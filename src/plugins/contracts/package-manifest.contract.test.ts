@@ -3,10 +3,9 @@ import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
-  { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
+    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -14,7 +13,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
+  { pluginId: "google" },
   { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
@@ -23,26 +22,13 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "amazon-bedrock",
-    pluginLocalRuntimeDeps: [
-      "@aws-sdk/client-bedrock",
-      "@aws-sdk/client-bedrock-runtime",
-      "@aws-sdk/credential-provider-node",
-    ],
-  },
-  {
-    pluginId: "amazon-bedrock-mantle",
-    pluginLocalRuntimeDeps: ["@aws/bedrock-token-generator"],
-  },
+  { pluginId: "amazon-bedrock" },
+  { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
     pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
   },
-  {
-    pluginId: "file-transfer",
-    pluginLocalRuntimeDeps: ["minimatch"],
-  },
+  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -57,7 +43,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
-    pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
+    pluginLocalRuntimeDeps: ["@lancedb/lancedb", "apache-arrow"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -66,7 +52,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "@azure/identity",
       "@microsoft/teams.api",
       "@microsoft/teams.apps",
-      "express",
       "jsonwebtoken",
       "jwks-rsa",
     ],
@@ -78,26 +63,20 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
+  { pluginId: "openshell" },
   {
     pluginId: "qqbot",
     pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
   },
-  {
-    pluginId: "slack",
-    pluginLocalRuntimeDeps: ["@slack/bolt", "@slack/web-api"],
-  },
+  { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "telegram",
-    pluginLocalRuntimeDeps: ["@grammyjs/runner", "@grammyjs/transformer-throttler", "grammy"],
-  },
+  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
+    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

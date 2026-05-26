@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
+import { normalizeOptionalString as normalizeOptionalPathInput } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   resolveProviderEnvApiKeyCandidates,
@@ -18,12 +19,13 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-type EnvApiKeyLookupOptions = {
+export type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  skipSetupProviderFallback?: boolean;
 };
 
 function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -37,14 +39,6 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
     return undefined;
   }
   return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
-}
-
-function normalizeOptionalPathInput(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function hasRequiredAuthEvidenceEnv(
@@ -102,14 +96,14 @@ export function resolveEnvApiKey(
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const normalized = options.aliasMap
-    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
-    : resolveProviderIdForAuth(provider, { env });
   const lookupParams = {
     config: options.config,
     workspaceDir: options.workspaceDir,
     env,
   };
+  const normalized = options.aliasMap
+    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
+    : resolveProviderIdForAuth(provider, lookupParams);
   const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
   const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
   const applied = new Set(getShellEnvAppliedKeys());
@@ -141,6 +135,9 @@ export function resolveEnvApiKey(
   }
 
   if (Array.isArray(candidates)) {
+    return null;
+  }
+  if (options.skipSetupProviderFallback === true) {
     return null;
   }
 

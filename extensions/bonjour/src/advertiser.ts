@@ -22,6 +22,7 @@ export type GatewayBonjourAdvertiseOpts = {
   sshPort?: number;
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
+  gatewayDirectReachable?: boolean;
   canvasPort?: number;
   tailnetDns?: string;
   cliPath?: string;
@@ -81,6 +82,7 @@ type BonjourAdvertiserDeps = {
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
+const CONFLICT_SETTLE_MS = 30_000;
 // Real-world LAN announce phase typically takes 12-13s on Mac/iOS networks. The
 // previous 8s threshold was triggering false-positive teardowns on every gateway
 // restart in such environments. 20s gives healthy networks plenty of room while
@@ -88,6 +90,7 @@ const REPAIR_DEBOUNCE_MS = 30_000;
 // See https://github.com/openclaw/openclaw/issues/72481
 const STUCK_ANNOUNCING_MS = 20_000;
 const MAX_CONSECUTIVE_RESTARTS = 3;
+const MAX_CONSECUTIVE_STUCK_STATE_RESTARTS = 1;
 // A flapping advertiser can briefly reach "announced" between probing
 // failures, which resets the consecutive counter. Bound total restarts too.
 const RESTART_WINDOW_MS = 30 * 60_000;
@@ -134,6 +137,10 @@ function readBonjourDisableOverride(): boolean | null {
 }
 
 function isContainerEnvironment() {
+  if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
+    return true;
+  }
+
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
     try {
       if (fs.existsSync(sentinelPath)) {
@@ -247,6 +254,10 @@ function serviceSummary(label: string, svc: BonjourService): string {
 
 function isAnnouncedState(state: string) {
   return state === BONJOUR_ANNOUNCED_STATE;
+}
+
+function isAdvertisingInProgressState(state: string) {
+  return state === "probing" || state === "announcing";
 }
 
 function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
@@ -400,7 +411,11 @@ export async function startGatewayBonjourAdvertiser(
         );
       } else {
         const label =
-          classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
+          classification.kind === "netmask-assertion"
+            ? "netmask assertion"
+            : classification.kind === "self-probe"
+              ? "self-probe race"
+              : "interface assertion";
         logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
         requestCiaoRecovery?.(classification);
       }
@@ -436,6 +451,9 @@ export async function startGatewayBonjourAdvertiser(
       if (opts.gatewayTlsFingerprintSha256) {
         txtBase.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
       }
+    }
+    if (opts.gatewayDirectReachable) {
+      txtBase.gatewayDirectReachable = "1";
     }
     if (typeof opts.canvasPort === "number" && opts.canvasPort > 0) {
       txtBase.canvasPort = String(opts.canvasPort);
@@ -501,12 +519,14 @@ export async function startGatewayBonjourAdvertiser(
       for (const { label, svc } of services) {
         try {
           svc.on("name-change", (name: unknown) => {
+            markConflictObserved(label, svc);
             const next = typeof name === "string" ? name : String(name);
             logger.warn(
               `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(next)}`,
             );
           });
           svc.on("hostname-change", (nextHostname: unknown) => {
+            markConflictObserved(label, svc);
             const next = typeof nextHostname === "string" ? nextHostname : String(nextHostname);
             logger.warn(
               `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(next)}`,
@@ -567,9 +587,18 @@ export async function startGatewayBonjourAdvertiser(
     let recreatePromise: Promise<void> | null = null;
     let disabled = false;
     let consecutiveRestarts = 0;
+    let consecutiveStuckStateRestarts = 0;
     const restartTimestamps: number[] = [];
     let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
+    const conflictTracker = new Map<string, number>();
+
+    const markConflictObserved = (label: string, svc: BonjourService) => {
+      const now = Date.now();
+      conflictTracker.set(label, now);
+      const nextState = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
+      stateTracker.set(label, { state: nextState, sinceMs: now });
+    };
 
     const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
       const now = Date.now();
@@ -586,7 +615,7 @@ export async function startGatewayBonjourAdvertiser(
       }
     };
 
-    const recreateAdvertiser = async (reason: string) => {
+    const recreateAdvertiser = async (reason: string, opts?: { stuckState?: boolean }) => {
       if (stopped || disabled) {
         return;
       }
@@ -595,6 +624,7 @@ export async function startGatewayBonjourAdvertiser(
       }
       recreatePromise = (async () => {
         consecutiveRestarts += 1;
+        consecutiveStuckStateRestarts = opts?.stuckState ? consecutiveStuckStateRestarts + 1 : 0;
         const now = Date.now();
         while (
           restartTimestamps.length > 0 &&
@@ -604,20 +634,25 @@ export async function startGatewayBonjourAdvertiser(
         }
         restartTimestamps.push(now);
         const tooManyConsecutive = consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS;
+        const tooManyStuckStates =
+          consecutiveStuckStateRestarts > MAX_CONSECUTIVE_STUCK_STATE_RESTARTS;
         const tooManyInWindow = restartTimestamps.length >= MAX_RESTARTS_IN_WINDOW;
-        if (tooManyConsecutive || tooManyInWindow) {
+        if (tooManyConsecutive || tooManyStuckStates || tooManyInWindow) {
           disabled = true;
           const detail = tooManyConsecutive
             ? `${MAX_CONSECUTIVE_RESTARTS} failed restarts`
-            : `${MAX_RESTARTS_IN_WINDOW} restarts within ${Math.round(
-                RESTART_WINDOW_MS / 60_000,
-              )} minutes`;
+            : tooManyStuckStates
+              ? `${MAX_CONSECUTIVE_STUCK_STATE_RESTARTS} stuck-state restart`
+              : `${MAX_RESTARTS_IN_WINDOW} restarts within ${Math.round(
+                  RESTART_WINDOW_MS / 60_000,
+                )} minutes`;
           logger.warn(
             `bonjour: disabling advertiser after ${detail} (${reason}); set discovery.mdns.mode="off" or OPENCLAW_DISABLE_BONJOUR=1 to disable mDNS discovery`,
           );
           const previous = cycle;
           cycle = null;
           stateTracker.clear();
+          conflictTracker.clear();
           await stopCycle(previous, { shutdownResponder: true });
           restoreConsoleLog();
           restoreCiaoExecHidePatch();
@@ -628,6 +663,7 @@ export async function startGatewayBonjourAdvertiser(
         await stopCycle(previous);
         cycle = createCycle();
         stateTracker.clear();
+        conflictTracker.clear();
         attachConflictListeners(cycle.services);
         startAdvertising(cycle.services);
       })().finally(() => {
@@ -651,28 +687,39 @@ export async function startGatewayBonjourAdvertiser(
       }
       updateStateTrackers(cycle.services);
       for (const { label, svc } of cycle.services) {
+        const now = Date.now();
         const stateUnknown = (svc as { serviceState?: unknown }).serviceState;
         if (typeof stateUnknown !== "string") {
           continue;
         }
         if (stateUnknown === "announced") {
           consecutiveRestarts = 0;
+          consecutiveStuckStateRestarts = 0;
+          conflictTracker.delete(label);
+        }
+        const lastConflictAt = conflictTracker.get(label);
+        if (lastConflictAt !== undefined && now - lastConflictAt >= CONFLICT_SETTLE_MS) {
+          conflictTracker.delete(label);
+        }
+        if (lastConflictAt !== undefined && now - lastConflictAt < CONFLICT_SETTLE_MS) {
+          continue;
         }
         const tracked = stateTracker.get(label);
         if (
           stateUnknown !== "announced" &&
           tracked &&
-          Date.now() - tracked.sinceMs >= STUCK_ANNOUNCING_MS
+          now - tracked.sinceMs >= STUCK_ANNOUNCING_MS
         ) {
           void recreateAdvertiser(
-            `service stuck in ${stateUnknown} for ${Date.now() - tracked.sinceMs}ms (${serviceSummary(
+            `service stuck in ${stateUnknown} for ${now - tracked.sinceMs}ms (${serviceSummary(
               label,
               svc,
             )})`,
+            { stuckState: true },
           );
           return;
         }
-        if (stateUnknown === "announced" || stateUnknown === "announcing") {
+        if (stateUnknown === "announced" || isAdvertisingInProgressState(stateUnknown)) {
           continue;
         }
 
@@ -682,7 +729,6 @@ export async function startGatewayBonjourAdvertiser(
         } catch {
           // ignore
         }
-        const now = Date.now();
         const last = lastRepairAttempt.get(key) ?? 0;
         if (now - last < REPAIR_DEBOUNCE_MS) {
           continue;

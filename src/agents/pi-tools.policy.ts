@@ -14,6 +14,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import {
+  normalizeUniqueSingleOrTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -22,11 +26,13 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
   resolveSubagentCapabilityStore,
+  resolveStoredSubagentInheritedToolAllowlist,
+  resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
-import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -84,6 +90,13 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
+function mergeConfiguredSubagentAllow(
+  allow: string[] | undefined,
+  alsoAllow: string[] | undefined,
+): string[] | undefined {
+  return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
+}
+
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
@@ -99,7 +112,7 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
     ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
 }
 
@@ -130,8 +143,32 @@ export function resolveSubagentToolPolicyForSession(
     ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
+}
+
+export function resolveInheritedToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string | undefined | null,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
+): SandboxToolPolicy | undefined {
+  const inheritedToolAllow = resolveStoredSubagentInheritedToolAllowlist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  if (inheritedToolAllow.length === 0 && inheritedToolDeny.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
+    ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
+  };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
@@ -195,17 +232,7 @@ function buildProviderToolPolicyLookup(
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    resolved.push(trimmed);
-  }
-  return resolved;
+  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
@@ -327,7 +354,7 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveProviderToolPolicy(params: {
+export function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
   modelId?: string;
@@ -372,27 +399,40 @@ function hasExplicitToolSection(section: unknown): boolean {
 
 /** Detect tool config sections that previously widened profiles implicitly.
  *  Used only for migration warnings — not merged into profileAlsoAllow.  #47487 */
+type ImplicitProfileGrantDetection = {
+  entries: Array<{ section: string; grants: string[] }>;
+};
+
 function detectImplicitProfileGrants(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
-}): string[] | undefined {
-  const implicit = new Set<string>();
+  includeGlobalSections: boolean;
+}): ImplicitProfileGrantDetection | undefined {
+  const entries: ImplicitProfileGrantDetection["entries"] = [];
   if (
     hasExplicitToolSection(params.agentTools?.exec) ||
-    hasExplicitToolSection(params.globalTools?.exec)
+    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.exec))
   ) {
-    implicit.add("exec");
-    implicit.add("process");
+    entries.push({ section: "tools.exec", grants: ["exec", "process"] });
   }
   if (
     hasExplicitToolSection(params.agentTools?.fs) ||
-    hasExplicitToolSection(params.globalTools?.fs)
+    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.fs))
   ) {
-    implicit.add("read");
-    implicit.add("write");
-    implicit.add("edit");
+    entries.push({ section: "tools.fs", grants: ["read", "write", "edit"] });
   }
-  return implicit.size > 0 ? Array.from(implicit) : undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return { entries };
+}
+
+function formatImplicitToolSections(sections: string[]): string {
+  return sections.join(" / ");
+}
+
+function formatToolListForWarning(toolNames: string[]): string {
+  return toolNames.map((toolName) => `"${toolName}"`).join(", ");
 }
 
 export function resolveEffectiveToolPolicy(params: {
@@ -415,6 +455,7 @@ export function resolveEffectiveToolPolicy(params: {
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;
+  const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,
@@ -431,20 +472,30 @@ export function resolveEffectiveToolPolicy(params: {
   // Warn affected users about removed implicit grants (#47487), but only when
   // the active profile/explicit alsoAllow do not already grant those tools.
   if (profile) {
-    const implicitGrants = detectImplicitProfileGrants({ globalTools, agentTools });
+    const implicitGrants = detectImplicitProfileGrants({
+      globalTools,
+      agentTools,
+      includeGlobalSections: profileSource === "global",
+    });
     if (implicitGrants) {
       const profilePolicy = mergeAlsoAllowPolicy(
         resolveToolProfilePolicy(profile),
         explicitProfileAlsoAllow,
       );
-      const uncovered = implicitGrants.filter(
-        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-      );
+      const uncoveredEntries = implicitGrants.entries
+        .map((entry) => ({
+          section: entry.section,
+          grants: entry.grants.filter(
+            (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+          ),
+        }))
+        .filter((entry) => entry.grants.length > 0);
+      const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);
       if (uncovered.length > 0) {
         logWarn(
           `tools policy: profile "${profile}"${agentId ? ` (agent "${agentId}")` : ""} has ` +
-            `configured tool sections (tools.exec / tools.fs) that no longer implicitly widen ` +
-            `the profile. Add alsoAllow: [${uncovered.map((t) => `"${t}"`).join(", ")}] ` +
+            `configured tool sections (${formatImplicitToolSections(uncoveredEntries.map((entry) => entry.section))}) that no longer implicitly widen ` +
+            `the profile. Add alsoAllow: [${formatToolListForWarning(uncovered)}] ` +
             `explicitly if these tools should be available. See #47487.`,
         );
       }
@@ -452,7 +503,7 @@ export function resolveEffectiveToolPolicy(params: {
   }
 
   const profileAlsoAllow = explicitProfileAlsoAllow
-    ? Array.from(new Set(explicitProfileAlsoAllow))
+    ? uniqueStrings(explicitProfileAlsoAllow)
     : undefined;
   return {
     agentId,
@@ -537,6 +588,7 @@ export function resolveGroupToolPolicy(params: {
   const configTools = resolveChannelGroupToolsPolicy({
     cfg: params.config,
     channel,
+    messageProvider: channel,
     groupId: groupIds[0],
     groupIdCandidates: groupIds.slice(1),
     accountId: params.accountId,

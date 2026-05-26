@@ -1,4 +1,10 @@
 import crypto from "node:crypto";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
@@ -47,18 +53,6 @@ const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -79,10 +73,7 @@ function extractSelections(value: unknown): string[] {
     return [];
   }
   if (normalized.includes(",")) {
-    return normalized
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(normalized.split(","));
   }
   return [normalized];
 }
@@ -267,7 +258,7 @@ export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: st
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
   const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return Array.from(new Set(limited));
+  return uniqueStrings(limited);
 }
 
 export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {

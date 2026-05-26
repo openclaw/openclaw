@@ -1,4 +1,5 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -9,16 +10,26 @@ const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
 const GOOGLE_MEET_MEDIA_SCOPE =
   "https://www.googleapis.com/auth/meetings.conference.media.readonly";
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
+const GOOGLE_MEET_SPACE_CREATED_SCOPE = "https://www.googleapis.com/auth/meetings.space.created";
+const GOOGLE_MEET_SPACE_SETTINGS_SCOPE = "https://www.googleapis.com/auth/meetings.space.settings";
 
-type GoogleMeetSpace = {
+export type GoogleMeetAccessType = "OPEN" | "TRUSTED" | "RESTRICTED";
+export type GoogleMeetEntryPointAccess = "ALL" | "CREATOR_APP_ONLY";
+
+export type GoogleMeetSpaceConfig = {
+  accessType?: GoogleMeetAccessType;
+  entryPointAccess?: GoogleMeetEntryPointAccess;
+};
+
+export type GoogleMeetSpace = {
   name: string;
   meetingCode?: string;
   meetingUri?: string;
   activeConference?: Record<string, unknown>;
-  config?: Record<string, unknown>;
+  config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
-type GoogleMeetPreflightReport = {
+export type GoogleMeetPreflightReport = {
   input: string;
   resolvedSpaceName: string;
   meetingCode?: string;
@@ -29,12 +40,17 @@ type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
-type GoogleMeetCreateSpaceResult = {
+export type GoogleMeetCreateSpaceResult = {
   space: GoogleMeetSpace;
   meetingUri: string;
 };
 
-type GoogleMeetConferenceRecord = {
+export type GoogleMeetEndActiveConferenceResult = {
+  space: string;
+  ended: true;
+};
+
+export type GoogleMeetConferenceRecord = {
   name: string;
   space?: string;
   startTime?: string;
@@ -353,7 +369,12 @@ export async function fetchGoogleMeetSpace(params: {
 
 export async function createGoogleMeetSpace(params: {
   accessToken: string;
+  config?: GoogleMeetSpaceConfig;
 }): Promise<GoogleMeetCreateSpaceResult> {
+  const body =
+    params.config && Object.keys(params.config).length > 0
+      ? JSON.stringify({ config: params.config })
+      : "{}";
   const { response, release } = await fetchWithSsrFGuard({
     url: `${GOOGLE_MEET_API_BASE_URL}/spaces`,
     init: {
@@ -363,7 +384,7 @@ export async function createGoogleMeetSpace(params: {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: "{}",
+      body,
     },
     policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
     auditContext: "google-meet.spaces.create",
@@ -375,7 +396,10 @@ export async function createGoogleMeetSpace(params: {
         response,
         detail,
         prefix: "Google Meet spaces.create",
-        scopes: ["https://www.googleapis.com/auth/meetings.space.created"],
+        scopes:
+          params.config && Object.keys(params.config).length > 0
+            ? [GOOGLE_MEET_SPACE_CREATED_SCOPE, GOOGLE_MEET_SPACE_SETTINGS_SCOPE]
+            : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
     const payload = (await response.json()) as GoogleMeetSpace;
@@ -387,6 +411,45 @@ export async function createGoogleMeetSpace(params: {
       throw new Error("Google Meet spaces.create response was missing meetingUri");
     }
     return { space: payload, meetingUri };
+  } finally {
+    await release();
+  }
+}
+
+export async function endGoogleMeetActiveConference(params: {
+  accessToken: string;
+  meeting: string;
+}): Promise<GoogleMeetEndActiveConferenceResult> {
+  const resolved = await fetchGoogleMeetSpace({
+    accessToken: params.accessToken,
+    meeting: params.meeting,
+  });
+  const space = resolved.name;
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(space)}:endActiveConference`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+    auditContext: "google-meet.spaces.endActiveConference",
+  });
+  try {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw await googleApiError({
+        response,
+        detail,
+        prefix: "Google Meet spaces.endActiveConference",
+        scopes: [GOOGLE_MEET_SPACE_CREATED_SCOPE],
+      });
+    }
+    return { space, ended: true };
   } finally {
     await release();
   }
@@ -735,9 +798,10 @@ function mergeAttendanceRows(
       grouped.set(key, { ...row, participants: [row.participant] });
       continue;
     }
-    existing.participants = [
-      ...new Set([...(existing.participants ?? [existing.participant]), row.participant]),
-    ];
+    existing.participants = uniqueStrings([
+      ...(existing.participants ?? [existing.participant]),
+      row.participant,
+    ]);
     existing.sessions.push(...row.sessions);
     existing.displayName ??= row.displayName;
     existing.user ??= row.user;

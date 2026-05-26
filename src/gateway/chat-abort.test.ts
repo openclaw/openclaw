@@ -1,10 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
+  abortChatRunsForProvider,
   isChatStopCommandText,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
+  updateChatRunProvider,
 } from "./chat-abort.js";
+
+type ChatAbortPayload = {
+  runId: string;
+  sessionKey: string;
+  seq: number;
+  state: "aborted";
+  stopReason?: string;
+  message?: {
+    role: "assistant";
+    content: Array<{ type: "text"; text: string }>;
+    timestamp: number;
+  };
+};
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createActiveEntry(sessionKey: string): ChatAbortControllerEntry {
   const now = Date.now();
@@ -36,6 +55,22 @@ function createOps(params: {
     chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
     chatDeltaSentAt: new Map([[runId, Date.now()]]),
     chatDeltaLastBroadcastLen: new Map([[runId, buffer?.length ?? 0]]),
+    chatDeltaLastBroadcastText: new Map(buffer !== undefined ? [[runId, buffer]] : []),
+    agentDeltaSentAt: new Map([[`${runId}:assistant`, Date.now()]]),
+    bufferedAgentEvents: new Map([
+      [
+        `${runId}:assistant`,
+        {
+          payload: {
+            runId,
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "buffer", delta: "buffer" },
+          },
+        },
+      ],
+    ]),
     chatAbortedRuns: new Map(),
     removeChatRun,
     agentRunSeq: new Map(),
@@ -44,12 +79,22 @@ function createOps(params: {
   };
 }
 
+function firstBroadcastPayload(ops: { broadcast: ReturnType<typeof vi.fn> }): unknown {
+  const call = ops.broadcast.mock.calls[0];
+  if (!call) {
+    throw new Error("expected broadcast call");
+  }
+  return call[1];
+}
+
 describe("isChatStopCommandText", () => {
   it("matches slash and standalone multilingual stop forms", () => {
     expect(isChatStopCommandText(" /STOP!!! ")).toBe(true);
     expect(isChatStopCommandText("stop please")).toBe(true);
     expect(isChatStopCommandText("do not do that")).toBe(true);
     expect(isChatStopCommandText("停止")).toBe(true);
+    expect(isChatStopCommandText("停下来")).toBe(true);
+    expect(isChatStopCommandText("暂停")).toBe(true);
     expect(isChatStopCommandText("やめて")).toBe(true);
     expect(isChatStopCommandText("توقف")).toBe(true);
     expect(isChatStopCommandText("остановись")).toBe(true);
@@ -64,6 +109,9 @@ describe("isChatStopCommandText", () => {
 
 describe("abortChatRunById", () => {
   it("broadcasts aborted payload with partial message when buffered text exists", () => {
+    const now = new Date("2026-01-02T03:04:05.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     const runId = "run-1";
     const sessionKey = "main";
     const entry = createActiveEntry(sessionKey);
@@ -80,28 +128,27 @@ describe("abortChatRunById", () => {
     expect(ops.chatRunBuffers.has(runId)).toBe(false);
     expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
     expect(ops.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(ops.chatDeltaLastBroadcastText.has(runId)).toBe(false);
+    expect(ops.agentDeltaSentAt?.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.bufferedAgentEvents?.has(`${runId}:assistant`)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(payload).toEqual(
-      expect.objectContaining({
-        runId,
-        sessionKey,
-        seq: 3,
-        state: "aborted",
-        stopReason: "user",
-      }),
-    );
-    expect(payload.message).toEqual(
-      expect.objectContaining({
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    expect(payload).toEqual({
+      runId,
+      sessionKey,
+      seq: 3,
+      state: "aborted",
+      stopReason: "user",
+      message: {
         role: "assistant",
         content: [{ type: "text", text: "  Partial reply  " }],
-      }),
-    );
-    expect((payload.message as { timestamp?: unknown }).timestamp).toEqual(expect.any(Number));
+        timestamp: now.getTime(),
+      },
+    });
     expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
   });
 
@@ -114,11 +161,14 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
+    const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
   });
 
   it("preserves partial message even when abort listeners clear buffers synchronously", () => {
+    const now = new Date("2026-01-02T03:04:05.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
     const runId = "run-1";
     const sessionKey = "main";
     const entry = createActiveEntry(sessionKey);
@@ -132,11 +182,50 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(payload.message).toEqual(
-      expect.objectContaining({
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    expect(payload).toEqual({
+      runId,
+      sessionKey,
+      seq: 1,
+      state: "aborted",
+      stopReason: undefined,
+      message: {
         role: "assistant",
         content: [{ type: "text", text: "streamed text" }],
+        timestamp: now.getTime(),
+      },
+    });
+  });
+});
+
+describe("abortChatRunsForProvider", () => {
+  it("uses updated provider metadata after model fallback", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    entry.providerId = "openai";
+    entry.authProviderId = "openai";
+    const ops = createOps({ runId, entry });
+
+    const updated = updateChatRunProvider(ops.chatAbortControllers, {
+      runId,
+      providerId: "openrouter",
+      authProviderId: "openrouter",
+    });
+    const result = abortChatRunsForProvider(ops, {
+      providerId: "openrouter",
+      stopReason: "auth-revoked",
+    });
+
+    expect(updated).toBe(true);
+    expect(result.runIds).toEqual([runId]);
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(ops.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        runId,
+        state: "aborted",
+        stopReason: "auth-revoked",
       }),
     );
   });

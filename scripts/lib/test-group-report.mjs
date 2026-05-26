@@ -1,5 +1,9 @@
 import path from "node:path";
-import { collectVitestFileDurations, normalizeTrackedRepoPath } from "../test-report-utils.mjs";
+import {
+  collectVitestAssertionDurations,
+  collectVitestFileDurations,
+  normalizeTrackedRepoPath,
+} from "../test-report-utils.mjs";
 import { formatMs } from "./vitest-report-cli-utils.mjs";
 
 export function formatBytesAsMb(valueBytes) {
@@ -8,11 +12,11 @@ export function formatBytesAsMb(valueBytes) {
     : `${(valueBytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
-export function formatSignedMs(value, digits = 1) {
+function formatSignedMs(value, digits = 1) {
   return `${value > 0 ? "+" : ""}${formatMs(value, digits)}`;
 }
 
-export function formatSignedBytesAsMb(valueBytes) {
+function formatSignedBytesAsMb(valueBytes) {
   return valueBytes === null || valueBytes === undefined
     ? "n/a"
     : `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
@@ -46,7 +50,7 @@ export function resolveTestArea(file) {
   return parts[0] || normalized;
 }
 
-export function resolveTestFolder(file, depth = 2) {
+function resolveTestFolder(file, depth = 2) {
   const normalized = normalizeTrackedRepoPath(file);
   const dir = path.posix.dirname(normalized);
   if (dir === ".") {
@@ -96,6 +100,8 @@ export function buildGroupedTestReport(params) {
   const byGroup = new Map();
   const byConfig = new Map();
   const files = [];
+  const maxTestMs = params.maxTestMs ?? null;
+  const slowTests = [];
 
   for (const input of params.reports) {
     const config = normalizeConfigLabel(input.config);
@@ -111,6 +117,14 @@ export function buildGroupedTestReport(params) {
       addFileEntry(configCounter, entry, config);
       files.push({ ...entry, config, group: groupKey });
     }
+
+    if (typeof maxTestMs === "number") {
+      for (const entry of collectVitestAssertionDurations(input.report, normalizeTrackedRepoPath)) {
+        if (entry.durationMs > maxTestMs) {
+          slowTests.push({ ...entry, config });
+        }
+      }
+    }
   }
 
   const sortByDuration = (left, right) =>
@@ -121,6 +135,12 @@ export function buildGroupedTestReport(params) {
   const groups = [...byGroup.values()].map(finalizeCounter).toSorted(sortByDuration);
   const configs = [...byConfig.values()].map(finalizeCounter).toSorted(sortByDuration);
   const topFiles = files.toSorted(sortFilesByDuration);
+  slowTests.sort(
+    (left, right) =>
+      right.durationMs - left.durationMs ||
+      left.file.localeCompare(right.file) ||
+      left.fullName.localeCompare(right.fullName),
+  );
   const totals = groups.reduce(
     (acc, group) => ({
       durationMs: acc.durationMs + group.durationMs,
@@ -137,6 +157,7 @@ export function buildGroupedTestReport(params) {
     groups,
     configs,
     topFiles,
+    slowTests,
   };
 }
 
@@ -251,6 +272,9 @@ function compareFiles(beforeFiles = [], afterFiles = []) {
 }
 
 function runKey(run) {
+  if (typeof run.label === "string" && run.label.trim().length > 0) {
+    return normalizeConfigLabel(run.label);
+  }
   return normalizeConfigLabel(run.config);
 }
 
@@ -450,6 +474,7 @@ export function renderGroupedTestComparison(comparison, options = {}) {
 export function renderGroupedTestReport(report, options = {}) {
   const limit = options.limit ?? 25;
   const topFiles = options.topFiles ?? 25;
+  const slowTests = report.slowTests ?? [];
   const lines = [
     `[test-group-report] groupBy=${report.groupBy} files=${report.totals.fileCount} tests=${report.totals.testCount} file-sum=${formatMs(report.totals.durationMs)}`,
     "",
@@ -480,6 +505,15 @@ export function renderGroupedTestReport(report, options = {}) {
     lines.push(
       `${String(index + 1).padStart(2, " ")}. ${formatMs(file.durationMs).padStart(10, " ")} | tests=${String(file.testCount).padStart(4, " ")} | ${file.config} | ${file.file}`,
     );
+  }
+
+  if (slowTests.length > 0) {
+    lines.push("", `Slow tests (${Math.min(topFiles, slowTests.length)} of ${slowTests.length})`);
+    for (const [index, test] of slowTests.slice(0, topFiles).entries()) {
+      lines.push(
+        `${String(index + 1).padStart(2, " ")}. ${formatMs(test.durationMs).padStart(10, " ")} | ${test.status} | ${test.config} | ${test.file} | ${test.fullName}`,
+      );
+    }
   }
 
   return lines.join("\n");

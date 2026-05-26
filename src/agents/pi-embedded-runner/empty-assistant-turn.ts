@@ -1,3 +1,5 @@
+import { asFiniteNumber } from "../../shared/number-coercion.js";
+
 type EmptyAssistantTurnLike = {
   content?: unknown;
   stopReason?: unknown;
@@ -17,14 +19,14 @@ type UsageFieldMap = {
 // Upstream badlogic/pi-mono should normalize Anthropic zero-token empty `stop`
 // turns before OpenClaw sees them. Downstream: openclaw/openclaw#71880.
 function readFiniteTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function isZero(value: number | undefined): value is 0 {
   return value === 0;
 }
 
-export function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
+function hasZeroTokenUsageSnapshot(usage: unknown): boolean {
   if (!usage || typeof usage !== "object") {
     return false;
   }

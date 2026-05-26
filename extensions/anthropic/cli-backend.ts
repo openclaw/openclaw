@@ -10,6 +10,7 @@ import {
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
   normalizeClaudeBackendConfig,
+  resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
 export function buildAnthropicCliBackend(): CliBackendPlugin {
@@ -62,6 +63,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       imagePathScope: "workspace",
       sessionArg: "--session-id",
       sessionMode: "always",
+      reseedFromRawTranscriptWhenUncompacted: true,
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
@@ -76,5 +78,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

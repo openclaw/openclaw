@@ -78,6 +78,17 @@ function setDefaultRandomIntMock() {
   });
 }
 
+function requireFirstPairingRequest(
+  requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
+) {
+  expect(requests).toHaveLength(1);
+  const [request] = requests;
+  if (!request) {
+    throw new Error("expected pairing request");
+  }
+  return request;
+}
+
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
   fsSync.mkdirSync(dir, { recursive: true });
@@ -173,7 +184,7 @@ async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy")
   expect(channelScoped).not.toContain(entry);
 }
 
-async function withAllowFromCacheReadSpy(params: {
+async function expectAllowFromCacheInvalidationWithReadSpy(params: {
   stateDir: string;
   createReadSpy: (filePath: string) => FileReadSpy;
   readAllowFrom: () => Promise<string[]>;
@@ -199,7 +210,13 @@ async function withAllowFromCacheReadSpy(params: {
 }
 
 function countFileReads(spy: { mock: { calls: unknown[][] } }, filePath: string): number {
-  return spy.mock.calls.filter(([candidate]) => candidate === filePath).length;
+  let count = 0;
+  for (const [candidate] of spy.mock.calls) {
+    if (candidate === filePath) {
+      count++;
+    }
+  }
+  return count;
 }
 
 async function seedDefaultAccountAllowFromFixture(stateDir: string) {
@@ -277,13 +294,49 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
     process.env,
     params.secondAccountId,
   );
-  expect(firstList).toHaveLength(1);
-  expect(secondList).toHaveLength(1);
-  expect(firstList[0]?.code).toBe(first.code);
-  expect(secondList[0]?.code).toBe(second.code);
+  expect(requireFirstPairingRequest(firstList).code).toBe(first.code);
+  expect(requireFirstPairingRequest(secondList).code).toBe(second.code);
 }
 
 describe("pairing store", () => {
+  it("skips malformed persisted pairing requests while approving valid codes", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const now = new Date().toISOString();
+      writeJsonFixture(resolvePairingFilePath(stateDir, "telegram"), {
+        version: 1,
+        requests: [
+          {
+            id: "bad-code",
+            code: { nested: "bad" },
+            createdAt: now,
+            lastSeenAt: now,
+          },
+          {
+            id: "1001",
+            code: "ABCDEFGH",
+            createdAt: now,
+            lastSeenAt: now,
+            meta: {
+              accountId: "yy",
+              ignored: { nested: "bad" },
+            },
+          },
+        ],
+      });
+
+      await expect(
+        approveChannelPairingCode({
+          channel: "telegram",
+          code: "ABCDEFGH",
+          accountId: "yy",
+        }),
+      ).resolves.toMatchObject({ id: "1001" });
+      await expect(readChannelAllowFromStore("telegram", process.env, "yy")).resolves.toEqual([
+        "1001",
+      ]);
+    });
+  });
+
   it("handles pending pairing request lifecycle and limits", async () => {
     await withTempStateDir(async (stateDir) => {
       const first = await upsertChannelPairingRequest({
@@ -300,8 +353,7 @@ describe("pairing store", () => {
       expect(second.created).toBe(false);
       expect(second.code).toBe(first.code);
       const reusedList = await listChannelPairingRequests("demo-pairing-a");
-      expect(reusedList).toHaveLength(1);
-      expect(reusedList[0]?.code).toBe(first.code);
+      expect(requireFirstPairingRequest(reusedList).code).toBe(first.code);
 
       const created = await upsertChannelPairingRequest({
         channel: "demo-pairing-b",
@@ -628,7 +680,7 @@ describe("pairing store", () => {
         },
       ]) {
         clearOAuthFixtures(stateDir);
-        await withAllowFromCacheReadSpy({
+        await expectAllowFromCacheInvalidationWithReadSpy({
           stateDir,
           createReadSpy: variant.createReadSpy,
           readAllowFrom: variant.readAllowFrom,

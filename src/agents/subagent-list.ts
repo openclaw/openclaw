@@ -34,6 +34,7 @@ type SubagentListItem = {
   line: string;
   runId: string;
   sessionKey: string;
+  taskName?: string;
   label: string;
   task: string;
   status: string;
@@ -59,11 +60,7 @@ type SessionEntryResolution = {
   entry: SessionEntry | undefined;
 };
 
-function resolveStorePathForKey(
-  cfg: OpenClawConfig,
-  key: string,
-  parsed?: ParsedAgentSessionKey | null,
-) {
+function resolveStorePathForKey(cfg: OpenClawConfig, parsed?: ParsedAgentSessionKey | null) {
   return resolveStorePath(cfg.session?.store, {
     agentId: parsed?.agentId,
   });
@@ -75,7 +72,7 @@ export function resolveSessionEntryForKey(params: {
   cache: Map<string, Record<string, SessionEntry>>;
 }): SessionEntryResolution {
   const parsed = parseAgentSessionKey(params.key);
-  const storePath = resolveStorePathForKey(params.cfg, params.key, parsed);
+  const storePath = resolveStorePathForKey(params.cfg, parsed);
   let store = params.cache.get(storePath);
   if (!store) {
     store = loadSessionStore(storePath);
@@ -255,12 +252,15 @@ export function buildSubagentList(params: {
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
-    const line = `${index}. ${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
+    const taskName = entry.taskName?.trim();
+    const taskNamePrefix = taskName ? `${taskName}: ` : "";
+    const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}`;
     const view: SubagentListItem = {
       index,
       line,
       runId: entry.runId,
       sessionKey: entry.childSessionKey,
+      ...(taskName ? { taskName } : {}),
       label,
       task,
       status,

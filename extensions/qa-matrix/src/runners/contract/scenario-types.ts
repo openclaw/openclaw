@@ -49,6 +49,7 @@ export type MatrixQaScenarioArtifacts = {
   dedupeCommitObserved?: boolean;
   duplicateWindowMs?: number;
   driverEventId?: string;
+  driverEventIds?: string[];
   driverUserId?: string;
   editEventId?: string;
   editedToken?: string;
@@ -127,6 +128,7 @@ export type MatrixQaScenarioArtifacts = {
   deletedBackupVersion?: string | null;
   faultedEndpoint?: string;
   faultHitCount?: number;
+  faultProxyBaseUrl?: string;
   faultRuleId?: string;
   historyEventId?: string;
   observerRecoveryDeviceId?: string;
@@ -164,6 +166,9 @@ export type MatrixQaScenarioArtifacts = {
   gatewayUserId?: string;
   secondEncryptionChanged?: boolean;
   setupSuccess?: boolean;
+  stateAfterFaultHitCount?: number;
+  stateAfterFaultRuleId?: string;
+  strippedSyncStateAfterParam?: boolean;
   verificationBootstrapAttempted?: boolean;
   verificationBootstrapSuccess?: boolean;
   gatewayReply?: MatrixQaReplyArtifact;

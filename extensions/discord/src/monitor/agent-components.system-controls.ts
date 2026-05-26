@@ -1,6 +1,6 @@
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
-import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import {
   Button,
   StringSelectMenu,
@@ -21,9 +21,9 @@ import {
 import { enqueueSystemEvent } from "./agent-components.deps.runtime.js";
 
 export class AgentComponentButton extends Button {
-  label = AGENT_BUTTON_KEY;
+  override label = AGENT_BUTTON_KEY;
   customId = `${AGENT_BUTTON_KEY}:seed=1`;
-  style = ButtonStyle.Primary;
+  override style = ButtonStyle.Primary;
   private ctx: AgentComponentContext;
 
   constructor(ctx: AgentComponentContext) {
@@ -31,7 +31,7 @@ export class AgentComponentButton extends Button {
     this.ctx = ctx;
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     const parsed = parseAgentComponentData(data);
     if (!parsed) {
       logError("agent button: failed to parse component data");
@@ -120,7 +120,7 @@ export class AgentSelectMenu extends StringSelectMenu {
     this.ctx = ctx;
   }
 
-  async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: StringSelectMenuInteraction, data: ComponentData): Promise<void> {
     const parsed = parseAgentComponentData(data);
     if (!parsed) {
       logError("agent select: failed to parse component data");

@@ -1,12 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-
-let isMinimaxVlmModel: typeof import("./minimax-vlm.js").isMinimaxVlmModel;
-let minimaxUnderstandImage: typeof import("./minimax-vlm.js").minimaxUnderstandImage;
-
-beforeAll(async () => {
-  ({ isMinimaxVlmModel, minimaxUnderstandImage } = await import("./minimax-vlm.js"));
-});
+import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
 describe("minimaxUnderstandImage apiKey normalization", () => {
   const priorFetch = global.fetch;
@@ -46,7 +40,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     });
 
     expect(text).toBe("ok");
-    expect(fetchSpy).toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledOnce();
   }
 
   it("strips embedded CR/LF before sending Authorization header", async () => {
@@ -81,6 +75,61 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
+  it.each(["minimax-cn", "minimax-portal-cn"])(
+    "routes %s to the CN VLM host by default",
+    async (provider) => {
+      const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+        const requestUrl =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        expect(requestUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+        return new Response(apiResponse, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      global.fetch = withFetchPreconnect(fetchSpy);
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          provider,
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+        }),
+      ).resolves.toBe("ok");
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["minimax-cn", "minimax-portal-cn"])(
+    "keeps %s on the CN VLM host when the configured host is malformed",
+    async (provider) => {
+      const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+        const requestUrl =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        expect(requestUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+        return new Response(apiResponse, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      global.fetch = withFetchPreconnect(fetchSpy);
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          provider,
+          apiHost: "https://[",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+        }),
+      ).resolves.toBe("ok");
+
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    },
+  );
+
   it("uses the caller-provided request timeout", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const fetchSpy = vi.fn(async () => {
@@ -101,14 +150,17 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       }),
     ).resolves.toBe("ok");
 
+    expect(timeoutSpy).toHaveBeenCalledOnce();
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);
   });
 });
 
 describe("isMinimaxVlmModel", () => {
-  it("only matches the canonical MiniMax VLM model id", async () => {
+  it("only matches the canonical MiniMax VLM model id", () => {
     expect(isMinimaxVlmModel("minimax", "MiniMax-VL-01")).toBe(true);
+    expect(isMinimaxVlmModel("minimax-cn", "MiniMax-VL-01")).toBe(true);
     expect(isMinimaxVlmModel("minimax-portal", "MiniMax-VL-01")).toBe(true);
+    expect(isMinimaxVlmModel("minimax-portal-cn", "MiniMax-VL-01")).toBe(true);
     expect(isMinimaxVlmModel("minimax-portal", "custom-vision")).toBe(false);
     expect(isMinimaxVlmModel("openai", "MiniMax-VL-01")).toBe(false);
   });

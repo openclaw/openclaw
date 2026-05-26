@@ -71,15 +71,18 @@ describe("provider public artifacts", () => {
       return { resolveThinkingProfile };
     });
 
-    vi.doMock("./bundled-dir.js", () => ({
-      resolveBundledPluginsDir: () => bundledPluginsDir,
-    }));
+    vi.doMock("./bundled-dir.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./bundled-dir.js")>();
+      return {
+        ...actual,
+        resolveBundledPluginsDir: () => bundledPluginsDir,
+      };
+    });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     vi.doMock("./public-surface-loader.js", () => ({
       loadBundledPluginPublicArtifactModuleSync,
     }));
-    vi.resetModules();
 
     try {
       const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
@@ -114,6 +117,123 @@ describe("provider public artifacts", () => {
     }
   });
 
+  it("does not cache manifest-owned provider policy aliases across bundled metadata changes", async () => {
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),
+    );
+    const writePlugin = (pluginId: string, providers: string[], version: number) => {
+      const pluginDir = path.join(bundledPluginsDir, pluginId);
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: pluginId,
+          name: `${pluginId} ${version}`,
+          configSchema: { type: "object" },
+          providers,
+        }),
+      );
+      fs.writeFileSync(
+        path.join(pluginDir, "index.js"),
+        "export default { register() {} };\n",
+        "utf8",
+      );
+    };
+
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "first" && dirName !== "second") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+
+    try {
+      writePlugin("first", ["fixture-provider"], 1);
+      writePlugin("second", [], 1);
+      const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+        typeof import("./provider-public-artifacts.js")
+      >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-refresh");
+
+      expect(
+        resolvePolicySurface("fixture-provider")
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["first"]);
+
+      writePlugin("first", [], 2);
+      writePlugin("second", ["fixture-provider"], 2);
+
+      expect(
+        resolvePolicySurface("fixture-provider")
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["second"]);
+    } finally {
+      fs.rmSync(bundledPluginsDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses caller-provided manifest metadata for provider policy aliases", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "owner") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-manifest");
+
+    const surface = resolvePolicySurface("alias", {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "owner",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/owner/openclaw.plugin.json",
+            providers: ["alias"],
+            rootDir: "/tmp/owner",
+            skills: [],
+            source: "/tmp/owner/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(surface?.resolveThinkingProfile?.({ provider: "alias", modelId: "demo" })).toEqual({
+      levels: [{ id: "owner" }],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("loads provider policy surfaces without package-manager repair", async () => {
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,
@@ -121,7 +241,6 @@ describe("provider public artifacts", () => {
     vi.doMock("./public-surface-loader.js", () => ({
       loadBundledPluginPublicArtifactModuleSync,
     }));
-    vi.resetModules();
 
     const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
       typeof import("./provider-public-artifacts.js")

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -59,6 +61,17 @@ const PAIRING_REQUIRED_PATTERN = /\bpairing required\b/i;
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
+const DEVICE_IDENTITY_REQUIRED_CLOSE_CODE = 1008;
+const DEVICE_IDENTITY_REQUIRED_CLOSE_REASON = "device identity required";
+const DEVICE_REQUIRED_PROBE_FAILURE_THRESHOLD = 3;
+const DEVICE_REQUIRED_PROBE_TTL_MS = 5 * 60_000;
+
+type DeviceRequiredProbeCacheEntry = {
+  failures: number;
+  firstFailureAtMs: number;
+};
+
+const deviceRequiredProbeCache = new Map<string, DeviceRequiredProbeCacheEntry>();
 
 export function clampProbeTimeoutMs(timeoutMs: number): number {
   return resolveSafeTimeoutDelayMs(timeoutMs, { minMs: MIN_PROBE_TIMEOUT_MS });
@@ -66,6 +79,50 @@ export function clampProbeTimeoutMs(timeoutMs: number): number {
 
 function formatProbeCloseError(close: GatewayProbeClose): string {
   return `gateway closed (${close.code}): ${close.reason}`;
+}
+
+function resolveDeviceRequiredProbeCacheKey(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return url;
+  }
+}
+
+function isDeviceIdentityRequiredClose(close: GatewayProbeClose | null): boolean {
+  return (
+    close?.code === DEVICE_IDENTITY_REQUIRED_CLOSE_CODE &&
+    close.reason.trim().toLowerCase() === DEVICE_IDENTITY_REQUIRED_CLOSE_REASON
+  );
+}
+
+function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
+  return Boolean(auth?.token?.trim() || auth?.password?.trim());
+}
+
+function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
+  const entry = deviceRequiredProbeCache.get(cacheKey);
+  if (!entry) {
+    return false;
+  }
+  if (nowMs - entry.firstFailureAtMs >= DEVICE_REQUIRED_PROBE_TTL_MS) {
+    deviceRequiredProbeCache.delete(cacheKey);
+    return false;
+  }
+  return entry.failures >= DEVICE_REQUIRED_PROBE_FAILURE_THRESHOLD;
+}
+
+function noteDeviceRequiredProbeFailure(cacheKey: string, nowMs: number): void {
+  const existing = deviceRequiredProbeCache.get(cacheKey);
+  if (!existing || nowMs - existing.firstFailureAtMs >= DEVICE_REQUIRED_PROBE_TTL_MS) {
+    deviceRequiredProbeCache.set(cacheKey, { failures: 1, firstFailureAtMs: nowMs });
+    return;
+  }
+  existing.failures += 1;
+}
+
+function clearDeviceRequiredProbeFailures(cacheKey: string): void {
+  deviceRequiredProbeCache.delete(cacheKey);
 }
 
 function emptyProbeAuth(): GatewayProbeAuthSummary {
@@ -80,6 +137,27 @@ function emptyProbeServer(): GatewayProbeServerSummary {
   return {
     version: null,
     connId: null,
+  };
+}
+
+function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
+  const close = {
+    code: DEVICE_IDENTITY_REQUIRED_CLOSE_CODE,
+    reason: DEVICE_IDENTITY_REQUIRED_CLOSE_REASON,
+    hint: "probe short-circuited by recent device-required rejections",
+  };
+  return {
+    ok: false,
+    url,
+    connectLatencyMs: null,
+    error: formatProbeCloseError(close),
+    close,
+    auth: emptyProbeAuth(),
+    server: emptyProbeServer(),
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
   };
 }
 
@@ -149,6 +227,7 @@ export async function probeGateway(opts: {
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -168,7 +247,8 @@ export async function probeGateway(opts: {
         return null;
       }
       const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-      const identity = loadDeviceIdentityIfPresent();
+      const stateDir = resolveStateDir(opts.env);
+      const identity = loadDeviceIdentityIfPresent(path.join(stateDir, "identity", "device.json"));
       if (!identity) {
         return null;
       }
@@ -178,6 +258,7 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = loadDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
+        env: opts.env,
       });
       return cachedOperatorToken ? identity : null;
     } catch {
@@ -186,6 +267,11 @@ export async function probeGateway(opts: {
       return null;
     }
   })();
+  const cacheKey = resolveDeviceRequiredProbeCacheKey(opts.url);
+  const cacheEligible = deviceIdentity == null && !hasProbeAuth(opts.auth);
+  if (cacheEligible && shouldShortCircuitDeviceRequiredProbe(cacheKey, Date.now())) {
+    return makeDeviceRequiredShortCircuitResult(opts.url);
+  }
   const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
 
   return await new Promise<GatewayProbeResult>((resolve) => {
@@ -214,6 +300,11 @@ export async function probeGateway(opts: {
       startAbort.abort();
       clearProbeTimer();
       client.stop();
+      if (result.ok) {
+        clearDeviceRequiredProbeFailures(cacheKey);
+      } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {
+        noteDeviceRequiredProbeFailure(cacheKey, Date.now());
+      }
       const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
       resolve({
         url: opts.url,
@@ -261,6 +352,7 @@ export async function probeGateway(opts: {
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+      env: opts.env,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",

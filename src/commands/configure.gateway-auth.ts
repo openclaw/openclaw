@@ -1,5 +1,6 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,7 +16,7 @@ import {
 } from "./model-picker.js";
 import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./onboard-helpers.js";
+import { randomToken } from "./random-token.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type ProviderChoiceModelPrompt = {
@@ -103,6 +104,12 @@ function resolveSingleConfiguredProvider(cfg: OpenClawConfig): string | undefine
   return configuredProviders.length === 1 ? configuredProviders[0] : undefined;
 }
 
+function resolveProviderFromModelRef(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
+}
+
 function resolveConfiguredProviderFromAuthChange(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -161,7 +168,9 @@ export function buildGatewayAuthConfig(params: {
   }
   if (params.mode === "trusted-proxy") {
     if (!params.trustedProxy) {
-      throw new Error("trustedProxy config is required when mode is trusted-proxy");
+      throw new Error(
+        `trustedProxy config is required when mode is trusted-proxy. Run ${formatCliCommand("openclaw configure --section gateway")} to configure Gateway auth interactively.`,
+      );
     }
     return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
   }
@@ -207,7 +216,8 @@ export async function promptAuthConfig(
         allowKeep: true,
         ignoreAllowlist: true,
         includeProviderPluginSetups: false,
-        loadCatalog: false,
+        loadCatalog: true,
+        browseCatalogOnDemand: true,
         preferredProvider,
         workspaceDir: resolveDefaultAgentWorkspaceDir(),
         runtime,
@@ -217,6 +227,7 @@ export async function promptAuthConfig(
       }
       if (modelSelection.model) {
         next = applyPrimaryModel(next, modelSelection.model);
+        preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
       }
       break;
     }

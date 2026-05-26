@@ -1,7 +1,7 @@
-import { streamOpenAIResponses, type AssistantMessage, type Model } from "@mariozechner/pi-ai";
-import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
+import { streamOpenAIResponses, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
+import { buildCopilotDynamicHeaders } from "./stream.js";
 import { wrapCopilotOpenAIResponsesStream } from "./stream.js";
 import { resolveCopilotApiToken } from "./token.js";
 
@@ -133,11 +133,16 @@ function extractText(response: unknown): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text?.trim() ?? "")
-    .filter(Boolean)
-    .join(" ");
+  const text: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      const trimmed = block.text?.trim() ?? "";
+      if (trimmed.length > 0) {
+        text.push(trimmed);
+      }
+    }
+  }
+  return text.join(" ");
 }
 
 describeLive("github-copilot connection-bound Responses IDs live", () => {

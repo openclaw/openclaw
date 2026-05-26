@@ -1,13 +1,40 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createJiti } from "jiti";
+import type { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../src/channels/plugins/config-schema.js";
 import {
   buildPluginLoaderJitiOptions,
   resolvePluginSdkAliasFile,
   resolvePluginSdkScopedAliasMap,
 } from "../src/plugins/sdk-alias.js";
+
+type CreateJiti = typeof createJiti;
+
+const jitiFactoryOverrideKey = Symbol.for("openclaw.channelConfigSurfaceJitiFactoryOverride");
+const requireForJiti = createRequire(import.meta.url);
+let createJitiLoaderFactory: CreateJiti | undefined;
+
+function loadCreateJitiLoaderFactory(): CreateJiti {
+  const override = (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: CreateJiti;
+    }
+  )[jitiFactoryOverrideKey];
+  if (override) {
+    return override;
+  }
+  if (createJitiLoaderFactory) {
+    return createJitiLoaderFactory;
+  }
+  const loaded = requireForJiti("jiti") as { createJiti?: CreateJiti };
+  if (typeof loaded.createJiti !== "function") {
+    throw new Error("jiti module did not export createJiti");
+  }
+  createJitiLoaderFactory = loaded.createJiti;
+  return createJitiLoaderFactory;
+}
 
 function isBuiltChannelConfigSchema(
   value: unknown,
@@ -137,7 +164,7 @@ export async function loadChannelConfigSurfaceModule(
         pluginSdkResolution: "src",
       }),
     };
-    const jiti = createJiti(import.meta.url, {
+    const jiti = loadCreateJitiLoaderFactory()(import.meta.url, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       interopDefault: true,
       tryNative: false,
@@ -146,9 +173,26 @@ export async function loadChannelConfigSurfaceModule(
     });
     return jiti(resolvedPath) as Record<string, unknown>;
   };
-  const loadFromPath = (
+  const loadViaNativeImport = async (candidatePath: string) => {
+    const imported = (await import(pathToFileURL(path.resolve(candidatePath)).href)) as Record<
+      string,
+      unknown
+    >;
+    return resolveConfigSchemaExport(imported);
+  };
+  const loadFromPath = async (
     candidatePath: string,
-  ): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null => {
+  ): Promise<{ schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null> => {
+    try {
+      const resolved = await loadViaNativeImport(candidatePath);
+      if (resolved) {
+        return resolved;
+      }
+    } catch {
+      // Fall through to the compatibility loaders when the module needs custom
+      // plugin SDK aliasing or cannot be imported by the current Node loader.
+    }
+
     try {
       // Prefer the source-aware Jiti path so generated config metadata stays
       // stable before and after build output exists in the repo.

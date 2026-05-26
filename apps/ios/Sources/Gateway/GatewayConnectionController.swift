@@ -20,6 +20,93 @@ import UIKit
 @MainActor
 @Observable
 final class GatewayConnectionController {
+    struct ManualAuthOverride: Equatable {
+        struct SetupAuth {
+            let token: String
+            let bootstrapToken: String
+            let password: String
+
+            var hasBootstrapToken: Bool {
+                !self.bootstrapToken.isEmpty
+            }
+
+            var shouldApplyTokenField: Bool {
+                !self.token.isEmpty || self.hasBootstrapToken
+            }
+
+            var shouldApplyPasswordField: Bool {
+                !self.password.isEmpty || self.hasBootstrapToken
+            }
+
+            var manualAuthOverride: ManualAuthOverride? {
+                ManualAuthOverride.normalized(
+                    token: self.token,
+                    bootstrapToken: self.bootstrapToken,
+                    password: self.password)
+            }
+        }
+
+        let token: String?
+        let bootstrapToken: String?
+        let password: String?
+
+        static func explicit(
+            token: String?,
+            bootstrapToken: String?,
+            password: String?) -> ManualAuthOverride
+        {
+            let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return ManualAuthOverride(
+                token: trimmedToken.isEmpty ? nil : trimmedToken,
+                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
+                password: trimmedPassword.isEmpty ? nil : trimmedPassword)
+        }
+
+        static func normalized(
+            token: String?,
+            bootstrapToken: String?,
+            password: String?) -> ManualAuthOverride?
+        {
+            let override = ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password)
+            guard override.token != nil || override.bootstrapToken != nil || override.password != nil
+            else { return nil }
+            return override
+        }
+
+        static func currentManualInput(
+            token: String?,
+            pendingOverride: ManualAuthOverride?,
+            password: String?) -> ManualAuthOverride?
+        {
+            guard let pendingOverride else {
+                return ManualAuthOverride.normalized(token: token, bootstrapToken: nil, password: password)
+            }
+            return ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: pendingOverride.bootstrapToken,
+                password: password)
+        }
+
+        static func setupAuth(from link: GatewayConnectDeepLink) -> SetupAuth {
+            SetupAuth(
+                token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                bootstrapToken: link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                password: link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        }
+    }
+
+    private struct PendingTrustConnect {
+        let url: URL
+        let stableID: String
+        let isManual: Bool
+        let authOverride: ManualAuthOverride?
+    }
+
     struct TrustPrompt: Identifiable, Equatable {
         let stableID: String
         let gatewayName: String
@@ -42,7 +129,7 @@ final class GatewayConnectionController {
     private weak var appModel: NodeAppModel?
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
-    private var pendingTrustConnect: (url: URL, stableID: String, isManual: Bool)?
+    private var pendingTrustConnect: PendingTrustConnect?
 
     init(appModel: NodeAppModel, startDiscovery: Bool = true) {
         self.appModel = appModel
@@ -125,7 +212,11 @@ final class GatewayConnectionController {
             guard let fp = await self.probeTLSFingerprint(url: url) else {
                 return "Failed to read TLS fingerprint from discovered gateway."
             }
-            self.pendingTrustConnect = (url: url, stableID: stableID, isManual: false)
+            self.pendingTrustConnect = PendingTrustConnect(
+                url: url,
+                stableID: stableID,
+                isManual: false,
+                authOverride: nil)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
                 gatewayName: gateway.name,
@@ -162,12 +253,23 @@ final class GatewayConnectionController {
         _ = await self.connectWithDiagnostics(gateway)
     }
 
-    func connectManual(host: String, port: Int, useTLS: Bool) async {
-        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+    func connectManual(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        authOverride: ManualAuthOverride? = nil) async
+    {
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let token =
+            authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken =
+            authOverride.map(\.bootstrapToken) ?? GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
+        let password =
+            authOverride.map(\.password) ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let pendingAuthOverride = authOverride ?? ManualAuthOverride.normalized(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
@@ -181,7 +283,11 @@ final class GatewayConnectionController {
                         + "Remote gateways must use HTTPS/WSS."
                 return
             }
-            self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
+            self.pendingTrustConnect = PendingTrustConnect(
+                url: url,
+                stableID: stableID,
+                isManual: true,
+                authOverride: pendingAuthOverride)
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: stableID,
                 gatewayName: "\(host):\(resolvedPort)",
@@ -269,11 +375,14 @@ final class GatewayConnectionController {
             GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: pending.stableID, useTLS: true)
         }
 
-        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let token =
+            pending.authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken =
+            pending.authOverride.map(\.bootstrapToken) ?? GatewaySettingsStore.loadGatewayBootstrapToken(
+                instanceId: instanceId)
+        let password =
+            pending.authOverride.map(\.password) ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let tlsParams = GatewayTLSParams(
             required: true,
             expectedFingerprint: prompt.fingerprintSha256,
@@ -293,6 +402,47 @@ final class GatewayConnectionController {
     func declinePendingTrustPrompt() {
         self.clearPendingTrustPrompt()
         self.appModel?.gatewayStatusText = "Offline"
+    }
+
+    @discardableResult
+    func trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem) async -> Bool {
+        guard problem.canTrustRotatedCertificate,
+              let stableID = problem.tlsStoreKey,
+              let fingerprint = problem.tlsObservedFingerprint
+        else {
+            self.appModel?.gatewayStatusText = "Certificate review required"
+            return false
+        }
+
+        guard GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID) else {
+            self.appModel?.gatewayStatusText = "Could not update gateway certificate"
+            return false
+        }
+
+        GatewayDiagnostics.log(
+            "gateway tls pin replaced stableID=\(stableID) "
+                + "old=\(problem.tlsExpectedFingerprint ?? "unknown") new=\(fingerprint)")
+        self.appModel?.gatewayStatusText = "Gateway certificate updated. Reconnecting…"
+        if let appModel = self.appModel, let cfg = appModel.activeGatewayConnectConfig {
+            let currentTLS = cfg.tls
+            let refreshedTLS = GatewayTLSParams(
+                required: currentTLS?.required ?? true,
+                expectedFingerprint: fingerprint,
+                allowTOFU: currentTLS?.allowTOFU ?? false,
+                storeKey: currentTLS?.storeKey ?? stableID)
+            let refreshedConfig = GatewayConnectConfig(
+                url: cfg.url,
+                stableID: cfg.stableID,
+                tls: refreshedTLS,
+                token: cfg.token,
+                bootstrapToken: cfg.bootstrapToken,
+                password: cfg.password,
+                nodeOptions: cfg.nodeOptions)
+            appModel.applyGatewayConnectConfig(refreshedConfig)
+        } else {
+            await self.connectLastKnown()
+        }
+        return true
     }
 
     private func updateFromDiscovery() {
@@ -689,58 +839,13 @@ final class GatewayConnectionController {
     }
 
     private func shouldRequireTLS(host: String) -> Bool {
-        !Self.isLoopbackHost(host)
+        !LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func shouldForceTLS(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
-    }
-
-    private static func isLoopbackHost(_ rawHost: String) -> Bool {
-        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !host.isEmpty else { return false }
-
-        if host.hasPrefix("[") && host.hasSuffix("]") {
-            host.removeFirst()
-            host.removeLast()
-        }
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
-        if host.isEmpty { return false }
-
-        if host == "localhost" || host == "0.0.0.0" || host == "::" {
-            return true
-        }
-        return Self.isLoopbackIPv4(host) || Self.isLoopbackIPv6(host)
-    }
-
-    private static func isLoopbackIPv4(_ host: String) -> Bool {
-        var addr = in_addr()
-        let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
-        guard parsed else { return false }
-        let value = UInt32(bigEndian: addr.s_addr)
-        let firstOctet = UInt8((value >> 24) & 0xFF)
-        return firstOctet == 127
-    }
-
-    private static func isLoopbackIPv6(_ host: String) -> Bool {
-        var addr = in6_addr()
-        let parsed = host.withCString { inet_pton(AF_INET6, $0, &addr) == 1 }
-        guard parsed else { return false }
-        return withUnsafeBytes(of: &addr) { rawBytes in
-            let bytes = rawBytes.bindMemory(to: UInt8.self)
-            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
-            if isV6Loopback { return true }
-
-            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
-            return isMappedV4 && bytes[12] == 127
-        }
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -821,6 +926,7 @@ final class GatewayConnectionController {
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
+        caps.append(OpenClawCapability.talk.rawValue)
         if WatchMessagingService.isSupportedOnDevice() {
             caps.append(OpenClawCapability.watch.rawValue)
         }

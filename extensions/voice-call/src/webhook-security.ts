@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -360,19 +364,6 @@ function buildTwilioVerificationUrl(
   }
 }
 
-function isLoopbackAddress(address?: string): boolean {
-  if (!address) {
-    return false;
-  }
-  if (address === "127.0.0.1" || address === "::1") {
-    return true;
-  }
-  if (address.startsWith("::ffff:127.")) {
-    return true;
-  }
-  return false;
-}
-
 function stripPortFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -614,7 +605,7 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
-  const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
+  const isLoopback = isLoopbackHost(options?.remoteIP ?? ctx.remoteAddress ?? "");
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
   // Reconstruct the URL Twilio used
@@ -841,11 +832,9 @@ function validatePlivoV3Signature(params: {
   const expected = normalizeSignatureBase64(digest);
 
   // Header can contain multiple signatures separated by commas.
-  const provided = params.signatureHeader
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => normalizeSignatureBase64(s));
+  const provided = normalizeStringEntries(params.signatureHeader.split(",")).map((s) =>
+    normalizeSignatureBase64(s),
+  );
 
   for (const sig of provided) {
     if (timingSafeEqualString(expected, sig)) {

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import {
   callGatewayTool,
   listNodes,
@@ -7,8 +6,7 @@ import {
   type AnyAgentTool,
   type NodeListNode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveMediaBufferPath } from "openclaw/plugin-sdk/media-store";
-import { Type } from "typebox";
+import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
 import {
@@ -17,43 +15,23 @@ import {
   readGatewayCallOptions,
   readTrimmedString,
 } from "../shared/params.js";
+import {
+  FILE_TRANSFER_SUBDIR,
+  FILE_WRITE_HARD_MAX_BYTES,
+  FILE_WRITE_TOOL_DESCRIPTOR,
+} from "./descriptors.js";
 
-const FILE_WRITE_HARD_MAX_BYTES = 16 * 1024 * 1024;
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
 
-const FILE_WRITE_SCHEMA = Type.Object({
-  node: Type.String({ description: "Node id or display name to write the file on." }),
-  path: Type.String({
-    description: "Absolute path on the node to write. Canonicalized server-side.",
-  }),
-  contentBase64: Type.Optional(
-    Type.String({
-      description: "Base64-encoded bytes to write. Maximum 16 MB after decode.",
-    }),
-  ),
-  sourceMediaId: Type.Optional(
-    Type.String({
-      description:
-        "Media id returned by file_fetch. Preferred for binary copies because bytes stay in the gateway media store.",
-    }),
-  ),
-  mimeType: Type.Optional(
-    Type.String({
-      description: "Content type hint. Not validated against the content.",
-    }),
-  ),
-  overwrite: Type.Optional(
-    Type.Boolean({
-      description: "Allow overwriting an existing file. Default false.",
-      default: false,
-    }),
-  ),
-  createParents: Type.Optional(
-    Type.Boolean({
-      description: "Create missing parent directories (mkdir -p). Default false.",
-      default: false,
-    }),
-  ),
-});
+function decodeStrictBase64(value: string): Buffer {
+  const buffer = Buffer.from(value, "base64");
+  if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    throw new Error("contentBase64 is not valid base64");
+  }
+  return buffer;
+}
 
 async function readSourceBytes(input: {
   contentBase64?: string;
@@ -61,20 +39,17 @@ async function readSourceBytes(input: {
 }): Promise<{ buffer: Buffer; contentBase64: string; source: "inline" | "media" }> {
   const sourceMediaId = input.sourceMediaId?.trim();
   if (sourceMediaId) {
-    const mediaPath = await resolveMediaBufferPath(sourceMediaId, "file-transfer");
-    const stat = await fs.stat(mediaPath);
-    if (stat.size > FILE_WRITE_HARD_MAX_BYTES) {
-      throw new Error(
-        `sourceMediaId too large: ${stat.size} bytes; maximum is ${FILE_WRITE_HARD_MAX_BYTES} bytes`,
-      );
-    }
-    const buffer = await fs.readFile(mediaPath);
+    const { buffer } = await readMediaBuffer(
+      sourceMediaId,
+      FILE_TRANSFER_SUBDIR,
+      FILE_WRITE_HARD_MAX_BYTES,
+    );
     return { buffer, contentBase64: buffer.toString("base64"), source: "media" };
   }
   if (input.contentBase64 === undefined) {
     throw new Error("contentBase64 or sourceMediaId required");
   }
-  const buffer = Buffer.from(input.contentBase64, "base64");
+  const buffer = decodeStrictBase64(input.contentBase64);
   return { buffer, contentBase64: input.contentBase64, source: "inline" };
 }
 
@@ -97,11 +72,7 @@ type FileWritePayload = FileWriteSuccess | FileWriteError;
 
 export function createFileWriteTool(): AnyAgentTool {
   return {
-    label: "File Write",
-    name: "file_write",
-    description:
-      "Write file bytes to a paired node by absolute path. Atomic write (temp + rename). Refuses to overwrite by default — pass overwrite=true to replace. Refuses to write through symlink targets unless policy explicitly allows following symlinks. Pair with file_fetch by passing its mediaId as sourceMediaId for binary copy. Requires operator opt-in: gateway.nodes.allowCommands must include 'file.write' AND plugins.entries.file-transfer.config.nodes.<node>.allowWritePaths must match the destination path. Without policy configured, every call is denied.",
-    parameters: FILE_WRITE_SCHEMA,
+    ...FILE_WRITE_TOOL_DESCRIPTOR,
     async execute(_toolCallId, params) {
       const raw: Record<string, unknown> =
         params && typeof params === "object" && !Array.isArray(params)

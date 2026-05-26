@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { createPluginSourceLoader } from "./source-loader.js";
@@ -57,16 +57,14 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return Object.values(plugin.providerAuthEnvVars ?? {}).some((envVars) =>
-    envVars.some((name) => {
-      const value = env[name]?.trim();
-      return value !== undefined && value !== "";
-    }),
-  );
-}
-
-function dedupeSorted(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  const envVars = [
+    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
+    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
+  ];
+  return envVars.some((name) => {
+    const value = env[name]?.trim();
+    return value !== undefined && value !== "";
+  });
 }
 
 function resolveProviderDiscoveryEntryPlugins(params: {
@@ -77,18 +75,17 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderDiscoveryEntryResult {
-  const registry = params.pluginMetadataSnapshot?.index ?? loadPluginRegistrySnapshot(params);
-  const manifestRegistry =
-    params.pluginMetadataSnapshot?.manifestRegistry ??
-    loadPluginManifestRegistryForInstalledIndex({
-      index: registry,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      includeDisabled: true,
+  const metadataSnapshot =
+    params.pluginMetadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params.config ?? {},
+      env: params.env ?? process.env,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
+  const registry = metadataSnapshot.index;
+  const manifestRegistry = metadataSnapshot.manifestRegistry;
   const pluginIds = resolveDiscoveredProviderPluginIds({
     ...params,
     registry,
@@ -137,7 +134,7 @@ function resolveSelectiveFullPluginIds(params: {
     .filter((plugin) => !params.entryResult.entryPluginIds.has(plugin.id))
     .filter((plugin) => hasProviderAuthEnvCredential(plugin, params.env))
     .map((plugin) => plugin.id);
-  return dedupeSorted([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
+  return sortUniqueStrings([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
 }
 
 export function resolvePluginDiscoveryProvidersRuntime(params: {
@@ -148,10 +145,10 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const entryResult = resolveProviderDiscoveryEntryPlugins(params);
+  const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
   if (params.discoveryEntriesOnly === true) {
     return entryResult.providers;
   }

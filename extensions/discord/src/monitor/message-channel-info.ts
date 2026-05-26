@@ -1,5 +1,5 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelType, Message } from "../internal/discord.js";
 import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 
@@ -26,7 +26,7 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
   { value: DiscordChannelInfo | null; expiresAt: number }
 >();
 
-export function __resetDiscordChannelInfoCacheForTest() {
+export function resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
 }
 

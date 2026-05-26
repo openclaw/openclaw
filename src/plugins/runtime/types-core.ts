@@ -4,11 +4,22 @@ import type { MediaUnderstandingRuntime } from "../../media-understanding/runtim
 import type {
   ListSpeechVoices,
   TextToSpeech,
+  TextToSpeechStream,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
+
+export type RuntimeRequestHeartbeatOptions = Parameters<
+  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
+>[0];
+
+export type RuntimeRequestHeartbeatNowOptions = Omit<
+  RuntimeRequestHeartbeatOptions,
+  "source" | "intent"
+> &
+  Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
   envSnapshotForRestore?: Record<string, string | undefined>;
@@ -75,6 +86,53 @@ export type RunHeartbeatOnceOptions = {
   sessionKey?: string;
   /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
   heartbeat?: { target?: string };
+};
+
+export type LlmCompleteMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type LlmCompleteCaller = {
+  kind: "plugin" | "context-engine" | "host" | "unknown";
+  id?: string;
+  name?: string;
+};
+
+export type LlmCompleteUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+};
+
+export type LlmCompleteParams = {
+  messages: LlmCompleteMessage[];
+  /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  systemPrompt?: string;
+  signal?: AbortSignal;
+  /** Human-readable reason for audit/debug output. */
+  purpose?: string;
+  /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
+  agentId?: string;
+};
+
+export type LlmCompleteResult = {
+  text: string;
+  provider: string;
+  model: string;
+  agentId: string;
+  usage: LlmCompleteUsage;
+  audit: {
+    caller: LlmCompleteCaller;
+    purpose?: string;
+    sessionKey?: string;
+  };
 };
 
 type RuntimeRunEmbeddedPiAgent = (
@@ -145,14 +203,30 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
+      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      /**
+       * @deprecated Use getSessionEntry/listSessionEntries for reads and
+       * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
+       * mutable whole-store compatibility shape.
+       */
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
       saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
+      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
+      updateSessionStoreEntry: typeof import("../../config/sessions/store.js").updateSessionStoreEntry;
       resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
-    requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
+    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
+    /**
+     * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
+     * scheduler intent explicitly.
+     */
+    requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
      * Accepts an optional `heartbeat` config override so callers can force
@@ -168,11 +242,12 @@ export type PluginRuntimeCore = {
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
-    getImageMetadata: typeof import("../../media/image-ops.js").getImageMetadata;
-    resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
+    getImageMetadata: typeof import("../../media/media-services.js").getImageMetadata;
+    resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
     textToSpeech: TextToSpeech;
+    textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
     listVoices: ListSpeechVoices;
   };
@@ -180,6 +255,7 @@ export type PluginRuntimeCore = {
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    extractStructuredWithModel: MediaUnderstandingRuntime["extractStructuredWithModel"];
     describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
     transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
@@ -244,16 +320,19 @@ export type PluginRuntimeCore = {
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
+  llm: {
+    complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+  };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

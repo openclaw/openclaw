@@ -4,11 +4,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { defineBundledChannelEntry, loadBundledEntryExportSync } from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
+const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
+  "openclaw.pluginModuleLoaderJitiFactoryOverride",
+);
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -17,7 +22,20 @@ afterEach(() => {
   vi.resetModules();
   vi.doUnmock("jiti");
   vi.unstubAllEnvs();
+  delete (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey];
 });
+
+function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
+  (
+    globalThis as typeof globalThis & {
+      [pluginModuleLoaderJitiFactoryOverrideKey]?: PluginModuleLoaderFactory;
+    }
+  )[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
+}
 
 function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi {
   return {
@@ -227,7 +245,9 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const profileLine = errorSpy.mock.calls
       .map((args) => String(args[0] ?? ""))
       .find((line) => line.startsWith("[plugin-load-profile] phase=bundled-entry-module-load"));
-    expect(profileLine, "expected a bundled-entry-module-load profile line").toBeDefined();
+    if (profileLine === undefined) {
+      throw new Error("expected a bundled-entry-module-load profile line");
+    }
     expect(profileLine).toMatch(/sourceLoaderCreateMs=\d/u);
     expect(profileLine).toMatch(/sourceLoaderCallMs=\d/u);
     expect(profileLine).not.toMatch(/sourceLoaderCreateMs=-/);
@@ -268,13 +288,10 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("keeps Windows dist sidecar loads off source-transform loading", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ load: 42 })));
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const createJiti = vi.fn(() => vi.fn(() => ({ load: 0 })));
+    stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const channelEntryContract = await importFreshModule<
         typeof import("./channel-entry-contract.js")
       >(import.meta.url, "./channel-entry-contract.js?scope=windows-dist-jiti");
@@ -285,25 +302,18 @@ describe("loadBundledEntryExportSync", () => {
       fs.mkdirSync(pluginRoot, { recursive: true });
 
       const importerPath = path.join(pluginRoot, "index.js");
-      const helperPath = path.join(pluginRoot, "helper.ts");
+      const helperPath = path.join(pluginRoot, "helper.cjs");
       fs.writeFileSync(importerPath, "export default {};\n", "utf8");
-      fs.writeFileSync(helperPath, "export const load = 42;\n", "utf8");
+      fs.writeFileSync(helperPath, "module.exports = { load: 42 };\n", "utf8");
 
       expect(
         channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-          specifier: "./helper.ts",
+          specifier: "./helper.cjs",
           exportName: "load",
         }),
       ).toBe(42);
-      expect(createJiti).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          tryNative: false,
-        }),
-      );
-    } finally {
-      platformSpy.mockRestore();
-    }
+      expect(createJiti).not.toHaveBeenCalled();
+    });
   });
 
   it("normalizes Windows absolute sidecar paths before module loads them", async () => {
@@ -313,40 +323,38 @@ describe("loadBundledEntryExportSync", () => {
     fs.writeFileSync(openedFdPath, "opened\n", "utf8");
     const jitiLoad = vi.fn(() => ({ load: 42 }));
     const createJiti = vi.fn(() => jitiLoad);
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
     vi.doMock("../infra/boundary-file-read.js", () => ({
-      openBoundaryFileSync: () => ({
+      openRootFileSync: () => ({
         ok: true,
         path: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\helper.ts",
         fd: fs.openSync(openedFdPath, "r"),
       }),
     }));
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
-      const channelEntryContract = await importFreshModule<
-        typeof import("./channel-entry-contract.js")
-      >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-jiti-path");
+    await withMockedWindowsPlatform(async () => {
+      try {
+        const channelEntryContract = await importFreshModule<
+          typeof import("./channel-entry-contract.js")
+        >(import.meta.url, "./channel-entry-contract.js?scope=windows-safe-jiti-path");
 
-      expect(
-        channelEntryContract.loadBundledEntryExportSync<number>(
-          "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js",
-          {
-            specifier: "./helper.ts",
-            exportName: "load",
-          },
-        ),
-      ).toBe(42);
-      expect(jitiLoad).toHaveBeenCalledWith(
-        "file:///C:/Users/alice/openclaw/dist/extensions/feishu/helper.ts",
-      );
-    } finally {
-      platformSpy.mockRestore();
-      vi.doUnmock("../infra/boundary-file-read.js");
-      vi.doUnmock("jiti");
-    }
+        expect(
+          channelEntryContract.loadBundledEntryExportSync<number>(
+            "file:///C:/Users/alice/openclaw/dist/extensions/feishu/index.js",
+            {
+              specifier: "./helper.ts",
+              exportName: "load",
+            },
+            { createLoaderForTest: createJiti as never },
+          ),
+        ).toBe(42);
+        expect(jitiLoad).toHaveBeenCalledWith(
+          "file:///C:/Users/alice/openclaw/dist/extensions/feishu/helper.ts",
+        );
+      } finally {
+        vi.doUnmock("../infra/boundary-file-read.js");
+        vi.doUnmock("jiti");
+      }
+    });
   });
 
   it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
@@ -408,6 +416,9 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {
+    stubPluginModuleLoaderJitiFactory(
+      vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
+    );
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 

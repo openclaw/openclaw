@@ -7,28 +7,26 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
-let listThinkingLevelOptions: typeof import("./thinking.js").listThinkingLevelOptions;
-let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
-let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
-let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
-let isThinkingLevelSupported: typeof import("./thinking.js").isThinkingLevelSupported;
-let formatThinkingLevels: typeof import("./thinking.js").formatThinkingLevels;
-let resolveSupportedThinkingLevel: typeof import("./thinking.js").resolveSupportedThinkingLevel;
-let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
+  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+  resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
+  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
+}));
 
-async function loadFreshThinkingModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../plugins/provider-thinking.js", () => ({
-    resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-    resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
-    resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
-    resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
-  }));
-  return await import("./thinking.js");
-}
+const {
+  listThinkingLevelLabels,
+  listThinkingLevelOptions,
+  listThinkingLevels,
+  normalizeReasoningLevel,
+  normalizeThinkLevel,
+  isThinkingLevelSupported,
+  formatThinkingLevels,
+  resolveSupportedThinkingLevel,
+  resolveThinkingDefaultForModel,
+} = await import("./thinking.js");
 
-beforeEach(async () => {
+beforeEach(() => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
@@ -37,18 +35,6 @@ beforeEach(async () => {
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
-
-  ({
-    listThinkingLevelLabels,
-    listThinkingLevelOptions,
-    listThinkingLevels,
-    normalizeReasoningLevel,
-    normalizeThinkLevel,
-    isThinkingLevelSupported,
-    formatThinkingLevels,
-    resolveSupportedThinkingLevel,
-    resolveThinkingDefaultForModel,
-  } = await loadFreshThinkingModuleForTest());
 });
 
 describe("normalizeThinkLevel", () => {
@@ -172,6 +158,70 @@ describe("listThinkingLevels", () => {
 
     expect(listThinkingLevels("demo", "demo-model")).toEqual(["off", "low"]);
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
+  });
+
+  it("treats catalog reasoning=false as an explicit thinking opt-out", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    });
+    const catalog = [
+      {
+        provider: "google",
+        id: "gemma-4-26b-a4b-it",
+        name: "Gemma 4 26B",
+        reasoning: false,
+      },
+    ];
+
+    expect(listThinkingLevels("google", "gemma-4-26b-a4b-it", catalog)).toEqual(["off"]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "google",
+        model: "gemma-4-26b-a4b-it",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe(false);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "google",
+        model: "gemma-4-26b-a4b-it",
+        catalog,
+      }),
+    ).toBe("off");
+  });
+
+  it("preserves provider-authoritative thinking profiles over stale catalog reasoning", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    const catalog = [
+      {
+        provider: "google",
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: false,
+      },
+    ];
+
+    expect(
+      isThinkingLevelSupported({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        level: "low",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        level: "low",
+        catalog,
+      }),
+    ).toBe("low");
   });
 
   it("passes catalog reasoning into provider thinking profiles for support checks", () => {

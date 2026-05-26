@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isAbortError,
   isBenignUncaughtExceptionError,
+  isTransientFileWatchError,
   isTransientNetworkError,
   isTransientSqliteError,
   isTransientUnhandledRejectionError,
@@ -59,14 +60,17 @@ describe("isTransientNetworkError", () => {
       "ESOCKETTIMEDOUT",
       "ECONNABORTED",
       "EPIPE",
+      "ENETDOWN",
       "EHOSTUNREACH",
       "ENETUNREACH",
+      "EADDRNOTAVAIL",
       "EAI_AGAIN",
       "EPROTO",
       "UND_ERR_CONNECT_TIMEOUT",
       "UND_ERR_SOCKET",
       "UND_ERR_HEADERS_TIMEOUT",
       "UND_ERR_BODY_TIMEOUT",
+      "ERR_HTTP2_INVALID_SESSION",
       "ERR_SSL_WRONG_VERSION_NUMBER",
       "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
     ];
@@ -99,6 +103,17 @@ describe("isTransientNetworkError", () => {
     const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
     const error = Object.assign(new TypeError("fetch failed"), { cause: outerCause });
     expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for destroyed HTTP/2 sessions from undici", () => {
+    const innerCause = Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    });
+    const outerCause = Object.assign(new Error("model call failed"), { cause: innerCause });
+
+    expect(isTransientNetworkError(innerCause)).toBe(true);
+    expect(isTransientNetworkError(outerCause)).toBe(true);
+    expect(isTransientNetworkError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
   });
 
   it("returns true for Slack request errors that wrap network codes in .original", () => {
@@ -258,24 +273,147 @@ describe("isTransientSqliteError", () => {
   });
 });
 
+describe("isTransientFileWatchError", () => {
+  it("returns true for ENOSPC with inotify message", () => {
+    const error = Object.assign(new Error("inotify watches exhausted"), { code: "ENOSPC" });
+    expect(isTransientFileWatchError(error)).toBe(true);
+  });
+
+  it("returns true for ENOSPC with file watcher message", () => {
+    const error = Object.assign(new Error("System limit for number of file watchers reached"), {
+      code: "ENOSPC",
+    });
+    expect(isTransientFileWatchError(error)).toBe(true);
+  });
+
+  it("returns true for ENOSPC with watcher error message", () => {
+    const error = Object.assign(new Error("watcher error: ENOSPC"), { code: "ENOSPC" });
+    expect(isTransientFileWatchError(error)).toBe(true);
+  });
+
+  it("returns false for ENOSPC without watch indicator in file-watch classifier", () => {
+    const error = Object.assign(new Error("write failed: no space left on device"), {
+      code: "ENOSPC",
+    });
+    expect(isTransientFileWatchError(error)).toBe(false);
+  });
+
+  it("returns false for ENOSPC with only 'disk full' message", () => {
+    const error = Object.assign(new Error("ENOSPC: disk full"), { code: "ENOSPC" });
+    expect(isTransientFileWatchError(error)).toBe(false);
+  });
+
+  it("returns false for message-only disk full without watch indicator", () => {
+    expect(isTransientFileWatchError(new Error("write failed: no space left on device"))).toBe(
+      false,
+    );
+    expect(isTransientFileWatchError(new Error("ENOSPC: no space left on device"))).toBe(false);
+  });
+
+  it("returns true for 'no space left on device' message with watcher context", () => {
+    const error = new Error("file watcher: no space left on device");
+    expect(isTransientFileWatchError(error)).toBe(true);
+  });
+
+  it("returns true for inotify-related error messages", () => {
+    expect(isTransientFileWatchError(new Error("inotify watches exhausted"))).toBe(true);
+    expect(
+      isTransientFileWatchError(new Error("System limit for number of file watchers reached")),
+    ).toBe(true);
+  });
+
+  it("returns true for watcher-related no-space messages", () => {
+    expect(isTransientFileWatchError(new Error("file watcher: no space left on device"))).toBe(
+      true,
+    );
+  });
+
+  it("returns false for generic code-less watcher messages", () => {
+    expect(isTransientFileWatchError(new Error("file watcher failed"))).toBe(false);
+    expect(isTransientFileWatchError(new Error("watcher error: boom"))).toBe(false);
+    expect(isTransientFileWatchError(new Error("watcher error: ENOSPC"))).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("file watcher failed"))).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("watcher error: boom"))).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("watcher error: ENOSPC"))).toBe(false);
+  });
+
+  it("returns true for ENOSPC with cause chain containing watch indicator", () => {
+    const cause = Object.assign(new Error("inotify watches exhausted"), { code: "ENOSPC" });
+    const error = Object.assign(new Error("watcher failed"), { cause });
+    expect(isTransientFileWatchError(error)).toBe(true);
+  });
+
+  it("returns false for 'watchdog timeout' (unrelated watch error)", () => {
+    expect(isTransientFileWatchError(new Error("watchdog timeout"))).toBe(false);
+    expect(isTransientFileWatchError(new Error("cannot watch process"))).toBe(false);
+  });
+
+  it("returns false for regular errors without file watch indicators", () => {
+    expect(isTransientFileWatchError(new Error("Something went wrong"))).toBe(false);
+    expect(isTransientFileWatchError(new TypeError("Cannot read property"))).toBe(false);
+    expect(isTransientFileWatchError(new RangeError("Invalid array length"))).toBe(false);
+  });
+
+  it("returns false for other disk errors without ENOSPC", () => {
+    expect(isTransientFileWatchError(new Error("disk quota exceeded"))).toBe(false);
+    expect(
+      isTransientFileWatchError(
+        Object.assign(new Error("read only file system"), { code: "EROFS" }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42, { message: "plain object" }])(
+    "returns false for non-file-watch input %#",
+    (value) => {
+      expect(isTransientFileWatchError(value)).toBe(false);
+    },
+  );
+});
+
 describe("isTransientUnhandledRejectionError", () => {
   it("treats raw pre-connect network uncaught exceptions as benign", () => {
     const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     const sqlite = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
     const network = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    const networkDown = Object.assign(new Error("connect ENETDOWN"), {
+      code: "ENETDOWN",
+    });
+    const rawNetworkDown = new Error(
+      "connect ENETDOWN 149.154.167.220:443 - Local (10.0.10.40:50017)",
+    );
     const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH"), {
       code: "EHOSTUNREACH",
     });
     const rawHostUnreachable = new Error(
       "connect EHOSTUNREACH 149.154.167.220:443 - Local (10.0.10.40:50017)",
     );
+    const addressUnavailable = Object.assign(new Error("connect EADDRNOTAVAIL"), {
+      code: "EADDRNOTAVAIL",
+    });
+    const rawAddressUnavailable = new Error(
+      "connect EADDRNOTAVAIL 2607:6bc0::10:443 - Local (:::0)",
+    );
+    const destroyedHttp2Session = Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    });
+    const wrappedDestroyedHttp2Session = Object.assign(new Error("model call failed"), {
+      cause: destroyedHttp2Session,
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
     expect(isBenignUncaughtExceptionError(sqlite)).toBe(false);
     expect(isBenignUncaughtExceptionError(network)).toBe(false);
+    expect(isBenignUncaughtExceptionError(networkDown)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawNetworkDown)).toBe(true);
     expect(isBenignUncaughtExceptionError(hostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawAddressUnavailable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(destroyedHttp2Session)).toBe(true);
+    expect(isBenignUncaughtExceptionError(wrappedDestroyedHttp2Session)).toBe(true);
+    expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {
@@ -286,5 +424,31 @@ describe("isTransientUnhandledRejectionError", () => {
     });
 
     expect(isTransientUnhandledRejectionError(error)).toBe(true);
+  });
+
+  it("returns true for transient file watcher errors (ENOSPC + inotify)", () => {
+    const error = Object.assign(new Error("inotify watches exhausted"), { code: "ENOSPC" });
+    expect(isTransientUnhandledRejectionError(error)).toBe(true);
+  });
+
+  it("returns true for file watcher errors with message only", () => {
+    const error = new Error("System limit for number of file watchers reached");
+    expect(isTransientUnhandledRejectionError(error)).toBe(true);
+  });
+
+  it("returns false for ENOSPC without watch indicator in unhandled-rejection classifier", () => {
+    const error = Object.assign(new Error("write failed: no space left on device"), {
+      code: "ENOSPC",
+    });
+    expect(isTransientUnhandledRejectionError(error)).toBe(false);
+  });
+
+  it("returns false for code-less disk full messages without watch indicator", () => {
+    expect(
+      isTransientUnhandledRejectionError(new Error("write failed: no space left on device")),
+    ).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("ENOSPC: no space left on device"))).toBe(
+      false,
+    );
   });
 });

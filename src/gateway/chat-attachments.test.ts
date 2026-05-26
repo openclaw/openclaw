@@ -52,6 +52,10 @@ async function cleanupOffloadedRefs(refs: { id: string }[]) {
   await Promise.allSettled(refs.map((ref) => deleteMediaBufferMock(ref.id, "inbound")));
 }
 
+function savedMime() {
+  return saveMediaBufferMock.mock.calls[0]?.[1];
+}
+
 beforeEach(() => {
   saveMediaBufferMock.mockClear();
   deleteMediaBufferMock.mockClear();
@@ -142,7 +146,7 @@ describe("parseMessageWithAttachments", () => {
     // ctx.MediaPaths so the workspace stage surfaces a real path.
     expect(parsed.message).toBe("read this");
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("application/pdf");
+    expect(savedMime()).toBe("application/pdf");
     expect(logs).toHaveLength(0);
   });
 
@@ -155,7 +159,7 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/octet-stream");
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("application/octet-stream");
+    expect(savedMime()).toBe("application/octet-stream");
     expect(parsed.message).toBe("take a look");
     expect(logs).toHaveLength(0);
   });
@@ -291,20 +295,40 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.offloadedRefs[0]?.label).toBe("bundle.zip");
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
   });
+
+  it("does not let image filenames override generic non-image byte sniffing", async () => {
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+    const { parsed, logs } = await parseWithWarnings("x", [
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "fake.png",
+        content: zip,
+      },
+    ]);
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
+    expect(savedMime()).toBe("application/zip");
+    expect(logs[0]).toMatch(/mime mismatch/i);
+  });
 });
 
 describe("parseMessageWithAttachments validation errors", () => {
   it("throws UnsupportedAttachmentError on empty payload", async () => {
-    await expect(
-      parseMessageWithAttachments(
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
         "x",
         [{ type: "file", mimeType: "application/pdf", fileName: "empty.pdf", content: "" }],
         { log: { warn: () => {} } },
-      ),
-    ).rejects.toMatchObject({
-      name: "UnsupportedAttachmentError",
-      reason: "empty-payload",
-    });
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
+    expect((caught as UnsupportedAttachmentError).reason).toBe("empty-payload");
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
@@ -332,6 +356,23 @@ describe("parseMessageWithAttachments validation errors", () => {
       await parseMessageWithAttachments(
         "x",
         [{ type: "file", mimeType: "image/png", fileName: "report.docx", content: docx }],
+        { log: { warn: () => {} }, acceptNonImage: false },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).reason).toBe("unsupported-non-image");
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects generic-container payloads with image mime and image filename when acceptNonImage is false", async () => {
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
+        "x",
+        [{ type: "image", mimeType: "image/png", fileName: "fake.png", content: zip }],
         { log: { warn: () => {} }, acceptNonImage: false },
       );
     } catch (err) {
@@ -394,12 +435,10 @@ describe("parseMessageWithAttachments validation errors", () => {
 
     try {
       expect(parsed.images).toHaveLength(0);
-      expect(parsed.imageOrder).toEqual([]);
+      expect(parsed.imageOrder).toStrictEqual([]);
       expect(parsed.offloadedRefs).toHaveLength(1);
-      expect(parsed.offloadedRefs[0]).toMatchObject({
-        mimeType: "application/pdf",
-        label: "brief.pdf",
-      });
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+      expect(parsed.offloadedRefs[0]?.label).toBe("brief.pdf");
       expect(parsed.message).toBe("read this");
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
@@ -477,7 +516,9 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.message).toContain(
         "[image attachment omitted: text-only attachment limit reached]",
       );
-      expect(logs.some((line) => /offload limit 10/i.test(line))).toBe(true);
+      expect(logs).toEqual([
+        "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
+      ]);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }

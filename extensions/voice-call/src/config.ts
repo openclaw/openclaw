@@ -5,7 +5,7 @@ import {
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
@@ -73,6 +73,24 @@ const PlivoConfigSchema = z
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
 
 export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
+
+const VoiceCallNumberRouteConfigSchema = z
+  .object({
+    /** Greeting message for inbound calls to this number. */
+    inboundGreeting: z.string().optional(),
+    /** TTS override for inbound calls to this number. Deep-merges with global voice-call TTS. */
+    tts: TtsConfigSchema,
+    /** Agent ID to use for voice response generation for this number. */
+    agentId: z.string().min(1).optional(),
+    /** Optional model override for voice responses for this number. */
+    responseModel: z.string().optional(),
+    /** System prompt for voice responses for this number. */
+    responseSystemPrompt: z.string().optional(),
+    /** Timeout for response generation in ms for this number. */
+    responseTimeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+export type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
@@ -173,6 +191,9 @@ export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfi
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
+const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
+
 const OutboundConfigSchema = z
   .object({
     /** Default call mode for outbound calls */
@@ -206,6 +227,7 @@ const VoiceCallRealtimeProvidersConfigSchema = z
   .default({});
 
 const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
+const VoiceCallRealtimeConsultPolicySchema = z.enum(["auto", "substantive", "always"]);
 
 const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
 
@@ -237,6 +259,48 @@ export type VoiceCallRealtimeFastContextConfig = z.infer<
   typeof VoiceCallRealtimeFastContextConfigSchema
 >;
 
+const VoiceCallRealtimeAgentContextConfigSchema = z
+  .object({
+    /** Inject a compact agent persona/context capsule into realtime voice instructions. */
+    enabled: z.boolean().default(false),
+    /** Maximum number of characters from the generated capsule to append. */
+    maxChars: z.number().int().positive().default(6000),
+    /** Include configured agent identity fields. */
+    includeIdentity: z.boolean().default(true),
+    /** Include agents.defaults/list systemPromptOverride when configured. */
+    includeSystemPrompt: z.boolean().default(true),
+    /** Include selected workspace files such as SOUL.md and IDENTITY.md. */
+    includeWorkspaceFiles: z.boolean().default(true),
+    /** Workspace-relative files to include, bounded by maxChars. */
+    files: z.array(z.string().min(1)).default(["SOUL.md", "IDENTITY.md", "USER.md"]),
+  })
+  .strict()
+  .default({
+    enabled: false,
+    maxChars: 6000,
+    includeIdentity: true,
+    includeSystemPrompt: true,
+    includeWorkspaceFiles: true,
+    files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+  });
+export type VoiceCallRealtimeAgentContextConfig = z.infer<
+  typeof VoiceCallRealtimeAgentContextConfigSchema
+>;
+
+export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+]);
+export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
+  typeof VoiceCallRealtimeConsultThinkingLevelSchema
+>;
+
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -253,10 +317,18 @@ const VoiceCallRealtimeConfigSchema = z
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
+    /** Guidance for when the realtime model should call the OpenClaw agent consult tool. */
+    consultPolicy: VoiceCallRealtimeConsultPolicySchema.default("auto"),
+    /** Optional thinking level override for the regular agent behind realtime consults. */
+    consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
+    /** Optional fast mode override for the regular agent behind realtime consults. */
+    consultFastMode: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
     fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    /** Bounded agent persona/context injection for the fast realtime voice path. */
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
@@ -265,6 +337,7 @@ const VoiceCallRealtimeConfigSchema = z
     enabled: false,
     instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
     toolPolicy: "safe-read-only",
+    consultPolicy: "auto",
     tools: [],
     fastContext: {
       enabled: false,
@@ -272,6 +345,14 @@ const VoiceCallRealtimeConfigSchema = z
       maxResults: 3,
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
+    },
+    agentContext: {
+      enabled: false,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeSystemPrompt: true,
+      includeWorkspaceFiles: true,
+      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
     providers: {},
   });
@@ -350,6 +431,9 @@ export const VoiceCallConfigSchema = z
     /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
 
+    /** Per-dialed-number overrides for inbound calls. Keys are E.164 numbers. */
+    numbers: z.record(E164Schema, VoiceCallNumberRouteConfigSchema).default({}),
+
     /** Outbound call configuration */
     outbound: OutboundConfigSchema,
 
@@ -393,6 +477,9 @@ export const VoiceCallConfigSchema = z
     /** Realtime voice-to-voice configuration */
     realtime: VoiceCallRealtimeConfigSchema,
 
+    /** Session memory scope for voice conversations. */
+    sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),
+
     /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
     publicUrl: z.string().url().optional(),
 
@@ -420,6 +507,10 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
+export type VoiceCallEffectiveConfigResult = {
+  config: VoiceCallConfig;
+  numberRouteKey?: string;
+};
 type DeepPartial<T> = T extends SecretInput
   ? T
   : T extends Array<infer U>
@@ -474,6 +565,56 @@ function normalizeVoiceCallTtsConfig(
   return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
 }
 
+function normalizePhoneRouteKey(phone: string | undefined): string {
+  return phone?.replace(/\D/g, "") ?? "";
+}
+
+export function resolveVoiceCallNumberRouteKey(
+  config: Pick<VoiceCallConfig, "numbers">,
+  phone: string | undefined,
+): string | undefined {
+  const routes = config.numbers;
+  if (!routes) {
+    return undefined;
+  }
+  if (phone && Object.prototype.hasOwnProperty.call(routes, phone)) {
+    return phone;
+  }
+
+  const normalizedPhone = normalizePhoneRouteKey(phone);
+  if (!normalizedPhone) {
+    return undefined;
+  }
+  return Object.keys(routes).find(
+    (routeKey) => normalizePhoneRouteKey(routeKey) === normalizedPhone,
+  );
+}
+
+export function resolveVoiceCallEffectiveConfig(
+  config: VoiceCallConfig,
+  phoneOrRouteKey: string | undefined,
+): VoiceCallEffectiveConfigResult {
+  const numberRouteKey = resolveVoiceCallNumberRouteKey(config, phoneOrRouteKey);
+  if (!numberRouteKey) {
+    return { config };
+  }
+
+  const route = config.numbers[numberRouteKey];
+  if (!route) {
+    return { config };
+  }
+
+  return {
+    numberRouteKey,
+    config: {
+      ...config,
+      ...route,
+      tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
+      numbers: config.numbers,
+    },
+  };
+}
+
 function sanitizeVoiceCallProviderConfigs(
   value: Record<string, Record<string, unknown> | undefined> | undefined,
 ): Record<string, Record<string, unknown>> {
@@ -484,6 +625,19 @@ function sanitizeVoiceCallProviderConfigs(
     Object.entries(value).filter(
       (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
     ),
+  );
+}
+
+function sanitizeVoiceCallNumberRoutes(
+  value: Record<string, unknown> | undefined,
+): Record<string, VoiceCallNumberRouteConfig> {
+  if (!value) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, unknown] => entry[1] !== undefined)
+      .map(([key, route]) => [key, VoiceCallNumberRouteConfigSchema.parse(route)]),
   );
 }
 
@@ -512,10 +666,18 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...config.realtime?.fastContext,
     sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
   };
+  const realtimeAgentContext = {
+    ...defaults.realtime.agentContext,
+    ...config.realtime?.agentContext,
+    files: config.realtime?.agentContext?.files ?? defaults.realtime.agentContext.files,
+  };
   return {
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
+    numbers: sanitizeVoiceCallNumberRoutes(
+      (config.numbers ?? defaults.numbers) as Record<string, unknown>,
+    ),
     outbound: { ...defaults.outbound, ...config.outbound },
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
@@ -542,11 +704,33 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
+        config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
+      ),
+      consultFastMode: config.realtime?.consultFastMode ?? defaults.realtime.consultFastMode,
       fastContext: realtimeFastContext,
+      agentContext: realtimeAgentContext,
       providers: realtimeProviders,
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
+}
+
+export function resolveVoiceCallSessionKey(params: {
+  config: Pick<VoiceCallConfig, "sessionScope">;
+  callId: string;
+  phone?: string;
+  explicitSessionKey?: string;
+}): string {
+  const explicit = params.explicitSessionKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (params.config.sessionScope === "per-call") {
+    return `voice:call:${params.callId}`;
+  }
+  const normalizedPhone = params.phone?.replace(/\D/g, "");
+  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
 }
 
 /**
@@ -684,9 +868,14 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
-  if (config.realtime.enabled && config.provider && config.provider !== "twilio") {
+  if (
+    config.realtime.enabled &&
+    config.provider &&
+    config.provider !== "twilio" &&
+    config.provider !== "telnyx"
+  ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
     );
   }
 

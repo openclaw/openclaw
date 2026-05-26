@@ -6,12 +6,12 @@ export type CoreCliCommandDescriptor = NamedCommandDescriptor;
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "crestodian",
-    description: "Open the ring-zero setup and repair helper",
+    description: "Open the interactive setup and repair assistant",
     hasSubcommands: false,
   },
   {
     name: "setup",
-    description: "Initialize local config and agent workspace",
+    description: "Initialize local config and an agent workspace",
     hasSubcommands: false,
   },
   {
@@ -42,7 +42,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "doctor",
-    description: "Health checks + quick fixes for the gateway and channels",
+    description: "Diagnose and repair config, Gateway, plugin, and channel problems",
     hasSubcommands: false,
   },
   {
@@ -62,12 +62,18 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "message",
-    description: "Send, read, and manage messages",
+    description: "Send, read, and manage channel messages",
     hasSubcommands: true,
   },
   {
     name: "mcp",
     description: "Manage OpenClaw MCP config and channel bridge",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
+    name: "transcripts",
+    description: "Inspect stored transcripts",
     hasSubcommands: true,
   },
   {
@@ -82,12 +88,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "status",
-    description: "Show channel health and recent session recipients",
+    description: "Show Gateway, channel, model, and recent-session status",
     hasSubcommands: false,
   },
   {
     name: "health",
-    description: "Fetch health from the running gateway",
+    description: "Fetch detailed health from the running Gateway",
     hasSubcommands: false,
   },
   {
@@ -102,7 +108,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "tasks",
-    description: "Inspect durable background task state",
+    description: "Inspect durable background tasks and flows",
     hasSubcommands: true,
   },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
@@ -119,4 +125,8 @@ export function getCoreCliCommandNames(): string[] {
 
 export function getCoreCliCommandsWithSubcommands(): string[] {
   return coreCliCommandCatalog.getCommandsWithSubcommands();
+}
+
+export function getCoreCliParentDefaultHelpCommands(): string[] {
+  return coreCliCommandCatalog.getParentDefaultHelpCommands();
 }

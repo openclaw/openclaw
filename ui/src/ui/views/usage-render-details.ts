@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
-import {
+import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
@@ -301,6 +301,15 @@ function renderSessionDetailPanel(
           ×
         </button>
       </div>
+      ${session.scope === "family" && session.includedSessionIds?.length
+        ? html`
+            <div class="usage-lineage-note">
+              ${t("usage.scope.familyIncluded", {
+                count: String(session.includedSessionIds.length),
+              })}
+            </div>
+          `
+        : nothing}
       <div class="session-detail-content">
         ${renderSessionSummary(
           session,
@@ -918,7 +927,7 @@ function renderContextPanel(
                     ${skillsTop.map(
                       (s) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono">${s.name}</span>
+                          <span class="mono" title=${s.name}>${s.name}</span>
                           <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
                         </div>
                       `,
@@ -947,7 +956,7 @@ function renderContextPanel(
                     ${toolsTop.map(
                       (t) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono">${t.name}</span>
+                          <span class="mono" title=${t.name}>${t.name}</span>
                           <span class="muted"
                             >~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span
                           >
@@ -978,7 +987,7 @@ function renderContextPanel(
                     ${filesTop.map(
                       (f) => html`
                         <div class="context-breakdown-item">
-                          <span class="mono">${f.name}</span>
+                          <span class="mono" title=${f.name}>${f.name}</span>
                           <span class="muted"
                             >~${formatTokens(charsToTokens(f.injectedChars))}</span
                           >

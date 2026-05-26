@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, ComponentRegistry, type AnyListener } from "./client.js";
@@ -31,9 +34,9 @@ function createTestCommand(params: {
 }): BaseCommand {
   return new (class extends BaseCommand {
     name = params.name;
-    description = `${params.name} command`;
+    override description = `${params.name} command`;
     type = ApplicationCommandType.ChatInput;
-    guildIds = params.guildIds;
+    override guildIds = params.guildIds;
     serializeOptions() {
       return params.options;
     }
@@ -54,7 +57,7 @@ describe("ComponentRegistry", () => {
     class WildcardButton extends Button {
       label = "button";
       customId = "__button_wildcard__";
-      customIdParser = (id: string) =>
+      override customIdParser = (id: string) =>
         id === this.customId || id.startsWith("occomp:")
           ? { key: "*", data: {} }
           : parseCustomId(id);
@@ -62,7 +65,7 @@ describe("ComponentRegistry", () => {
     class WildcardSelect extends StringSelectMenu {
       customId = "__select_wildcard__";
       options = [];
-      customIdParser = (id: string) =>
+      override customIdParser = (id: string) =>
         id === this.customId || id.startsWith("occomp:")
           ? { key: "*", data: {} }
           : parseCustomId(id);
@@ -86,7 +89,7 @@ describe("ComponentRegistry", () => {
     class EncodedButton extends Button {
       label = "button";
       customId = "encoded:seed=one";
-      customIdParser = (id: string) => ({
+      override customIdParser = (id: string) => ({
         key: id.startsWith("encoded:") ? "encoded" : parseCustomId(id).key,
         data: {},
       });
@@ -113,7 +116,24 @@ describe("Client.deployCommands", () => {
     await client.deployCommands({ mode: "overwrite" });
 
     expect(put).toHaveBeenCalledWith(Routes.applicationGuildCommands("app1", "g1"), {
-      body: [expect.objectContaining({ name: "one" }), expect.objectContaining({ name: "two" })],
+      body: [
+        {
+          name: "one",
+          description: "one command",
+          type: ApplicationCommandType.ChatInput,
+          integration_types: [0, 1],
+          contexts: [0, 1, 2],
+          default_member_permissions: null,
+        },
+        {
+          name: "two",
+          description: "two command",
+          type: ApplicationCommandType.ChatInput,
+          integration_types: [0, 1],
+          contexts: [0, 1, 2],
+          default_member_permissions: null,
+        },
+      ],
     });
     expect(put).toHaveBeenCalledTimes(2);
   });
@@ -150,6 +170,123 @@ describe("Client.deployCommands", () => {
     expect(deleteRequest).not.toHaveBeenCalled();
   });
 
+  it("does not patch live-only command metadata or reordered unordered arrays", async () => {
+    const client = createInternalTestClient([
+      createTestCommand({
+        name: "one",
+        options: [
+          {
+            type: 3,
+            name: "value",
+            description: "Value",
+            required: false,
+            autocomplete: false,
+            channel_types: [1, 0],
+          },
+        ],
+      }),
+    ]);
+    const get = vi.fn(async () => [
+      {
+        id: "cmd1",
+        application_id: "app1",
+        type: ApplicationCommandType.ChatInput,
+        name: "one",
+        name_localized: "one",
+        description: "one command",
+        description_localized: "one command",
+        options: [
+          {
+            type: 3,
+            name: "value",
+            description: "Value",
+            description_localized: "Value",
+            channel_types: [0, 1],
+          },
+        ],
+        default_member_permissions: null,
+        dm_permission: true,
+        integration_types: [1, 0],
+        contexts: [2, 1, 0],
+        guild_id: undefined,
+        version: "1",
+      },
+    ]);
+    const patch = vi.fn(async () => undefined);
+    const post = vi.fn(async () => undefined);
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, patch, post, delete: deleteRequest });
+
+    await client.deployCommands({ mode: "reconcile" });
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    expect(deleteRequest).not.toHaveBeenCalled();
+  });
+
+  it("patches changed option localization maps", async () => {
+    const client = createInternalTestClient([
+      createTestCommand({
+        name: "one",
+        options: [
+          {
+            type: 3,
+            name: "value",
+            name_localizations: { de: "wert" },
+            description: "Value",
+            description_localizations: { de: "Wert" },
+          },
+        ],
+      }),
+    ]);
+    const get = vi.fn(async () => [
+      {
+        id: "cmd1",
+        application_id: "app1",
+        type: ApplicationCommandType.ChatInput,
+        name: "one",
+        description: "one command",
+        options: [
+          {
+            type: 3,
+            name: "value",
+            name_localizations: { de: "alter-wert" },
+            description: "Value",
+            description_localizations: { de: "Alter Wert" },
+          },
+        ],
+      },
+    ]);
+    const patch = vi.fn(async () => undefined);
+    const post = vi.fn(async () => undefined);
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, patch, post, delete: deleteRequest });
+
+    await client.deployCommands({ mode: "reconcile" });
+
+    expect(patch).toHaveBeenCalledWith(Routes.applicationCommand("app1", "cmd1"), {
+      body: {
+        name: "one",
+        description: "one command",
+        type: ApplicationCommandType.ChatInput,
+        options: [
+          {
+            type: 3,
+            name: "value",
+            name_localizations: { de: "wert" },
+            description: "Value",
+            description_localizations: { de: "Wert" },
+          },
+        ],
+        integration_types: [0, 1],
+        contexts: [0, 1, 2],
+        default_member_permissions: null,
+      },
+    });
+    expect(post).not.toHaveBeenCalled();
+    expect(deleteRequest).not.toHaveBeenCalled();
+  });
+
   it("skips command deploy when the serialized command set is unchanged", async () => {
     const client = createInternalTestClient([createTestCommand({ name: "one" })]);
     const get = vi.fn(async () => []);
@@ -161,6 +298,35 @@ describe("Client.deployCommands", () => {
 
     expect(get).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips unchanged command deploys across client restarts using the hash store", async () => {
+    const hashStorePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-command-deploy-")),
+      "hashes.json",
+    );
+    const first = createInternalTestClient([createTestCommand({ name: "one" })], {
+      commandDeployHashStorePath: hashStorePath,
+    });
+    const firstGet = vi.fn(async () => []);
+    const firstPost = vi.fn(async () => undefined);
+    attachRestMock(first, { get: firstGet, post: firstPost });
+
+    await first.deployCommands({ mode: "reconcile" });
+
+    const second = createInternalTestClient([createTestCommand({ name: "one" })], {
+      commandDeployHashStorePath: hashStorePath,
+    });
+    const secondGet = vi.fn(async () => []);
+    const secondPost = vi.fn(async () => undefined);
+    attachRestMock(second, { get: secondGet, post: secondPost });
+
+    await second.deployCommands({ mode: "reconcile" });
+
+    expect(firstGet).toHaveBeenCalledTimes(1);
+    expect(firstPost).toHaveBeenCalledTimes(1);
+    expect(secondGet).not.toHaveBeenCalled();
+    expect(secondPost).not.toHaveBeenCalled();
   });
 
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {
@@ -201,12 +367,15 @@ describe("Client gateway event queue", () => {
       eventQueue: {},
     });
 
-    expect(client.getRuntimeMetrics().eventQueue).toEqual(
-      expect.objectContaining({
-        maxQueueSize: 10_000,
-        maxConcurrency: 50,
-      }),
-    );
+    expect(client.getRuntimeMetrics().eventQueue).toEqual({
+      queueSize: 0,
+      processing: 0,
+      processed: 0,
+      dropped: 0,
+      timeouts: 0,
+      maxQueueSize: 10_000,
+      maxConcurrency: 50,
+    });
   });
 
   it("times out hung queued listeners", async () => {
@@ -228,9 +397,15 @@ describe("Client gateway event queue", () => {
     expect(errorSpy).toHaveBeenCalledWith(
       "[EventQueue] Listener Object timed out after 10ms for event READY",
     );
-    expect(client.getRuntimeMetrics().eventQueue).toEqual(
-      expect.objectContaining({ processed: 1, timeouts: 1 }),
-    );
+    expect(client.getRuntimeMetrics().eventQueue).toEqual({
+      queueSize: 0,
+      processing: 0,
+      processed: 1,
+      dropped: 0,
+      timeouts: 1,
+      maxQueueSize: 10_000,
+      maxConcurrency: 1,
+    });
   });
 
   it("limits queued listener concurrency", async () => {

@@ -6,10 +6,15 @@ import type {
   BrowserTransport,
   SnapshotAriaNode,
 } from "./client.types.js";
+import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 
 export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
+
+const BROWSER_STATUS_REQUEST_TIMEOUT_MS = 7_500;
+const BROWSER_DOCTOR_REQUEST_TIMEOUT_MS = 7_500;
+const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS = 10_000;
 
 export type ProfileStatus = {
   name: string;
@@ -40,6 +45,8 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       nodes: SnapshotAriaNode[];
+      blockedByDialog?: boolean;
+      browserState?: unknown;
     }
   | {
       ok: true;
@@ -60,6 +67,8 @@ export type SnapshotResult =
       labelsSkipped?: number;
       imagePath?: string;
       imageType?: "png" | "jpeg";
+      blockedByDialog?: boolean;
+      browserState?: unknown;
     };
 
 export async function browserStatus(
@@ -71,7 +80,7 @@ export async function browserStatus(
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 1500,
+        : BROWSER_STATUS_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -88,7 +97,9 @@ export async function browserDoctor(
   }
   const q = params.size ? `?${params.toString()}` : "";
   return await fetchBrowserJson<BrowserDoctorReport>(withBaseUrl(baseUrl, `/doctor${q}`), {
-    timeoutMs: opts?.deep ? 10000 : 3000,
+    timeoutMs: opts?.deep
+      ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS
+      : BROWSER_DOCTOR_REQUEST_TIMEOUT_MS,
   });
 }
 
@@ -310,6 +321,7 @@ export async function browserSnapshot(
     urls?: boolean;
     mode?: "efficient";
     profile?: string;
+    timeoutMs?: number;
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
@@ -355,8 +367,13 @@ export async function browserSnapshot(
   if (opts.profile) {
     q.set("profile", opts.profile);
   }
+  const resolvedTimeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.floor(opts.timeoutMs)
+      : DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
+  q.set("timeoutMs", String(resolvedTimeoutMs));
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
+    timeoutMs: resolvedTimeoutMs,
   });
 }
 

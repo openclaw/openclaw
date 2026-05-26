@@ -41,7 +41,6 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
 describe("renderChatAvatar", () => {
   it("renders assistant fallback, blob image, and text avatars", () => {
     const defaultAvatar = renderAvatar(["assistant"]);
-    expect(defaultAvatar).not.toBeNull();
     expect(defaultAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
 
     const remoteAvatar = renderAvatar([
@@ -56,7 +55,7 @@ describe("renderChatAvatar", () => {
 
     const textAvatar = renderAvatar(["assistant", { avatar: "VC", name: "Val" }]);
     expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("VC");
+    expect(textAvatar?.textContent?.trim()).toBe("VC");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
   });
 
@@ -79,6 +78,6 @@ describe("renderChatAvatar", () => {
 
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
-    expect(textAvatar?.textContent).toContain("AB");
+    expect(textAvatar?.textContent?.trim()).toBe("AB");
   });
 });

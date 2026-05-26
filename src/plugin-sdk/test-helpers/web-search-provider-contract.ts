@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
-  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
   resolveWebSearchProviderContractEntriesForPluginId,
-} from "../testing.js";
+} from "../../plugins/contracts/registry.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
 import { installWebSearchProviderContractSuite } from "./provider-contract-suites.js";
 
 type WebSearchContractEntry = ReturnType<
@@ -33,18 +33,24 @@ export function describeWebSearchProviderContracts(pluginId: string) {
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
       ?.webSearchProviderIds ?? [];
 
+  let providerEntries: WebSearchContractEntry[] | undefined;
   const resolveProviders = (): WebSearchContractEntry[] => {
+    if (providerEntries) {
+      return providerEntries;
+    }
     const publicArtifactProviders = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
       onlyPluginIds: [pluginId],
     });
     if (publicArtifactProviders) {
-      return publicArtifactProviders.map((provider) => ({
+      providerEntries = publicArtifactProviders.map((provider) => ({
         pluginId: provider.pluginId,
         provider,
         credentialValue: resolveWebSearchCredentialValue(provider),
       }));
+      return providerEntries;
     }
-    return resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    providerEntries = resolveWebSearchProviderContractEntriesForPluginId(pluginId);
+    return providerEntries;
   };
 
   describe(`${pluginId} web search provider contract registry load`, () => {

@@ -88,7 +88,13 @@ describe("diagnostic stability bundles", () => {
       reason: "json_body_limit",
     });
 
-    const error = Object.assign(new Error("contains secret message"), { code: "ERR_TEST" });
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(
+      new Error(
+        `Startup failed: OPENAI_API_KEY=${secret} while opening google/web-search-contract-api.js`,
+      ),
+      { code: "ERR_TEST" },
+    );
     const result = writeDiagnosticStabilityBundleSync({
       reason: "gateway.restart_startup_failed",
       error,
@@ -101,30 +107,22 @@ describe("diagnostic stability bundles", () => {
     const bundle = readBundle(file);
     const raw = fs.readFileSync(file, "utf8");
 
-    expect(bundle).toMatchObject({
-      version: 1,
-      generatedAt: "2026-04-22T12:00:00.000Z",
-      reason: "gateway.restart_startup_failed",
-      error: {
-        name: "Error",
-        code: "ERR_TEST",
-      },
-      host: {
-        hostname: "<redacted-hostname>",
-      },
-      snapshot: {
-        count: 2,
-      },
-    });
-    expect(bundle.snapshot.events[0]).toMatchObject({
-      type: "webhook.error",
-      channel: "telegram",
-    });
+    expect(bundle.version).toBe(1);
+    expect(bundle.generatedAt).toBe("2026-04-22T12:00:00.000Z");
+    expect(bundle.reason).toBe("gateway.restart_startup_failed");
+    expect(bundle.error?.name).toBe("Error");
+    expect(bundle.error?.code).toBe("ERR_TEST");
+    expect(bundle.host.hostname).toBe("<redacted-hostname>");
+    expect(bundle.snapshot.count).toBe(2);
+    expect(bundle.snapshot.events[0]?.type).toBe("webhook.error");
+    expect(bundle.snapshot.events[0]?.channel).toBe("telegram");
     expect(bundle.snapshot.events[0]).not.toHaveProperty("chatId");
     expect(bundle.snapshot.events[0]).not.toHaveProperty("error");
+    expect(bundle.error?.message).toContain("google/web-search-contract-api.js");
+    expect(bundle.error?.message).not.toContain(secret);
     expect(raw).not.toContain("chat-secret");
     expect(raw).not.toContain("message body");
-    expect(raw).not.toContain("contains secret message");
+    expect(raw).not.toContain(secret);
     expect(raw).not.toContain(os.hostname());
   });
 
@@ -153,18 +151,15 @@ describe("diagnostic stability bundles", () => {
     }
     const bundle = readBundle(result.path);
     const raw = fs.readFileSync(result.path, "utf8");
-    expect(bundle).toMatchObject({
-      reason: "gateway.restart_startup_failed",
-      error: {
-        name: "Error",
-        code: "ERR_CONFIG_PARSE",
-      },
-      snapshot: {
-        count: 0,
-        events: [],
-      },
+    expect(bundle.reason).toBe("gateway.restart_startup_failed");
+    expect(bundle.error).toEqual({
+      name: "Error",
+      code: "ERR_CONFIG_PARSE",
+      message: "raw startup config payload",
     });
-    expect(raw).not.toContain("raw startup config payload");
+    expect(bundle.snapshot.count).toBe(0);
+    expect(bundle.snapshot.events).toEqual([]);
+    expect(raw).not.toContain("stack");
   });
 
   it("registers a fatal hook only while installed", () => {
@@ -182,7 +177,7 @@ describe("diagnostic stability bundles", () => {
     expect(messages[0]).toContain(tempDir);
 
     resetDiagnosticStabilityBundleForTest();
-    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
+    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
   });
 
   it("retains only the newest bundle files", () => {
@@ -239,10 +234,30 @@ describe("diagnostic stability bundles", () => {
     Object.assign(bundle, {
       reason: "private reason token=secret",
       privateTopLevel: "top-level-secret",
+      evidence: {
+        memoryPressure: {
+          level: "critical",
+          reason: "rss_threshold",
+          memory: {
+            rssBytes: 4096,
+            heapTotalBytes: 2048,
+            heapUsedBytes: 1536,
+            externalBytes: 128,
+            arrayBuffersBytes: 64,
+          },
+          topSessionFiles: [
+            {
+              relativePath: "agents/main/sessions/raw-secret-session.jsonl",
+              sizeBytes: 4096,
+              mtimeMs: 1,
+            },
+          ],
+        },
+      },
       error: {
         name: "private error name",
         code: "ERR_TEST",
-        message: "error-message-secret",
+        message: "OPENAI_API_KEY=sk-1234567890abcdef",
       },
     });
     Object.assign(bundle.process as Record<string, unknown>, {
@@ -284,7 +299,12 @@ describe("diagnostic stability bundles", () => {
     }
     expect(result.bundle.reason).toBe("unknown");
     expect(result.bundle.host).toEqual({ hostname: "<redacted-hostname>" });
-    expect(result.bundle.error).toEqual({ code: "ERR_TEST" });
+    expect(result.bundle.error?.code).toBe("ERR_TEST");
+    expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
+    expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
+    expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
+      "agents/<agent>/sessions/<session>.jsonl",
+    );
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,
@@ -297,12 +317,13 @@ describe("diagnostic stability bundles", () => {
       "private reason",
       "top-level-secret",
       "private error name",
-      "error-message-secret",
+      "sk-1234567890abcdef",
       "process-command-secret",
       "private-hostname",
       "host-extra-secret",
       "snapshot-secret",
       "private event reason",
+      "raw-secret-session",
       "chat-id-secret",
       "event-error-secret",
       "private summary type",

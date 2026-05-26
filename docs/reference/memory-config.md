@@ -213,6 +213,8 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 
   </Accordion>
   <Accordion title="Bedrock">
+    ### Bedrock embedding config
+
     Bedrock uses the AWS SDK default credential chain — no API keys needed. If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the provider and model:
 
     ```json5
@@ -406,7 +408,7 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 | Key                | Type      | Default | Description                      |
 | ------------------ | --------- | ------- | -------------------------------- |
-| `cache.enabled`    | `boolean` | `false` | Cache chunk embeddings in SQLite |
+| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 | `cache.maxEntries` | `number`  | `50000` | Max cached embeddings            |
 
 Prevents re-embedding unchanged text during reindex or transcript updates.

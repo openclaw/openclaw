@@ -17,6 +17,7 @@ export {
   createScheduledEventDiscord,
   resolveEventCoverImage,
   fetchChannelInfoDiscord,
+  fetchGuildInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,
   fetchVoiceStatusDiscord,
@@ -29,6 +30,7 @@ export {
 export {
   createThreadDiscord,
   deleteMessageDiscord,
+  DiscordThreadInitialMessageError,
   editMessageDiscord,
   fetchMessageDiscord,
   listPinsDiscord,

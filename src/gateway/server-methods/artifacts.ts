@@ -1,4 +1,14 @@
 import { createHash } from "node:crypto";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
+import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -10,6 +20,11 @@ import {
   validateArtifactsListParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "../session-store-key.js";
 import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -25,6 +40,12 @@ type ArtifactQuery = {
   sessionKey?: string;
   runId?: string;
   taskId?: string;
+  agentId?: string;
+};
+
+type ResolvedArtifactSession = {
+  sessionKey: string;
+  agentId?: string;
 };
 
 function artifactError(type: string, message: string, details?: Record<string, unknown>) {
@@ -36,14 +57,64 @@ function artifactError(type: string, message: string, details?: Record<string, u
   });
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function resolveRequesterSessionAgentId(
+  sessionKey: string | undefined,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  const key = asNonEmptyString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(key);
+  if (!parsed && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  if (cfg) {
+    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+    return resolveSessionStoreAgentId(cfg, canonicalKey);
+  }
+  if (parsed) {
+    return parsed.agentId;
+  }
+  return resolveAgentIdFromSessionKey(key);
 }
 
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function resolveScopedArtifactSessionKey(
+  sessionKey: string | undefined,
+  agentId: string | undefined,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  const key = asNonEmptyString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  const scopedAgentId = asNonEmptyString(agentId);
+  if (!scopedAgentId) {
+    return key;
+  }
+  const parsed = parseAgentSessionKey(key);
+  if (!parsed && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  if (cfg) {
+    const scopedKey = resolveStoredSessionKeyForAgentStore({
+      cfg,
+      agentId: scopedAgentId,
+      sessionKey: key,
+    });
+    if (
+      scopedKey !== "global" &&
+      scopedKey !== "unknown" &&
+      resolveSessionStoreAgentId(cfg, scopedKey) !== normalizeAgentId(scopedAgentId)
+    ) {
+      return undefined;
+    }
+    return scopedKey;
+  }
+  if (parsed && parsed.agentId !== normalizeAgentId(scopedAgentId)) {
+    return undefined;
+  }
+  return toAgentStoreSessionKey({ agentId: scopedAgentId, requestKey: key });
 }
 
 function normalizeArtifactType(value: string): string {
@@ -85,7 +156,7 @@ function mediaUrlValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return asNonEmptyString(value);
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   return asNonEmptyString(record?.url);
 }
 
@@ -122,18 +193,18 @@ function artifactId(parts: {
 }
 
 function resolveMessageSeq(message: Record<string, unknown>, fallback: number): number {
-  const meta = asRecord(message.__openclaw);
+  const meta = asOptionalRecord(message["__openclaw"]);
   const seq = meta?.seq;
   return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : fallback;
 }
 
 function resolveMessageRunId(message: Record<string, unknown>): string | undefined {
-  const meta = asRecord(message.__openclaw);
+  const meta = asOptionalRecord(message["__openclaw"]);
   return asNonEmptyString(meta?.runId) ?? asNonEmptyString(message.runId);
 }
 
 function resolveMessageTaskId(message: Record<string, unknown>): string | undefined {
-  const meta = asRecord(message.__openclaw);
+  const meta = asOptionalRecord(message["__openclaw"]);
   return (
     asNonEmptyString(meta?.messageTaskId) ??
     asNonEmptyString(meta?.taskId) ??
@@ -154,7 +225,7 @@ function resolveBlockDownload(block: Record<string, unknown>): {
   const url = asNonEmptyString(block.url) ?? asNonEmptyString(block.openUrl);
   const imageUrl = mediaUrlValue(block.image_url);
   const audioUrl = asNonEmptyString(block.audio_url);
-  const source = asRecord(block.source);
+  const source = asOptionalRecord(block.source);
   const sourceData = asNonEmptyString(source?.data);
   const sourceUrl = asNonEmptyString(source?.url);
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
@@ -229,7 +300,7 @@ function collectArtifactsFromMessage(params: {
   runId?: string;
   taskId?: string;
 }): void {
-  const msg = asRecord(params.message);
+  const msg = asOptionalRecord(params.message);
   if (!msg) {
     return;
   }
@@ -244,7 +315,7 @@ function collectArtifactsFromMessage(params: {
   }
   const content = Array.isArray(msg.content) ? msg.content : [];
   for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-    const block = asRecord(content[contentIndex]);
+    const block = asOptionalRecord(content[contentIndex]);
     if (!block || !isArtifactBlock(block)) {
       continue;
     }
@@ -281,48 +352,86 @@ function collectArtifactsFromMessage(params: {
   }
 }
 
-function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
+function resolveQuerySession(
+  query: ArtifactQuery,
+  cfg?: OpenClawConfig,
+): ResolvedArtifactSession | undefined {
   if (query.sessionKey) {
-    return query.sessionKey;
+    const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
+    if (!sessionKey) {
+      return undefined;
+    }
+    return { sessionKey, ...(query.agentId ? { agentId: query.agentId } : {}) };
   }
   if (query.runId) {
-    return resolveSessionKeyForRun(query.runId);
+    const agentId = query.agentId ?? resolveDefaultAgentId(cfg ?? {});
+    const sessionKey = resolveSessionKeyForRun(query.runId, { agentId });
+    const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
+    return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
+    const taskAgentId =
+      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey, cfg);
+    if (
+      query.agentId &&
+      taskAgentId &&
+      normalizeAgentId(query.agentId) !== normalizeAgentId(taskAgentId)
+    ) {
+      return undefined;
+    }
+    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     if (requesterSessionKey) {
-      return requesterSessionKey;
+      const scopedSessionKey = resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
+      return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
     }
     const runId = asNonEmptyString(task?.runId);
-    return runId ? resolveSessionKeyForRun(runId) : undefined;
+    const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
+    const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
+    return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
   }
   return undefined;
 }
 
 async function loadArtifacts(
   query: ArtifactQuery,
+  cfg?: OpenClawConfig,
 ): Promise<{ artifacts: ArtifactRecord[]; sessionKey?: string }> {
-  const sessionKey = resolveQuerySessionKey(query);
-  if (!sessionKey) {
+  const resolved = resolveQuerySession(query, cfg);
+  if (!resolved) {
     return { artifacts: [] };
   }
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { sessionKey } = resolved;
+  const scopedGlobalAgentId =
+    cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
+  const { storePath, entry } = scopedGlobalAgentId
+    ? loadSessionEntry(sessionKey, { agentId: scopedGlobalAgentId })
+    : loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };
   }
   const artifacts: ArtifactRecord[] = [];
-  await visitSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, (message, seq) => {
-    collectArtifactsFromMessage({
-      message,
-      messageFallbackSeq: seq,
-      artifacts,
-      sessionKey,
-      runId: query.runId,
-      taskId: query.taskId,
-    });
-  });
+  await visitSessionMessagesAsync(
+    sessionId,
+    storePath,
+    entry?.sessionFile,
+    (message, seq) => {
+      collectArtifactsFromMessage({
+        message,
+        messageFallbackSeq: seq,
+        artifacts,
+        sessionKey,
+        runId: query.runId,
+        taskId: query.taskId,
+      });
+    },
+    {
+      mode: "full",
+      reason: "artifact query transcript scan",
+    },
+  );
   return {
     sessionKey,
     artifacts,
@@ -344,11 +453,14 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   return false;
 }
 
-async function findArtifact(params: ArtifactsGetParams): Promise<{
+async function findArtifact(
+  params: ArtifactsGetParams,
+  cfg?: OpenClawConfig,
+): Promise<{
   artifact?: ArtifactRecord;
   sessionKey?: string;
 }> {
-  const loaded = await loadArtifacts(params);
+  const loaded = await loadArtifacts(params, cfg);
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
@@ -356,19 +468,19 @@ async function findArtifact(params: ArtifactsGetParams): Promise<{
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: _data, url: _url, ...summary } = artifact;
+  const { data: dataValue, url: _url, ...summary } = artifact;
   return summary;
 }
 
 export const artifactsHandlers: GatewayRequestHandlers = {
-  "artifacts.list": async ({ params, respond }) => {
+  "artifacts.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifacts, sessionKey } = await loadArtifacts(params);
+    const { artifacts, sessionKey } = await loadArtifacts(params, context.getRuntimeConfig?.());
     if (!sessionKey && (params.runId || params.taskId)) {
       respond(
         false,
@@ -379,14 +491,14 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifacts: artifacts.map(toSummary) });
   },
-  "artifacts.get": async ({ params, respond }) => {
+  "artifacts.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsGetParams, "artifacts.get", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params);
+    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.());
     if (!artifact) {
       respond(
         false,
@@ -399,7 +511,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifact: toSummary(artifact) });
   },
-  "artifacts.download": async ({ params, respond }) => {
+  "artifacts.download": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validateArtifactsDownloadParams, "artifacts.download", respond)
     ) {
@@ -408,7 +520,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params);
+    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.());
     if (!artifact) {
       respond(
         false,

@@ -5,6 +5,7 @@ import {
   normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelMaxTokens,
   normalizeLegacyOpenAIModelProviderApi,
+  normalizeLegacyOllamaNativeNumCtxParams,
   normalizeLegacyRuntimeModelRefs,
   normalizeLegacyNanoBananaSkill,
   normalizeLegacyTalkConfig,
@@ -42,5 +43,6 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyRuntimeModelRefs(next, changes);
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
+  next = normalizeLegacyOllamaNativeNumCtxParams(next, changes);
   return normalizeLegacyMistralModelMaxTokens(next, changes);
 }

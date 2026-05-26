@@ -14,7 +14,10 @@ import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
 } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
+import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalRequest,
+} from "./plugin-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -69,6 +72,7 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     ask: request.request.ask ?? null,
     agentId: request.request.agentId ?? null,
     warningText: request.request.warningText ?? null,
+    commandAnalysis: request.request.commandAnalysis ?? null,
     commandText,
     commandPreview,
     cwd: request.request.cwd ?? null,
@@ -104,6 +108,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
       ...buildPluginViewBase(pluginRequest, "pending"),
       actions: buildExecApprovalActionDescriptors({
         approvalCommandId: pluginRequest.id,
+        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(pluginRequest.request),
       }),
       expiresAtMs: pluginRequest.expiresAtMs,
     };

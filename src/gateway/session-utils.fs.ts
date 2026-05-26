@@ -1,20 +1,16 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
-import {
-  resolveSessionTranscriptCandidates,
-  archiveFileOnDisk,
-  archiveSessionTranscripts,
-  cleanupArchivedSessionTranscripts,
-} from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
 import {
   readSessionTranscriptIndex,
   type IndexedTranscriptEntry,
@@ -43,6 +39,7 @@ const transcriptMessageCountCache = new Map<
 >();
 const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
 const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
+type TranscriptFileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
 
 function readSessionTitleFieldsCacheKey(
   filePath: string,
@@ -127,8 +124,10 @@ export function attachOpenClawTranscriptMeta(
   }
   const record = message as Record<string, unknown>;
   const existing =
-    record.__openclaw && typeof record.__openclaw === "object" && !Array.isArray(record.__openclaw)
-      ? (record.__openclaw as Record<string, unknown>)
+    record["__openclaw"] &&
+    typeof record["__openclaw"] === "object" &&
+    !Array.isArray(record["__openclaw"])
+      ? (record["__openclaw"] as Record<string, unknown>)
       : {};
   return {
     ...record,
@@ -151,76 +150,23 @@ export function readSessionMessages(
     return [];
   }
 
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const hasTreeEntries = lines.some(hasSessionTreeEntry);
-  let branchEntries: SessionEntry[] | null = null;
-  if (hasTreeEntries) {
-    try {
-      branchEntries = SessionManager.open(filePath).getBranch();
-    } catch {
-      branchEntries = null;
-    }
-  }
-
-  if (branchEntries) {
-    const messages: unknown[] = [];
-    let messageSeq = 0;
-    for (const entry of branchEntries) {
-      if (entry.type === "message" && entry.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(entry.message, {
-            ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
-
-      if (entry.type === "compaction") {
-        const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof entry.id === "string" ? entry.id : undefined,
-            seq: messageSeq,
-          },
-        });
-      }
-    }
-    return messages;
-  }
-
-  const messages: unknown[] = [];
-  let messageSeq = 0;
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line);
-      const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
-      if (message) {
-        messageSeq += 1;
-        messages.push(message);
-      }
-    } catch {
-      // ignore bad lines
-    }
-  }
-  return messages;
+  return transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
 }
 
-type ReadRecentSessionMessagesOptions = {
+export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
   maxLines?: number;
 };
+
+export type ReadSessionMessagesAsyncOptions =
+  | {
+      mode: "full";
+      reason: string;
+    }
+  | ({
+      mode: "recent";
+    } & ReadRecentSessionMessagesOptions);
 
 type ReadRecentSessionMessagesResult = {
   messages: unknown[];
@@ -283,25 +229,7 @@ export function readRecentSessionMessages(
         .filter((line) => line.trim().length > 0)
         .slice(-maxLines);
 
-      if (lines.some(hasSessionTreeEntry)) {
-        return readSessionMessages(sessionId, storePath, sessionFile).slice(-maxMessages);
-      }
-
-      const messages: unknown[] = [];
-      let messageSeq = 0;
-      for (const line of lines) {
-        try {
-          const parsed = JSON.parse(line);
-          const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
-          if (message) {
-            messageSeq += 1;
-            messages.push(message);
-          }
-        } catch {
-          // ignore bad tail lines
-        }
-      }
-      return messages.slice(-maxMessages);
+      return parseRecentTranscriptTailMessages(lines, maxMessages);
     }) ?? []
   );
 }
@@ -337,11 +265,68 @@ async function readRecentTranscriptTailLinesAsync(
   }
 }
 
+const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
+const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
+const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+function isOversizedTranscriptLine(line: string): boolean {
+  return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
+}
+
+function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
+  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  try {
+    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
+    return normalizeTailEntryString(decoded);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonNullableStringFieldPrefix(
+  prefix: string,
+  field: string,
+): string | null | undefined {
+  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
+    return null;
+  }
+  return extractJsonStringFieldPrefix(prefix, field);
+}
+
+function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
+  const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
+  const id = extractJsonStringFieldPrefix(prefix, "id");
+  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
+  const type = extractJsonStringFieldPrefix(prefix, "type");
+  const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
+  const record: Record<string, unknown> = {
+    ...(type ? { type } : {}),
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    message: {
+      role,
+      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
+      __openclaw: { truncated: true, reason: "oversized" },
+    },
+  };
+  return {
+    ...(id ? { id } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    record,
+  };
+}
+
 function normalizeTailEntryString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
+  if (isOversizedTranscriptLine(line)) {
+    return buildOversizedTranscriptRecord(line);
+  }
   try {
     const parsed = JSON.parse(line) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -374,8 +359,10 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
   const byId = new Map<string, TailTranscriptRecord>();
   let leafId: string | undefined;
   for (const entry of entries) {
-    if (tailRecordHasTreeLink(entry) && entry.id) {
+    if (entry.id) {
       byId.set(entry.id, entry);
+    }
+    if (tailRecordHasTreeLink(entry) && entry.id) {
       leafId = entry.id;
     }
   }
@@ -398,7 +385,57 @@ function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTr
     selected.push(entry);
     currentId = entry.parentId ?? undefined;
   }
-  return selected.toReversed();
+  const activeBranch = selected.toReversed();
+  const firstActiveRecord = activeBranch[0];
+  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
+  if (firstActiveIndex > 0) {
+    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.record.type === "compaction") {
+        return [entry, ...activeBranch];
+      }
+    }
+  }
+  return activeBranch;
+}
+
+function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
+  const records: TailTranscriptRecord[] = [];
+  visitTranscriptLines(filePath, (line) => {
+    if (!line.trim()) {
+      return;
+    }
+    const record = parseTailTranscriptRecord(line);
+    if (record && record.record.type !== "session") {
+      records.push(record);
+    }
+  });
+  return records;
+}
+
+function selectActiveTranscriptRecords(records: TailTranscriptRecord[]): TailTranscriptRecord[] {
+  return records.some(tailRecordHasTreeLink) ? selectBoundedActiveTailRecords(records) : records;
+}
+
+function readSelectedTranscriptRecords(filePath: string): TailTranscriptRecord[] {
+  try {
+    return selectActiveTranscriptRecords(readTranscriptRecords(filePath));
+  } catch {
+    return [];
+  }
+}
+
+function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[] {
+  const messages: unknown[] = [];
+  let messageSeq = 0;
+  for (const entry of records) {
+    const message = parsedSessionEntryToMessage(entry.record, messageSeq + 1);
+    if (message) {
+      messageSeq += 1;
+      messages.push(message);
+    }
+  }
+  return messages;
 }
 
 function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number): unknown[] {
@@ -406,19 +443,7 @@ function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number)
     const entry = parseTailTranscriptRecord(line);
     return entry ? [entry] : [];
   });
-  const selected = entries.some(tailRecordHasTreeLink)
-    ? selectBoundedActiveTailRecords(entries)
-    : entries;
-  const messages: unknown[] = [];
-  let messageSeq = 0;
-  for (const entry of selected) {
-    const message = parsedSessionEntryToMessage(entry.record, messageSeq + 1);
-    if (message) {
-      messageSeq += 1;
-      messages.push(message);
-    }
-  }
-  return messages.slice(-maxMessages);
+  return transcriptRecordsToMessages(selectActiveTranscriptRecords(entries)).slice(-maxMessages);
 }
 
 function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
@@ -479,61 +504,6 @@ async function visitTranscriptLinesAsync(
   }
 }
 
-function transcriptHasTreeEntries(filePath: string): boolean {
-  let hasTreeEntries = false;
-  try {
-    visitTranscriptLines(filePath, (line) => {
-      if (!hasTreeEntries && hasSessionTreeEntry(line)) {
-        hasTreeEntries = true;
-      }
-    });
-  } catch {
-    return false;
-  }
-  return hasTreeEntries;
-}
-
-function visitSessionManagerBranchMessages(
-  filePath: string,
-  visit: (message: unknown, seq: number) => void,
-): number {
-  const branchEntries = SessionManager.open(filePath).getBranch();
-  let messageSeq = 0;
-  for (const entry of branchEntries) {
-    if (entry.type === "message" && entry.message) {
-      messageSeq += 1;
-      visit(
-        attachOpenClawTranscriptMeta(entry.message, {
-          ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-          seq: messageSeq,
-        }),
-        messageSeq,
-      );
-      continue;
-    }
-
-    if (entry.type === "compaction") {
-      const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-      const timestamp = Number.isFinite(ts) ? ts : Date.now();
-      messageSeq += 1;
-      visit(
-        {
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof entry.id === "string" ? entry.id : undefined,
-            seq: messageSeq,
-          },
-        },
-        messageSeq,
-      );
-    }
-  }
-  return messageSeq;
-}
-
 export function visitSessionMessages(
   sessionId: string,
   storePath: string | undefined,
@@ -545,35 +515,11 @@ export function visitSessionMessages(
     return 0;
   }
 
-  if (transcriptHasTreeEntries(filePath)) {
-    try {
-      return visitSessionManagerBranchMessages(filePath, visit);
-    } catch {
-      return 0;
-    }
+  const messages = transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
+  for (const [index, message] of messages.entries()) {
+    visit(message, index + 1);
   }
-
-  let messageSeq = 0;
-  try {
-    visitTranscriptLines(filePath, (line) => {
-      if (!line.trim()) {
-        return;
-      }
-      try {
-        const parsed = JSON.parse(line);
-        const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
-        if (message) {
-          messageSeq += 1;
-          visit(message, messageSeq);
-        }
-      } catch {
-        // ignore bad lines
-      }
-    });
-  } catch {
-    return 0;
-  }
-  return messageSeq;
+  return messages.length;
 }
 
 export function readSessionMessageCount(
@@ -605,8 +551,13 @@ export function readSessionMessageCount(
 export async function readSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
-  sessionFile?: string,
+  sessionFile: string | undefined,
+  opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
+  if (opts.mode === "recent") {
+    const { mode: modeValue, ...recentOpts } = opts;
+    return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
+  }
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
   if (!filePath) {
     return [];
@@ -620,6 +571,7 @@ export async function visitSessionMessagesAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   visit: (message: unknown, seq: number) => void,
+  _opts: { mode: "full"; reason: string },
 ): Promise<number> {
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
   if (!filePath) {
@@ -761,18 +713,6 @@ export function readRecentSessionTranscriptLines(params: {
     return null;
   }
   return { lines, totalLines };
-}
-
-function hasSessionTreeEntry(line: string): boolean {
-  if (!line.trim()) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
-  } catch {
-    return false;
-  }
 }
 
 function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
@@ -943,43 +883,47 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   if (cached) {
     return cached;
   }
-  const index = await readSessionTranscriptIndex(filePath);
-  if (!index) {
+
+  if (stat.size === 0) {
+    const empty = { firstUserMessage: null, lastMessagePreview: null };
+    setCachedSessionTitleFields(cacheKey, stat, empty);
+    return empty;
+  }
+
+  let handle: TranscriptFileHandle | null = null;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+
+    let firstUserMessage: string | null = null;
+    try {
+      const chunk = await readTranscriptHeadChunkAsync(handle);
+      if (chunk) {
+        firstUserMessage = extractFirstUserMessageFromTranscriptChunk(chunk, opts);
+      }
+    } catch {
+      // ignore head read errors
+    }
+
+    let lastMessagePreview: string | null = null;
+    try {
+      lastMessagePreview = await readLastMessagePreviewFromOpenTranscriptAsync({
+        handle,
+        size: stat.size,
+      });
+    } catch {
+      // ignore tail read errors
+    }
+
+    const result = { firstUserMessage, lastMessagePreview };
+    setCachedSessionTitleFields(cacheKey, stat, result);
+    return result;
+  } catch {
     return { firstUserMessage: null, lastMessagePreview: null };
-  }
-
-  let firstUserMessage: string | null = null;
-  for (const entry of index.entries) {
-    const msg = entry.record.message as TranscriptMessage | undefined;
-    if (msg?.role !== "user") {
-      continue;
-    }
-    if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
-      continue;
-    }
-    const text = extractTextFromContent(msg.content);
-    if (text) {
-      firstUserMessage = text;
-      break;
+  } finally {
+    if (handle) {
+      await handle.close().catch(() => undefined);
     }
   }
-
-  let lastMessagePreview: string | null = null;
-  for (const entry of index.entries.toReversed()) {
-    const msg = entry.record.message as TranscriptMessage | undefined;
-    if (!msg || (msg.role !== "user" && msg.role !== "assistant")) {
-      continue;
-    }
-    const text = extractTextFromContent(msg.content);
-    if (text) {
-      lastMessagePreview = text;
-      break;
-    }
-  }
-
-  const result = { firstUserMessage, lastMessagePreview };
-  setCachedSessionTitleFields(cacheKey, stat, result);
-  return result;
 }
 
 function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
@@ -1011,6 +955,18 @@ function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
     return null;
   }
   return buf.toString("utf-8", 0, bytesRead);
+}
+
+async function readTranscriptHeadChunkAsync(
+  handle: TranscriptFileHandle,
+  maxBytes = 8192,
+): Promise<string | null> {
+  const buffer = Buffer.alloc(maxBytes);
+  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  if (bytesRead <= 0) {
+    return null;
+  }
+  return buffer.toString("utf-8", 0, bytesRead);
 }
 
 function extractFirstUserMessageFromTranscriptChunk(
@@ -1123,25 +1079,39 @@ function readLastMessagePreviewFromOpenTranscript(params: {
   return null;
 }
 
-export function readLastMessagePreviewFromTranscript(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string | null {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
+async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
+  handle: TranscriptFileHandle;
+  size: number;
+}): Promise<string | null> {
+  const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
+  const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
+  const buffer = Buffer.alloc(readLen);
+  const { bytesRead } = await params.handle.read(buffer, 0, readLen, readStart);
+  if (bytesRead <= 0) {
     return null;
   }
 
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    const size = stat.size;
-    if (size === 0) {
-      return null;
+  const chunk = buffer.toString("utf-8", 0, bytesRead);
+  const lines = chunk.split(/\r?\n/).filter((line) => line.trim());
+  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+
+  for (let i = tailLines.length - 1; i >= 0; i--) {
+    const line = tailLines[i];
+    try {
+      const parsed = JSON.parse(line);
+      const msg = parsed?.message as TranscriptMessage | undefined;
+      if (msg?.role !== "user" && msg?.role !== "assistant") {
+        continue;
+      }
+      const text = extractTextFromContent(msg.content);
+      if (text) {
+        return text;
+      }
+    } catch {
+      // skip malformed
     }
-    return readLastMessagePreviewFromOpenTranscript({ fd, size });
-  });
+  }
+  return null;
 }
 
 type SessionTranscriptUsageSnapshot = {
@@ -1172,7 +1142,173 @@ function resolvePositiveUsageNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function extractLatestUsageFromTranscriptLines(
+function extractTranscriptContentEstimatedChars(content: unknown): number {
+  if (typeof content === "string") {
+    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
+    return normalized ? estimateStringChars(normalized) : 0;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let chars = 0;
+  for (const part of content) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      continue;
+    }
+    const record = part as Record<string, unknown>;
+    if (typeof record.text !== "string") {
+      continue;
+    }
+    const type = typeof record.type === "string" ? record.type : "text";
+    if (type !== "text" && type !== "output_text" && type !== "input_text") {
+      continue;
+    }
+    const normalized = stripInlineDirectiveTagsForDisplay(record.text).text.trim();
+    if (normalized) {
+      chars += estimateStringChars(normalized);
+    }
+  }
+  return chars;
+}
+
+function extractTranscriptTokenEstimateFromLine(line: string): {
+  estimatedChars: number;
+  hasModelIdentity: boolean;
+} | null {
+  if (isOversizedTranscriptLine(line)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const message =
+      parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
+        ? (parsed.message as Record<string, unknown>)
+        : undefined;
+    if (!message) {
+      return null;
+    }
+    const role = typeof message.role === "string" ? message.role : undefined;
+    if (role !== "user" && role !== "assistant") {
+      return null;
+    }
+    const modelProvider =
+      typeof message.provider === "string"
+        ? message.provider.trim()
+        : typeof parsed.provider === "string"
+          ? parsed.provider.trim()
+          : undefined;
+    const model =
+      typeof message.model === "string"
+        ? message.model.trim()
+        : typeof parsed.model === "string"
+          ? parsed.model.trim()
+          : undefined;
+    const isDeliveryMirror =
+      role === "assistant" && modelProvider === "openclaw" && model === "delivery-mirror";
+    if (isDeliveryMirror) {
+      return null;
+    }
+    const contentChars = extractTranscriptContentEstimatedChars(message.content);
+    if (contentChars <= 0) {
+      return null;
+    }
+    return {
+      estimatedChars: contentChars,
+      hasModelIdentity: role === "assistant" && Boolean(modelProvider || model),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractUsageSnapshotFromTranscriptLine(
+  line: string,
+): SessionTranscriptUsageSnapshot | null {
+  if (isOversizedTranscriptLine(line)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const message =
+      parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
+        ? (parsed.message as Record<string, unknown>)
+        : undefined;
+    if (!message) {
+      return null;
+    }
+    const role = typeof message.role === "string" ? message.role : undefined;
+    if (role && role !== "assistant") {
+      return null;
+    }
+    const usageRaw =
+      message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
+        ? message.usage
+        : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
+          ? parsed.usage
+          : undefined;
+    const usage = normalizeUsage(usageRaw);
+    const totalTokens = resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
+    const costUsd = extractTranscriptUsageCost(usageRaw);
+    const modelProvider =
+      typeof message.provider === "string"
+        ? message.provider.trim()
+        : typeof parsed.provider === "string"
+          ? parsed.provider.trim()
+          : undefined;
+    const model =
+      typeof message.model === "string"
+        ? message.model.trim()
+        : typeof parsed.model === "string"
+          ? parsed.model.trim()
+          : undefined;
+    const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
+    const hasMeaningfulUsage =
+      hasNonzeroUsage(usage) ||
+      typeof totalTokens === "number" ||
+      (typeof costUsd === "number" && Number.isFinite(costUsd));
+    const hasModelIdentity = Boolean(modelProvider || model);
+    if (!hasMeaningfulUsage && !hasModelIdentity) {
+      return null;
+    }
+    if (isDeliveryMirror && !hasMeaningfulUsage) {
+      return null;
+    }
+
+    const snapshot: SessionTranscriptUsageSnapshot = {};
+    if (!isDeliveryMirror) {
+      if (modelProvider) {
+        snapshot.modelProvider = modelProvider;
+      }
+      if (model) {
+        snapshot.model = model;
+      }
+    }
+    if (typeof usage?.input === "number" && Number.isFinite(usage.input)) {
+      snapshot.inputTokens = usage.input;
+    }
+    if (typeof usage?.output === "number" && Number.isFinite(usage.output)) {
+      snapshot.outputTokens = usage.output;
+    }
+    if (typeof usage?.cacheRead === "number" && Number.isFinite(usage.cacheRead)) {
+      snapshot.cacheRead = usage.cacheRead;
+    }
+    if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
+      snapshot.cacheWrite = usage.cacheWrite;
+    }
+    if (typeof totalTokens === "number") {
+      snapshot.totalTokens = totalTokens;
+      snapshot.totalTokensFresh = true;
+    }
+    if (typeof costUsd === "number" && Number.isFinite(costUsd)) {
+      snapshot.costUsd = costUsd;
+    }
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
+function extractAggregateUsageFromTranscriptLines(
   lines: Iterable<string>,
 ): SessionTranscriptUsageSnapshot | null {
   const snapshot: SessionTranscriptUsageSnapshot = {};
@@ -1187,90 +1323,51 @@ function extractLatestUsageFromTranscriptLines(
   let sawCacheWrite = false;
   let costUsdTotal = 0;
   let sawCost = false;
+  let estimatedTranscriptChars = 0;
+  let sawEstimatedTranscriptContent = false;
+  let sawEstimateModelIdentity = false;
 
   for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      const message =
-        parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
-          ? (parsed.message as Record<string, unknown>)
-          : undefined;
-      if (!message) {
-        continue;
-      }
-      const role = typeof message.role === "string" ? message.role : undefined;
-      if (role && role !== "assistant") {
-        continue;
-      }
-      const usageRaw =
-        message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
-          ? message.usage
-          : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
-            ? parsed.usage
-            : undefined;
-      const usage = normalizeUsage(usageRaw);
-      const totalTokens = resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
-      const costUsd = extractTranscriptUsageCost(usageRaw);
-      const modelProvider =
-        typeof message.provider === "string"
-          ? message.provider.trim()
-          : typeof parsed.provider === "string"
-            ? parsed.provider.trim()
-            : undefined;
-      const model =
-        typeof message.model === "string"
-          ? message.model.trim()
-          : typeof parsed.model === "string"
-            ? parsed.model.trim()
-            : undefined;
-      const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
-      const hasMeaningfulUsage =
-        hasNonzeroUsage(usage) ||
-        typeof totalTokens === "number" ||
-        (typeof costUsd === "number" && Number.isFinite(costUsd));
-      const hasModelIdentity = Boolean(modelProvider || model);
-      if (!hasMeaningfulUsage && !hasModelIdentity) {
-        continue;
-      }
-      if (isDeliveryMirror && !hasMeaningfulUsage) {
-        continue;
-      }
-
-      sawSnapshot = true;
-      if (!isDeliveryMirror) {
-        if (modelProvider) {
-          snapshot.modelProvider = modelProvider;
-        }
-        if (model) {
-          snapshot.model = model;
-        }
-      }
-      if (typeof usage?.input === "number" && Number.isFinite(usage.input)) {
-        inputTokens += usage.input;
-        sawInputTokens = true;
-      }
-      if (typeof usage?.output === "number" && Number.isFinite(usage.output)) {
-        outputTokens += usage.output;
-        sawOutputTokens = true;
-      }
-      if (typeof usage?.cacheRead === "number" && Number.isFinite(usage.cacheRead)) {
-        cacheRead += usage.cacheRead;
-        sawCacheRead = true;
-      }
-      if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
-        cacheWrite += usage.cacheWrite;
-        sawCacheWrite = true;
-      }
-      if (typeof totalTokens === "number") {
-        snapshot.totalTokens = totalTokens;
-        snapshot.totalTokensFresh = true;
-      }
-      if (typeof costUsd === "number" && Number.isFinite(costUsd)) {
-        costUsdTotal += costUsd;
-        sawCost = true;
-      }
-    } catch {
-      // skip malformed lines
+    const estimate = extractTranscriptTokenEstimateFromLine(line);
+    if (estimate) {
+      estimatedTranscriptChars += estimate.estimatedChars;
+      sawEstimatedTranscriptContent = true;
+      sawEstimateModelIdentity ||= estimate.hasModelIdentity;
+    }
+    const current = extractUsageSnapshotFromTranscriptLine(line);
+    if (!current) {
+      continue;
+    }
+    sawSnapshot = true;
+    if (current.modelProvider) {
+      snapshot.modelProvider = current.modelProvider;
+    }
+    if (current.model) {
+      snapshot.model = current.model;
+    }
+    if (typeof current.inputTokens === "number") {
+      inputTokens += current.inputTokens;
+      sawInputTokens = true;
+    }
+    if (typeof current.outputTokens === "number") {
+      outputTokens += current.outputTokens;
+      sawOutputTokens = true;
+    }
+    if (typeof current.cacheRead === "number") {
+      cacheRead += current.cacheRead;
+      sawCacheRead = true;
+    }
+    if (typeof current.cacheWrite === "number") {
+      cacheWrite += current.cacheWrite;
+      sawCacheWrite = true;
+    }
+    if (typeof current.totalTokens === "number") {
+      snapshot.totalTokens = current.totalTokens;
+      snapshot.totalTokensFresh = true;
+    }
+    if (typeof current.costUsd === "number" && Number.isFinite(current.costUsd)) {
+      costUsdTotal += current.costUsd;
+      sawCost = true;
     }
   }
 
@@ -1292,13 +1389,34 @@ function extractLatestUsageFromTranscriptLines(
   if (sawCost) {
     snapshot.costUsd = costUsdTotal;
   }
+  if (
+    typeof snapshot.totalTokens !== "number" &&
+    sawEstimatedTranscriptContent &&
+    sawEstimateModelIdentity
+  ) {
+    const estimatedTotalTokens = estimateTokensFromChars(estimatedTranscriptChars);
+    if (estimatedTotalTokens > 0) {
+      snapshot.totalTokens = estimatedTotalTokens;
+      snapshot.totalTokensFresh = true;
+    }
+  }
   return snapshot;
 }
 
-function extractLatestUsageFromTranscriptChunk(
+function extractLatestUsageFromTranscriptLines(
+  lines: Iterable<string>,
+): SessionTranscriptUsageSnapshot | null {
+  let latest: SessionTranscriptUsageSnapshot | null = null;
+  for (const line of lines) {
+    latest = extractUsageSnapshotFromTranscriptLine(line) ?? latest;
+  }
+  return latest;
+}
+
+function extractAggregateUsageFromTranscriptChunk(
   chunk: string,
 ): SessionTranscriptUsageSnapshot | null {
-  return extractLatestUsageFromTranscriptLines(
+  return extractAggregateUsageFromTranscriptLines(
     chunk.split(/\r?\n/).filter((line) => line.trim().length > 0),
   );
 }
@@ -1320,7 +1438,7 @@ export function readLatestSessionUsageFromTranscript(
       return null;
     }
     const chunk = fs.readFileSync(fd, "utf-8");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    return extractAggregateUsageFromTranscriptChunk(chunk);
   });
 }
 
@@ -1345,6 +1463,62 @@ export async function readLatestSessionUsageFromTranscriptAsync(
       if (line.trim()) {
         lines.push(line);
       }
+    });
+    return extractAggregateUsageFromTranscriptLines(lines);
+  } catch {
+    return null;
+  }
+}
+
+export async function readRecentSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size === 0) {
+      return null;
+    }
+    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+      maxMessages: 1,
+      maxLines: 1000,
+      maxBytes,
+    });
+    return extractAggregateUsageFromTranscriptLines(lines);
+  } catch {
+    return null;
+  }
+}
+
+export async function readLatestRecentSessionUsageFromTranscriptAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): Promise<SessionTranscriptUsageSnapshot | null> {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (stat.size === 0) {
+      return null;
+    }
+    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+      maxMessages: 1,
+      maxLines: 1000,
+      maxBytes,
     });
     return extractLatestUsageFromTranscriptLines(lines);
   } catch {
@@ -1381,7 +1555,7 @@ export function readRecentSessionUsageFromTranscript(
       .split(/\r?\n/)
       .slice(readStart > 0 ? 1 : 0)
       .join("\n");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    return extractAggregateUsageFromTranscriptChunk(chunk);
   });
 }
 

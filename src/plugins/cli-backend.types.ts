@@ -1,5 +1,6 @@
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
 export type PluginTextReplacement = {
   from: string | RegExp;
@@ -33,6 +34,31 @@ export type CliBackendPreparedExecution = {
   cleanup?: () => Promise<void>;
 };
 
+export type CliBackendThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
+
+export type CliBackendResolveExecutionArgsContext = {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+  authProfileId?: string;
+  thinkingLevel?: CliBackendThinkingLevel;
+  useResume: boolean;
+  baseArgs: readonly string[];
+};
+
+export type CliBackendResolveExecutionArgs = (
+  ctx: CliBackendResolveExecutionArgsContext,
+) => readonly string[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on";
@@ -49,6 +75,11 @@ export type CliBackendPlugin = {
   id: string;
   /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
   config: CliBackendConfig;
+  /**
+   * Context-engine host capabilities provided by this backend when it is
+   * driven through the generic CLI runner.
+   */
+  contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
@@ -141,6 +172,14 @@ export type CliBackendPlugin = {
     | CliBackendPreparedExecution
     | null
     | undefined;
+  /**
+   * Backend-owned per-run argv rewrite.
+   *
+   * Use this for request-scoped CLI dialect flags that should not be modeled
+   * as static config, such as mapping OpenClaw thinking levels to a backend's
+   * native effort flag.
+   */
+  resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
    * catalog. Backends that cannot provide a true no-tools mode must mark

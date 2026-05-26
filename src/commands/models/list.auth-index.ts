@@ -10,13 +10,20 @@ import {
   hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
 import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 
 export type ModelListAuthIndex = {
   hasProviderAuth(provider: string): boolean;
+  allowsProviderAuthAvailabilityFallback(provider: string): boolean;
 };
 
 export type CreateModelListAuthIndexParams = {
@@ -25,6 +32,7 @@ export type CreateModelListAuthIndexParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function normalizeAuthProvider(
@@ -39,11 +47,16 @@ function listValidatedSyntheticAuthProviderRefs(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly string[] {
+  if (params.metadataSnapshot && (params.metadataSnapshot.registryDiagnostics?.length ?? 0) > 0) {
+    return [];
+  }
   const result = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    index: params.metadataSnapshot?.index,
   });
   if (result.source !== "persisted" && result.source !== "provided") {
     return [];
@@ -61,10 +74,12 @@ export function createModelListAuthIndex(
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     env,
+    metadataSnapshot: params.metadataSnapshot,
   };
   const aliasMap = resolveProviderAuthAliasMap(lookupParams);
   const envCandidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
   const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
+  const skipSetupProviderFallback = params.metadataSnapshot !== undefined;
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
@@ -92,6 +107,7 @@ export function createModelListAuthIndex(
         aliasMap,
         candidateMap: envCandidateMap,
         authEvidenceMap,
+        skipSetupProviderFallback,
         config: params.cfg,
         workspaceDir: params.workspaceDir,
       })
@@ -112,12 +128,19 @@ export function createModelListAuthIndex(
       addProvider(provider);
     }
   }
+  const primaryModelProvider = resolveAgentModelPrimaryValue(
+    params.cfg.agents?.defaults?.model,
+  )?.split("/", 1)[0];
+  if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
+    addSyntheticProvider("codex");
+  }
 
   for (const provider of params.syntheticAuthProviderRefs ??
     listValidatedSyntheticAuthProviderRefs({
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       env,
+      metadataSnapshot: params.metadataSnapshot,
     })) {
     addSyntheticProvider(provider);
   }
@@ -133,8 +156,11 @@ export function createModelListAuthIndex(
     const hasAuth = Boolean(
       resolveEnvApiKey(provider, env, {
         aliasMap,
-        candidateMap: hasPrecomputedCandidates ? envCandidateMap : undefined,
-        authEvidenceMap: hasPrecomputedEvidence ? authEvidenceMap : undefined,
+        candidateMap:
+          skipSetupProviderFallback || hasPrecomputedCandidates ? envCandidateMap : undefined,
+        authEvidenceMap:
+          skipSetupProviderFallback || hasPrecomputedEvidence ? authEvidenceMap : undefined,
+        skipSetupProviderFallback,
         config: params.cfg,
         workspaceDir: params.workspaceDir,
       }),
@@ -146,14 +172,30 @@ export function createModelListAuthIndex(
     return hasAuth;
   };
 
+  const hasOpenAICodexRuntimeAuth = (provider: string): boolean => {
+    const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({
+        provider: normalizedProvider,
+        config: params.cfg,
+      }) && authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
+
   return {
     hasProviderAuth(provider: string): boolean {
       const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
-      return (
+      const hasDirectAuth =
         authenticatedProviders.has(normalizedProvider) ||
         syntheticAuthProviders.has(normalizeProviderIdForAuth(provider)) ||
-        hasEnvProviderAuth(provider)
-      );
+        hasEnvProviderAuth(provider);
+      if (hasDirectAuth) {
+        return true;
+      }
+      return hasOpenAICodexRuntimeAuth(normalizedProvider);
+    },
+    allowsProviderAuthAvailabilityFallback(provider: string): boolean {
+      return hasOpenAICodexRuntimeAuth(provider);
     },
   };
 }

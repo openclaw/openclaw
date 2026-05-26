@@ -1,5 +1,5 @@
-import type { Component } from "@mariozechner/pi-tui";
-import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
@@ -7,6 +7,13 @@ import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
 const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
+
+type RepeatableSystemMessage = {
+  component: Container;
+  textNode: Text;
+  baseText: string;
+  count: number;
+};
 
 export class ChatLog extends Container {
   private readonly maxComponents: number;
@@ -20,8 +27,10 @@ export class ChatLog extends Container {
       createdAt: number;
     }
   >();
+  private pendingSystemNotices = new Map<string, Container>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
+  private repeatableSystemMessage: RepeatableSystemMessage | null = null;
 
   constructor(maxComponents = 180) {
     super();
@@ -44,8 +53,16 @@ export class ChatLog extends Container {
         this.pendingUsers.delete(runId);
       }
     }
+    for (const [runId, entry] of this.pendingSystemNotices.entries()) {
+      if (entry === component) {
+        this.pendingSystemNotices.delete(runId);
+      }
+    }
     if (this.btwMessage === component) {
       this.btwMessage = null;
+    }
+    if (this.repeatableSystemMessage?.component === component) {
+      this.repeatableSystemMessage = null;
     }
   }
 
@@ -65,11 +82,18 @@ export class ChatLog extends Container {
     this.pruneOverflow();
   }
 
+  private appendNonSystem(component: Component) {
+    this.repeatableSystemMessage = null;
+    this.append(component);
+  }
+
   clearAll(opts?: { preservePendingUsers?: boolean }) {
     this.clear();
     this.toolById.clear();
     this.streamingRuns.clear();
+    this.pendingSystemNotices.clear();
     this.btwMessage = null;
+    this.repeatableSystemMessage = null;
     if (!opts?.preservePendingUsers) {
       this.pendingUsers.clear();
     }
@@ -80,7 +104,7 @@ export class ChatLog extends Container {
       if (this.children.includes(entry.component)) {
         continue;
       }
-      this.append(entry.component);
+      this.appendNonSystem(entry.component);
     }
   }
 
@@ -91,19 +115,62 @@ export class ChatLog extends Container {
     this.pendingUsers.clear();
   }
 
-  private createSystemMessage(text: string): Container {
-    const entry = new Container();
-    entry.addChild(new Spacer(1));
-    entry.addChild(new Text(theme.system(text), 1, 0));
-    return entry;
+  private formatRepeatedSystemText(text: string, count: number) {
+    return count > 1 ? `${text} x${count}` : text;
   }
 
-  addSystem(text: string) {
-    this.append(this.createSystemMessage(text));
+  private createSystemMessage(text: string): RepeatableSystemMessage {
+    const entry = new Container();
+    const textNode = new Text(theme.system(text), 1, 0);
+    entry.addChild(new Spacer(1));
+    entry.addChild(textNode);
+    return {
+      component: entry,
+      textNode,
+      baseText: text,
+      count: 1,
+    };
+  }
+
+  addSystem(text: string, opts?: { coalesceConsecutive?: boolean }) {
+    if (
+      opts?.coalesceConsecutive &&
+      this.repeatableSystemMessage?.baseText === text &&
+      this.children[this.children.length - 1] === this.repeatableSystemMessage.component
+    ) {
+      this.repeatableSystemMessage.count += 1;
+      this.repeatableSystemMessage.textNode.setText(
+        theme.system(this.formatRepeatedSystemText(text, this.repeatableSystemMessage.count)),
+      );
+      return;
+    }
+    const message = this.createSystemMessage(text);
+    this.append(message.component);
+    this.repeatableSystemMessage = opts?.coalesceConsecutive ? message : null;
+  }
+
+  addPendingSystem(runId: string, text: string) {
+    const existing = this.pendingSystemNotices.get(runId);
+    if (existing) {
+      this.removeChild(existing);
+    }
+    const message = this.createSystemMessage(text);
+    this.pendingSystemNotices.set(runId, message.component);
+    this.append(message.component);
+  }
+
+  dismissPendingSystem(runId: string) {
+    const existing = this.pendingSystemNotices.get(runId);
+    if (!existing) {
+      return false;
+    }
+    this.removeChild(existing);
+    this.pendingSystemNotices.delete(runId);
+    return true;
   }
 
   addUser(text: string) {
-    this.append(new UserMessageComponent(text));
+    this.appendNonSystem(new UserMessageComponent(text));
   }
 
   addPendingUser(runId: string, text: string, createdAt = Date.now()) {
@@ -116,7 +183,7 @@ export class ChatLog extends Container {
     }
     const component = new UserMessageComponent(text);
     this.pendingUsers.set(runId, { component, text, createdAt });
-    this.append(component);
+    this.appendNonSystem(component);
     return component;
   }
 
@@ -192,7 +259,7 @@ export class ChatLog extends Container {
     }
     const component = new AssistantMessageComponent(text);
     this.streamingRuns.set(effectiveRunId, component);
-    this.append(component);
+    this.appendNonSystem(component);
     return component;
   }
 
@@ -214,7 +281,7 @@ export class ChatLog extends Container {
       this.streamingRuns.delete(effectiveRunId);
       return;
     }
-    this.append(new AssistantMessageComponent(text));
+    this.appendNonSystem(new AssistantMessageComponent(text));
   }
 
   dropAssistant(runId?: string) {
@@ -232,13 +299,13 @@ export class ChatLog extends Container {
       this.btwMessage.setResult(params);
       if (this.children[this.children.length - 1] !== this.btwMessage) {
         this.removeChild(this.btwMessage);
-        this.append(this.btwMessage);
+        this.appendNonSystem(this.btwMessage);
       }
       return this.btwMessage;
     }
     const component = new BtwInlineMessage(params);
     this.btwMessage = component;
-    this.append(component);
+    this.appendNonSystem(component);
     return component;
   }
 
@@ -263,7 +330,7 @@ export class ChatLog extends Container {
     const component = new ToolExecutionComponent(toolName, args);
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
-    this.append(component);
+    this.appendNonSystem(component);
     return component;
   }
 

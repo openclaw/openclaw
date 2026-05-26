@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildConfiguredModelCatalog,
+  resolveThinkingDefault,
+} from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -47,6 +53,7 @@ import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -60,11 +67,17 @@ type LocalRunState = {
   sessionKey: string;
   controller: AbortController;
   buffer: string;
+  lastBroadcastText?: string;
   isBtw: boolean;
   question?: string;
+  finishing: boolean;
+  lifecycleEnded: boolean;
+  lifecycleStopReason?: string;
   finalSent: boolean;
   registered: boolean;
 };
+
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
@@ -74,8 +87,42 @@ const silentRuntime = {
   },
 };
 
+function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
+  const modelMaps = [
+    cfg.agents?.defaults?.models,
+    ...(cfg.agents?.list?.map((agent) => agent?.models) ?? []),
+  ];
+  return modelMaps.some((models) =>
+    Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
+  );
+}
+
+function resolveConfiguredReplaceModeCatalog(cfg: OpenClawConfig) {
+  if (cfg.models?.mode !== "replace") {
+    return undefined;
+  }
+  if (hasProviderWildcardModelAllowlist(cfg)) {
+    return undefined;
+  }
+  return buildConfiguredModelCatalog({ cfg });
+}
+
+function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
+  return cfg.models?.mode === "replace" && hasProviderWildcardModelAllowlist(cfg);
+}
+
+async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
+  const configuredCatalog = resolveConfiguredReplaceModeCatalog(cfg);
+  if (configuredCatalog !== undefined) {
+    return configuredCatalog;
+  }
+  return await loadGatewayModelCatalog(
+    shouldLoadFullGatewayCatalogForReplaceMode(cfg) ? { readOnly: false } : undefined,
+  );
+}
+
 function resolveBtwQuestion(message: string): string | undefined {
-  const match = /^\/btw(?::|\s)+(.*)$/i.exec(message.trim());
+  const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
   const question = match?.[1]?.trim();
   return question ? question : undefined;
 }
@@ -104,6 +151,70 @@ function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
   return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
 }
 
+function resolveDeltaPayload(text: string, previousText: string | undefined) {
+  if (previousText === undefined) {
+    return { deltaText: text };
+  }
+  if (!text.startsWith(previousText)) {
+    return { deltaText: text, replace: true as const };
+  }
+  return { deltaText: text.slice(previousText.length) };
+}
+
+async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {
+  if (promises.length === 0) {
+    return true;
+  }
+  const timeoutMs = resolveLocalRunShutdownGraceMs();
+  if (timeoutMs <= 0) {
+    return false;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let completed = false;
+  await Promise.race([
+    Promise.allSettled(promises).then(() => {
+      completed = true;
+    }),
+    new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, timeoutMs);
+      timeout.unref?.();
+    }),
+  ]);
+  if (timeout) {
+    clearTimeout(timeout);
+  }
+  return completed;
+}
+
+async function waitForQueuedLocalRun(previousRun: Promise<void>, runId: string): Promise<void> {
+  const timeoutMs = resolveLocalRunShutdownGraceMs();
+  if (timeoutMs <= 0) {
+    throw new Error(
+      `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
+    );
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      previousRun,
+      new Promise<void>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
+            ),
+          );
+        }, timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export class EmbeddedTuiBackend implements TuiBackend {
   readonly connection = { url: "local embedded" };
 
@@ -114,16 +225,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private readonly deps = createDefaultDeps();
   private readonly runs = new Map<string, LocalRunState>();
+  private readonly runPromises = new Map<string, Promise<void>>();
   private unsubscribe?: () => void;
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
+  private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
 
   start() {
     if (this.unsubscribe) {
       return;
     }
     setEmbeddedMode(true);
+    void ensureContextWindowCacheLoaded();
     // Suppress console output from logError/logInfo that would pollute the TUI.
     // File logger (getLogger()) still captures everything via logger.ts:35.
     this.previousRuntimeLog = defaultRuntime.log;
@@ -138,13 +252,34 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
-  stop() {
+  async stop() {
+    const maintenancePromises: Promise<void>[] = [];
+    for (const [runId, run] of this.runs) {
+      if (run.finishing || run.lifecycleEnded) {
+        const promise = this.runPromises.get(runId);
+        if (promise) {
+          maintenancePromises.push(promise);
+        }
+        continue;
+      }
+      run.controller.abort();
+    }
+    const maintenanceCompleted = await waitForLocalRunShutdown(maintenancePromises);
+    if (!maintenanceCompleted) {
+      for (const run of this.runs.values()) {
+        if (run.finishing || run.lifecycleEnded) {
+          run.controller.abort();
+        }
+      }
+    }
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    this.clearPendingLifecycleErrors();
     for (const run of this.runs.values()) {
       run.controller.abort();
     }
     this.runs.clear();
+    this.runPromises.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
     this.previousRuntimeLog = undefined;
@@ -155,8 +290,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
+    const queuedAfter = question ? undefined : this.findPendingSessionRunPromise(opts.sessionKey);
     if (!question) {
-      this.abortSessionRuns(opts.sessionKey);
+      if (!queuedAfter) {
+        this.abortSessionRuns(opts.sessionKey);
+      }
     }
     const controller = new AbortController();
     this.runs.set(runId, {
@@ -165,11 +303,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       buffer: "",
       isBtw: Boolean(question),
       question,
+      finishing: false,
+      lifecycleEnded: false,
       finalSent: false,
       registered: false,
     });
 
-    void this.runTurn({
+    const runPromise = this.runTurn({
       runId,
       sessionKey: opts.sessionKey,
       message: opts.message,
@@ -177,6 +317,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       deliver: opts.deliver,
       timeoutMs: opts.timeoutMs,
       controller,
+      queuedAfter,
+    });
+    this.runPromises.set(runId, runPromise);
+    void runPromise.finally(() => {
+      this.runPromises.delete(runId);
     });
 
     return { runId };
@@ -185,6 +330,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async abortChat(opts: { sessionKey: string; runId: string }) {
     const run = this.runs.get(opts.runId);
     if (!run || run.sessionKey !== opts.sessionKey) {
+      return { ok: true, aborted: false };
+    }
+    if (run.lifecycleEnded) {
       return { ok: true, aborted: false };
     }
     run.controller.abort();
@@ -196,16 +344,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
-        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile)
+        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            mode: "recent",
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          })
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       projectRecentChatDisplayMessages(rawMessages, {
@@ -213,7 +366,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         maxMessages: max,
       }),
     );
-    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
@@ -225,7 +377,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadGatewayModelCatalog();
+      const catalog = await loadEmbeddedTuiModelCatalog(cfg);
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
@@ -275,7 +427,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         store,
         storeKey: primaryKey,
         patch: opts,
-        loadGatewayModelCatalog,
+        loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
       });
     });
     if (!applied.ok) {
@@ -316,8 +468,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listModels(): Promise<TuiModelChoice[]> {
-    const catalog = await loadGatewayModelCatalog();
     const cfg = getRuntimeConfig();
+    const catalog = await loadEmbeddedTuiModelCatalog(cfg);
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
@@ -335,10 +487,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   private abortSessionRuns(sessionKey: string) {
     for (const run of this.runs.values()) {
-      if (run.sessionKey === sessionKey && !run.isBtw) {
+      if (run.sessionKey === sessionKey && !run.isBtw && !run.lifecycleEnded && !run.finishing) {
         run.controller.abort();
       }
     }
+  }
+
+  private findPendingSessionRunPromise(sessionKey: string): Promise<void> | undefined {
+    for (const [runId, run] of this.runs) {
+      if (run.sessionKey === sessionKey && !run.isBtw && (run.finishing || run.lifecycleEnded)) {
+        return this.runPromises.get(runId);
+      }
+    }
+    return undefined;
   }
 
   private nextSeq() {
@@ -354,6 +515,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
+  private clearPendingLifecycleError(runId: string) {
+    const pending = this.pendingLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending);
+    this.pendingLifecycleErrors.delete(runId);
+  }
+
+  private clearPendingLifecycleErrors() {
+    for (const pending of this.pendingLifecycleErrors.values()) {
+      clearTimeout(pending);
+    }
+    this.pendingLifecycleErrors.clear();
+  }
+
+  private scheduleChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
+    const timer = setTimeout(() => {
+      this.pendingLifecycleErrors.delete(runId);
+      this.emitChatError(runId, run, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    this.pendingLifecycleErrors.set(runId, timer);
+  }
+
   private emitChatDelta(runId: string, run: LocalRunState) {
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: true,
@@ -362,11 +549,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!text || projected.suppress) {
       return;
     }
+    const deltaPayload = resolveDeltaPayload(text, run.lastBroadcastText);
+    if (!deltaPayload.deltaText && !deltaPayload.replace) {
+      return;
+    }
     run.registered = true;
+    run.lastBroadcastText = text;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "delta",
+      ...deltaPayload,
       message: {
         role: "assistant",
         content: [{ type: "text", text }],
@@ -376,11 +569,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatFinal(runId: string, run: LocalRunState, stopReason?: string) {
-    if (run.finalSent) {
+    this.clearPendingLifecycleError(runId);
+    const alreadyFinal = run.finalSent;
+    run.finishing = false;
+    run.lifecycleEnded = true;
+    run.finalSent = true;
+    if (alreadyFinal) {
       return;
     }
-    run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: false,
     });
@@ -404,11 +602,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatAborted(runId: string, run: LocalRunState) {
-    if (run.finalSent) {
+    this.clearPendingLifecycleError(runId);
+    const alreadyFinal = run.finalSent;
+    run.finishing = false;
+    run.lifecycleEnded = true;
+    run.finalSent = true;
+    if (alreadyFinal) {
       return;
     }
-    run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -417,11 +620,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatError(runId: string, run: LocalRunState, errorMessage?: string) {
-    if (run.finalSent) {
+    this.clearPendingLifecycleError(runId);
+    const alreadyFinal = run.finalSent;
+    run.finishing = false;
+    run.lifecycleEnded = true;
+    run.finalSent = true;
+    if (alreadyFinal) {
       return;
     }
-    run.finalSent = true;
     run.registered = true;
+    run.lastBroadcastText = undefined;
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
@@ -435,10 +643,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     run.registered = true;
+    run.lastBroadcastText = "";
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
       state: "delta",
+      deltaText: "",
       message: {
         role: "assistant",
         content: [{ type: "text", text: "" }],
@@ -451,6 +661,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const run = this.runs.get(evt.runId);
     if (!run) {
       return;
+    }
+
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    if (evt.stream !== "lifecycle" || lifecyclePhase !== "error") {
+      this.clearPendingLifecycleError(evt.runId);
     }
 
     if (evt.stream !== "assistant") {
@@ -486,28 +702,35 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
 
-    const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
+    if (phase === "finishing") {
+      run.finishing = true;
+      run.lifecycleStopReason =
+        typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
+      return;
+    }
     if (phase === "end") {
+      run.finishing = false;
       if (aborted) {
         this.emitChatAborted(evt.runId, run);
         return;
       }
-      if (!run.isBtw) {
-        const stopReason =
-          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
-        this.emitChatFinal(evt.runId, run, stopReason);
-      }
+      run.lifecycleEnded = true;
+      run.lifecycleStopReason =
+        typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
       return;
     }
 
     if (phase === "error") {
+      run.finishing = false;
       if (aborted) {
         this.emitChatAborted(evt.runId, run);
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      this.emitChatError(evt.runId, run, errorMessage);
+      run.buffer = "";
+      this.scheduleChatError(evt.runId, run, errorMessage);
     }
   }
 
@@ -519,8 +742,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
     deliver?: boolean;
     timeoutMs?: number;
     controller: AbortController;
+    queuedAfter?: Promise<void>;
   }) {
     try {
+      if (params.queuedAfter) {
+        try {
+          await waitForQueuedLocalRun(params.queuedAfter, params.runId);
+        } catch (error) {
+          const run = this.runs.get(params.runId);
+          if (run) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.emitChatError(
+              params.runId,
+              run,
+              `previous run did not finish cleanly: ${errorMessage}`,
+            );
+          }
+          return;
+        }
+        if (params.controller.signal.aborted) {
+          const run = this.runs.get(params.runId);
+          if (run) {
+            this.emitChatAborted(params.runId, run);
+          }
+          return;
+        }
+      }
       const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey);
       const result = await agentCommandFromIngress(
         {
@@ -536,7 +783,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
           timeout: timeoutSecondsFromMs(params.timeoutMs),
           runId: params.runId,
           abortSignal: params.controller.signal,
-          senderIsOwner: true,
           allowModelOverride: false,
         },
         silentRuntime,
@@ -567,7 +813,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
         if (normalizedText && !run.buffer) {
           run.buffer = normalizedText;
         }
-        this.emitChatFinal(params.runId, run);
+        const stopReason =
+          run.lifecycleStopReason ??
+          (typeof result?.meta?.stopReason === "string" ? result.meta.stopReason : undefined);
+        this.emitChatFinal(params.runId, run, stopReason);
       }
     } catch (error) {
       const run = this.runs.get(params.runId);

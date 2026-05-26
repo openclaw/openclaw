@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   normalizeModelCatalog,
@@ -28,6 +28,7 @@ import {
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
+import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -42,7 +43,9 @@ type PluginManifestLoadCacheEntry = {
   ctimeMs: number;
 };
 
-const pluginManifestLoadCache = new Map<string, PluginManifestLoadCacheEntry>();
+const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
+  MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
+);
 
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
@@ -179,6 +182,8 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
+export type PluginManifestDefaultPlatform = NodeJS.Platform;
+
 export type PluginManifestSetupProvider = {
   /** Provider id surfaced during setup/onboarding. */
   id: string;
@@ -287,6 +292,7 @@ export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
@@ -298,6 +304,8 @@ export type PluginManifest = {
    * Optional lightweight module that exports provider plugin metadata for
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
+  providerCatalogEntry?: string;
+  /** @deprecated Use providerCatalogEntry. */
   providerDiscoveryEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
@@ -372,6 +380,14 @@ export type PluginManifest = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  /** Cheap image-generation provider auth metadata without importing plugin runtime. */
+  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap video-generation provider auth metadata without importing plugin runtime. */
+  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap music-generation provider auth metadata without importing plugin runtime. */
+  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap plugin-tool availability metadata without importing plugin runtime. */
+  toolMetadata?: Record<string, PluginManifestToolMetadata>;
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
@@ -386,11 +402,13 @@ export type PluginManifestContracts = {
    * plugin instead of every provider plugin.
    */
   externalAuthProviders?: string[];
+  embeddingProviders?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  transcriptSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
@@ -399,6 +417,7 @@ export type PluginManifestContracts = {
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   migrationProviders?: string[];
+  gatewayMethodDispatch?: string[];
   tools?: string[];
 };
 
@@ -409,6 +428,53 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<
+    Record<
+      "pdf",
+      {
+        textExtraction?: string;
+        image?: string | false;
+      }
+    >
+  >;
+};
+
+export type PluginManifestProviderBaseUrlGuard = {
+  provider: string;
+  defaultBaseUrl?: string;
+  allowedBaseUrls: string[];
+};
+
+export type PluginManifestCapabilityProviderAuthSignal = {
+  provider: string;
+  providerBaseUrl?: PluginManifestProviderBaseUrlGuard;
+};
+
+export type PluginManifestCapabilityProviderModeConfigSignal = {
+  path?: string;
+  default?: string;
+  allowed?: string[];
+  disallowed?: string[];
+};
+
+export type PluginManifestCapabilityProviderConfigSignal = {
+  rootPath: string;
+  overlayPath?: string;
+  required?: string[];
+  requiredAny?: string[];
+  mode?: PluginManifestCapabilityProviderModeConfigSignal;
+};
+
+export type PluginManifestCapabilityProviderMetadata = {
+  aliases?: string[];
+  authProviders?: string[];
+  authSignals?: PluginManifestCapabilityProviderAuthSignal[];
+  configSignals?: PluginManifestCapabilityProviderConfigSignal[];
+  referenceAudioInputs?: boolean;
+};
+
+export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
+  optional?: boolean;
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -431,6 +497,11 @@ export type PluginManifestProviderAuthChoice = {
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
+  /**
+   * Surface this group in the featured tier of the interactive onboarding
+   * picker. Featured groups appear before the "More…" entry.
+   */
+  onboardingFeatured?: boolean;
   /** Optional CLI flag metadata for one-flag auth flows such as API keys. */
   optionKey?: string;
   cliFlag?: string;
@@ -443,7 +514,10 @@ export type PluginManifestProviderAuthChoice = {
   onboardingScopes?: PluginManifestOnboardingScope[];
 };
 
-export type PluginManifestOnboardingScope = "text-inference" | "image-generation";
+export type PluginManifestOnboardingScope =
+  | "text-inference"
+  | "image-generation"
+  | "music-generation";
 
 export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
@@ -539,6 +613,26 @@ function normalizeMediaUnderstandingNativeDocumentInputs(value: unknown): Array<
   return values.length > 0 ? values : undefined;
 }
 
+function normalizeMediaUnderstandingDocumentModels(
+  value: unknown,
+): PluginManifestMediaUnderstandingProviderMetadata["documentModels"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const pdfRaw = value.pdf;
+  if (!isRecord(pdfRaw)) {
+    return undefined;
+  }
+  const textExtraction = normalizeOptionalString(pdfRaw.textExtraction);
+  const image: string | false | undefined =
+    pdfRaw.image === false ? false : normalizeOptionalString(pdfRaw.image);
+  const pdf = {
+    ...(textExtraction ? { textExtraction } : {}),
+    ...(image !== undefined ? { image } : {}),
+  };
+  return Object.keys(pdf).length > 0 ? { pdf } : undefined;
+}
+
 function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
@@ -558,14 +652,173 @@ function normalizeMediaUnderstandingProviderMetadata(
     const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
       rawMetadata.nativeDocumentInputs,
     );
+    const documentModels = normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels);
     const metadata = {
       ...(capabilities ? { capabilities } : {}),
       ...(defaultModels ? { defaultModels } : {}),
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
+      ...(documentModels ? { documentModels } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderBaseUrlGuard(
+  value: unknown,
+): PluginManifestProviderBaseUrlGuard | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const provider = normalizeOptionalString(value.provider);
+  const allowedBaseUrls = normalizeTrimmedStringList(value.allowedBaseUrls);
+  if (!provider || allowedBaseUrls.length === 0) {
+    return undefined;
+  }
+  const defaultBaseUrl = normalizeOptionalString(value.defaultBaseUrl);
+  return {
+    provider,
+    ...(defaultBaseUrl ? { defaultBaseUrl } : {}),
+    allowedBaseUrls,
+  };
+}
+
+function normalizeCapabilityProviderAuthSignals(
+  value: unknown,
+): PluginManifestCapabilityProviderAuthSignal[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const signals: PluginManifestCapabilityProviderAuthSignal[] = [];
+  for (const rawSignal of value) {
+    if (!isRecord(rawSignal)) {
+      continue;
+    }
+    const provider = normalizeOptionalString(rawSignal.provider);
+    if (!provider) {
+      continue;
+    }
+    const providerBaseUrl = normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl);
+    signals.push({
+      provider,
+      ...(providerBaseUrl ? { providerBaseUrl } : {}),
+    });
+  }
+  return signals.length > 0 ? signals : undefined;
+}
+
+function normalizeCapabilityProviderModeConfigSignal(
+  value: unknown,
+): PluginManifestCapabilityProviderModeConfigSignal | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const path = normalizeOptionalString(value.path);
+  const defaultValue = normalizeOptionalString(value.default);
+  const allowed = normalizeTrimmedStringList(value.allowed);
+  const disallowed = normalizeTrimmedStringList(value.disallowed);
+  const signal = {
+    ...(path ? { path } : {}),
+    ...(defaultValue ? { default: defaultValue } : {}),
+    ...(allowed.length > 0 ? { allowed } : {}),
+    ...(disallowed.length > 0 ? { disallowed } : {}),
+  } satisfies PluginManifestCapabilityProviderModeConfigSignal;
+  return Object.keys(signal).length > 0 ? signal : undefined;
+}
+
+function normalizeCapabilityProviderConfigSignals(
+  value: unknown,
+): PluginManifestCapabilityProviderConfigSignal[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const signals: PluginManifestCapabilityProviderConfigSignal[] = [];
+  for (const rawSignal of value) {
+    if (!isRecord(rawSignal)) {
+      continue;
+    }
+    const rootPath = normalizeOptionalString(rawSignal.rootPath);
+    if (!rootPath) {
+      continue;
+    }
+    const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
+    const required = normalizeTrimmedStringList(rawSignal.required);
+    const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
+    const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
+    const signal = {
+      rootPath,
+      ...(overlayPath ? { overlayPath } : {}),
+      ...(required.length > 0 ? { required } : {}),
+      ...(requiredAny.length > 0 ? { requiredAny } : {}),
+      ...(mode ? { mode } : {}),
+    } satisfies PluginManifestCapabilityProviderConfigSignal;
+    if (required.length > 0 || requiredAny.length > 0 || mode) {
+      signals.push(signal);
+    }
+  }
+  return signals.length > 0 ? signals : undefined;
+}
+
+function normalizeCapabilityProviderMetadataEntry(
+  rawMetadata: Record<string, unknown>,
+): PluginManifestCapabilityProviderMetadata | undefined {
+  const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
+  const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
+  const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
+  const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
+  const referenceAudioInputs = rawMetadata.referenceAudioInputs === true ? true : undefined;
+  const metadata = {
+    ...(aliases.length > 0 ? { aliases } : {}),
+    ...(authProviders.length > 0 ? { authProviders } : {}),
+    ...(authSignals ? { authSignals } : {}),
+    ...(configSignals ? { configSignals } : {}),
+    ...(referenceAudioInputs ? { referenceAudioInputs } : {}),
+  } satisfies PluginManifestCapabilityProviderMetadata;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function normalizeCapabilityProviderMetadata(
+  value: unknown,
+): Record<string, PluginManifestCapabilityProviderMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestCapabilityProviderMetadata> = Object.create(null);
+  for (const [rawProviderId, rawMetadata] of Object.entries(value)) {
+    const providerId = normalizeOptionalString(rawProviderId) ?? "";
+    if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const metadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    if (metadata) {
+      normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizePluginToolMetadata(
+  value: unknown,
+): Record<string, PluginManifestToolMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestToolMetadata> = Object.create(null);
+  for (const [rawToolName, rawMetadata] of Object.entries(value)) {
+    const toolName = normalizeOptionalString(rawToolName) ?? "";
+    if (!toolName || isBlockedObjectKey(toolName) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const providerMetadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    const metadata = {
+      ...providerMetadata,
+      ...(rawMetadata.optional === true ? { optional: true } : {}),
+    } satisfies PluginManifestToolMetadata;
+    if (Object.keys(metadata).length > 0) {
+      normalized[toolName] = metadata;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -579,6 +832,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
+  const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -586,6 +840,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const transcriptSourceProviders = normalizeTrimmedStringList(value.transcriptSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
@@ -594,16 +849,19 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
+  const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
+    ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(transcriptSourceProviders.length > 0 ? { transcriptSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
@@ -612,6 +870,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
+    ...(gatewayMethodDispatch.length > 0 ? { gatewayMethodDispatch } : {}),
     ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
 
@@ -952,7 +1211,7 @@ function normalizeManifestProviderRequest(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
-function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
+export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -984,6 +1243,27 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   } satisfies PluginManifestActivation;
 
   return Object.keys(activation).length > 0 ? activation : undefined;
+}
+
+const MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS = new Set<PluginManifestDefaultPlatform>([
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+  "cygwin",
+  "netbsd",
+]);
+
+function normalizeManifestDefaultPlatforms(value: unknown): PluginManifestDefaultPlatform[] {
+  return normalizeTrimmedStringList(value).filter(
+    (platform): platform is PluginManifestDefaultPlatform =>
+      MANIFEST_DEFAULT_ENABLEMENT_PLATFORMS.has(platform as PluginManifestDefaultPlatform),
+  );
 }
 
 function normalizeManifestSetupProviders(
@@ -1121,13 +1401,14 @@ function normalizeProviderAuthChoices(
     const groupId = normalizeOptionalString(entry.groupId) ?? "";
     const groupLabel = normalizeOptionalString(entry.groupLabel) ?? "";
     const groupHint = normalizeOptionalString(entry.groupHint) ?? "";
+    const onboardingFeatured = entry.onboardingFeatured === true;
     const optionKey = normalizeOptionalString(entry.optionKey) ?? "";
     const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
-        scope === "text-inference" || scope === "image-generation",
+        scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
     normalized.push({
       provider,
@@ -1141,6 +1422,7 @@ function normalizeProviderAuthChoices(
       ...(groupId ? { groupId } : {}),
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
+      ...(onboardingFeatured ? { onboardingFeatured: true } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
@@ -1227,12 +1509,14 @@ function buildPluginManifestLoadCacheKey(params: {
   rootRealPath?: string;
   stats: fs.Stats;
 }): string {
-  return JSON.stringify([
-    path.resolve(params.manifestPath),
-    params.rejectHardlinks,
-    params.rootRealPath ?? "",
-    params.stats.dev,
-    params.stats.ino,
+  return createPluginCacheKey([
+    [
+      path.resolve(params.manifestPath),
+      params.rejectHardlinks,
+      params.rootRealPath ?? "",
+      params.stats.dev,
+      params.stats.ino,
+    ],
     params.stats.size,
     params.stats.mtimeMs,
     params.stats.ctimeMs,
@@ -1252,8 +1536,6 @@ function getCachedPluginManifestLoadResult(
   ) {
     return undefined;
   }
-  pluginManifestLoadCache.delete(key);
-  pluginManifestLoadCache.set(key, entry);
   return entry.result;
 }
 
@@ -1268,13 +1550,6 @@ function setCachedPluginManifestLoadResult(
     mtimeMs: stats.mtimeMs,
     ctimeMs: stats.ctimeMs,
   });
-  if (pluginManifestLoadCache.size <= MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES) {
-    return;
-  }
-  const oldestKey = pluginManifestLoadCache.keys().next().value;
-  if (typeof oldestKey === "string") {
-    pluginManifestLoadCache.delete(oldestKey);
-  }
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
@@ -1293,7 +1568,7 @@ export function loadPluginManifest(
   rootRealPath?: string,
 ): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),
@@ -1302,7 +1577,7 @@ export function loadPluginManifest(
     rejectHardlinks,
   });
   if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+    return matchRootFileOpenFailure(opened, {
       path: () => ({
         ok: false,
         error: `plugin manifest not found: ${manifestPath}`,
@@ -1357,6 +1632,9 @@ export function loadPluginManifest(
 
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
+  const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
+    raw.enabledByDefaultOnPlatforms,
+  );
   const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
   const autoEnableWhenConfiguredProviders = normalizeTrimmedStringList(
     raw.autoEnableWhenConfiguredProviders,
@@ -1366,10 +1644,12 @@ export function loadPluginManifest(
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
+  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const providerCatalogEntry = normalizeOptionalString(raw.providerCatalogEntry);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
-    ownedProviders: new Set(providers),
+    ownedProviders: new Set([...providers, ...cliBackends]),
   });
   const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
     ownedProviders: new Set(providers),
@@ -1381,7 +1661,6 @@ export function loadPluginManifest(
   const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
     ownedProviders: new Set(providers),
   });
-  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
@@ -1397,6 +1676,16 @@ export function loadPluginManifest(
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
     raw.mediaUnderstandingProviderMetadata,
   );
+  const imageGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.imageGenerationProviderMetadata,
+  );
+  const videoGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.videoGenerationProviderMetadata,
+  );
+  const musicGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.musicGenerationProviderMetadata,
+  );
+  const toolMetadata = normalizePluginToolMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
@@ -1411,6 +1700,7 @@ export function loadPluginManifest(
       id,
       configSchema,
       ...(enabledByDefault ? { enabledByDefault } : {}),
+      ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
       ...(autoEnableWhenConfiguredProviders.length > 0
         ? { autoEnableWhenConfiguredProviders }
@@ -1418,6 +1708,7 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      providerCatalogEntry,
       providerDiscoveryEntry,
       modelSupport,
       modelCatalog,
@@ -1443,6 +1734,10 @@ export function loadPluginManifest(
       uiHints,
       contracts,
       mediaUnderstandingProviderMetadata,
+      imageGenerationProviderMetadata,
+      videoGenerationProviderMetadata,
+      musicGenerationProviderMetadata,
+      toolMetadata,
       configContracts,
       channelConfigs,
     },
@@ -1508,9 +1803,10 @@ export type PluginPackageChannelCliOption = {
 };
 
 export type PluginPackageInstall = {
+  clawhubSpec?: string;
   npmSpec?: string;
   localPath?: string;
-  defaultChoice?: "npm" | "local";
+  defaultChoice?: "clawhub" | "npm" | "local";
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
@@ -1530,19 +1826,18 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
-export type OpenClawPackageBundle = {
-  includeInCore?: boolean;
-};
-
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
   setupEntry?: string;
   runtimeSetupEntry?: string;
   setupFeatures?: OpenClawPackageSetupFeatures;
+  plugin?: {
+    id?: string;
+    label?: string;
+  };
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
-  bundle?: OpenClawPackageBundle;
   startup?: OpenClawPackageStartup;
 };
 
@@ -1556,7 +1851,8 @@ export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
 export type PackageExtensionResolution =
   | { status: "ok"; entries: string[] }
   | { status: "missing"; entries: [] }
-  | { status: "empty"; entries: [] };
+  | { status: "empty"; entries: [] }
+  | { status: "invalid"; entries: []; error: string };
 
 export type ManifestKey = typeof MANIFEST_KEY;
 
@@ -1564,6 +1860,8 @@ export type PackageManifest = {
   name?: string;
   version?: string;
   description?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 } & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
 
 export function getPackageManifestMetadata(
@@ -1575,20 +1873,43 @@ export function getPackageManifestMetadata(
   return manifest[MANIFEST_KEY];
 }
 
-export function isPackageIncludedInCoreBundle(
-  manifest: OpenClawPackageManifest | undefined,
-): boolean {
-  return manifest?.bundle?.includeInCore !== false;
-}
-
 export function resolvePackageExtensionEntries(
   manifest: PackageManifest | undefined,
 ): PackageExtensionResolution {
-  const raw = getPackageManifestMetadata(manifest)?.extensions;
-  if (!Array.isArray(raw)) {
+  const rawOpenClaw = manifest?.[MANIFEST_KEY] as unknown;
+  if (rawOpenClaw === undefined || rawOpenClaw === null) {
     return { status: "missing", entries: [] };
   }
-  const entries = raw.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  if (!isRecord(rawOpenClaw)) {
+    return {
+      status: "invalid",
+      entries: [],
+      error: "package.json openclaw must be an object",
+    };
+  }
+  const raw = rawOpenClaw.extensions;
+  if (raw === undefined || raw === null) {
+    return { status: "missing", entries: [] };
+  }
+  if (!Array.isArray(raw)) {
+    return {
+      status: "invalid",
+      entries: [],
+      error: "package.json openclaw.extensions must be an array",
+    };
+  }
+  const entries: string[] = [];
+  for (const [index, entry] of raw.entries()) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) {
+      return {
+        status: "invalid",
+        entries: [],
+        error: `package.json openclaw.extensions[${index}] must be a non-empty string`,
+      };
+    }
+    entries.push(normalized);
+  }
   if (entries.length === 0) {
     return { status: "empty", entries: [] };
   }

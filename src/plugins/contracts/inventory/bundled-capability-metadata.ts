@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
   resolveBundledPluginScanDir,
 } from "../../bundled-plugin-scan.js";
 import {
   getPackageManifestMetadata,
-  isPackageIncludedInCoreBundle,
   PLUGIN_MANIFEST_FILENAME,
   type PackageManifest,
   type PluginManifest,
@@ -23,10 +23,12 @@ export type BundledPluginContractSnapshot = {
   cliBackendIds: string[];
   providerIds: string[];
   providerAuthEnvVars: Record<string, string[]>;
+  embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  transcriptSourceProviderIds: string[];
   documentExtractorIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
@@ -60,30 +62,16 @@ export type BundledCapabilityManifest = Pick<
 >;
 
 function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isExplicitlyDownloadablePlugin(packageJson: Record<string, unknown> | undefined): boolean {
-  return !isPackageIncludedInCoreBundle(getPackageManifestMetadata(packageJson as PackageManifest));
+  const raw = tryReadJsonSync(filePath);
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
   const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
-  if (isExplicitlyDownloadablePlugin(packageJson)) {
-    return undefined;
-  }
-  const extensions = normalizeBundledPluginStringList(
-    packageJson?.openclaw && typeof packageJson.openclaw === "object"
-      ? (packageJson.openclaw as { extensions?: unknown }).extensions
-      : undefined,
-  );
+  const packageManifest = getPackageManifestMetadata(packageJson as PackageManifest);
+  const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
   if (extensions.length === 0) {
     return undefined;
   }
@@ -142,6 +130,9 @@ export function buildBundledPluginContractSnapshot(
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
     providerAuthEnvVars: normalizeStringListRecord(manifest.providerAuthEnvVars),
+    embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
+      value.trim(),
+    ),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) => value.trim()),
     realtimeTranscriptionProviderIds: uniqueStrings(
       manifest.contracts?.realtimeTranscriptionProviders,
@@ -152,6 +143,10 @@ export function buildBundledPluginContractSnapshot(
     ),
     mediaUnderstandingProviderIds: uniqueStrings(
       manifest.contracts?.mediaUnderstandingProviders,
+      (value) => value.trim(),
+    ),
+    transcriptSourceProviderIds: uniqueStrings(
+      manifest.contracts?.transcriptSourceProviders,
       (value) => value.trim(),
     ),
     documentExtractorIds: uniqueStrings(manifest.contracts?.documentExtractors, (value) =>
@@ -191,10 +186,12 @@ export function hasBundledPluginContractSnapshotCapabilities(
   return (
     entry.cliBackendIds.length > 0 ||
     entry.providerIds.length > 0 ||
+    entry.embeddingProviderIds.length > 0 ||
     entry.speechProviderIds.length > 0 ||
     entry.realtimeTranscriptionProviderIds.length > 0 ||
     entry.realtimeVoiceProviderIds.length > 0 ||
     entry.mediaUnderstandingProviderIds.length > 0 ||
+    entry.transcriptSourceProviderIds.length > 0 ||
     entry.documentExtractorIds.length > 0 ||
     entry.imageGenerationProviderIds.length > 0 ||
     entry.videoGenerationProviderIds.length > 0 ||

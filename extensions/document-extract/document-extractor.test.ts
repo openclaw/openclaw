@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { canvasSizes, getDocumentMock, pdfDocument } = vi.hoisted(() => ({
   canvasSizes: [] as Array<{ width: number; height: number }>,
@@ -36,7 +36,21 @@ import { createPdfDocumentExtractor } from "./document-extractor.js";
 
 const require = createRequire(import.meta.url);
 
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
+
 describe("PDF document extractor", () => {
+  afterAll(() => {
+    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+    vi.doUnmock("@napi-rs/canvas");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     canvasSizes.length = 0;
     getDocumentMock.mockReset();
@@ -46,10 +60,13 @@ describe("PDF document extractor", () => {
 
   it("declares PDF support", () => {
     const extractor = createPdfDocumentExtractor();
-    expect(extractor).toMatchObject({
+    const { extract, ...descriptor } = extractor;
+    expect(extract).toBeInstanceOf(Function);
+    expect(descriptor).toEqual({
       id: "pdf",
       label: "PDF",
       mimeTypes: ["application/pdf"],
+      autoDetectOrder: 10,
     });
   });
 
@@ -64,7 +81,10 @@ describe("PDF document extractor", () => {
       minTextChars: 10,
     });
 
-    expect(result?.images).toHaveLength(1);
+    if (!result) {
+      throw new Error("Expected PDF extraction result");
+    }
+    expect(result.images).toHaveLength(1);
     expect(canvasSizes).toEqual([{ width: 10, height: 10 }]);
   });
 
@@ -80,21 +100,25 @@ describe("PDF document extractor", () => {
     });
 
     expect(getDocumentMock).toHaveBeenCalledTimes(1);
-    const [params] = getDocumentMock.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
+    const params = requireFirstMockArg(getDocumentMock, "pdfjs getDocument call");
+    const { data, standardFontDataUrl, ...stableParams } = params as {
+      data: Uint8Array;
+      disableWorker: boolean;
+      standardFontDataUrl: string;
+    };
+    expect(stableParams).toEqual({
       disableWorker: true,
     });
-    expect(typeof params.standardFontDataUrl).toBe("string");
+    expect(data).toBeInstanceOf(Uint8Array);
+    expect(typeof standardFontDataUrl).toBe("string");
 
     const expectedStandardFontDataUrl =
       path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + "/";
-    expect(params.standardFontDataUrl).toBe(expectedStandardFontDataUrl);
-    expect(path.isAbsolute(params.standardFontDataUrl)).toBe(true);
-    expect(params.standardFontDataUrl.endsWith("/")).toBe(true);
-    expect(params.standardFontDataUrl.startsWith("file://")).toBe(false);
-    expect(existsSync(params.standardFontDataUrl)).toBe(true);
-    expect(existsSync(path.join(params.standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(
-      true,
-    );
+    expect(standardFontDataUrl).toBe(expectedStandardFontDataUrl);
+    expect(path.isAbsolute(standardFontDataUrl)).toBe(true);
+    expect(standardFontDataUrl.endsWith("/")).toBe(true);
+    expect(standardFontDataUrl.startsWith("file://")).toBe(false);
+    expect(existsSync(standardFontDataUrl)).toBe(true);
+    expect(existsSync(path.join(standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(true);
   });
 });

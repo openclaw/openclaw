@@ -23,10 +23,17 @@ type InputOptionsReturn = InputOptionsFactory extends (
   ? Return
   : never;
 type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
+type ExternalOptionFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 const env = {
   NODE_ENV: "production",
 };
+const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
+const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -38,24 +45,58 @@ function normalizedLogHaystack(log: { message?: string; id?: string; importer?: 
   return [log.message, log.id, log.importer].filter(Boolean).join("\n").replaceAll("\\", "/");
 }
 
+function matchesExternalOption(
+  option: unknown,
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+): boolean {
+  if (!option) {
+    return false;
+  }
+  if (typeof option === "function") {
+    return (option as ExternalOptionFunction)(id, parentId, isResolved) === true;
+  }
+  if (typeof option === "string") {
+    return option === id;
+  }
+  if (option instanceof RegExp) {
+    return option.test(id);
+  }
+  if (Array.isArray(option)) {
+    return option.some((entry) => matchesExternalOption(entry, id, parentId, isResolved));
+  }
+  return false;
+}
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
 
   const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
+  const previousExternal = (options as { external?: unknown }).external;
 
   function isSuppressedLog(log: {
     code?: string;
     message?: string;
     id?: string;
     importer?: string;
+    plugin?: string;
   }) {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
     if (log.code === "UNRESOLVED_IMPORT") {
       return normalizedLogHaystack(log).includes("extensions/");
+    }
+    if (
+      log.code === "PLUGIN_WARNING" &&
+      log.plugin === "rolldown-plugin-dts:fake-js" &&
+      typeof log.message === "string" &&
+      log.message.includes("uses CommonJS dts syntax")
+    ) {
+      return true;
     }
     if (log.code !== "EVAL") {
       return false;
@@ -66,6 +107,12 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
 
   return {
     ...options,
+    external(id: string, parentId: string | undefined, isResolved: boolean) {
+      return (
+        shouldNeverBundleDependency(id) ||
+        matchesExternalOption(previousExternal, id, parentId, isResolved)
+      );
+    },
     onLog(...args: Parameters<OnLogFunction>) {
       const [level, log, defaultHandler] = args;
       if (isSuppressedLog(log)) {
@@ -86,6 +133,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
     env,
     fixedExtension: false,
     platform: "node",
+    sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
   };
 }
@@ -123,15 +171,34 @@ const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 const explicitNeverBundleDependencies = [
+  "@anthropic-ai/vertex-sdk",
+  "@slack/bolt",
+  "@slack/web-api",
+  "@discordjs/voice",
   "@lancedb/lancedb",
+  "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@vitest/expect",
   "matrix-js-sdk",
+  "prism-media",
+  "qrcode-terminal",
+  "typescript",
+  "vitest",
 ].toSorted((left, right) => left.localeCompare(right));
 
 function shouldNeverBundleDependency(id: string): boolean {
   return explicitNeverBundleDependencies.some((dependency) => {
     return id === dependency || id.startsWith(`${dependency}/`);
   });
+}
+
+function shouldAlwaysBundleDependency(id: string): boolean {
+  return (
+    id === "@openclaw/fs-safe" ||
+    id.startsWith("@openclaw/fs-safe/") ||
+    id === "zod" ||
+    id.startsWith("zod/")
+  );
 }
 
 function listBundledPluginEntrySources(
@@ -165,8 +232,14 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
+    "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+    "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
+    "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
+    "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
@@ -178,12 +251,17 @@ function buildCoreDistEntries(): Record<string, string> {
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    "web-fetch/runtime": "src/web-fetch/runtime.ts",
     "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
+    "telegram-ingress-worker.runtime": bundledPluginFile(
+      "telegram",
+      "src/telegram-ingress-worker.runtime.ts",
+    ),
     "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
@@ -201,6 +279,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
     "agents/pi-embedded-runner/effective-tool-policy":
       "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+    "agents/pi-embedded-runner/tool-split": "src/agents/pi-embedded-runner/tool-split.ts",
     "agents/pi-embedded-runner/run/runtime-context-prompt":
       "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
@@ -231,6 +310,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...dockerE2eHarnessEntries,
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
+    // Private bundled Codex helper for app-server user MCP config projection.
+    "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
         `plugin-sdk/${entry}`,
@@ -243,6 +324,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
+    "memory-core-local-embedding-worker":
+      "packages/memory-host-sdk/src/host/embeddings-worker-child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
   };
@@ -253,8 +336,10 @@ export default defineConfig([
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
     deps: {
+      alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
     },
   }),

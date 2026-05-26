@@ -38,6 +38,14 @@ type CacheEntry = {
 };
 
 const transcriptIndexCache = new Map<string, CacheEntry>();
+const transcriptIndexBuilds = new Map<
+  string,
+  {
+    mtimeMs: number;
+    size: number;
+    promise: Promise<SessionTranscriptIndex>;
+  }
+>();
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
@@ -66,6 +74,7 @@ function setCachedIndex(filePath: string, entry: CacheEntry): void {
 
 export function clearSessionTranscriptIndexCache(): void {
   transcriptIndexCache.clear();
+  transcriptIndexBuilds.clear();
 }
 
 function isIndexableTranscriptRecord(record: unknown): record is ParsedTranscriptRecord {
@@ -137,7 +146,7 @@ function buildActiveTreeEntries(params: {
     seen.add(currentId);
     const entry = params.byId.get(currentId);
     if (!entry) {
-      return [];
+      break;
     }
     out.push(entry);
     currentId = entry.parentId ?? undefined;
@@ -197,10 +206,12 @@ async function buildSessionTranscriptIndex(
       record: parsed,
     };
     rawEntries.push(rawEntry);
-    if (isTreeTranscriptRecord(parsed) && id) {
-      hasTreeEntries = true;
-      leafId = id;
+    if (id) {
       byId.set(id, rawEntry);
+      if (isTreeTranscriptRecord(parsed)) {
+        hasTreeEntries = true;
+        leafId = id;
+      }
     }
   });
 
@@ -233,7 +244,22 @@ export async function readSessionTranscriptIndex(
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     return touchCachedIndex(filePath, cached);
   }
-  const index = await buildSessionTranscriptIndex(filePath, stat);
+  const inFlight = transcriptIndexBuilds.get(filePath);
+  if (inFlight && inFlight.mtimeMs === stat.mtimeMs && inFlight.size === stat.size) {
+    return await inFlight.promise;
+  }
+  const promise = buildSessionTranscriptIndex(filePath, stat);
+  transcriptIndexBuilds.set(filePath, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    promise,
+  });
+  const index = await promise.finally(() => {
+    const current = transcriptIndexBuilds.get(filePath);
+    if (current?.promise === promise) {
+      transcriptIndexBuilds.delete(filePath);
+    }
+  });
   setCachedIndex(filePath, {
     mtimeMs: stat.mtimeMs,
     size: stat.size,

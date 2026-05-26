@@ -1,6 +1,7 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { detectOpenAICompletionsCompat } from "../agents/openai-completions-compat.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
@@ -15,16 +16,16 @@ export function extractModelCompat(
   return modelOrCompat as ModelCompatConfig;
 }
 
+/** @deprecated Provider-owned model compat helper; do not use from third-party plugins. */
 export function applyModelCompatPatch<T extends { compat?: ModelCompatConfig }>(
   model: T,
-  patch: ModelCompatConfig,
+  patch: Partial<ModelCompatConfig> & Record<string, unknown>,
 ): T {
-  const nextCompat = { ...model.compat, ...patch };
+  const nextCompat = { ...model.compat, ...patch } as ModelCompatConfig;
+  const currentCompat = model.compat as (Record<string, unknown> & ModelCompatConfig) | undefined;
   if (
     model.compat &&
-    Object.entries(patch).every(
-      ([key, value]) => model.compat?.[key as keyof ModelCompatConfig] === value,
-    )
+    Object.entries(patch).every(([key, value]) => currentCompat?.[key] === value)
   ) {
     return model;
   }
@@ -58,11 +59,19 @@ export function resolveUnsupportedToolSchemaKeywords(
 ): ReadonlySet<string> {
   const keywords = extractModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
   return new Set(
-    keywords
-      .filter((keyword): keyword is string => typeof keyword === "string")
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
+    normalizeStringEntries(
+      keywords.filter((keyword): keyword is string => typeof keyword === "string"),
+    ),
   );
+}
+
+export function shouldOmitEmptyArrayItems(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): boolean {
+  const compat = extractModelCompat(modelOrCompat) as
+    | (ModelCompatConfig & { omitEmptyArrayItems?: unknown })
+    | undefined;
+  return compat?.omitEmptyArrayItems === true;
 }
 
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {

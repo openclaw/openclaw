@@ -21,7 +21,7 @@ describe("CronService restart catch-up", () => {
   function createRestartCronService(params: {
     storePath: string;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
-    requestHeartbeatNow: ReturnType<typeof vi.fn>;
+    requestHeartbeat: ReturnType<typeof vi.fn>;
     onEvent?: ReturnType<typeof vi.fn>;
     nowMs?: () => number;
     runIsolatedAgentJob?: ReturnType<typeof vi.fn>;
@@ -33,7 +33,7 @@ describe("CronService restart catch-up", () => {
       log: noopLogger,
       ...(params.nowMs ? { nowMs: params.nowMs } : {}),
       enqueueSystemEvent: params.enqueueSystemEvent as never,
-      requestHeartbeatNow: params.requestHeartbeatNow as never,
+      requestHeartbeat: params.requestHeartbeat as never,
       runIsolatedAgentJob:
         (params.runIsolatedAgentJob as never) ??
         (vi.fn(async () => ({ status: "ok" as const })) as never),
@@ -59,18 +59,55 @@ describe("CronService restart catch-up", () => {
     };
   }
 
+  function createOverdueCronJob(id: string, nextRunAtMs: number) {
+    return {
+      id,
+      name: `job-${id}`,
+      enabled: true,
+      createdAtMs: nextRunAtMs - 60_000,
+      updatedAtMs: nextRunAtMs - 60_000,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: `tick-${id}` },
+      state: { nextRunAtMs },
+    };
+  }
+
+  function expectQueuedSystemEvent(
+    enqueueSystemEvent: ReturnType<typeof vi.fn>,
+    expectedText: string,
+  ) {
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    const [text, options] = enqueueSystemEvent.mock.calls[0] ?? [];
+    expect(text).toBe(expectedText);
+    expect((options as { agentId?: string } | undefined)?.agentId).toBeUndefined();
+  }
+
+  function expectInterruptedJobEvent(
+    onEvent: ReturnType<typeof vi.fn>,
+    expected: { jobId: string; runAtMs: number },
+  ) {
+    const event = onEvent.mock.calls
+      .map(([evt]) => evt as CronEvent)
+      .find((evt) => evt.action === "finished" && evt.jobId === expected.jobId);
+    expect(event?.status).toBe("error");
+    expect(event?.error).toBe("cron: job interrupted by gateway restart");
+    expect(event?.runAtMs).toBe(expected.runAtMs);
+  }
+
   async function withRestartedCron(
     jobs: unknown[],
     run: (params: {
       cron: CronService;
       enqueueSystemEvent: ReturnType<typeof vi.fn>;
-      requestHeartbeatNow: ReturnType<typeof vi.fn>;
+      requestHeartbeat: ReturnType<typeof vi.fn>;
       onEvent: ReturnType<typeof vi.fn>;
     }) => Promise<void>,
   ) {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const onEvent = vi.fn();
 
     await writeStoreJobs(store.storePath, jobs);
@@ -78,13 +115,13 @@ describe("CronService restart catch-up", () => {
     const cron = createRestartCronService({
       storePath: store.storePath,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       onEvent,
     });
 
     try {
       await cron.start();
-      await run({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent });
+      await run({ cron, enqueueSystemEvent, requestHeartbeat, onEvent });
     } finally {
       cron.stop();
       await store.cleanup();
@@ -114,12 +151,9 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "digest now",
-          expect.objectContaining({ agentId: undefined }),
-        );
-        expect(requestHeartbeatNow).toHaveBeenCalled();
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expectQueuedSystemEvent(enqueueSystemEvent, "digest now");
+        expect(requestHeartbeat).toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-overdue-job");
@@ -135,7 +169,7 @@ describe("CronService restart catch-up", () => {
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
 
     await writeStoreJobs(store.storePath, [
       {
@@ -155,7 +189,7 @@ describe("CronService restart catch-up", () => {
     const cron = createRestartCronService({
       storePath: store.storePath,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob,
       nowMs: () => startNow,
       startupDeferredMissedAgentJobDelayMs: 120_000,
@@ -166,7 +200,7 @@ describe("CronService restart catch-up", () => {
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
 
       const listedJobs = await cron.list({ includeDisabled: true });
       const updated = listedJobs.find((job) => job.id === "startup-isolated-agent");
@@ -201,14 +235,18 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent }) => {
-        expect(noopLogger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ jobId: "restart-stale-running" }),
-          "cron: marking interrupted running job failed on startup",
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
+        const warning = vi
+          .mocked(noopLogger.warn)
+          .mock.calls.find(
+            ([, message]) => message === "cron: marking interrupted running job failed on startup",
+          );
+        expect((warning?.[0] as { jobId?: string } | undefined)?.jobId).toBe(
+          "restart-stale-running",
         );
 
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-stale-running");
@@ -218,15 +256,10 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.lastRunAtMs).toBe(staleRunningAt);
         expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
         expect(updated?.state.nextRunAtMs).toBeGreaterThan(Date.parse("2025-12-13T17:00:00.000Z"));
-        expect(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            action: "finished",
-            jobId: "restart-stale-running",
-            status: "error",
-            error: "cron: job interrupted by gateway restart",
-            runAtMs: staleRunningAt,
-          }),
-        );
+        expectInterruptedJobEvent(onEvent, {
+          jobId: "restart-stale-running",
+          runAtMs: staleRunningAt,
+        });
       },
     );
   });
@@ -253,12 +286,9 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "catch missed slot",
-          expect.objectContaining({ agentId: undefined }),
-        );
-        expect(requestHeartbeatNow).toHaveBeenCalled();
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expectQueuedSystemEvent(enqueueSystemEvent, "catch missed slot");
+        expect(requestHeartbeat).toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-missed-slot");
@@ -289,9 +319,9 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow, onEvent }) => {
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, onEvent }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
 
         const listedJobs = await cron.list({ includeDisabled: true });
         const updated = listedJobs.find((job) => job.id === "restart-stale-one-shot");
@@ -302,15 +332,10 @@ describe("CronService restart catch-up", () => {
         expect(updated?.state.lastRunAtMs).toBe(staleRunningAt);
         expect(updated?.state.nextRunAtMs).toBeUndefined();
         expect(updated?.state.lastError).toBe("cron: job interrupted by gateway restart");
-        expect(onEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            action: "finished",
-            jobId: "restart-stale-one-shot",
-            status: "error",
-            error: "cron: job interrupted by gateway restart",
-            runAtMs: staleRunningAt,
-          }),
-        );
+        expectInterruptedJobEvent(onEvent, {
+          jobId: "restart-stale-one-shot",
+          runAtMs: staleRunningAt,
+        });
       },
     );
   });
@@ -336,9 +361,9 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ enqueueSystemEvent, requestHeartbeatNow }) => {
+      async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
       },
     );
   });
@@ -366,9 +391,9 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ enqueueSystemEvent, requestHeartbeatNow }) => {
+      async ({ enqueueSystemEvent, requestHeartbeat }) => {
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
       },
     );
   });
@@ -397,12 +422,9 @@ describe("CronService restart catch-up", () => {
           },
         },
       ],
-      async ({ enqueueSystemEvent, requestHeartbeatNow }) => {
-        expect(enqueueSystemEvent).toHaveBeenCalledWith(
-          "replay after backoff elapsed",
-          expect.objectContaining({ agentId: undefined }),
-        );
-        expect(requestHeartbeatNow).toHaveBeenCalled();
+      async ({ enqueueSystemEvent, requestHeartbeat }) => {
+        expectQueuedSystemEvent(enqueueSystemEvent, "replay after backoff elapsed");
+        expect(requestHeartbeat).toHaveBeenCalled();
       },
     );
   });
@@ -424,7 +446,7 @@ describe("CronService restart catch-up", () => {
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => {
         now += 6_000;
         return { status: "ok" as const, summary: "ok" };
@@ -447,6 +469,45 @@ describe("CronService restart catch-up", () => {
     expect(
       (staggeredJobs[1]?.state.nextRunAtMs ?? 0) - (staggeredJobs[0]?.state.nextRunAtMs ?? 0),
     ).toBe(5_000);
+
+    await store.cleanup();
+  });
+
+  it("keeps startup overflow cron deferrals before the next natural cron slot", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    let now = startNow;
+
+    await writeStoreJobs(store.storePath, [
+      createOverdueCronJob("cron-stagger-0", Date.parse("2025-12-13T16:00:00.000Z")),
+      createOverdueCronJob("cron-stagger-1", Date.parse("2025-12-13T16:05:00.000Z")),
+      createOverdueCronJob("cron-stagger-2", Date.parse("2025-12-13T16:10:00.000Z")),
+    ]);
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        now += 6_000;
+        return { status: "ok" as const, summary: "ok" };
+      }),
+      maxMissedJobsPerRestart: 1,
+      missedJobStaggerMs: 5_000,
+    });
+
+    await runMissedJobs(state);
+
+    const deferredJobs = (state.store?.jobs ?? [])
+      .filter((job) => job.id.startsWith("cron-stagger-") && job.id !== "cron-stagger-0")
+      .toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+
+    expect(deferredJobs).toHaveLength(2);
+    expect(deferredJobs[0]?.state.nextRunAtMs).toBe(startNow + 5_000);
+    expect(deferredJobs[1]?.state.nextRunAtMs).toBe(startNow + 10_000);
 
     await store.cleanup();
   });

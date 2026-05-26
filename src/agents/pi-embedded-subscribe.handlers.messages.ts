@@ -1,5 +1,5 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   parseReplyDirectives,
@@ -16,6 +16,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -34,7 +35,6 @@ import {
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
-  formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
@@ -255,7 +255,7 @@ export function readPendingToolMediaReply(
   }
   return {
     mediaUrls: state.pendingToolMediaUrls.length
-      ? Array.from(new Set(state.pendingToolMediaUrls))
+      ? uniqueStrings(state.pendingToolMediaUrls)
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
@@ -289,7 +289,7 @@ function mergeReplyDirectiveResults(
   if (!second) {
     return first;
   }
-  const mediaUrls = Array.from(new Set([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]));
+  const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
@@ -692,7 +692,7 @@ export function handleMessageEnd(
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
-  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
   const parsedText = trimmedText
     ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
@@ -770,18 +770,18 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     ctx.state.includeReasoning &&
-    formattedReasoning &&
+    trimmedReasoning &&
     onBlockReply &&
-    formattedReasoning !== ctx.state.lastReasoningSent,
+    trimmedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning || !formattedReasoning) {
+    if (!shouldEmitReasoning || !trimmedReasoning) {
       return;
     }
-    ctx.state.lastReasoningSent = formattedReasoning;
-    ctx.emitBlockReply({ text: formattedReasoning, isReasoning: true });
+    ctx.state.lastReasoningSent = trimmedReasoning;
+    ctx.emitBlockReply({ text: trimmedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -872,6 +872,8 @@ export function handleMessageEnd(
           );
         } else {
           ctx.state.lastBlockReplyText = text;
+          ctx.state.lastDeliveredBlockReplyText = text;
+          ctx.state.toolExecutionSinceLastBlockReply = false;
           emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
         }
       }

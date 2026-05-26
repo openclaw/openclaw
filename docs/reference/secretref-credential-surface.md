@@ -54,6 +54,7 @@ Scope intent:
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
+- `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
@@ -82,14 +83,14 @@ Scope intent:
 - `channels.irc.nickserv.password`
 - `channels.irc.accounts.*.password`
 - `channels.irc.accounts.*.nickserv.password`
-- `channels.bluebubbles.password`
-- `channels.bluebubbles.accounts.*.password`
 - `channels.feishu.appSecret`
 - `channels.feishu.encryptKey`
 - `channels.feishu.verificationToken`
 - `channels.feishu.accounts.*.appSecret`
 - `channels.feishu.accounts.*.encryptKey`
 - `channels.feishu.accounts.*.verificationToken`
+- `channels.qqbot.clientSecret`
+- `channels.qqbot.accounts.*.clientSecret`
 - `channels.msteams.appPassword`
 - `channels.mattermost.botToken`
 - `channels.mattermost.accounts.*.botToken`

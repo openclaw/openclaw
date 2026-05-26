@@ -141,6 +141,7 @@ vi.mock("./health.js", () => ({
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
+  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
   resolvePluginMigrationProviders: () => [migrationProviderMock],
   resolvePluginMigrationProvider: ({ providerId }: { providerId: string }) =>
     providerId === migrationProviderMock.id ? migrationProviderMock : undefined,
@@ -210,6 +211,46 @@ function createJsonCaptureRuntime() {
     readCapturedJson: () => capturedJson,
   };
 }
+
+type MockWithCalls<TArgs extends unknown[]> = {
+  mock: {
+    calls: TArgs[];
+  };
+};
+
+function readFirstMockCall(mock: unknown, label: string): unknown[] {
+  const calls = (mock as MockWithCalls<unknown[]>).mock.calls;
+  const call = calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+type EnsureWorkspaceOptions = {
+  skipBootstrap?: boolean;
+};
+
+type MigrationPlanCall = {
+  config?: OpenClawConfig;
+  includeSecrets?: boolean;
+  overwrite?: boolean;
+  source?: string;
+};
+
+type MigrationApplyCall = {
+  reportDir?: string;
+  source?: string;
+};
+
+type GatewayHealthCall = {
+  password?: string;
+  token?: string;
+};
+
+type HealthCommandCall = GatewayHealthCall & {
+  config?: OpenClawConfig;
+};
 
 async function expectLocalJsonSetupFailure(stateDir: string, runtimeWithCapture: RuntimeEnv) {
   await expect(
@@ -404,11 +445,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(cfg.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
-      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
-        workspace,
-        runtime,
-        expect.objectContaining({ skipBootstrap: true }),
-      );
+      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledOnce();
+      const [workspaceArg, runtimeArg, optionsArg] = readFirstMockCall(
+        ensureWorkspaceAndSessionsMock,
+        "ensureWorkspaceAndSessions",
+      ) as [string, RuntimeEnv, EnsureWorkspaceOptions];
+      expect(workspaceArg).toBe(workspace);
+      expect(runtimeArg).toBe(runtime);
+      expect(optionsArg.skipBootstrap).toBe(true);
     });
   }, 60_000);
 
@@ -465,25 +509,23 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      expect(migrationProviderMock.plan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source,
-          includeSecrets: false,
-          overwrite: false,
-          config: expect.objectContaining({
-            agents: expect.objectContaining({
-              defaults: expect.objectContaining({ workspace }),
-            }),
-          }),
-        }),
-      );
-      expect(migrationProviderMock.apply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source,
-          reportDir: expect.stringContaining(path.join(stateDir, "migration", "hermes")),
-        }),
-        planned,
-      );
+      expect(migrationProviderMock.plan).toHaveBeenCalledOnce();
+      const [planCall] = readFirstMockCall(
+        migrationProviderMock.plan,
+        "migrationProvider.plan",
+      ) as [MigrationPlanCall];
+      expect(planCall.source).toBe(source);
+      expect(planCall.includeSecrets).toBe(false);
+      expect(planCall.overwrite).toBe(false);
+      expect(planCall.config?.agents?.defaults?.workspace).toBe(workspace);
+      expect(migrationProviderMock.apply).toHaveBeenCalledOnce();
+      const [applyCall, appliedPlan] = readFirstMockCall(
+        migrationProviderMock.apply,
+        "migrationProvider.apply",
+      ) as [MigrationApplyCall, MigrationPlan];
+      expect(applyCall.source).toBe(source);
+      expect(applyCall.reportDir).toContain(path.join(stateDir, "migration", "hermes"));
+      expect(appliedPlan).toBe(planned);
       expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
       expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
       expect(healthCommandMock).not.toHaveBeenCalled();
@@ -575,27 +617,21 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      expect(waitForGatewayReachableMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          token,
-          password: undefined,
-        }),
-      );
-      expect(healthCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          token,
-          password: undefined,
-          config: expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                mode: "token",
-                token,
-              }),
-            }),
-          }),
-        }),
-        expect.any(Object),
-      );
+      const [gatewayHealthCall] = readFirstMockCall(
+        waitForGatewayReachableMock,
+        "waitForGatewayReachable",
+      ) as [GatewayHealthCall];
+      expect(gatewayHealthCall.token).toBe(token);
+      expect(gatewayHealthCall.password).toBeUndefined();
+      const [healthCall, healthRuntime] = readFirstMockCall(healthCommandMock, "healthCommand") as [
+        HealthCommandCall,
+        RuntimeEnv,
+      ];
+      expect(healthCall.token).toBe(token);
+      expect(healthCall.password).toBeUndefined();
+      expect(healthCall.config?.gateway?.auth?.mode).toBe("token");
+      expect(healthCall.config?.gateway?.auth?.token).toBe(token);
+      expect(healthRuntime).toBe(runtime);
     });
   }, 60_000);
 

@@ -2,19 +2,22 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
-import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
+import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { isMessageToolSendActionName } from "./pi-embedded-messaging.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
+const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -99,20 +102,74 @@ function extractDirectErrorField(value: unknown): string | undefined {
   );
 }
 
+function readErrorCodeField(value: unknown): string | undefined {
+  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
+}
+
+function readDenialErrorCodeFromMessage(value: unknown): string | undefined {
+  const message = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  if (!message) {
+    return undefined;
+  }
+  for (const code of TOOL_DENIAL_ERROR_CODES) {
+    if (message === code || message.startsWith(`${code}:`)) {
+      return code;
+    }
+  }
+  return undefined;
+}
+
+function readNestedErrorCodeField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    readDenialErrorCodeFromMessage(record.message) ??
+    readDenialErrorCodeFromMessage(record.error) ??
+    readErrorCodeField(record.code) ??
+    readErrorCodeField(record.gatewayCode)
+  );
+}
+
+function extractDirectErrorCodeField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    readNestedErrorCodeField(record.error) ??
+    readNestedErrorCodeField(record.nodeError) ??
+    readErrorCodeField(record.code) ??
+    readErrorCodeField(record.gatewayCode)
+  );
+}
+
+export function buildToolLifecycleErrorResult(error: unknown): {
+  details: Record<string, unknown>;
+} {
+  const errorRecord = readRecord(error);
+  const rawDetails = readRecord(errorRecord?.details);
+  const nodeError = readRecord(rawDetails?.nodeError);
+  const gatewayCode =
+    readErrorCodeField(errorRecord?.gatewayCode) ?? readErrorCodeField(errorRecord?.code);
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    details: {
+      status: "error",
+      error: message,
+      ...(gatewayCode ? { gatewayCode } : {}),
+      ...(nodeError ? { nodeError } : {}),
+    },
+  };
+}
+
 function extractAggregatedErrorField(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const record = value as Record<string, unknown>;
   return readErrorCandidate(record.aggregated);
-}
-
-function isHostDenialToolText(text: string): boolean {
-  const normalized = text.trim();
-  if (normalized.includes("SYSTEM_RUN_DENIED") || normalized.includes("INVALID_REQUEST")) {
-    return true;
-  }
-  return normalized.toLowerCase().includes("approval cannot safely bind");
 }
 
 function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
@@ -215,8 +272,8 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
-// Core tool names that are allowed to emit local MEDIA: paths.
-// Plugin/MCP tools are intentionally excluded to prevent untrusted file reads.
+// Core tool names that are allowed to emit local MEDIA: paths. Plugin tools
+// must be explicitly passed as trusted run-local names by the caller.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
   "apply_patch",
@@ -248,10 +305,14 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "x_search",
   "write",
 ]);
-const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
-  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
-);
 const HTTP_URL_RE = /^https?:\/\//i;
+
+export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+  if (!toolName) {
+    return false;
+  }
+  return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
+}
 
 function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
   if (!result || typeof result !== "object") {
@@ -276,20 +337,29 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
-export function isToolResultMediaTrusted(toolName?: string, result?: unknown): boolean {
+export function isToolResultMediaTrusted(
+  toolName?: string,
+  result?: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
+): boolean {
   if (!toolName || isExternalToolResult(result)) {
     return false;
   }
-  const normalized = normalizeToolName(toolName);
-  return (
-    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) || TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized)
-  );
+  const registeredName = toolName.trim();
+  if (registeredName && trustedLocalMediaToolNames?.has(registeredName) === true) {
+    return true;
+  }
+  return isCoreToolResultMediaTrustedName(toolName);
 }
 
-function isTrustedOwnedTtsLocalMedia(toolName: string | undefined, result: unknown): boolean {
+function isTrustedOwnedTtsLocalMedia(
+  toolName: string | undefined,
+  result: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
+): boolean {
   if (
     !toolName ||
-    !isToolResultMediaTrusted(toolName, result) ||
+    !isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames) ||
     normalizeToolName(toolName) !== "tts"
   ) {
     return false;
@@ -305,25 +375,31 @@ export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
   result?: unknown,
-  builtinToolNames?: ReadonlySet<string>,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(toolName, result);
-  if (isToolResultMediaTrusted(toolName, result)) {
-    // When the current run provides its exact registered tool names (core
-    // built-ins plus bundled/trusted plugin tools), require the raw emitted
-    // tool name to match one of them before allowing local MEDIA: paths.
+  const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
+    toolName,
+    result,
+    trustedLocalMediaToolNames,
+  );
+  if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
+    // When the current run provides its exact trusted local-media tool names,
+    // require the raw emitted tool name to match one of them before allowing
+    // local MEDIA: paths.
     // This blocks normalized aliases and case-variant collisions such as
     // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
     // registered tool's media trust. TTS-generated local files carry a
     // separate trusted-media flag from the owned tool result, so they can
-    // survive runs whose exact built-in set omitted the raw tts name.
-    if (builtinToolNames !== undefined && !trustedOwnedTtsLocalMedia) {
-      const registeredName = toolName?.trim();
-      if (!registeredName || !builtinToolNames.has(registeredName)) {
-        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+    // survive runs whose exact trusted set omitted the raw tts name.
+    if (trustedLocalMediaToolNames !== undefined) {
+      if (!trustedOwnedTtsLocalMedia) {
+        const registeredName = toolName?.trim();
+        if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+        }
       }
     }
     return mediaUrls;
@@ -362,18 +438,45 @@ function readToolResultDetailsMedia(
 
 function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   const urls: string[] = [];
+  const pushString = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (normalized) {
+      urls.push(normalized);
+    }
+  };
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushString(attachment.media);
+    pushString(attachment.path);
+    pushString(attachment.url);
+    pushString(attachment.mediaUrl);
+    pushString(attachment.filePath);
+    pushString(attachment.fileUrl);
+  };
   if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
     urls.push(media.mediaUrl.trim());
   }
   if (Array.isArray(media.mediaUrls)) {
-    urls.push(
-      ...media.mediaUrls
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    );
+    for (const value of media.mediaUrls) {
+      pushString(value);
+    }
   }
-  return Array.from(new Set(urls));
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      pushAttachment(attachment);
+    }
+  }
+  return uniqueStrings(urls);
+}
+
+function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
+  return media.outbound === false;
 }
 
 function extractTextContentMediaArtifact(content: unknown[]): {
@@ -423,6 +526,9 @@ export function extractToolResultMediaArtifact(
   const record = result as Record<string, unknown>;
   const detailsMedia = readToolResultDetailsMedia(record);
   if (detailsMedia) {
+    if (isNonOutboundToolResultMedia(detailsMedia)) {
+      return undefined;
+    }
     const mediaUrls = collectStructuredMediaUrls(detailsMedia);
     if (mediaUrls.length > 0) {
       return {
@@ -472,6 +578,14 @@ export function isToolResultError(result: unknown): boolean {
   return normalized === "error" || normalized === "timeout";
 }
 
+export function extractToolErrorCode(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  return extractDirectErrorCodeField(record.details) ?? extractDirectErrorCodeField(record);
+}
+
 export function isToolResultTimedOut(result: unknown): boolean {
   const normalizedStatus = readToolResultStatus(result);
   if (normalizedStatus === "timeout") {
@@ -508,9 +622,6 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     } catch {
       // Fall through to status/text fallback.
     }
-    if (isHostDenialToolText(text)) {
-      return normalizeToolErrorText(text);
-    }
   }
   const fromDetailsStatus = extractErrorField(record.details);
   if (fromDetailsStatus) {
@@ -539,7 +650,7 @@ export function extractMessagingToolSend(
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (action !== "send" && action !== "thread-reply") {
+    if (!isMessageToolSendActionName(action)) {
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);
@@ -552,7 +663,23 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    const threadId = normalizeOptionalString(args.threadId);
+    const threadSuppressed = args.topLevel === true || args.threadId === null;
+    const threadImplicit =
+      !threadId &&
+      !threadSuppressed &&
+      Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
+    return to
+      ? {
+          tool: toolName,
+          provider,
+          accountId,
+          to,
+          ...(threadId ? { threadId } : {}),
+          ...(threadImplicit ? { threadImplicit: true } : {}),
+          ...(threadSuppressed ? { threadSuppressed: true } : {}),
+        }
+      : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
@@ -564,12 +691,14 @@ export function extractMessagingToolSend(
     return undefined;
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
+  const threadId = normalizeOptionalString(extracted.threadId);
   return to
     ? {
         tool: toolName,
         provider: providerId,
         accountId: extracted.accountId ?? accountId,
         to,
+        ...(threadId ? { threadId } : {}),
       }
     : undefined;
 }

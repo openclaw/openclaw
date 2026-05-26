@@ -27,6 +27,11 @@ export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeo
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
+export type SessionCompactionCheckpointPreview = Pick<
+  SessionCompactionCheckpoint,
+  "checkpointId" | "createdAt" | "reason"
+>;
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -66,6 +71,7 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -78,13 +84,14 @@ export type GatewaySessionRow = {
   model?: string;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
+  contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: SessionEntry["lastThreadId"];
   compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
+  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 

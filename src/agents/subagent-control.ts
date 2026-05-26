@@ -14,6 +14,7 @@ import { callGateway } from "../gateway/call.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import {
@@ -64,12 +65,12 @@ let subagentControlDeps: {
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
 
-let subagentControlRuntimePromise: Promise<typeof import("./subagent-control.runtime.js")> | null =
-  null;
+const subagentControlRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-control.runtime.js"),
+);
 
 function loadSubagentControlRuntime() {
-  subagentControlRuntimePromise ??= import("./subagent-control.runtime.js");
-  return subagentControlRuntimePromise;
+  return subagentControlRuntimeLoader.load();
 }
 
 async function resolveSubagentControlRuntime(): Promise<{
@@ -713,6 +714,7 @@ export function resolveControlledSubagentTarget(
     token,
     recentWindowMinutes: options?.recentMinutes ?? DEFAULT_RECENT_MINUTES,
     label: (entry) => resolveSubagentLabel(entry),
+    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: options?.isActive,
     errors: {
       missingTarget: "Missing subagent target.",
@@ -726,7 +728,7 @@ export function resolveControlledSubagentTarget(
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
@@ -743,3 +745,4 @@ export const __testing = {
       : defaultSubagentControlDeps;
   },
 };
+export { testing as __testing };

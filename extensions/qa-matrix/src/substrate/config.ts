@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
 type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
@@ -57,7 +58,11 @@ type MatrixQaThreadBindingsConfigOverrides = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
 };
 
@@ -162,7 +167,7 @@ type MatrixQaAccountExecApprovalsConfig = {
 };
 
 function normalizeMatrixQaAllowlist(entries?: string[]) {
-  return [...new Set((entries ?? []).map((entry) => entry.trim()).filter(Boolean))];
+  return uniqueStrings(normalizeStringEntries(entries ?? []));
 }
 
 function resolveMatrixQaGroupSnapshots(params: {
@@ -226,7 +231,7 @@ function resolveMatrixQaDmAllowFrom(params: {
   const dmParticipantUserIds = params.topology.rooms
     .filter((room) => room.kind === "dm")
     .flatMap((room) => room.memberUserIds.filter((userId) => userId !== params.sutUserId));
-  const dmAllowFrom = [...new Set(dmParticipantUserIds)];
+  const dmAllowFrom = uniqueStrings(dmParticipantUserIds);
   return dmAllowFrom.length > 0 ? dmAllowFrom : [params.driverUserId];
 }
 
@@ -544,7 +549,7 @@ export function summarizeMatrixQaConfigSnapshot(snapshot: MatrixQaConfigSnapshot
     `encryption=${formatMatrixQaBoolean(snapshot.encryption)}`,
     `startupVerification=${snapshot.startupVerification ?? "<default>"}`,
     `threadBindings.enabled=${snapshot.threadBindings.enabled ?? "<default>"}`,
-    `threadBindings.spawnSubagentSessions=${snapshot.threadBindings.spawnSubagentSessions ?? "<default>"}`,
+    `threadBindings.spawnSessions=${snapshot.threadBindings.spawnSessions ?? "<default>"}`,
     `approvals.exec.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.exec)}`,
     `approvals.plugin.enabled=${formatMatrixQaBoolean(snapshot.approvalForwarding.plugin)}`,
   ].join(", ");
@@ -566,7 +571,7 @@ export function buildMatrixQaConfig(
     topology: MatrixQaProvisionedTopology;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "matrix"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "matrix"]);
   const snapshot = buildMatrixQaConfigSnapshot({
     driverUserId: params.driverUserId,
     observerUserId: params.observerUserId,

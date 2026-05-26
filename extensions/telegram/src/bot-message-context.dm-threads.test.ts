@@ -59,36 +59,100 @@ afterEach(() => {
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
-  const buildContext = async (message: Record<string, unknown>) =>
+  const buildContext = async (
+    message: Record<string, unknown>,
+    params?: Pick<
+      Parameters<typeof buildTelegramMessageContextForTest>[0],
+      "cfg" | "me" | "resolveTelegramGroupConfig"
+    >,
+  ) =>
     await buildTelegramMessageContextForTest({
       message,
+      ...params,
     });
 
-  it("uses thread session key for dm topics", async () => {
+  const dmThreadMessage = {
+    message_id: 1,
+    chat: { id: 1234, type: "private" },
+    date: 1700000000,
+    text: "hello",
+    message_thread_id: 42,
+    from: { id: 42, first_name: "Alice" },
+  };
+
+  it("keeps DM message_thread_id on the main session when bot topics are absent", async () => {
+    const ctx = await buildContext(dmThreadMessage);
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+  });
+
+  it("keeps DM message_thread_id on the main session when bot topics are disabled", async () => {
+    const ctx = await buildContext(dmThreadMessage, {
+      me: { has_topics_enabled: false },
+    });
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+  });
+
+  it("uses thread session key when Telegram reports bot topics enabled", async () => {
+    const ctx = await buildContext(dmThreadMessage, {
+      me: { has_topics_enabled: true },
+    });
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
+  });
+
+  it("does not use configured DM topics without bot topic capability", async () => {
+    const ctx = await buildContext(
+      {
+        ...dmThreadMessage,
+        message_id: 3,
+        date: 1700000002,
+      },
+      {
+        resolveTelegramGroupConfig: () => ({
+          groupConfig: { requireTopic: true },
+          topicConfig: { agentId: "support" },
+        }),
+      },
+    );
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:support:main");
+  });
+
+  it("uses configured DM topic routing once bot topic capability is present", async () => {
+    const ctx = await buildContext(
+      {
+        ...dmThreadMessage,
+        message_id: 4,
+        date: 1700000003,
+      },
+      {
+        me: { has_topics_enabled: true },
+        resolveTelegramGroupConfig: () => ({
+          groupConfig: { requireTopic: true },
+          topicConfig: { agentId: "support" },
+        }),
+      },
+    );
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:support:main:thread:1234:42");
+  });
+
+  it("uses the main session key when no thread id", async () => {
     const ctx = await buildContext({
       message_id: 1,
       chat: { id: 1234, type: "private" },
       date: 1700000000,
       text: "hello",
-      message_thread_id: 42,
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctx).not.toBeNull();
-    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
-  });
-
-  it("uses the main session key when no thread id", async () => {
-    const ctx = await buildContext({
-      message_id: 2,
-      chat: { id: 1234, type: "private" },
-      date: 1700000001,
-      text: "hello",
-      from: { id: 42, first_name: "Alice" },
-    });
-
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
   });
@@ -114,11 +178,13 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx) {
+      throw new Error("expected Telegram non-forum group context");
+    }
     // Session key should NOT include :topic:42
-    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890");
+    expect(ctx.ctxPayload.SessionKey).toBe("agent:main:telegram:group:-1001234567890");
     // MessageThreadId should be undefined (not a forum)
-    expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
+    expect(ctx.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
   it("keeps same session for regular group with and without message_thread_id", async () => {
@@ -139,10 +205,30 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctxWithThread).not.toBeNull();
-    expect(ctxWithoutThread).not.toBeNull();
     // Both messages should use the same session key
     expect(ctxWithThread?.ctxPayload?.SessionKey).toBe(ctxWithoutThread?.ctxPayload?.SessionKey);
+  });
+
+  it("does not add a topic-cache store lookup for non-forum group reply threads", async () => {
+    const resolveStorePath = vi.fn(() => "/tmp/openclaw/session-store.json");
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 9,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        date: 1700000008,
+        text: "@bot hello",
+        message_thread_id: 42,
+        from: { id: 42, first_name: "Alice" },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      sessionRuntime: { resolveStorePath },
+    });
+
+    expect(ctx?.isForum).toBe(false);
+    expect(ctx?.ctxPayload?.MessageThreadId).toBeUndefined();
+    expect(resolveStorePath).toHaveBeenCalledTimes(1);
   });
 
   it("uses topic session for forum groups with message_thread_id", async () => {
@@ -155,10 +241,10 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       from: { id: 42, first_name: "Alice" },
     });
 
-    expect(ctx).not.toBeNull();
     // Session key SHOULD include :topic:99 for forums
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(99);
+    expect(ctx?.ctxPayload?.OriginatingTo).toBe("telegram:-1001234567890:topic:99");
   });
 
   it("surfaces topic name from reply_to_message forum metadata", async () => {
@@ -175,7 +261,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
   });
 
@@ -198,7 +283,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
       sessionRuntime: null,
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
   });
 
@@ -240,7 +324,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
         from: { id: 42, first_name: "Alice" },
       });
 
-      expect(ctx).not.toBeNull();
       expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -288,7 +371,6 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
         sessionRuntime: null,
       });
 
-      expect(ctx).not.toBeNull();
       expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

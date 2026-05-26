@@ -1,9 +1,9 @@
 ---
-summary: "runtime.channel.turn -- the shared inbound turn kernel that bundled and third-party channel plugins use to record, dispatch, and finalize agent turns"
+summary: "runtime.channel.turn -- the shared inbound event kernel that bundled and third-party channel plugins use to record, dispatch, and finalize agent turns"
 title: "Channel turn kernel"
 sidebarTitle: "Channel turn"
 read_when:
-  - You are building a channel plugin and want the shared inbound turn lifecycle
+  - You are building a channel plugin and want the shared inbound event lifecycle
   - You are migrating a channel monitor off hand-rolled record/dispatch glue
   - You need to understand admission, ingest, classify, preflight, resolve, record, dispatch, and finalize stages
 ---
@@ -64,6 +64,7 @@ The runtime exposes three preferred entry points so adapters can opt in at the l
 
 ```typescript
 runtime.channel.turn.run(...)             // adapter-driven full pipeline
+runtime.channel.turn.runAssembled(...)    // already-built context + delivery adapter
 runtime.channel.turn.runPrepared(...)     // channel owns dispatch; kernel runs record + finalize
 runtime.channel.turn.buildContext(...)    // pure facts to FinalizedMsgContext mapping
 ```
@@ -72,7 +73,7 @@ Two older runtime helpers remain available for Plugin SDK compatibility:
 
 ```typescript
 runtime.channel.turn.runResolved(...)      // deprecated compatibility alias; prefer run
-runtime.channel.turn.dispatchAssembled(...) // deprecated compatibility alias; prefer run or runPrepared
+runtime.channel.turn.dispatchAssembled(...) // deprecated compatibility alias; prefer runAssembled
 ```
 
 ### run
@@ -113,6 +114,41 @@ await runtime.channel.turn.run({
 ```
 
 `run` is the right shape when the channel has small adapter logic and benefits from owning the lifecycle through hooks.
+
+### runAssembled
+
+Use when the channel has already resolved routing, built a `FinalizedMsgContext`,
+and only needs the shared record, reply-pipeline, dispatch, and finalize
+ordering. This is the preferred shape for simple bundled inbound paths that
+would otherwise repeat `createChannelMessageReplyPipeline(...)` and
+`runPrepared(...)` boilerplate.
+
+```typescript
+await runtime.channel.turn.runAssembled({
+  cfg,
+  channel: "irc",
+  accountId,
+  agentId: route.agentId,
+  routeSessionKey: route.sessionKey,
+  storePath,
+  ctxPayload,
+  recordInboundSession: runtime.channel.session.recordInboundSession,
+  dispatchReplyWithBufferedBlockDispatcher:
+    runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+  delivery: {
+    deliver: async (payload) => {
+      await sendPlatformReply(payload);
+    },
+    onError: (err, info) => {
+      runtime.error?.(`reply ${info.kind} failed: ${String(err)}`);
+    },
+  },
+});
+```
+
+Choose `runAssembled` over `runPrepared` when the only channel-owned dispatch
+behavior is final payload delivery plus optional typing, reply options, durable
+delivery, or error logging.
 
 ### runPrepared
 
@@ -279,6 +315,150 @@ Supplemental context covers quote, forwarded, and thread-bootstrap context. The 
 
 Media is fact-shaped. Platform download, auth, SSRF policy, CDN rules, and decryption stay channel-local. The kernel maps facts into `MediaPath`, `MediaUrl`, `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`, and `MediaTranscribedIndexes`.
 
+Use `toInboundMediaFacts(...)` from `openclaw/plugin-sdk/channel-inbound` when
+your channel has a resolved media list and only needs to attach generic facts:
+
+```typescript
+media: toInboundMediaFacts(resolvedMedia, {
+  kind: "image",
+  messageId: input.id,
+});
+```
+
+If media mixes local files and URL-only entries, keep the list as media facts.
+Core preserves array indexes when it writes legacy context fields so downstream
+media understanding, transcription markers, and prompt notes continue to refer
+to the same attachment.
+
+For skipped group messages that should be available to a later mention, pass
+media facts through the turn `preflight.media` field. The kernel converts those
+facts into bounded history media entries before recording:
+
+```typescript
+preflight(input) {
+  return {
+    admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
+    media: () => toInboundMediaFacts(resolveLocalImages(input), {
+      kind: "image",
+      messageId: input.id,
+    }),
+    history: {
+      key: historyKey,
+      limit: historyLimit,
+      mediaLimit: 4,
+      shouldRecord: () => stillCurrent(input),
+    },
+  };
+}
+```
+
+History media is intentionally conservative: image-only today, local readable
+paths only, bounded by the configured media limit, and still tied to the
+channel history key. Authenticated provider URLs should be downloaded by the
+plugin before they become model-visible media.
+
+## History windows
+
+Message-turn code should use `createChannelHistoryWindow(...)` instead of
+calling low-level `reply-history` map helpers directly. The old map helpers
+remain importable as deprecated compatibility exports, but new plugin runtime
+code should not call them. The window facade keeps text context, structured
+`InboundHistory`, history-media normalization, and clearing behind one
+core-owned API while still letting the channel choose how a history line is
+rendered.
+
+```typescript
+const history = createChannelHistoryWindow({ historyMap: groupHistories });
+
+await history.recordWithMedia({
+  historyKey,
+  limit: historyLimit,
+  entry,
+  media: () =>
+    toInboundMediaFacts(resolvedImages, {
+      kind: "image",
+      messageId: entry.messageId,
+    }),
+});
+
+const combinedBody = history.buildPendingContext({
+  historyKey,
+  limit: historyLimit,
+  currentMessage,
+  formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
+});
+```
+
+The older `buildPendingHistoryContextFromMap`,
+`buildInboundHistoryFromMap`, `recordPendingHistoryEntry*`, and
+`clearHistoryEntries*` exports remain as deprecated compatibility for plugins
+that have not migrated yet. New channel work should use the window or the turn
+kernel record/finalize options.
+
+## Common message patterns
+
+Text-only group with mention required:
+
+```typescript
+preflight(input) {
+  const decision = resolveInboundMentionDecision({ facts, policy });
+  if (decision.shouldSkip) {
+    return {
+      admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
+      history: { key: historyKey, limit: historyLimit },
+    };
+  }
+  return { access: { mentions: decision } };
+}
+```
+
+Image-only message followed by a later mention:
+
+```typescript
+preflight(input) {
+  if (!wasMentioned && resolvedImages.length > 0) {
+    return {
+      admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
+      media: () => toInboundMediaFacts(resolvedImages, {
+        kind: "image",
+        messageId: input.id,
+      }),
+      history: { key: historyKey, limit: historyLimit, mediaLimit: 4 },
+    };
+  }
+  return {};
+}
+```
+
+Explicit reply-to-image:
+
+```typescript
+resolveTurn(input, _eventClass, preflight) {
+  return {
+    ...assembled,
+    media: toInboundMediaFacts([...currentMedia, ...referencedReplyMedia]),
+    supplemental: {
+      quote: preflight.supplemental?.quote,
+    },
+  };
+}
+```
+
+Direct message with history:
+
+```typescript
+resolveTurn(input) {
+  return {
+    ...assembled,
+    history: undefined,
+    message: {
+      rawBody: input.rawText,
+      bodyForAgent: input.textForAgent,
+    },
+  };
+}
+```
+
 ## Adapter contract
 
 For full `run`, the adapter shape is:
@@ -306,23 +486,29 @@ type ChannelTurnAdapter<TRaw> = {
 
 ## Delivery adapter
 
-The kernel does not call the platform directly. The channel hands the kernel a `ChannelTurnDeliveryAdapter`:
+The kernel does not call the platform directly. The channel hands the kernel a `ChannelEventDeliveryAdapter`:
 
 ```typescript
-type ChannelTurnDeliveryAdapter = {
+type ChannelEventDeliveryAdapter = {
   deliver(payload: ReplyPayload, info: ChannelDeliveryInfo): Promise<ChannelDeliveryResult | void>;
   onError?(err: unknown, info: { kind: string }): void;
+  durable?: false | DurableInboundReplyDeliveryOptions;
 };
 
 type ChannelDeliveryResult = {
   messageIds?: string[];
+  receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
 };
 ```
 
-`deliver` is called once per buffered reply chunk. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelTurnDeliveryAdapter()`.
+`deliver` is called once per buffered reply chunk. During the message-lifecycle migration, assembled channel-event delivery is channel-owned by default: an omitted `durable` field means the kernel must call `deliver` directly and must not route through generic outbound delivery. Set `durable` only after the channel has been audited to prove the generic send path preserves the old delivery behavior, including reply/thread targets, media handling, sent-message/self-echo caches, status cleanup, and returned message ids. `durable: false` remains a compatibility spelling for "use the channel-owned callback", but unmigrated channels should not need to add it. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks; newer delivery paths should also return `receipt` so recovery, preview finalization, and duplicate suppression can move off `messageIds`. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelEventDeliveryAdapter()`.
+
+Channels using `runPrepared` with a fully channel-owned dispatcher do not have a `ChannelEventDeliveryAdapter`. Those dispatchers are not durable by default. They should keep their direct delivery path until they explicitly opt in to the new send context with a complete target, replay-safe adapter, receipt contract, and channel side-effect hooks.
+
+Public compatibility helpers such as `recordInboundSessionAndDispatchReply`, `dispatchInboundReplyWithBase`, and direct-DM helpers must stay behavior-preserving during migration. They should not call generic durable delivery before caller-owned `deliver` or `reply` callbacks.
 
 ## Record options
 
@@ -388,6 +574,7 @@ Backward compatibility rules apply: new fact fields are additive, admission kind
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) for the planned send/receive/live lifecycle that will wrap this kernel
 - [Building channel plugins](/plugins/sdk-channel-plugins) for the broader channel plugin contract
 - [Plugin runtime helpers](/plugins/sdk-runtime) for other `runtime.*` surfaces
 - [Plugin internals](/plugins/architecture-internals) for load pipeline and registry mechanics

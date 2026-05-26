@@ -1,6 +1,10 @@
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
+import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import type { ProfileContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
@@ -10,11 +14,22 @@ import {
   toStringOrEmpty,
 } from "./utils.js";
 
+const permissionRouteDeps = {
+  getPwAiModule,
+};
+
+export const testing = {
+  setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
+    permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
+  },
+};
+
 type GrantPermissionsBody = {
   origin?: unknown;
   permissions?: unknown;
   optionalPermissions?: unknown;
   timeoutMs?: unknown;
+  targetId?: unknown;
 };
 
 function readOrigin(raw: unknown): string | null {
@@ -43,19 +58,49 @@ function readPermissions(raw: unknown): string[] | null {
   if (permissions.length !== raw.length) {
     return null;
   }
-  return [...new Set(permissions)];
+  return uniqueStrings(permissions);
 }
 
 async function grantPermissions(params: {
+  profileCtx: ProfileContext;
+  targetId?: string;
   wsUrl: string;
   origin: string;
   requiredPermissions: string[];
   optionalPermissions: string[];
   timeoutMs: number;
+  ssrfPolicy?: SsrFPolicy;
 }) {
   const allPermissions = [
     ...new Set([...params.requiredPermissions, ...params.optionalPermissions]),
   ];
+  const playwrightRequiredPermissions = params.requiredPermissions.map(toPlaywrightPermission);
+  const canUsePlaywright =
+    playwrightRequiredPermissions.every((value): value is string => Boolean(value)) &&
+    params.requiredPermissions.length > 0;
+  if (canUsePlaywright) {
+    const pw = await permissionRouteDeps.getPwAiModule({ mode: "soft" });
+    if (pw) {
+      try {
+        const page = await pw.getPageForTargetId({
+          cdpUrl: params.profileCtx.profile.cdpUrl,
+          targetId: params.targetId,
+          ssrfPolicy: params.ssrfPolicy,
+        });
+        await page.context().grantPermissions(playwrightRequiredPermissions, {
+          origin: params.origin,
+        });
+        return {
+          grantedPermissions: params.requiredPermissions,
+          unsupportedPermissions: params.optionalPermissions,
+          grantMethod: "playwright",
+        };
+      } catch {
+        // Fall back to the raw CDP browser command below. Some routes call this
+        // before a page exists, while attached browser profiles need Playwright.
+      }
+    }
+  }
   let unsupportedPermissions: string[] = [];
   await withCdpSocket(
     params.wsUrl,
@@ -82,7 +127,19 @@ async function grantPermissions(params: {
   return {
     grantedPermissions: allPermissions.filter((value) => !unsupportedPermissions.includes(value)),
     unsupportedPermissions,
+    grantMethod: "cdp",
   };
+}
+
+function toPlaywrightPermission(permission: string): string | undefined {
+  switch (permission) {
+    case "audioCapture":
+      return "microphone";
+    case "videoCapture":
+      return "camera";
+    default:
+      return undefined;
+  }
 }
 
 export function registerBrowserPermissionRoutes(
@@ -107,6 +164,7 @@ export function registerBrowserPermissionRoutes(
         return jsonError(res, 400, "permissions must be a non-empty string array");
       }
       const optionalPermissions = readPermissions(body.optionalPermissions ?? []) ?? [];
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
       const timeoutMs = Math.max(1_000, toNumber(body.timeoutMs) ?? 5_000);
 
       try {
@@ -120,11 +178,14 @@ export function registerBrowserPermissionRoutes(
           return jsonError(res, 409, "browser CDP WebSocket unavailable");
         }
         const granted = await grantPermissions({
+          profileCtx,
+          targetId,
           wsUrl,
           origin,
           requiredPermissions,
           optionalPermissions,
           timeoutMs,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
         });
         return res.json({ ok: true, origin, ...granted });
       } catch (error) {
@@ -133,3 +194,4 @@ export function registerBrowserPermissionRoutes(
     }),
   );
 }
+export { testing as __testing };

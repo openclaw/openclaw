@@ -46,6 +46,15 @@ const baseUsage = {
   },
 } satisfies NonNullable<UsageSessionEntry["usage"]>;
 
+function expectFilteredUsage(
+  result: ReturnType<typeof computeFilteredUsage>,
+): NonNullable<ReturnType<typeof computeFilteredUsage>> {
+  if (!result) {
+    throw new Error("Expected filtered usage result");
+  }
+  return result;
+}
+
 describe("computeFilteredUsage", () => {
   it("returns undefined when no points match the range", () => {
     const points = [makePoint({ timestamp: 1000 }), makePoint({ timestamp: 2000 })];
@@ -60,9 +69,9 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 3000, totalTokens: 300, cost: 0.3 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
-    expect(result).toBeDefined();
-    expect(result!.totalTokens).toBe(300); // 100 + 200
-    expect(result!.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
+    const filtered = expectFilteredUsage(result);
+    expect(filtered.totalTokens).toBe(300); // 100 + 200
+    expect(filtered.totalCost).toBeCloseTo(0.3); // 0.1 + 0.2
   });
 
   it("handles reversed range (end < start)", () => {
@@ -71,8 +80,7 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 2000, totalTokens: 75 }),
     ];
     const result = computeFilteredUsage(baseUsage, points, 2000, 1000);
-    expect(result).toBeDefined();
-    expect(result!.totalTokens).toBe(125);
+    expect(expectFilteredUsage(result).totalTokens).toBe(125);
   });
 
   it("counts message types based on input/output presence", () => {
@@ -81,18 +89,22 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 2000, input: 0, output: 20 }),
       makePoint({ timestamp: 3000, input: 5, output: 15 }),
     ];
-    const result = computeFilteredUsage(baseUsage, points, 1000, 3000);
-    expect(result!.messageCounts!.user).toBe(2); // points with input > 0
-    expect(result!.messageCounts!.assistant).toBe(2); // points with output > 0
-    expect(result!.messageCounts!.total).toBe(3);
+    const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 3000));
+    const counts = result.messageCounts;
+    if (!counts) {
+      throw new Error("expected filtered usage to include message counts");
+    }
+    expect(counts.user).toBe(2); // points with input > 0
+    expect(counts.assistant).toBe(2); // points with output > 0
+    expect(counts.total).toBe(3);
   });
 
   it("computes duration from first to last filtered point", () => {
     const points = [makePoint({ timestamp: 1000 }), makePoint({ timestamp: 5000 })];
-    const result = computeFilteredUsage(baseUsage, points, 1000, 5000);
-    expect(result!.durationMs).toBe(4000);
-    expect(result!.firstActivity).toBe(1000);
-    expect(result!.lastActivity).toBe(5000);
+    const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 5000));
+    expect(result.durationMs).toBe(4000);
+    expect(result.firstActivity).toBe(1000);
+    expect(result.lastActivity).toBe(5000);
   });
 
   it("aggregates token types (input, output, cacheRead, cacheWrite)", () => {
@@ -100,19 +112,18 @@ describe("computeFilteredUsage", () => {
       makePoint({ timestamp: 1000, input: 10, output: 20, cacheRead: 30, cacheWrite: 40 }),
       makePoint({ timestamp: 2000, input: 5, output: 15, cacheRead: 25, cacheWrite: 35 }),
     ];
-    const result = computeFilteredUsage(baseUsage, points, 1000, 2000);
-    expect(result!.input).toBe(15);
-    expect(result!.output).toBe(35);
-    expect(result!.cacheRead).toBe(55);
-    expect(result!.cacheWrite).toBe(75);
+    const result = expectFilteredUsage(computeFilteredUsage(baseUsage, points, 1000, 2000));
+    expect(result.input).toBe(15);
+    expect(result.output).toBe(35);
+    expect(result.cacheRead).toBe(55);
+    expect(result.cacheWrite).toBe(75);
   });
 });
 
 describe("chart bar sizing", () => {
-  it("bar width ratio and max are reasonable", () => {
-    expect(CHART_BAR_WIDTH_RATIO).toBeGreaterThan(0);
-    expect(CHART_BAR_WIDTH_RATIO).toBeLessThan(1);
-    expect(CHART_MAX_BAR_WIDTH).toBeGreaterThan(0);
+  it("keeps the chart bar sizing constants stable", () => {
+    expect(CHART_BAR_WIDTH_RATIO).toBe(0.75);
+    expect(CHART_MAX_BAR_WIDTH).toBe(8);
   });
 
   it("bars fit within chart width for typical point counts", () => {

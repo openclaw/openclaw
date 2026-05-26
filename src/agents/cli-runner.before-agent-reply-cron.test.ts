@@ -114,21 +114,30 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       handled: true,
       reply: { text: "dreaming claimed via cli runner" },
     });
+    const onExecutionPhase = vi.fn();
 
-    const result = await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
+    const result = await runCliAgent({
+      ...baseRunParams,
+      trigger: "cron",
+      jobId: "cron-job-123",
+      onExecutionPhase,
+    });
 
     expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
-    expect(runBeforeAgentReplyMock).toHaveBeenCalledWith(
-      { cleanedBody: baseRunParams.prompt },
-      expect.objectContaining({
-        jobId: "cron-job-123",
-        agentId: baseRunParams.agentId,
-        sessionId: baseRunParams.sessionId,
-        sessionKey: baseRunParams.sessionKey,
-        workspaceDir: baseRunParams.workspaceDir,
-        trigger: "cron",
-      }),
-    );
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "before_agent_reply",
+      provider: baseRunParams.provider,
+      model: baseRunParams.model,
+    });
+    const [event, context] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(event).toEqual({ cleanedBody: baseRunParams.prompt });
+    const hookContext = context as Record<string, unknown> | undefined;
+    expect(hookContext?.jobId).toBe("cron-job-123");
+    expect(hookContext?.agentId).toBe(baseRunParams.agentId);
+    expect(hookContext?.sessionId).toBe(baseRunParams.sessionId);
+    expect(hookContext?.sessionKey).toBe(baseRunParams.sessionKey);
+    expect(hookContext?.workspaceDir).toBe(baseRunParams.workspaceDir);
+    expect(hookContext?.trigger).toBe("cron");
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
   });
@@ -145,6 +154,47 @@ describe("runCliAgent cron before_agent_reply seam", () => {
 
     expect(prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
+  });
+
+  it("re-arms setup progress when a cron hook does not claim", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue(undefined);
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    const onExecutionPhase = vi.fn();
+
+    await runCliAgent({
+      ...baseRunParams,
+      trigger: "cron",
+      jobId: "cron-job-123",
+      onExecutionPhase,
+    });
+
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "before_agent_reply",
+      provider: baseRunParams.provider,
+      model: baseRunParams.model,
+    });
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "runtime_plugins",
+      provider: baseRunParams.provider,
+      model: baseRunParams.model,
+    });
+    expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats empty CLI subprocess output as a failover failure, not a green cron run", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "   " });
+
+    await expect(runCliAgent({ ...baseRunParams, trigger: "cron" })).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "empty_response",
+      provider: baseRunParams.provider,
+      model: baseRunParams.model,
+      sessionId: baseRunParams.sessionId,
+    });
   });
 
   it("returns a silent payload when a cron hook claims without a reply body", async () => {
@@ -166,7 +216,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, trigger: "user" });
 
     expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalled();
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls through to the CLI subprocess when no before_agent_reply hook is registered", async () => {
@@ -177,7 +227,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     await runCliAgent({ ...baseRunParams, trigger: "cron" });
 
     expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).toHaveBeenCalled();
+    expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("can close temporary CLI live sessions after a run", async () => {

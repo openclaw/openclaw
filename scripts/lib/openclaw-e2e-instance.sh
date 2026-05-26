@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Shared in-container lifecycle helpers for Docker/Bash E2E lanes.
-openclaw_e2e_eval_test_state_from_b64() { eval "$(printf '%s' "${1:?missing OpenClaw test-state script}" | base64 -d)"; }
+openclaw_e2e_eval_test_state_from_b64() {
+  local encoded="${1:?missing OpenClaw test-state script}"
+  local decoded
+  if ! decoded="$(printf '%s' "$encoded" | base64 -d)"; then
+    echo "Invalid OpenClaw test-state base64 payload" >&2
+    return 1
+  fi
+  if [ -z "${decoded//[[:space:]]/}" ]; then
+    echo "OpenClaw test-state base64 payload decoded to an empty script" >&2
+    return 1
+  fi
+  eval "$decoded"
+}
 openclaw_e2e_resolve_entrypoint() {
   local entry
   for entry in dist/index.mjs dist/index.js; do
@@ -26,17 +38,57 @@ openclaw_e2e_package_entrypoint() {
   echo "OpenClaw package entrypoint not found under $root/dist/" >&2
   return 1
 }
+openclaw_e2e_maybe_timeout() {
+  local timeout_value="$1"
+  shift
+  if [ -z "$timeout_value" ] || [ "$timeout_value" = "0" ]; then
+    "$@"
+    return
+  fi
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "timeout command not found; running OpenClaw E2E command without timeout $timeout_value" >&2
+    "$@"
+    return
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" "$timeout_value" "$@"
+  fi
+}
 openclaw_e2e_install_package() {
   local log_file="$1"
   local label="${2:-mounted OpenClaw package}"
   local prefix="${3:-}"
   local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+  local timeout_value="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
   local args=(-g)
   if [ -n "$prefix" ]; then
     args+=("--prefix" "$prefix")
   fi
   echo "Installing $label..."
-  if ! npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+  local had_errexit=0
+  case "$-" in
+    *e*) had_errexit=1 ;;
+  esac
+  set +e
+  openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1
+  local install_status=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  else
+    set +e
+  fi
+  if [ "$install_status" -ne 0 ]; then
+    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
+      echo "npm install timed out after $timeout_value for $label" >&2
+    fi
     echo "npm install failed for $label" >&2
     cat "$log_file" >&2 || true
     exit 1
@@ -105,6 +157,17 @@ for target in "$@"; do
 done
 TRASH
   chmod +x /tmp/openclaw-bin/trash
+}
+openclaw_e2e_run_script_with_pty() {
+  local command="$1"
+  local log_path="$2"
+  if script --version >/dev/null 2>&1; then
+    script -q -f -c "$command" "$log_path"
+  elif node -e 'import("@lydell/node-pty")' >/dev/null 2>&1; then
+    node scripts/e2e/lib/run-with-pty.mjs "$log_path" /bin/bash -lc "$command"
+  else
+    script -q -F "$log_path" /bin/bash -lc "$command"
+  fi
 }
 openclaw_e2e_stop_process() {
   local pid="${1:-}" _

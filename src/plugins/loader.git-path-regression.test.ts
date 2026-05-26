@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("plugin loader git path regression", () => {
-  it("loads git-style package extension entries when they import plugin-sdk subpaths (#49806)", async () => {
+  it("loads git-style package extension entries when they import plugin-sdk subpaths (#49806)", () => {
     const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "imessage");
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
@@ -85,9 +85,8 @@ export const copiedRuntimeMarker = {
         dep: mod.copiedRuntimeMarker?.resolveOutboundSendDep?.(),
       }));
     `;
-    const raw = execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    const raw = execNodeEvalSync(script, {
       cwd: process.cwd(),
-      encoding: "utf-8",
     });
     const result = JSON.parse(raw) as {
       withoutAliasThrew: boolean;

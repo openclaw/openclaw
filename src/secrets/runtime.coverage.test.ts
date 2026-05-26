@@ -1,14 +1,191 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type {
+  PluginOrigin,
+  PluginWebFetchProviderEntry,
+  PluginWebSearchProviderEntry,
+} from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+}));
+
+function createCoverageWebSearchProvider(params: {
+  pluginId: string;
+  id: string;
+  envVar: string;
+  order: number;
+}): PluginWebSearchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const readConfiguredCredential = (config?: OpenClawConfig): unknown =>
+    (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
+      ?.webSearch?.apiKey;
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} coverage provider`,
+    envVars: [params.envVar],
+    placeholder: `${params.id}-key`,
+    signupUrl: `https://example.com/${params.id}`,
+    autoDetectOrder: params.order,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: () => undefined,
+    setCredentialValue: () => {},
+    getConfiguredCredentialValue: readConfiguredCredential,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setPathCreateStrict(
+        configTarget,
+        ["plugins", "entries", params.pluginId, "config", "webSearch", "apiKey"],
+        value,
+      );
+    },
+    createTool: () => null,
+  };
+}
+
+function createCoverageWebFetchProvider(params: {
+  pluginId: string;
+  id: string;
+  envVar: string;
+}): PluginWebFetchProviderEntry {
+  const credentialPath = `plugins.entries.${params.pluginId}.config.webFetch.apiKey`;
+  const readConfiguredCredential = (config?: OpenClawConfig): unknown =>
+    (config?.plugins?.entries?.[params.pluginId]?.config as { webFetch?: { apiKey?: unknown } })
+      ?.webFetch?.apiKey;
+  return {
+    pluginId: params.pluginId,
+    id: params.id,
+    label: params.id,
+    hint: `${params.id} coverage fetch provider`,
+    envVars: [params.envVar],
+    placeholder: `${params.id}-key`,
+    signupUrl: `https://example.com/${params.id}`,
+    autoDetectOrder: 10,
+    credentialPath,
+    inactiveSecretPaths: [credentialPath],
+    getCredentialValue: () => undefined,
+    setCredentialValue: () => {},
+    getConfiguredCredentialValue: readConfiguredCredential,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setPathCreateStrict(
+        configTarget,
+        ["plugins", "entries", params.pluginId, "config", "webFetch", "apiKey"],
+        value,
+      );
+    },
+    createTool: () => null,
+  };
+}
+
+const COVERAGE_WEB_SEARCH_PROVIDERS = new Map(
+  [
+    createCoverageWebSearchProvider({
+      pluginId: "brave",
+      id: "brave",
+      envVar: "BRAVE_API_KEY",
+      order: 10,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "google",
+      id: "gemini",
+      envVar: "GEMINI_API_KEY",
+      order: 20,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "xai",
+      id: "grok",
+      envVar: "XAI_API_KEY",
+      order: 30,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "moonshot",
+      id: "kimi",
+      envVar: "MOONSHOT_API_KEY",
+      order: 40,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "perplexity",
+      id: "perplexity",
+      envVar: "PERPLEXITY_API_KEY",
+      order: 50,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      envVar: "FIRECRAWL_API_KEY",
+      order: 60,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "exa",
+      id: "exa",
+      envVar: "EXA_API_KEY",
+      order: 65,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "minimax",
+      id: "minimax",
+      envVar: "MINIMAX_API_KEY",
+      order: 70,
+    }),
+    createCoverageWebSearchProvider({
+      pluginId: "tavily",
+      id: "tavily",
+      envVar: "TAVILY_API_KEY",
+      order: 80,
+    }),
+  ].map((provider) => [provider.pluginId, provider]),
+);
+
+const COVERAGE_WEB_FETCH_PROVIDERS = new Map(
+  [
+    createCoverageWebFetchProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      envVar: "FIRECRAWL_API_KEY",
+    }),
+  ].map((provider) => [provider.pluginId, provider]),
+);
+
+vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
+  loadBundledWebFetchProviderEntriesFromDir: (params: { pluginId: string }) => {
+    const provider = COVERAGE_WEB_FETCH_PROVIDERS.get(params.pluginId);
+    return provider ? [provider] : null;
+  },
+  loadBundledWebSearchProviderEntriesFromDir: (params: { pluginId: string }) => {
+    const provider = COVERAGE_WEB_SEARCH_PROVIDERS.get(params.pluginId);
+    return provider ? [provider] : null;
+  },
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: (params: {
+    onlyPluginIds: readonly string[];
+  }) => {
+    const providers = params.onlyPluginIds.map((pluginId) =>
+      COVERAGE_WEB_FETCH_PROVIDERS.get(pluginId),
+    );
+    return providers.every(
+      (provider): provider is PluginWebFetchProviderEntry => provider !== undefined,
+    )
+      ? providers
+      : null;
+  },
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: (params: {
+    onlyPluginIds: readonly string[];
+  }) => {
+    const providers = params.onlyPluginIds.map((pluginId) =>
+      COVERAGE_WEB_SEARCH_PROVIDERS.get(pluginId),
+    );
+    return providers.every(
+      (provider): provider is PluginWebSearchProviderEntry => provider !== undefined,
+    )
+      ? providers
+      : null;
+  },
 }));
 
 type SecretRegistryEntry = {
@@ -61,6 +238,7 @@ const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
   // Doctor migrates legacy web search config into plugin-owned webSearch config.
   "tools.web.search.apiKey",
+  "tools.web.search.*.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
 ]);
 
@@ -70,6 +248,24 @@ let collectConfigAssignments: typeof import("./runtime-config-collectors.js").co
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
 let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
+const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
+process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ??= "extensions";
+process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
+
+afterAll(() => {
+  if (previousBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+  }
+  if (previousTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrustBundledPluginsDir;
+  }
+});
 
 async function ensureConfigCoverageRuntimeLoaded(): Promise<void> {
   if (!collectConfigAssignments) {
@@ -90,9 +286,11 @@ async function ensureRuntimeWebToolsLoaded(): Promise<void> {
 }
 
 function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): string[] {
-  const segments = pathPattern.split(".").filter(Boolean);
   const out: string[] = [];
-  for (const segment of segments) {
+  for (const segment of pathPattern.split(".")) {
+    if (!segment) {
+      continue;
+    }
     if (segment === "*") {
       out.push(wildcardToken);
       continue;
@@ -139,6 +337,23 @@ function buildCoverageLoadablePluginOrigins(
     }
   }
   return origins;
+}
+
+function resolveCoverageLoadablePluginOrigins(
+  entries: readonly SecretRegistryEntry[],
+): ReadonlyMap<string, PluginOrigin> | undefined {
+  const origins = new Map<string, PluginOrigin>();
+  for (const entry of entries) {
+    if (!entry.id.startsWith("plugins.entries.")) {
+      continue;
+    }
+    const pluginId = entry.id.split(".")[2];
+    const origin = pluginId ? COVERAGE_LOADABLE_PLUGIN_ORIGINS.get(pluginId) : undefined;
+    if (pluginId && origin) {
+      origins.set(pluginId, origin);
+    }
+  }
+  return origins.size > 0 ? origins : undefined;
 }
 
 function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
@@ -315,6 +530,16 @@ function applyConfigForOpenClawTarget(
       config,
       ["channels", "zalo", "accounts", wildcardToken, "webhookUrl"],
       "https://example.com/hook",
+    );
+  }
+  if (entry.id === "channels.qqbot.clientSecret") {
+    setPathCreateStrict(config, ["channels", "qqbot", "appId"], "sample-app-id");
+  }
+  if (entry.id === "channels.qqbot.accounts.*.clientSecret") {
+    setPathCreateStrict(
+      config,
+      ["channels", "qqbot", "accounts", wildcardToken, "appId"],
+      "sample-app-id",
     );
   }
   if (entry.id === "channels.feishu.verificationToken") {
@@ -522,102 +747,131 @@ async function prepareAuthCoverageSnapshot(params: {
   };
 }
 
-async function expectOpenClawCoverageEntriesResolved(
+async function expectOpenClawCoverageBatchResolved(
   label: string,
-  entries: readonly SecretRegistryEntry[],
+  batch: readonly SecretRegistryEntry[],
 ): Promise<void> {
-  for (const batch of buildCoverageBatches(entries)) {
-    logCoverageBatch(label, batch);
-    const config = {} as OpenClawConfig;
-    const env: Record<string, string> = {};
-    for (const [index, entry] of batch.entries()) {
-      const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
-      const runtimeEnvId = resolveCoverageEnvId(entry, envId);
-      const expectedValue = `resolved-${entry.id}`;
-      const wildcardToken = resolveCoverageWildcardToken(index);
-      env[runtimeEnvId] = expectedValue;
-      applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
-    }
-    const snapshot = await prepareConfigCoverageSnapshot({
-      config,
-      env,
-      loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
-      includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
-      skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
-    });
-    for (const [index, entry] of batch.entries()) {
-      const resolved = getPath(
-        snapshot.config,
-        resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
-      );
-      expect(resolved).toBe(`resolved-${entry.id}`);
-    }
+  logCoverageBatch(label, batch);
+  const config = {} as OpenClawConfig;
+  const env: Record<string, string> = {};
+  for (const [index, entry] of batch.entries()) {
+    const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
+    const runtimeEnvId = resolveCoverageEnvId(entry, envId);
+    const expectedValue = `resolved-${entry.id}`;
+    const wildcardToken = resolveCoverageWildcardToken(index);
+    env[runtimeEnvId] = expectedValue;
+    applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
   }
+  const snapshot = await prepareConfigCoverageSnapshot({
+    config,
+    env,
+    loadablePluginOrigins: resolveCoverageLoadablePluginOrigins(batch),
+    includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
+    skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
+  });
+  for (const [index, entry] of batch.entries()) {
+    const resolved = getPath(
+      snapshot.config,
+      resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
+    );
+    expect(resolved).toBe(`resolved-${entry.id}`);
+  }
+}
+
+const OPENCLAW_CORE_COVERAGE_BATCHES = buildCoverageBatches(
+  collectOpenClawCoverageEntries({ includePluginEntries: false }),
+);
+const OPENCLAW_PLUGIN_COVERAGE_BATCHES = buildCoverageBatches(
+  collectOpenClawCoverageEntries({ includePluginEntries: true }),
+);
+const AUTH_PROFILE_COVERAGE_BATCHES = buildCoverageBatches(
+  COVERAGE_REGISTRY_ENTRIES.filter((entry) => entry.configFile === "auth-profiles.json"),
+);
+
+function toCoverageBatchCase(batch: SecretRegistryEntry[]) {
+  const firstEntry = batch[0];
+  return {
+    name:
+      batch.length === 1 && firstEntry
+        ? firstEntry.id
+        : firstEntry
+          ? `${resolveCoverageBatchKey(firstEntry)} (${batch.length})`
+          : "empty",
+    batch,
+  };
 }
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [sharedRuntime, resolver] = await Promise.all([
-      import("./runtime-shared.js"),
-      import("./resolve.js"),
-    ]);
+    const [sharedRuntime, resolver, configCollectors, authCollectors, runtimeWebTools] =
+      await Promise.all([
+        import("./runtime-shared.js"),
+        import("./resolve.js"),
+        import("./runtime-config-collectors.js"),
+        import("./runtime-auth-collectors.js"),
+        import("./runtime-web-tools.js"),
+      ]);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
     ({ resolveSecretRefValues } = resolver);
+    ({ collectConfigAssignments } = configCollectors);
+    ({ collectAuthStoreAssignments } = authCollectors);
+    ({ resolveRuntimeWebTools } = runtimeWebTools);
   });
 
-  it(
-    "handles every core and channel openclaw.json registry target when configured as active",
-    async () => {
-      await expectOpenClawCoverageEntriesResolved(
-        "openclaw.json core",
-        collectOpenClawCoverageEntries({ includePluginEntries: false }),
-      );
-    },
-    RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "handles every plugin openclaw.json registry target when configured as active",
-    async () => {
-      await expectOpenClawCoverageEntriesResolved(
-        "openclaw.json plugins",
-        collectOpenClawCoverageEntries({ includePluginEntries: true }),
-      );
-    },
-    RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
-  );
-
-  it("handles every auth-profiles registry target", async () => {
-    const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) => entry.configFile === "auth-profiles.json",
+  describe("openclaw.json core and channel registry targets", () => {
+    test.each(OPENCLAW_CORE_COVERAGE_BATCHES.map(toCoverageBatchCase))(
+      "handles $name",
+      async ({ batch }) => {
+        await expectOpenClawCoverageBatchResolved("openclaw.json core", batch);
+      },
+      RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
     );
-    for (const batch of buildCoverageBatches(entries)) {
-      logCoverageBatch("auth-profiles.json", batch);
-      const env: Record<string, string> = {};
-      const authStore: AuthProfileStore = {
-        version: 1,
-        profiles: {},
-      };
-      for (const [index, entry] of batch.entries()) {
-        const envId = `OPENCLAW_AUTH_SECRET_TARGET_${entry.id}`;
-        env[envId] = `resolved-${entry.id}`;
-        applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
-      }
-      const snapshot = await prepareAuthCoverageSnapshot({
-        config: {} as OpenClawConfig,
-        env,
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => authStore,
-      });
-      const resolvedStore = snapshot.authStores[0]?.store;
-      expect(resolvedStore).toBeDefined();
-      for (const [index, entry] of batch.entries()) {
-        const resolved = getPath(
-          resolvedStore,
-          toConcretePathSegments(entry.pathPattern, resolveCoverageWildcardToken(index)),
-        );
-        expect(resolved).toBe(`resolved-${entry.id}`);
-      }
-    }
+  });
+
+  describe("openclaw.json plugin registry targets", () => {
+    test.each(OPENCLAW_PLUGIN_COVERAGE_BATCHES.map(toCoverageBatchCase))(
+      "handles $name",
+      async ({ batch }) => {
+        await expectOpenClawCoverageBatchResolved("openclaw.json plugins", batch);
+      },
+      RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
+    );
+  });
+
+  describe("auth-profiles registry targets", () => {
+    test.each(AUTH_PROFILE_COVERAGE_BATCHES.map(toCoverageBatchCase))(
+      "handles $name",
+      async ({ batch }) => {
+        logCoverageBatch("auth-profiles.json", batch);
+        const env: Record<string, string> = {};
+        const authStore: AuthProfileStore = {
+          version: 1,
+          profiles: {},
+        };
+        for (const [index, entry] of batch.entries()) {
+          const envId = `OPENCLAW_AUTH_SECRET_TARGET_${entry.id}`;
+          env[envId] = `resolved-${entry.id}`;
+          applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
+        }
+        const snapshot = await prepareAuthCoverageSnapshot({
+          config: {} as OpenClawConfig,
+          env,
+          agentDirs: ["/tmp/openclaw-agent-main"],
+          loadAuthStore: () => authStore,
+        });
+        const resolvedStore = snapshot.authStores[0]?.store;
+        if (!resolvedStore) {
+          throw new Error("expected resolved auth store snapshot");
+        }
+        for (const [index, entry] of batch.entries()) {
+          const resolved = getPath(
+            resolvedStore,
+            toConcretePathSegments(entry.pathPattern, resolveCoverageWildcardToken(index)),
+          );
+          expect(resolved).toBe(`resolved-${entry.id}`);
+        }
+      },
+      RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
+    );
   });
 });

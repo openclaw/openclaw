@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -26,6 +27,11 @@ function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
 
+export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return /^gpt-5\.4-mini(?:-|$)/u.test(id);
+}
+
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   return effort === "minimal" ? "minimal" : effort;
 }
@@ -34,18 +40,16 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
+  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+    return [];
+  }
   const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const supported = [
-    ...new Set(
-      raw
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  ];
+  const supported = uniqueStrings(
+    normalizeStringEntries(raw.filter((value) => typeof value === "string")),
+  );
   return supported.length > 0 ? supported : undefined;
 }
 

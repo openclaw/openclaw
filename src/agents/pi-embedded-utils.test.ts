@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
@@ -468,6 +468,28 @@ File contents here`,
     expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
   });
 
+  it("strips raw <function_response> workflow blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Prefix",
+            "<function_response>",
+            'Searching for: "what skills matter most in the age of AI"',
+            "...",
+            "</function_response>",
+            "Suffix",
+          ].join("\n"),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+  });
+
   it("strips dangling <tool_call> XML content to end-of-string", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
@@ -615,29 +637,29 @@ describe("formatReasoningMessage", () => {
 
   it("wraps single line in italics", () => {
     expect(formatReasoningMessage("Single line of reasoning")).toBe(
-      "Reasoning:\n_Single line of reasoning_",
+      "Thinking\n\n_Single line of reasoning_",
     );
   });
 
   it("wraps each line separately for multiline text (Telegram fix)", () => {
     expect(formatReasoningMessage("Line one\nLine two\nLine three")).toBe(
-      "Reasoning:\n_Line one_\n_Line two_\n_Line three_",
+      "Thinking\n\n_Line one_\n_Line two_\n_Line three_",
     );
   });
 
   it("preserves empty lines between reasoning text", () => {
     expect(formatReasoningMessage("First block\n\nSecond block")).toBe(
-      "Reasoning:\n_First block_\n\n_Second block_",
+      "Thinking\n\n_First block_\n\n_Second block_",
     );
   });
 
   it("handles mixed empty and non-empty lines", () => {
-    expect(formatReasoningMessage("A\n\nB\nC")).toBe("Reasoning:\n_A_\n\n_B_\n_C_");
+    expect(formatReasoningMessage("A\n\nB\nC")).toBe("Thinking\n\n_A_\n\n_B_\n_C_");
   });
 
   it("trims leading/trailing whitespace", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
-      "Reasoning:\n_Reasoning here_",
+      "Thinking\n\n_Reasoning here_",
     );
   });
 });
@@ -794,13 +816,13 @@ describe("extractAssistantVisibleText", () => {
 });
 
 describe("promoteThinkingTagsToBlocks", () => {
-  it("does not crash on malformed null content entries", () => {
+  it("preserves malformed null content entries while promoting thinking tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [null as never, { type: "text", text: "<thinking>hello</thinking>ok" }],
       timestamp: Date.now(),
     });
-    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    promoteThinkingTagsToBlocks(msg);
     const types = msg.content.map((b: { type?: string }) => b?.type);
     expect(types).toContain("thinking");
     expect(types).toContain("text");
@@ -820,13 +842,14 @@ describe("promoteThinkingTagsToBlocks", () => {
     ]);
   });
 
-  it("does not crash on undefined content entries", () => {
+  it("preserves undefined content entries when there are no thinking tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [undefined as never, { type: "text", text: "no tags here" }],
       timestamp: Date.now(),
     });
-    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    promoteThinkingTagsToBlocks(msg);
+    expect(msg.content).toEqual([undefined, { type: "text", text: "no tags here" }]);
   });
 
   it("passes through well-formed content unchanged when no thinking tags", () => {

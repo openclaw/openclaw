@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -6,12 +6,18 @@ import {
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
+import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  hasMessagingToolDeliveryEvidence,
+} from "../delivery-evidence.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -24,29 +30,33 @@ type ReplayMetadataAttempt = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
   | "successfulCronAdds"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptResult, "messagingToolSentTargets" | "acceptedSessionSpawns">>;
 
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "clientToolCall"
+  | "clientToolCalls"
   | "currentAttemptAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "didSendViaMessagingTool"
   | "messagingToolSentTexts"
   | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
->;
+  | "toolMetas"
+> &
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
 
 type PlanningOnlyAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
-  | "clientToolCall"
+  | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "didSendViaMessagingTool"
@@ -54,12 +64,15 @@ type PlanningOnlyAttempt = Pick<
   | "lastAssistant"
   | "itemLifecycle"
   | "replayMetadata"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "messagingToolSentTargets"
   | "toolMetas"
 >;
 
 type SilentToolResultAttempt = Pick<
   EmbeddedRunAttemptResult,
-  | "clientToolCall"
+  | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
@@ -81,7 +94,12 @@ export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   lastAssistant?: { stopReason?: string } | null;
 }): boolean {
-  return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+  // A tool-use stop reason means the model issued a tool call and expected
+  // to continue after tool results. If the session ended before the
+  // post-tool assistant message arrived, the turn is incomplete regardless
+  // of whether pre-tool text exists — that text is preliminary analysis,
+  // not the final answer. (#76477)
+  return params.lastAssistant?.stopReason === "toolUse";
 }
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -117,6 +135,19 @@ const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
 // constrained, but it should not inherit the stricter planning-only/ack prompts.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
+// Model APIs eligible for the non-visible turn retry guard.  OpenAI Responses
+// family can produce reasoning-only turns where usage.output > 0 but no visible
+// text is emitted; without the guard these pass through as successful. (#85364)
+const RETRY_GUARD_MODEL_APIS = new Set([
+  "openai-completions",
+  "anthropic-messages",
+  "bedrock-converse-stream",
+  "openai-responses",
+  "openai-codex-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -185,30 +216,16 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
-function hasStringEntry(values: readonly unknown[] | undefined): boolean {
-  return (
-    Array.isArray(values) &&
-    values.some((value) => typeof value === "string" && value.trim().length > 0)
-  );
-}
-
-export function hasCommittedUserVisibleToolDelivery(
-  attempt: Pick<EmbeddedRunAttemptResult, "messagingToolSentTexts" | "messagingToolSentMediaUrls">,
-): boolean {
-  return (
-    hasStringEntry(attempt.messagingToolSentTexts) ||
-    hasStringEntry(attempt.messagingToolSentMediaUrls)
-  );
-}
-
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadMutatingTools ||
-    params.didSendViaMessagingTool ||
-    hasCommittedUserVisibleToolDelivery(params) ||
+    hadAsyncStartedTool ||
+    hasMessagingToolDeliveryEvidence(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
   return {
     hadPotentialSideEffects,
@@ -228,11 +245,18 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
+  // Tool-use terminal guard: when the last assistant message ended with a
+  // tool-call stop reason, the model expected to continue after tool results.
+  // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
+  // turn check in that case — the final post-tool response was never
+  // produced. (#76477)
+  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+
   if (
-    params.payloadCount !== 0 ||
+    (params.payloadCount !== 0 && !toolUseTerminal) ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError
@@ -244,7 +268,15 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return null;
+  }
+
+  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+    return null;
+  }
+
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
     return null;
   }
 
@@ -284,6 +316,10 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
     nonEmptyTexts.length > 0 &&
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
   );
+}
+
+function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
+  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
 function isToolResultRole(role: string): boolean {
@@ -347,7 +383,7 @@ export function resolveSilentToolResultReplyPayload(params: {
     params.aborted ||
     params.timedOut ||
     (params.attempt.toolMetas?.length ?? 0) === 0 ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
@@ -398,7 +434,7 @@ export function resolveRunLivenessState(params: {
   return "working";
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
+function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -476,10 +512,11 @@ function shouldSkipPlanningOnlyRetry(params: {
   return Boolean(
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
   );
 }
@@ -494,7 +531,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipPlanningOnlyRetry(params)) {
     return false;
   }
-  if (hasCommittedUserVisibleToolDelivery(params.attempt)) {
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
@@ -615,7 +652,7 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
     return true;
   }
-  if (normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions") {
+  if (RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? ""))) {
     return true;
   }
   // Non-visible final turns are narrower than planning-only turns: there is no
@@ -694,28 +731,18 @@ export function resolveAckExecutionFastPathInstruction(params: {
 }
 
 function extractPlanningOnlySteps(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const bulletLines = lines
-    .map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "").trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
+  const bulletLines = normalizeStringEntries(
+    lines.map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "")),
+  );
   if (bulletLines.length >= 2) {
     return bulletLines.slice(0, 4);
   }
-  return text
-    .split(/(?<=[.!?])\s+/u)
-    .map((step) => step.trim())
-    .filter(Boolean)
-    .slice(0, 4);
+  return normalizeStringEntries(text.split(/(?<=[.!?])\s+/u)).slice(0, 4);
 }
 
 function hasStructuredPlanningOnlyFormat(text: string): boolean {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
   if (lines.length === 0) {
     return false;
   }
@@ -827,10 +854,10 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
     params.aborted ||
     params.timedOut ||
-    params.attempt.clientToolCall ||
+    params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.didSendViaMessagingTool ||
+    hasMessagingToolDeliveryEvidence(params.attempt) ||
     params.attempt.lastToolError ||
     (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
     ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&

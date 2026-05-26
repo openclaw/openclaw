@@ -2,6 +2,7 @@ import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device
 import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeSortedUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
 type KnownNodeDevicePairingSource = {
@@ -47,20 +48,8 @@ type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    for (const value of item) {
-      const trimmed = value.trim();
-      if (trimmed) {
-        values.add(trimmed);
-      }
-    }
-  }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
+  return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
@@ -115,7 +104,12 @@ function resolveEffectiveLastSeen(params: {
       ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
       : undefined,
   ].filter((entry) => entry !== undefined);
-  const newest = candidates.toSorted((left, right) => right.atMs - left.atMs)[0];
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
   if (!newest) {
     return {};
   }

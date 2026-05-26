@@ -7,7 +7,9 @@ import {
   AgentEmbeddedHarnessSchema,
   AgentRuntimePolicySchema,
   AgentModelSchema,
+  AgentToolModelSchema,
   MemorySearchSchema,
+  AgentRunRetriesConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -33,17 +35,8 @@ const OptionalBootstrapFileNameSchema = z.enum([
 
 export const SilentReplyPolicyConfigSchema = z
   .object({
-    direct: SilentReplyPolicySchema.optional(),
     group: SilentReplyPolicySchema.optional(),
     internal: SilentReplyPolicySchema.optional(),
-  })
-  .strict();
-
-export const SilentReplyRewriteConfigSchema = z
-  .object({
-    direct: z.boolean().optional(),
-    group: z.boolean().optional(),
-    internal: z.boolean().optional(),
   })
   .strict();
 
@@ -54,12 +47,12 @@ export const AgentDefaultsSchema = z
     agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    imageModel: AgentModelSchema.optional(),
-    imageGenerationModel: AgentModelSchema.optional(),
-    videoGenerationModel: AgentModelSchema.optional(),
-    musicGenerationModel: AgentModelSchema.optional(),
+    imageModel: AgentToolModelSchema.optional(),
+    imageGenerationModel: AgentToolModelSchema.optional(),
+    videoGenerationModel: AgentToolModelSchema.optional(),
+    musicGenerationModel: AgentToolModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
-    pdfModel: AgentModelSchema.optional(),
+    pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
     models: z
@@ -70,6 +63,7 @@ export const AgentDefaultsSchema = z
             alias: z.string().optional(),
             /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
             params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
           })
@@ -79,7 +73,6 @@ export const AgentDefaultsSchema = z
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
-    silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
     repoRoot: z.string().optional(),
     systemPromptOverride: z.string().optional(),
     promptOverlays: z
@@ -217,6 +210,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedPi: z
       .object({
         projectSettingsPolicy: z
@@ -239,6 +233,7 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
@@ -251,12 +246,14 @@ export const AgentDefaultsSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
+    imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z

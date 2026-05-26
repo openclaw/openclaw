@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { testing, createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -16,6 +17,9 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     createCronToolOptions: vi.fn(),
+    createImageGenerateToolOptions: vi.fn(),
+    createMusicGenerateToolOptions: vi.fn(),
+    createVideoGenerateToolOptions: vi.fn(),
     textToSpeech: vi.fn(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
@@ -37,10 +41,6 @@ vi.mock("./tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
 }));
 
-vi.mock("./tools/canvas-tool.js", () => ({
-  createCanvasTool: () => mocks.stubTool("canvas"),
-}));
-
 vi.mock("./tools/cron-tool.js", () => ({
   createCronTool: (options: unknown) => {
     mocks.createCronToolOptions(options);
@@ -53,7 +53,10 @@ vi.mock("./tools/gateway-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-generate-tool.js", () => ({
-  createImageGenerateTool: () => mocks.stubTool("image_generate"),
+  createImageGenerateTool: (options: unknown) => {
+    mocks.createImageGenerateToolOptions(options);
+    return mocks.stubTool("image_generate");
+  },
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
@@ -65,7 +68,10 @@ vi.mock("./tools/message-tool.js", () => ({
 }));
 
 vi.mock("./tools/music-generate-tool.js", () => ({
-  createMusicGenerateTool: () => mocks.stubTool("music_generate"),
+  createMusicGenerateTool: (options: unknown) => {
+    mocks.createMusicGenerateToolOptions(options);
+    return mocks.stubTool("music_generate");
+  },
 }));
 
 vi.mock("./tools/nodes-tool.js", () => ({
@@ -109,7 +115,10 @@ vi.mock("./tools/update-plan-tool.js", () => ({
 }));
 
 vi.mock("./tools/video-generate-tool.js", () => ({
-  createVideoGenerateTool: () => mocks.stubTool("video_generate"),
+  createVideoGenerateTool: (options: unknown) => {
+    mocks.createVideoGenerateToolOptions(options);
+    return mocks.stubTool("video_generate");
+  },
 }));
 
 vi.mock("./tools/web-tools.js", () => ({
@@ -121,9 +130,25 @@ vi.mock("../tts/tts.js", () => ({
   textToSpeech: mocks.textToSpeech,
 }));
 
+function getTextToSpeechParams() {
+  const calls = (mocks.textToSpeech as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+  return calls[0]?.[0] as
+    | {
+        text?: string;
+        cfg?: OpenClawConfig;
+        agentId?: string;
+        channel?: string;
+        accountId?: string;
+      }
+    | undefined;
+}
+
 describe("createOpenClawTools TTS config wiring", () => {
   beforeEach(() => {
     mocks.createCronToolOptions.mockClear();
+    mocks.createImageGenerateToolOptions.mockClear();
+    mocks.createMusicGenerateToolOptions.mockClear();
+    mocks.createVideoGenerateToolOptions.mockClear();
     mocks.textToSpeech.mockClear();
   });
 
@@ -142,8 +167,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
-    __testing.setDepsForTest({ config: injectedConfig });
+    testing.setDepsForTest({ config: injectedConfig });
 
     try {
       const tool = createOpenClawTools({
@@ -157,20 +181,16 @@ describe("createOpenClawTools TTS config wiring", () => {
 
       await tool.execute("call-1", { text: "hello from config" });
 
-      expect(mocks.textToSpeech).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "hello from config",
-          cfg: injectedConfig,
-        }),
-      );
+      const ttsParams = getTextToSpeechParams();
+      expect(ttsParams?.text).toBe("hello from config");
+      expect(ttsParams?.cfg).toBe(injectedConfig);
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 
   it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
-    __testing.setDepsForTest({ config: {} });
+    testing.setDepsForTest({ config: {} });
 
     try {
       const tool = createOpenClawTools({
@@ -185,7 +205,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       expect(tool.description).toContain("Use only for explicit audio intent");
       expect(tool.description).toContain("Never use for ordinary text replies");
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 
@@ -196,8 +216,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
-    __testing.setDepsForTest({ config: injectedConfig });
+    testing.setDepsForTest({ config: injectedConfig });
 
     try {
       const tool = createOpenClawTools({
@@ -212,14 +231,11 @@ describe("createOpenClawTools TTS config wiring", () => {
 
       await tool.execute("call-1", { text: "hello from reader" });
 
-      expect(mocks.textToSpeech).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "hello from reader",
-          agentId: "reader",
-        }),
-      );
+      const ttsParams = getTextToSpeechParams();
+      expect(ttsParams?.text).toBe("hello from reader");
+      expect(ttsParams?.agentId).toBe("reader");
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
   });
 
@@ -238,8 +254,7 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
-    __testing.setDepsForTest({ config: injectedConfig });
+    testing.setDepsForTest({ config: injectedConfig });
 
     try {
       const tool = createOpenClawTools({
@@ -255,17 +270,82 @@ describe("createOpenClawTools TTS config wiring", () => {
 
       await tool.execute("call-1", { text: "hello from account" });
 
-      expect(mocks.textToSpeech).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "hello from account",
-          cfg: injectedConfig,
-          channel: "feishu",
-          accountId: "feishu-main",
-        }),
-      );
+      const ttsParams = getTextToSpeechParams();
+      expect(ttsParams?.text).toBe("hello from account");
+      expect(ttsParams?.cfg).toBe(injectedConfig);
+      expect(ttsParams?.channel).toBe("feishu");
+      expect(ttsParams?.accountId).toBe("feishu-main");
     } finally {
-      __testing.setDepsForTest();
+      testing.setDepsForTest();
     }
+  });
+});
+
+describe("createOpenClawTools media generation session wiring", () => {
+  beforeEach(() => {
+    mocks.createImageGenerateToolOptions.mockClear();
+    mocks.createMusicGenerateToolOptions.mockClear();
+    mocks.createVideoGenerateToolOptions.mockClear();
+  });
+
+  it("uses the isolated cron run key for background media completions", () => {
+    const config = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:cron:daily-media",
+      runSessionKey: "agent:main:cron:daily-media:run:run-123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+    expect(mocks.createVideoGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+    expect(mocks.createMusicGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+  });
+
+  it("keeps the requester session key for non-cron media completions", () => {
+    const config = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:slack:channel:C123",
+      runSessionKey: "agent:main:slack:channel:C123:run:run-123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:slack:channel:C123",
+      }),
+    );
   });
 });
 
@@ -275,8 +355,6 @@ describe("createOpenClawTools cron context wiring", () => {
   });
 
   it("passes preserved channel delivery context into the cron tool", async () => {
-    const { createOpenClawTools } = await import("./openclaw-tools.js");
-
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       agentChannel: "matrix",
@@ -301,8 +379,6 @@ describe("createOpenClawTools cron context wiring", () => {
   });
 
   it("uses agent route context when auto-threading context is unavailable", async () => {
-    const { createOpenClawTools } = await import("./openclaw-tools.js");
-
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       agentChannel: "matrix",
@@ -325,8 +401,6 @@ describe("createOpenClawTools cron context wiring", () => {
   });
 
   it("passes self-remove scope into the cron tool", async () => {
-    const { createOpenClawTools } = await import("./openclaw-tools.js");
-
     createOpenClawTools({
       agentSessionKey: "agent:main:cron:job-current",
       cronSelfRemoveOnlyJobId: "job-current",

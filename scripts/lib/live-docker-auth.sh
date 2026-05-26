@@ -18,6 +18,34 @@ openclaw_live_trim() {
   printf '%s' "$value"
 }
 
+openclaw_live_truthy() {
+  case "${1:-}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openclaw_live_is_ci() {
+  openclaw_live_truthy "${CI:-}" || openclaw_live_truthy "${GITHUB_ACTIONS:-}"
+}
+
+openclaw_live_default_profile_file() {
+  if [[ -n "${OPENCLAW_PROFILE_FILE:-}" ]]; then
+    printf '%s\n' "$OPENCLAW_PROFILE_FILE"
+    return 0
+  fi
+  local testbox_profile="$HOME/.openclaw-testbox-live.profile"
+  if [[ -f "$testbox_profile" ]]; then
+    printf '%s\n' "$testbox_profile"
+    return 0
+  fi
+  printf '%s\n' "$HOME/.profile"
+}
+
 openclaw_live_validate_relative_home_path() {
   local value
   value="$(openclaw_live_trim "${1:-}")"
@@ -65,7 +93,7 @@ openclaw_live_should_include_auth_file_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    codex-cli | openai-codex)
+    codex-cli | openai | openai-codex)
       printf '%s\n' ".codex/auth.json"
       printf '%s\n' ".codex/config.toml"
       ;;
@@ -171,11 +199,33 @@ openclaw_live_append_array() {
   local source_array="${2:?source array required}"
   local count
 
-  eval "count=\${#$source_array[@]}"
+  eval "count=\${#${source_array}[@]}"
   if ((count == 0)); then
     return 0
   fi
-  eval "$target_array+=(\"\${$source_array[@]}\")"
+  eval "${target_array}+=(\"\${${source_array}[@]}\")"
+}
+
+openclaw_live_timeout_supports_kill_after() {
+  command -v timeout >/dev/null 2>&1 || return 1
+  timeout --kill-after=1s 1s true >/dev/null 2>&1
+}
+
+openclaw_live_init_docker_run_args() {
+  local target_array="${1:?target array required}"
+  local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
+  local quoted_timeout
+
+  if command -v timeout >/dev/null 2>&1; then
+    quoted_timeout="$(printf '%q' "$timeout_value")"
+    if openclaw_live_timeout_supports_kill_after; then
+      eval "${target_array}=(timeout --kill-after=30s ${quoted_timeout} docker run)"
+    else
+      eval "${target_array}=(timeout ${quoted_timeout} docker run)"
+    fi
+    return
+  fi
+  eval "${target_array}=(docker run)"
 }
 
 openclaw_live_stage_auth_into_home() {

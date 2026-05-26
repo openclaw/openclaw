@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import { createFeishuMessageReceiveHandler } from "../monitor.message-handler.js";
 import { setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
@@ -89,6 +88,7 @@ function createImmediateInboundDebounce() {
         }
       },
       flushKey: async () => {},
+      cancelKey: () => false,
     }),
   };
 }
@@ -411,31 +411,6 @@ async function loadMonitorSingleAccount() {
   return module.monitorSingleAccount;
 }
 
-export async function setupFeishuMessageReceiveLifecycleHandler(params: {
-  runtime: RuntimeEnv;
-  core: PluginRuntime;
-  cfg: ClawdbotConfig;
-  accountId: string;
-  fireAndForget?: boolean;
-  handleMessage: Parameters<typeof createFeishuMessageReceiveHandler>[0]["handleMessage"];
-  resolveDebounceText: Parameters<
-    typeof createFeishuMessageReceiveHandler
-  >[0]["resolveDebounceText"];
-}): Promise<(data: unknown) => Promise<void>> {
-  return createFeishuMessageReceiveHandler({
-    cfg: params.cfg,
-    core: params.core,
-    accountId: params.accountId,
-    runtime: params.runtime,
-    chatHistories: new Map(),
-    fireAndForget: params.fireAndForget,
-    handleMessage: params.handleMessage,
-    resolveDebounceText: params.resolveDebounceText,
-    hasProcessedMessage: vi.fn(async () => false),
-    recordProcessedMessage: vi.fn(async () => true),
-  });
-}
-
 export async function setupFeishuLifecycleHandler(params: {
   createEventDispatcherMock: {
     mockReturnValue: (value: unknown) => unknown;
@@ -468,7 +443,7 @@ export async function setupFeishuLifecycleHandler(params: {
   });
 
   const handlers: Record<string, (data: unknown) => Promise<void>> = {};
-  for (const [key, value] of Object.entries(register.mock.calls[0]?.[0] ?? {})) {
+  for (const [key, value] of Object.entries(register.mock.calls.at(0)?.[0] ?? {})) {
     handlers[key] = value as (data: unknown) => Promise<void>;
   }
   const handler = handlers[params.handlerKey];

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -9,9 +10,10 @@ const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
 const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
 const TOOLING_PATH_RE =
-  /^(?:scripts\/|test\/vitest\/|\.github\/|git-hooks\/|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.gitignore$|\.oxlint.*|\.oxfmt.*)/u;
+  /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
   /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
+const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
 const LIVE_DOCKER_TOOLING_PATH_RE =
   /^(?:scripts\/test-docker-all\.mjs|scripts\/test-docker-all\.sh|scripts\/lib\/live-docker-auth\.sh|scripts\/test-live-(?:acp-bind|cli-backend|codex-harness|gateway-models|models)-docker\.sh|src\/gateway\/gateway-acp-bind\.live\.test\.ts|src\/gateway\/live-agent-probes\.test\.ts)$/u;
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
@@ -30,7 +32,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
   "package.json",
-  "src/config/schema.base.generated.ts",
 ]);
 
 /** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
@@ -177,7 +178,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (changedPath.startsWith("test/")) {
+    if (changedPath.startsWith("test/") || changedPath.startsWith("test-fixtures/")) {
       lanes.tooling = true;
       reasons.push(`${changedPath}: root test/support surface`);
       continue;
@@ -186,6 +187,12 @@ export function detectChangedLanes(changedPaths, options = {}) {
     if (TOOLING_PATH_RE.test(changedPath)) {
       lanes.tooling = true;
       reasons.push(`${changedPath}: tooling surface`);
+      continue;
+    }
+
+    if (LEGACY_ROOT_ASSET_PATH_RE.test(changedPath)) {
+      lanes.tooling = true;
+      reasons.push(`${changedPath}: legacy root asset cleanup`);
       continue;
     }
 
@@ -439,8 +446,7 @@ function parseArgs(argv) {
 }
 
 function isDirectRun() {
-  const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 function printHuman(result) {

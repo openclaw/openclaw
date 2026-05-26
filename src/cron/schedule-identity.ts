@@ -1,13 +1,14 @@
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { CronJob } from "./types.js";
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(record[key]);
 }
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function schedulePayloadFromRecord(
@@ -61,18 +62,6 @@ function resolveSchedulePayload(
   return schedulePayloadFromRecord(job);
 }
 
-function cronScheduleIdentity(job: Pick<CronJob, "schedule"> & { enabled?: boolean }): string {
-  const schedule = resolveSchedulePayload(job as unknown as Record<string, unknown>);
-  if (!schedule) {
-    throw new Error("Unsupported cron schedule kind");
-  }
-  return JSON.stringify({
-    version: 1,
-    enabled: job.enabled ?? true,
-    schedule,
-  });
-}
-
 export function tryCronScheduleIdentity(
   job: { schedule?: unknown; enabled?: unknown } & Record<string, unknown>,
 ): string | undefined {
@@ -88,8 +77,14 @@ export function tryCronScheduleIdentity(
 }
 
 export function cronSchedulingInputsEqual(
-  previous: Pick<CronJob, "schedule"> & { enabled?: boolean },
-  next: Pick<CronJob, "schedule"> & { enabled?: boolean },
+  previous: Pick<CronJob, "schedule"> & { enabled?: unknown },
+  next: Pick<CronJob, "schedule"> & { enabled?: unknown },
 ): boolean {
-  return cronScheduleIdentity(previous) === cronScheduleIdentity(next);
+  const previousIdentity = tryCronScheduleIdentity(previous as Record<string, unknown>);
+  const nextIdentity = tryCronScheduleIdentity(next as Record<string, unknown>);
+  return (
+    previousIdentity !== undefined &&
+    nextIdentity !== undefined &&
+    previousIdentity === nextIdentity
+  );
 }

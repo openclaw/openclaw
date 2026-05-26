@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHomeDir, getQQBotDataDir, isWindows } from "../../utils/platform.js";
 import type { SlashCommandResult } from "../slash-commands.js";
 
@@ -10,10 +12,7 @@ function getConfiguredLogFiles(): string[] {
   for (const cli of ["openclaw", "clawdbot", "moltbot"]) {
     try {
       const cfgPath = path.join(homeDir, `.${cli}`, `${cli}.json`);
-      if (!fs.existsSync(cfgPath)) {
-        continue;
-      }
-      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const cfg = loadJsonFile<{ logging?: { file?: unknown } }>(cfgPath);
       const logFile = cfg?.logging?.file;
       if (logFile && typeof logFile === "string") {
         files.push(path.resolve(logFile));
@@ -127,6 +126,28 @@ type LogCandidate = {
   sourceDir: string;
   mtimeMs: number;
 };
+
+function addCollisionSuffix(filePath: string, suffix: number): string {
+  const ext = path.extname(filePath);
+  const baseName = path.basename(filePath, ext);
+  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
+}
+
+function writeNewTextFileSync(filePath: string, contents: string): string {
+  for (let suffix = 1; suffix <= 100; suffix++) {
+    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
+    try {
+      fs.writeFileSync(candidate, contents, { encoding: "utf8", flag: "wx" });
+      return candidate;
+    } catch (error) {
+      if (typeof error === "object" && error && "code" in error && error.code === "EEXIST") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not find an unused log export filename near ${filePath}`);
+}
 
 function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
   const candidates: LogCandidate[] = [];
@@ -303,11 +324,13 @@ export function buildBotLogsResult(): SlashCommandResult {
 
   const tmpDir = getQQBotDataDir("downloads");
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const tmpFile = path.join(tmpDir, `bot-logs-${timestamp}.txt`);
-  fs.writeFileSync(tmpFile, lines.join("\n"), "utf8");
+  const tmpFile = writeNewTextFileSync(
+    path.join(tmpDir, `bot-logs-${timestamp}.txt`),
+    lines.join("\n"),
+  );
 
   const fileCount = recentFiles.length;
-  const topSources = Array.from(new Set(recentFiles.map((item) => item.sourceDir))).slice(0, 3);
+  const topSources = uniqueStrings(recentFiles.map((item) => item.sourceDir)).slice(0, 3);
   let summaryText = `共 ${fileCount} 个日志文件，包含 ${totalIncluded} 行内容`;
   if (truncatedCount > 0) {
     summaryText += `（其中 ${truncatedCount} 个文件已截断为最后 ${MAX_LINES_PER_FILE} 行，总计原始 ${totalOriginal} 行）`;

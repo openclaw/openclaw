@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
+import { readJsonIfExists, writeJson } from "./json-files.js";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY = 32;
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const OMITTED_QA_EXTENSION_PREFIXES = [
@@ -39,6 +42,36 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
+type ExternalizedBundledExtensionIds = ReadonlySet<string>;
+type PackageDistInventoryScanContext = {
+  activeFsOps: number;
+  fsConcurrency: number;
+  waiters: Array<() => void>;
+};
+
+function createPackageDistInventoryScanContext(): PackageDistInventoryScanContext {
+  return {
+    activeFsOps: 0,
+    fsConcurrency: PACKAGE_DIST_INVENTORY_SCAN_CONCURRENCY,
+    waiters: [],
+  };
+}
+
+async function withPackageDistInventoryFsSlot<T>(
+  context: PackageDistInventoryScanContext,
+  task: () => Promise<T>,
+): Promise<T> {
+  while (context.activeFsOps >= context.fsConcurrency) {
+    await new Promise<void>((resolve) => context.waiters.push(resolve));
+  }
+  context.activeFsOps += 1;
+  try {
+    return await task();
+  } finally {
+    context.activeFsOps -= 1;
+    context.waiters.shift()?.();
+  }
+}
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
@@ -74,8 +107,59 @@ export function isLegacyPluginDependencyInstallStagePath(relativePath: string): 
   );
 }
 
-function isPackagedDistPath(relativePath: string): boolean {
+function collectExcludedPackagedExtensionDirs(rootPackageJson: unknown): Set<string> {
+  if (!rootPackageJson || typeof rootPackageJson !== "object") {
+    return new Set();
+  }
+  const files = (rootPackageJson as { files?: unknown }).files;
+  if (!Array.isArray(files)) {
+    return new Set();
+  }
+  const excluded = new Set<string>();
+  for (const entry of files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+    if (match?.[1]) {
+      excluded.add(match[1]);
+    }
+  }
+  return excluded;
+}
+
+function isExternalizedBundledExtensionDistPath(
+  relativePath: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): boolean {
+  if (externalizedExtensionIds.size === 0) {
+    return false;
+  }
+  const parts = normalizeRelativePath(relativePath).split("/");
+  return (
+    parts.length >= 3 &&
+    parts[0] === "dist" &&
+    parts[1] === "extensions" &&
+    Boolean(parts[2]) &&
+    externalizedExtensionIds.has(parts[2] ?? "")
+  );
+}
+
+async function collectExternalizedBundledExtensionIds(
+  packageRoot: string,
+): Promise<ExternalizedBundledExtensionIds> {
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  return collectExcludedPackagedExtensionDirs(await readJsonIfExists<unknown>(packageJsonPath));
+}
+
+function isPackagedDistPath(
+  relativePath: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): boolean {
   if (!relativePath.startsWith("dist/")) {
+    return false;
+  }
+  if (isExternalizedBundledExtensionDistPath(relativePath, externalizedExtensionIds)) {
     return false;
   }
   if (isLegacyPluginDependencyDirPath(relativePath)) {
@@ -106,26 +190,37 @@ function isPackagedDistPath(relativePath: string): boolean {
   return true;
 }
 
-function isOmittedDistSubtree(relativePath: string): boolean {
+function isOmittedDistSubtree(
+  relativePath: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): boolean {
   return (
+    isExternalizedBundledExtensionDistPath(relativePath, externalizedExtensionIds) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
   );
 }
 
-async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
+async function collectRelativeFiles(
+  rootDir: string,
+  baseDir: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+  context: PackageDistInventoryScanContext,
+): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
-  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath)) {
+  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, externalizedExtensionIds)) {
     return [];
   }
   try {
-    const rootStats = await fs.lstat(rootDir);
+    const rootStats = await withPackageDistInventoryFsSlot(context, () => fs.lstat(rootDir));
     if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) {
       throw new Error(
         `Unsafe package dist path: ${normalizeRelativePath(path.relative(baseDir, rootDir))}`,
       );
     }
-    const entries = await fs.readdir(rootDir, { withFileTypes: true });
+    const entries = await withPackageDistInventoryFsSlot(context, () =>
+      fs.readdir(rootDir, { withFileTypes: true }),
+    );
     const files = await Promise.all(
       entries.map(async (entry) => {
         const entryPath = path.join(rootDir, entry.name);
@@ -134,10 +229,10 @@ async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<s
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir);
+          return await collectRelativeFiles(entryPath, baseDir, externalizedExtensionIds, context);
         }
         if (entry.isFile()) {
-          return isPackagedDistPath(relativePath) ? [relativePath] : [];
+          return isPackagedDistPath(relativePath, externalizedExtensionIds) ? [relativePath] : [];
         }
         return [];
       }),
@@ -152,7 +247,14 @@ async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<s
 }
 
 export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
-  return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot);
+  const externalizedExtensionIds = await collectExternalizedBundledExtensionIds(packageRoot);
+  const scanContext = createPackageDistInventoryScanContext();
+  return await collectRelativeFiles(
+    path.join(packageRoot, "dist"),
+    packageRoot,
+    externalizedExtensionIds,
+    scanContext,
+  );
 }
 
 export async function collectLegacyPluginDependencyStagingDebrisPaths(
@@ -244,38 +346,28 @@ export async function assertNoLegacyPluginDependencyStagingDebris(
 
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
   await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
-  const inventory = [...new Set(await collectPackageDistInventory(packageRoot))].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
-  await fs.writeFile(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
+  await writeJson(inventoryPath, inventory, { trailingNewline: true });
   return inventory;
 }
 
-async function readPackageDistInventory(packageRoot: string): Promise<string[]> {
+async function readPackageDistInventoryOptional(packageRoot: string): Promise<string[] | null> {
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  const raw = await fs.readFile(inventoryPath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
+  const parsed = await readJsonIfExists<unknown>(inventoryPath);
+  if (parsed === null) {
+    return null;
+  }
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
     throw new Error(`Invalid package dist inventory at ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
   }
-  return [...new Set(parsed.map(normalizeRelativePath))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
 export async function readPackageDistInventoryIfPresent(
   packageRoot: string,
 ): Promise<string[] | null> {
-  try {
-    return await readPackageDistInventory(packageRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
+  return await readPackageDistInventoryOptional(packageRoot);
 }
 
 export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {

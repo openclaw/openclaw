@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 // but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
@@ -683,10 +684,9 @@ function getAudienceClaims(payload: unknown): string[] {
     return trimmed ? [trimmed] : [];
   }
   if (Array.isArray(audience)) {
-    return audience
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(
+      audience.filter((value): value is string => typeof value === "string"),
+    );
   }
   return [];
 }
@@ -876,9 +876,41 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
           return false;
         }
         return true;
-      } catch {
+      } catch (err) {
+        // Network-level failures (DNS, firewall, TLS) must be distinguished from
+        // invalid tokens so callers can log them at an appropriate severity.
+        // Rethrow so the JWT middleware can emit an actionable warning instead of
+        // silently returning 401 (which looks identical to a bad credential).
+        if (isJwksNetworkError(err)) {
+          throw err;
+        }
         return false;
       }
     },
   };
+}
+
+/**
+ * Return true when the error originated from a network-level failure fetching
+ * the JWKS endpoint (DNS resolution, connection refused, TLS handshake, etc.)
+ * rather than from token verification logic.
+ */
+function isJwksNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  if (
+    code === "ECONNREFUSED" ||
+    code === "ENOTFOUND" ||
+    code === "EHOSTUNREACH" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET"
+  ) {
+    return true;
+  }
+  // jwks-rsa wraps fetch failures with a message containing the URL or "key fetching"
+  return (
+    /jwks|key fetch|getSigningKey/i.test(err.message) && /network|fetch|connect/i.test(err.message)
+  );
 }

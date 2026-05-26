@@ -2,14 +2,15 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 
-export function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
+function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   const owners = cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(owners)) {
     return [];
   }
-  return owners.map((entry) => normalizeOptionalString(String(entry ?? "")) ?? "").filter(Boolean);
+  return normalizeStringEntries(owners.map((entry) => String(entry ?? "")));
 }
 
 export function hasConfiguredCommandOwners(cfg: OpenClawConfig): boolean {

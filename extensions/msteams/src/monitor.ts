@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  isDangerousNameMatchingEnabled,
   keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
@@ -73,12 +74,20 @@ export async function monitorMSTeamsProvider(
   let allowFrom = msteamsCfg.allowFrom;
   let groupAllowFrom = msteamsCfg.groupAllowFrom;
   let teamsConfig = msteamsCfg.teams;
+  const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
   const cleanAllowEntry = (entry: string) =>
     entry
       .replace(/^(msteams|teams):/i, "")
       .replace(/^user:/i, "")
       .trim();
+  const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
+  const cleanAllowEntries = (entries?: string[]) =>
+    entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
+  const mergeStableUserIds = (entries?: string[]) => {
+    const additions = cleanAllowEntries(entries).filter((entry) => isStableUserId(entry));
+    return additions.length > 0 ? mergeAllowlist({ existing: entries, additions }) : entries;
+  };
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -102,21 +111,26 @@ export async function monitorMSTeamsProvider(
   };
 
   try {
-    const allowEntries =
-      allowFrom?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ??
-      [];
-    if (allowEntries.length > 0) {
-      const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
-      allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+    allowFrom = mergeStableUserIds(allowFrom);
+    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+      groupAllowFrom = mergeStableUserIds(groupAllowFrom);
     }
 
-    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-      const groupEntries = groupAllowFrom
-        .map((entry) => cleanAllowEntry(entry))
-        .filter((entry) => entry && entry !== "*");
-      if (groupEntries.length > 0) {
-        const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
-        groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+    if (allowNameMatching) {
+      const allowEntries = cleanAllowEntries(allowFrom).filter((entry) => !isStableUserId(entry));
+      if (allowEntries.length > 0) {
+        const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+      }
+
+      if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
+        const groupEntries = cleanAllowEntries(groupAllowFrom).filter(
+          (entry) => !isStableUserId(entry),
+        );
+        if (groupEntries.length > 0) {
+          const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
+          groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
+        }
       }
     }
 
@@ -194,7 +208,11 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${formatUnknownError(err)}`);
+    // Log at error (not log) — allowlist resolution failures leave the bot in a
+    // degraded state where Graph-resolved IDs are missing (#77674).
+    runtime?.error(
+      `msteams resolve failed; falling back to raw config entries — allowlist members resolved via Graph may be missing. ${formatUnknownError(err)}`,
+    );
   }
 
   msteamsCfg = {
@@ -300,7 +318,23 @@ export async function monitorMSTeamsProvider(
         next();
       })
       .catch((err) => {
-        log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
+        // Network-level failures (DNS, firewall, TLS toward login.botframework.com)
+        // are rethrown by the validator so we can log them visibly. Without this,
+        // they look identical to a bad credential at default log levels (#77674).
+        const isNetworkFailure =
+          err instanceof Error &&
+          /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|ECONNRESET/i.test(
+            (err as NodeJS.ErrnoException).code ?? err.message,
+          );
+        if (isNetworkFailure) {
+          // Network failure fetching JWKS keys — log visibly so operators can
+          // identify egress blocks to login.botframework.com (#77674).
+          runtime?.error(
+            `msteams: JWKS key fetch failed — check egress to login.botframework.com:443 (firewall or DNS may be blocking it). Bot will 401 all inbound requests until this is resolved. Error: ${formatUnknownError(err)}`,
+          );
+        } else {
+          log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
+        }
         res.status(401).json({ error: "Unauthorized" });
       });
   });

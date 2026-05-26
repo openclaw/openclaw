@@ -68,6 +68,7 @@ const accountFixture: ResolvedMattermostAccount = {
   baseUrl: "https://chat.example.com",
   botTokenSource: "config",
   baseUrlSource: "config",
+  streamingMode: "partial",
   config: {},
 };
 
@@ -139,6 +140,11 @@ async function runSlashRequest(params: {
   const response = createResponse();
   await handler(req, response.res);
   return response;
+}
+
+function firstLogMessage(log: ReturnType<typeof vi.fn>): string {
+  const message = log.mock.calls[0]?.[0];
+  return typeof message === "string" ? message : "";
 }
 
 describe("slash-http", () => {
@@ -627,7 +633,7 @@ describe("slash-http", () => {
     ).resolves.toBe(false);
 
     expect(log).toHaveBeenCalledTimes(1);
-    const message = log.mock.calls[0]?.[0] ?? "";
+    const message = firstLogMessage(log);
     expect(message).not.toMatch(/[\r\n\t]/u);
     expect(message).toContain("deleted command cmd-1  spoofed");
     expect(message).toContain("using team list fallback");
@@ -752,7 +758,7 @@ describe("slash-http", () => {
     ).resolves.toBe(true);
 
     expect(log).toHaveBeenCalledTimes(1);
-    const message = log.mock.calls[0]?.[0] ?? "";
+    const message = firstLogMessage(log);
     expect(message).not.toMatch(/[\r\n\t]/u);
     expect(message).toContain("/oc_status  spoofed");
     expect(message).toContain("primary token=[redacted]");
@@ -791,7 +797,7 @@ describe("slash-http", () => {
     ).resolves.toBe(false);
 
     expect(log).toHaveBeenCalledTimes(1);
-    const message = log.mock.calls[0]?.[0] ?? "";
+    const message = firstLogMessage(log);
     expect(message).not.toMatch(/[\r\n\t]/u);
     expect(message).toContain("fallback  second-line");
     expect(message).toContain("botToken: [redacted]");

@@ -2,7 +2,7 @@ import {
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ChannelType, type Message } from "../internal/discord.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
@@ -146,16 +146,19 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
     normalizeOptionalString(params.threadBinding?.webhookId) ??
     normalizeOptionalString(params.threadBinding?.metadata?.webhookId) ??
     "";
-  if (!boundWebhookId) {
-    const threadId = normalizeOptionalString(params.threadId) ?? "";
-    if (!threadId) {
-      return false;
-    }
-    return isRecentlyUnboundThreadWebhookMessage({
-      accountId: params.accountId,
-      threadId,
-      webhookId,
-    });
+  if (boundWebhookId && webhookId === boundWebhookId) {
+    return true;
   }
-  return webhookId === boundWebhookId;
+  const threadId = normalizeOptionalString(params.threadId) ?? "";
+  if (!threadId) {
+    return false;
+  }
+  if (params.threadBinding) {
+    return true;
+  }
+  return isRecentlyUnboundThreadWebhookMessage({
+    accountId: params.accountId,
+    threadId,
+    webhookId,
+  });
 }

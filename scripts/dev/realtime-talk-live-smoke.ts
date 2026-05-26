@@ -1,12 +1,15 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
+import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
+import { previewForDevToolLog, redactJsonValueForDevToolLog } from "../lib/dev-tooling-safety.ts";
 
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-1.5";
+  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
@@ -27,16 +30,19 @@ function getEnv(name: string): string | undefined {
 }
 
 function shortError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
 }
 
 async function readBoundedText(response: Response): Promise<string> {
   const text = await response.text();
-  return text.length > 600 ? `${text.slice(0, 600)}...` : text;
+  return previewForDevToolLog(text, 600);
 }
 
 function printResult(result: SmokeResult): void {
-  console.log(`${result.name}: ${result.ok ? "ok" : "failed"}`, result.details ?? {});
+  console.log(
+    `${result.name}: ${result.ok ? "ok" : "failed"}`,
+    redactJsonValueForDevToolLog(result.details ?? {}),
+  );
 }
 
 function compareStrings(left: string | undefined, right: string | undefined): number {
@@ -79,6 +85,45 @@ async function createOpenAIClientSecret(apiKey: string): Promise<string> {
     throw new Error("OpenAI Realtime client secret response did not include a value");
   }
   return secret;
+}
+
+async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
+  const provider = buildOpenAIRealtimeVoiceProvider();
+  const events: string[] = [];
+  const bridge = provider.createBridge({
+    providerConfig: {
+      apiKey,
+      model: OPENAI_REALTIME_MODEL,
+      voice: OPENAI_REALTIME_VOICE,
+    },
+    instructions: "OpenClaw backend realtime live smoke. Do not speak yet.",
+    onAudio: () => {},
+    onClearAudio: () => {},
+    onEvent: (event) => {
+      events.push(`${event.direction}:${event.type}`);
+    },
+  });
+
+  try {
+    await bridge.connect();
+    return {
+      name: "openai-backend-bridge",
+      ok: bridge.isConnected(),
+      details: {
+        model: OPENAI_REALTIME_MODEL,
+        connected: bridge.isConnected(),
+        events: events.slice(0, 10),
+      },
+    };
+  } catch (error) {
+    return {
+      name: "openai-backend-bridge",
+      ok: false,
+      details: { model: OPENAI_REALTIME_MODEL, error: shortError(error) },
+    };
+  } finally {
+    bridge.close();
+  }
 }
 
 async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<SmokeResult> {
@@ -295,6 +340,9 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
     const repoRoot = process.cwd().replaceAll("\\", "/");
+    const relayModulePath = JSON.stringify(
+      `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
+    );
     await writeFile(
       path.join(dir, "index.html"),
       '<!doctype html><meta charset="utf-8"><script type="module" src="/main.ts"></script>',
@@ -302,7 +350,7 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
     await writeFile(
       path.join(dir, "main.ts"),
       `
-import { GatewayRelayRealtimeTalkTransport } from "/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts";
+const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
@@ -331,7 +379,7 @@ const client = {
   },
   async request(method, params) {
     requests.push({ method, params });
-    if (method === "chat.send") {
+    if (method === "talk.client.toolCall") {
       const runId = params.idempotencyKey || "run-smoke";
       window.setTimeout(() => {
         emit({ event: "chat", payload: { runId, state: "final", message: { text: "relay consult ok" } } });
@@ -365,26 +413,26 @@ try {
     },
   );
   await transport.start();
-  emit({ event: "talk.realtime.relay", payload: { relaySessionId: "relay-live-smoke", type: "ready" } });
+  emit({ event: "talk.event", payload: { relaySessionId: "relay-live-smoke", type: "ready" } });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: { relaySessionId: "relay-live-smoke", type: "transcript", role: "user", text: "relay user", final: true },
   });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: { relaySessionId: "relay-live-smoke", type: "transcript", role: "assistant", text: "relay assistant", final: false },
   });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: { relaySessionId: "relay-live-smoke", type: "audio", audioBase64: base64ZeroPcm(480) },
   });
   const processor = transport.inputProcessor;
   processor?.onaudioprocess?.({
     inputBuffer: { getChannelData: () => new Float32Array(160).fill(0.01) },
   });
-  emit({ event: "talk.realtime.relay", payload: { relaySessionId: "relay-live-smoke", type: "mark" } });
+  emit({ event: "talk.event", payload: { relaySessionId: "relay-live-smoke", type: "mark" } });
   emit({
-    event: "talk.realtime.relay",
+    event: "talk.event",
     payload: {
       relaySessionId: "relay-live-smoke",
       type: "toolCall",
@@ -396,11 +444,11 @@ try {
   await delay(400);
   transport.stop();
   await delay(100);
-  window.__relaySmokeResult = { requests, statuses, transcripts };
-  window.__relaySmokeDone = true;
+  window.relaySmokeResult = { requests, statuses, transcripts };
+  window.relaySmokeDone = true;
 } catch (error) {
-  window.__relaySmokeResult = { error: error instanceof Error ? error.message : String(error), requests, statuses, transcripts };
-  window.__relaySmokeDone = true;
+  window.relaySmokeResult = { error: error instanceof Error ? error.message : String(error), requests, statuses, transcripts };
+  window.relaySmokeDone = true;
 }
 `,
     );
@@ -419,10 +467,16 @@ try {
     await context.grantPermissions(["microphone"], { origin: url });
     const page = await context.newPage();
     await page.goto(url);
-    await page.waitForFunction(() => globalThis.__relaySmokeDone === true, undefined, {
-      timeout: 15_000,
-    });
-    const result = (await page.evaluate(() => globalThis.__relaySmokeResult)) as {
+    await page.waitForFunction(
+      () => (globalThis as Record<string, unknown>).relaySmokeDone === true,
+      undefined,
+      {
+        timeout: 15_000,
+      },
+    );
+    const result = (await page.evaluate(
+      () => (globalThis as Record<string, unknown>).relaySmokeResult,
+    )) as {
       error?: string;
       requests?: Array<{ method?: string }>;
       statuses?: Array<{ status?: string }>;
@@ -436,10 +490,10 @@ try {
     const statusNames = new Set((result.statuses ?? []).map((entry) => entry.status));
     const transcriptTexts = new Set((result.transcripts ?? []).map((entry) => entry.text));
     const expectedMethods = [
-      "talk.realtime.relayAudio",
-      "talk.realtime.relayMark",
-      "talk.realtime.relayToolResult",
-      "talk.realtime.relayStop",
+      "talk.client.toolCall",
+      "talk.session.appendAudio",
+      "talk.session.submitToolResult",
+      "talk.session.close",
     ];
     const ok =
       expectedMethods.every((method) => methods.has(method)) &&
@@ -484,11 +538,17 @@ async function main(): Promise<void> {
   try {
     if (!openAIKey) {
       results.push({
+        name: "openai-backend-bridge",
+        ok: false,
+        details: { error: "OPENAI_API_KEY missing" },
+      });
+      results.push({
         name: "openai-webrtc-browser",
         ok: false,
         details: { error: "OPENAI_API_KEY missing" },
       });
     } else {
+      results.push(await smokeOpenAIBackendBridge(openAIKey));
       results.push(await smokeOpenAIWebRtc(browser, openAIKey));
     }
     if (!googleKey) {
@@ -512,4 +572,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error) => {
+    console.error(shortError(error));
+    process.exitCode = 1;
+  });
+}

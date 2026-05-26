@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPluginStateStoreForTests } from "./plugin-state-store.js";
 
-function createPluginRecord(id: string, origin: PluginRecord["origin"] = "bundled"): PluginRecord {
+function createPluginRecord(
+  id: string,
+  origin: PluginRecord["origin"] = "bundled",
+  opts: { trustedOfficialInstall?: boolean } = {},
+): PluginRecord {
   return {
     id,
     name: id,
     source: `/plugins/${id}/index.ts`,
     origin,
+    trustedOfficialInstall: opts.trustedOfficialInstall,
     enabled: true,
     status: "loaded",
     toolNames: [],
@@ -18,10 +24,12 @@ function createPluginRecord(id: string, origin: PluginRecord["origin"] = "bundle
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],
@@ -30,7 +38,6 @@ function createPluginRecord(id: string, origin: PluginRecord["origin"] = "bundle
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -44,7 +51,14 @@ function createPluginRecord(id: string, origin: PluginRecord["origin"] = "bundle
 function createTestPluginRegistry() {
   return createPluginRegistry({
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    runtime: createPluginRuntime(),
+    runtime: {
+      state: {
+        resolveStateDir,
+        openKeyedStore: () => {
+          throw new Error("registry plugin runtime proxy should bind openKeyedStore");
+        },
+      },
+    } as unknown as PluginRuntime,
   });
 }
 
@@ -65,7 +79,8 @@ describe("plugin runtime state proxy", () => {
         namespace: "runtime",
         maxEntries: 10,
       });
-      await store.register("k", { plugin: "discord" });
+      await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
+      await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
 
       const telegram = createPluginRecord("telegram", "bundled");
       registry.registry.plugins.push(telegram);
@@ -79,6 +94,22 @@ describe("plugin runtime state proxy", () => {
     });
   });
 
+  it("allows trusted official global plugins to use keyed state", async () => {
+    await withOpenClawTestState({ label: "plugin-state-trusted-global" }, async () => {
+      const registry = createTestPluginRegistry();
+      const record = createPluginRecord("slack", "global", { trustedOfficialInstall: true });
+      registry.registry.plugins.push(record);
+      const api = registry.createApi(record, { config: {} });
+
+      const store = api.runtime.state.openKeyedStore<{ plugin: string }>({
+        namespace: "runtime",
+        maxEntries: 10,
+      });
+      await expect(store.register("thread", { plugin: "slack" })).resolves.toBeUndefined();
+      await expect(store.lookup("thread")).resolves.toEqual({ plugin: "slack" });
+    });
+  });
+
   it("rejects external plugins in this release", () => {
     const registry = createTestPluginRegistry();
     const record = createPluginRecord("external-plugin", "workspace");
@@ -87,6 +118,17 @@ describe("plugin runtime state proxy", () => {
 
     expect(() =>
       api.runtime.state.openKeyedStore({ namespace: "runtime", maxEntries: 10 }),
-    ).toThrow("openKeyedStore is only available for bundled plugins");
+    ).toThrow("openKeyedStore is only available for trusted plugins");
+  });
+
+  it("rejects untrusted global plugins", () => {
+    const registry = createTestPluginRegistry();
+    const record = createPluginRecord("external-plugin", "global");
+    registry.registry.plugins.push(record);
+    const api = registry.createApi(record, { config: {} });
+
+    expect(() =>
+      api.runtime.state.openKeyedStore({ namespace: "runtime", maxEntries: 10 }),
+    ).toThrow("openKeyedStore is only available for trusted plugins");
   });
 });

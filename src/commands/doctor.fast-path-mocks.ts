@@ -9,6 +9,11 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-browser.js", () => ({
+  detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
+  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -36,11 +41,13 @@ vi.mock("./doctor-memory-search.js", () => ({
 vi.mock("./doctor-platform-notes.js", () => ({
   noteStartupOptimizationHints: vi.fn(),
   noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
+  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn().mockResolvedValue(undefined),
   noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-sandbox.js", () => ({
   maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),
 }));
 

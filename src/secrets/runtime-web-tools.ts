@@ -15,6 +15,7 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -380,7 +381,7 @@ async function resolveBundledWebSearchProviders(params: {
     params.configuredBundledPluginId !== undefined
       ? [params.configuredBundledPluginId]
       : params.onlyPluginIds && params.onlyPluginIds.length > 0
-        ? [...new Set(params.onlyPluginIds)].toSorted((left, right) => left.localeCompare(right))
+        ? sortUniqueStrings(params.onlyPluginIds)
         : undefined;
   if (onlyPluginIds && onlyPluginIds.length > 0) {
     const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds });
@@ -479,7 +480,18 @@ function readConfiguredProviderCredential(params: {
   config: OpenClawConfig;
   search: Record<string, unknown> | undefined;
 }): unknown {
-  return params.provider.getConfiguredCredentialValue?.(params.config);
+  return (
+    params.provider.getConfiguredCredentialValue?.(params.config) ??
+    params.provider.getCredentialValue(params.search)
+  );
+}
+
+function readConfiguredProviderCredentialFallback(params: {
+  provider: PluginWebSearchProviderEntry;
+  config: OpenClawConfig;
+  search: Record<string, unknown> | undefined;
+}): { path: string; value: unknown } | undefined {
+  return params.provider.getConfiguredCredentialFallback?.(params.config);
 }
 
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
@@ -513,6 +525,14 @@ function readConfiguredFetchProviderCredential(params: {
 }): unknown {
   const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
   return configuredValue ?? params.provider.getCredentialValue(params.fetch);
+}
+
+function readConfiguredFetchProviderCredentialFallback(params: {
+  provider: PluginWebFetchProviderEntry;
+  config: OpenClawConfig;
+  fetch: Record<string, unknown> | undefined;
+}): { path: string; value: unknown } | undefined {
+  return params.provider.getConfiguredCredentialFallback?.(params.config);
 }
 
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
@@ -657,6 +677,12 @@ export async function resolveRuntimeWebTools(params: {
           config,
           search: toolConfig,
         }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredProviderCredentialFallback({
+          provider,
+          config,
+          search: toolConfig,
+        }),
       ignoreKeylessProvidersForConfiguredSurface: true,
       emptyProvidersWhenSurfaceMissing: true,
       normalizeConfiguredProviderAgainstActiveProviders: true,
@@ -680,6 +706,12 @@ export async function resolveRuntimeWebTools(params: {
       autoDetectSelectedCode: "WEB_SEARCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredProviderCredential({
+          provider,
+          config,
+          search: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredProviderCredentialFallback({
           provider,
           config,
           search: toolConfig,
@@ -760,6 +792,12 @@ export async function resolveRuntimeWebTools(params: {
           config,
           fetch: toolConfig,
         }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredentialFallback({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
     });
 
     await resolveRuntimeWebProviderSelection({
@@ -780,6 +818,12 @@ export async function resolveRuntimeWebTools(params: {
       autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredFetchProviderCredential({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredentialFallback({
           provider,
           config,
           fetch: toolConfig,

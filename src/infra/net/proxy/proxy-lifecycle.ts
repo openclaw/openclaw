@@ -7,21 +7,33 @@
  * restores the previous process state on shutdown.
  */
 
-import http from "node:http";
-import https from "node:https";
-import { bootstrap as bootstrapGlobalAgent } from "global-agent";
+import {
+  installGlobalProxy,
+  type ProxylineHandle,
+  type ProxylineUndiciOptions,
+} from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
+
+export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
+import {
+  getActiveManagedProxyLoopbackMode,
+  getActiveManagedProxyUrl,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+  type ActiveManagedProxyRegistration,
+} from "./active-proxy-state.js";
+import {
+  loadManagedProxyTlsOptions,
+  loadManagedProxyTlsOptionsSync,
+  resolveManagedProxyCaFileForUrl,
+} from "./proxy-tls.js";
 
 export type ProxyHandle = {
   /** The operator-managed proxy URL injected into process.env. */
   proxyUrl: string;
-  /** Alias kept for CLI cleanup tests and logs. */
-  injectedProxyUrl: string;
-  /** Original proxy-related environment values, restored on stop/crash. */
-  envSnapshot: ProxyEnvSnapshot;
   /** Restore process-wide proxy state. */
   stop: () => Promise<void>;
   /** Synchronously restore process-wide proxy state during hard process exit. */
@@ -29,55 +41,26 @@ export type ProxyHandle = {
 };
 
 const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] as const;
-const GLOBAL_AGENT_PROXY_KEYS = ["GLOBAL_AGENT_HTTP_PROXY", "GLOBAL_AGENT_HTTPS_PROXY"] as const;
-const GLOBAL_AGENT_FORCE_KEYS = ["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] as const;
-const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY", "GLOBAL_AGENT_NO_PROXY"] as const;
-const PROXY_ACTIVE_KEYS = ["OPENCLAW_PROXY_ACTIVE"] as const;
-const ALL_PROXY_ENV_KEYS = [
-  ...PROXY_ENV_KEYS,
-  ...GLOBAL_AGENT_PROXY_KEYS,
-  ...GLOBAL_AGENT_FORCE_KEYS,
-  ...NO_PROXY_ENV_KEYS,
-  ...PROXY_ACTIVE_KEYS,
+const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY"] as const;
+const PROXY_ACTIVE_KEYS = [
+  "OPENCLAW_PROXY_ACTIVE",
+  "OPENCLAW_PROXY_LOOPBACK_MODE",
+  "OPENCLAW_PROXY_CA_FILE",
 ] as const;
-const GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS = [
-  ...ALL_PROXY_ENV_KEYS,
-  "all_proxy",
-  "ALL_PROXY",
-] as const;
+const ALL_PROXY_ENV_KEYS = [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS, ...PROXY_ACTIVE_KEYS] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
-type GatewayControlPlaneProxyBypassEnvKey =
-  (typeof GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS)[number];
-type GatewayControlPlaneProxyBypassEnvSnapshot = Record<
-  GatewayControlPlaneProxyBypassEnvKey,
-  string | undefined
->;
-type NodeHttpStackSnapshot = {
-  httpRequest: typeof http.request;
-  httpGet: typeof http.get;
-  httpGlobalAgent: typeof http.globalAgent;
-  httpsRequest: typeof https.request;
-  httpsGet: typeof https.get;
-  httpsGlobalAgent: typeof https.globalAgent;
-  hadGlobalAgent: boolean;
-  globalAgent: unknown;
-};
-type ActiveProxyRegistration = {
-  proxyUrl: string;
-  stopped: boolean;
-};
 
-let globalAgentBootstrapped = false;
-let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
-let activeProxyRegistrations: ActiveProxyRegistration[] = [];
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
+let proxylineHandle: ProxylineHandle | null = null;
+const MANAGED_PROXY_UNDICI_OPTIONS = Object.freeze({
+  allowH2: false,
+}) satisfies ProxylineUndiciOptions;
 
-export function _resetGlobalAgentBootstrapForTests(): void {
-  globalAgentBootstrapped = false;
-  nodeHttpStackSnapshot = null;
-  activeProxyRegistrations = [];
+export function resetProxyLifecycleForTests(): void {
   baseProxyEnvSnapshot = null;
+  proxylineHandle?.stop();
+  proxylineHandle = null;
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -86,31 +69,39 @@ function captureProxyEnv(): ProxyEnvSnapshot {
     https_proxy: process.env["https_proxy"],
     HTTP_PROXY: process.env["HTTP_PROXY"],
     HTTPS_PROXY: process.env["HTTPS_PROXY"],
-    GLOBAL_AGENT_HTTP_PROXY: process.env["GLOBAL_AGENT_HTTP_PROXY"],
-    GLOBAL_AGENT_HTTPS_PROXY: process.env["GLOBAL_AGENT_HTTPS_PROXY"],
-    GLOBAL_AGENT_FORCE_GLOBAL_AGENT: process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"],
     no_proxy: process.env["no_proxy"],
     NO_PROXY: process.env["NO_PROXY"],
-    GLOBAL_AGENT_NO_PROXY: process.env["GLOBAL_AGENT_NO_PROXY"],
     OPENCLAW_PROXY_ACTIVE: process.env["OPENCLAW_PROXY_ACTIVE"],
+    OPENCLAW_PROXY_LOOPBACK_MODE: process.env["OPENCLAW_PROXY_LOOPBACK_MODE"],
+    OPENCLAW_PROXY_CA_FILE: process.env["OPENCLAW_PROXY_CA_FILE"],
   };
 }
 
-function injectProxyEnv(proxyUrl: string): ProxyEnvSnapshot {
+function injectProxyEnv(
+  proxyUrl: string,
+  loopbackMode: ProxyLoopbackMode,
+  proxyCaFile: string | undefined,
+): ProxyEnvSnapshot {
   const snapshot = captureProxyEnv();
-  applyProxyEnv(proxyUrl);
+  applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
   return snapshot;
 }
 
-function applyProxyEnv(proxyUrl: string): void {
+function applyProxyEnv(
+  proxyUrl: string,
+  loopbackMode: ProxyLoopbackMode,
+  proxyCaFile: string | undefined,
+): void {
   for (const key of PROXY_ENV_KEYS) {
     process.env[key] = proxyUrl;
   }
-  for (const key of GLOBAL_AGENT_PROXY_KEYS) {
-    process.env[key] = proxyUrl;
-  }
-  process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"] = "true";
   process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+  process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = loopbackMode;
+  if (proxyCaFile) {
+    process.env["OPENCLAW_PROXY_CA_FILE"] = proxyCaFile;
+  } else {
+    delete process.env["OPENCLAW_PROXY_CA_FILE"];
+  }
   for (const key of NO_PROXY_ENV_KEYS) {
     process.env[key] = "";
   }
@@ -127,178 +118,29 @@ function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
   }
 }
 
-function captureGatewayControlPlaneProxyBypassEnv(): GatewayControlPlaneProxyBypassEnvSnapshot {
-  const snapshot = {} as GatewayControlPlaneProxyBypassEnvSnapshot;
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    snapshot[key] = process.env[key];
-  }
-  return snapshot;
-}
-
-function restoreGatewayControlPlaneProxyBypassEnv(
-  snapshot: GatewayControlPlaneProxyBypassEnvSnapshot,
-): void {
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
-function withoutGatewayControlPlaneProxyEnv<T>(run: () => T): T {
-  const snapshot = captureGatewayControlPlaneProxyBypassEnv();
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    delete process.env[key];
-  }
-  try {
-    return run();
-  } finally {
-    restoreGatewayControlPlaneProxyBypassEnv(snapshot);
-  }
-}
-
-function restoreGlobalAgentRuntime(snapshot: ProxyEnvSnapshot): void {
-  if (
-    typeof global === "undefined" ||
-    (global as Record<string, unknown>)["GLOBAL_AGENT"] == null
-  ) {
-    return;
-  }
-  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
-  agent["HTTP_PROXY"] = snapshot["GLOBAL_AGENT_HTTP_PROXY"] ?? "";
-  agent["HTTPS_PROXY"] = snapshot["GLOBAL_AGENT_HTTPS_PROXY"] ?? "";
-  agent["NO_PROXY"] = snapshot["GLOBAL_AGENT_NO_PROXY"] ?? null;
-}
-
-function captureNodeHttpStack(): NodeHttpStackSnapshot {
-  const globalRecord = global as Record<string, unknown>;
-  return {
-    httpRequest: http.request,
-    httpGet: http.get,
-    httpGlobalAgent: http.globalAgent,
-    httpsRequest: https.request,
-    httpsGet: https.get,
-    httpsGlobalAgent: https.globalAgent,
-    hadGlobalAgent: Object.hasOwn(globalRecord, "GLOBAL_AGENT"),
-    globalAgent: globalRecord["GLOBAL_AGENT"],
-  };
-}
-
-function restoreNodeHttpStack(): void {
-  const snapshot = nodeHttpStackSnapshot;
-  if (!snapshot) {
-    return;
-  }
-  http.request = snapshot.httpRequest;
-  http.get = snapshot.httpGet;
-  http.globalAgent = snapshot.httpGlobalAgent;
-  https.request = snapshot.httpsRequest;
-  https.get = snapshot.httpsGet;
-  https.globalAgent = snapshot.httpsGlobalAgent;
-  const globalRecord = global as Record<string, unknown>;
-  if (snapshot.hadGlobalAgent) {
-    globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
-  } else {
-    delete globalRecord["GLOBAL_AGENT"];
-  }
-  nodeHttpStackSnapshot = null;
-  globalAgentBootstrapped = false;
-}
-
-function bootstrapNodeHttpStack(proxyUrl: string): void {
-  if (!globalAgentBootstrapped) {
-    nodeHttpStackSnapshot = captureNodeHttpStack();
-    bootstrapGlobalAgent();
-    globalAgentBootstrapped = true;
-  }
-
-  if (
-    typeof global !== "undefined" &&
-    (global as Record<string, unknown>)["GLOBAL_AGENT"] != null
-  ) {
-    const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"] as Record<string, unknown>;
-    agent["HTTP_PROXY"] = proxyUrl;
-    agent["HTTPS_PROXY"] = proxyUrl;
-    agent["NO_PROXY"] = process.env["GLOBAL_AGENT_NO_PROXY"];
-  }
-}
-
-function findTopActiveProxyRegistration(): ActiveProxyRegistration | null {
-  for (let index = activeProxyRegistrations.length - 1; index >= 0; index -= 1) {
-    const registration = activeProxyRegistrations[index];
-    if (!registration.stopped) {
-      return registration;
-    }
-  }
-  return null;
-}
-
-function resetUndiciDispatcherForProxyLifecycle(): void {
-  try {
-    forceResetGlobalDispatcher();
-  } catch (err) {
-    logWarn(`proxy: failed to reset undici dispatcher: ${String(err)}`);
-  }
-}
-
-function restoreGlobalAgentRuntimeForProxyLifecycle(snapshot: ProxyEnvSnapshot): void {
-  try {
-    restoreGlobalAgentRuntime(snapshot);
-  } catch (err) {
-    logWarn(`proxy: failed to reset global-agent: ${String(err)}`);
-  }
-}
-
-function restoreNodeHttpStackForProxyLifecycle(): void {
-  try {
-    restoreNodeHttpStack();
-  } catch (err) {
-    logWarn(`proxy: failed to restore node HTTP stack: ${String(err)}`);
-  }
-}
-
-function reapplyActiveProxyRuntime(proxyUrl: string): void {
-  applyProxyEnv(proxyUrl);
-  resetUndiciDispatcherForProxyLifecycle();
-  try {
-    bootstrapNodeHttpStack(proxyUrl);
-  } catch (err) {
-    logWarn(`proxy: failed to refresh node HTTP proxy hooks: ${String(err)}`);
-  }
-}
-
 function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
+  try {
+    proxylineHandle?.stop();
+  } catch (err) {
+    logWarn(`proxy: failed to stop Proxyline: ${String(err)}`);
+  }
+  proxylineHandle = null;
   restoreProxyEnv(snapshot);
-  resetUndiciDispatcherForProxyLifecycle();
-  restoreGlobalAgentRuntimeForProxyLifecycle(snapshot);
-  restoreNodeHttpStackForProxyLifecycle();
+  forceResetGlobalDispatcher();
+  ensureInheritedManagedProxyRoutingActive();
 }
 
-function restoreAfterFailedProxyActivation(
-  previousActiveRegistration: ActiveProxyRegistration | null,
-  restoreSnapshot: ProxyEnvSnapshot,
-): void {
-  if (previousActiveRegistration) {
-    reapplyActiveProxyRuntime(previousActiveRegistration.proxyUrl);
-    return;
-  }
+function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): void {
   restoreInactiveProxyRuntime(restoreSnapshot);
   baseProxyEnvSnapshot = null;
 }
 
-function stopActiveProxyRegistration(registration: ActiveProxyRegistration): void {
+function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistration): void {
   if (registration.stopped) {
     return;
   }
-  registration.stopped = true;
-  activeProxyRegistrations = activeProxyRegistrations.filter((entry) => !entry.stopped);
-
-  const nextActiveRegistration = findTopActiveProxyRegistration();
-  if (nextActiveRegistration) {
-    reapplyActiveProxyRuntime(nextActiveRegistration.proxyUrl);
+  stopActiveManagedProxyRegistration(registration);
+  if (getActiveManagedProxyUrl()) {
     return;
   }
 
@@ -310,7 +152,7 @@ function stopActiveProxyRegistration(registration: ActiveProxyRegistration): voi
 function isSupportedProxyUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "http:";
+    return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
   }
@@ -321,13 +163,13 @@ function resolveProxyUrl(config: ProxyConfig | undefined): string {
   if (!candidate) {
     throw new Error(
       "proxy: enabled but no HTTP proxy URL is configured; set proxy.proxyUrl " +
-        "or OPENCLAW_PROXY_URL to an http:// forward proxy.",
+        "or OPENCLAW_PROXY_URL to an http:// or https:// forward proxy.",
     );
   }
   if (!isSupportedProxyUrl(candidate)) {
     throw new Error(
       "proxy: enabled but proxy URL is invalid; set proxy.proxyUrl " +
-        "or OPENCLAW_PROXY_URL to an http:// forward proxy.",
+        "or OPENCLAW_PROXY_URL to an http:// or https:// forward proxy.",
     );
   }
   return candidate;
@@ -342,29 +184,78 @@ function redactProxyUrlForLog(value: string): string {
   }
 }
 
+export function ensureInheritedManagedProxyRoutingActive(): void {
+  if (process.env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
+    return;
+  }
+  const proxyUrl = process.env["HTTP_PROXY"];
+  if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
+    return;
+  }
+  const proxyCaFile = resolveManagedProxyCaFileForUrl({
+    proxyUrl,
+    caFileOverride: process.env["OPENCLAW_PROXY_CA_FILE"],
+  });
+  const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
+  proxylineHandle = installGlobalProxy({
+    mode: "managed",
+    proxyUrl,
+    ...(proxyTls ? { proxyTls } : {}),
+    ifActive: "reuse-compatible",
+    undici: MANAGED_PROXY_UNDICI_OPTIONS,
+  });
+  forceResetGlobalDispatcher({ preserveProxylineManaged: true });
+}
+
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
   if (config?.enabled !== true) {
     return null;
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  const previousActiveRegistration = findTopActiveProxyRegistration();
+  const loopbackMode = config.loopbackMode ?? "gateway-only";
+  const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
+  const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
+  const activeProxyUrl = getActiveManagedProxyUrl();
+  if (activeProxyUrl) {
+    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
+      loopbackMode,
+      proxyTls,
+    });
+    const handle: ProxyHandle = {
+      proxyUrl,
+      stop: async () => {
+        stopActiveProxyRegistration(registration);
+      },
+      kill: () => {
+        stopActiveProxyRegistration(registration);
+      },
+    };
+    return handle;
+  }
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
-  let injectedEnvSnapshot = captureProxyEnv();
-  let registration: ActiveProxyRegistration | null = null;
+  let registration: ActiveManagedProxyRegistration | null = null;
 
   try {
-    injectedEnvSnapshot = injectProxyEnv(proxyUrl);
-    forceResetGlobalDispatcher();
-    bootstrapNodeHttpStack(proxyUrl);
-    registration = {
+    injectProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
+    proxylineHandle = installGlobalProxy({
+      mode: "managed",
       proxyUrl,
-      stopped: false,
-    };
-    activeProxyRegistrations.push(registration);
+      ...(proxyTls ? { proxyTls } : {}),
+      ifActive: "replace",
+      undici: MANAGED_PROXY_UNDICI_OPTIONS,
+    });
+    forceResetGlobalDispatcher({ preserveProxylineManaged: true });
+    registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
+      loopbackMode,
+      proxyTls,
+    });
   } catch (err) {
-    restoreAfterFailedProxyActivation(previousActiveRegistration, lifecycleBaseEnvSnapshot);
+    if (registration) {
+      stopActiveManagedProxyRegistration(registration);
+    }
+    restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
       cause: err,
     });
@@ -376,8 +267,6 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
 
   const handle: ProxyHandle = {
     proxyUrl,
-    injectedProxyUrl: proxyUrl,
-    envSnapshot: injectedEnvSnapshot,
     stop: async () => {
       if (registration) {
         stopActiveProxyRegistration(registration);
@@ -400,22 +289,46 @@ export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
   await handle.stop();
 }
 
-function isGatewayLoopbackControlPlaneUrl(value: string): boolean {
-  let url: URL;
+function parseGatewayControlPlaneUrl(value: string): URL | null {
   try {
-    url = new URL(value);
+    return new URL(value);
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isGatewayControlPlaneProtocol(protocol: string): boolean {
+  return protocol === "ws:" || protocol === "wss:" || protocol === "http:" || protocol === "https:";
+}
+
+function getGatewayControlPlaneBypassAuthority(value: string): string | null {
+  const url = parseGatewayControlPlaneUrl(value);
   if (
-    url.protocol !== "ws:" &&
-    url.protocol !== "wss:" &&
-    url.protocol !== "http:" &&
-    url.protocol !== "https:"
+    url === null ||
+    !isGatewayControlPlaneProtocol(url.protocol) ||
+    !isGatewayControlPlaneLoopbackHost(url.hostname)
   ) {
-    return false;
+    return null;
   }
-  return isGatewayControlPlaneLoopbackHost(url.hostname);
+  return url.port ? `${url.hostname}:${url.port}` : url.hostname;
+}
+
+export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
+  const authority = getGatewayControlPlaneBypassAuthority(url);
+  if (!authority) {
+    return undefined;
+  }
+  const loopbackMode = getActiveManagedProxyLoopbackMode();
+  if (loopbackMode === "block") {
+    throw new Error(
+      "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
+    );
+  }
+  if (loopbackMode === "proxy") {
+    return undefined;
+  }
+
+  return proxylineHandle?.registerBypass({ url });
 }
 
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
@@ -423,50 +336,43 @@ function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
   return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);
 }
 
-export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
-  url: string,
-  run: () => T,
-): T {
-  if (!isGatewayLoopbackControlPlaneUrl(url)) {
-    throw new Error("proxy: dangerous Gateway control-plane bypass is loopback-only");
+/**
+ * Carve out the operator-managed external proxy for the Browser plugin's
+ * loopback CDP probe to a Chromium instance OpenClaw spawned itself.
+ *
+ * The managed proxy installs a process-wide undici dispatcher that would
+ * otherwise route `http://127.0.0.1:<cdpPort>/json/version` and the
+ * `ws://127.0.0.1:<cdpPort>/devtools/...` upgrade through the external
+ * forward proxy, which returns 502 because nothing on the proxy listens for
+ * the loopback CDP port. The bypass restores direct loopback delivery for
+ * the duration the caller holds the returned `unregister` callback.
+ *
+ * Loopback-gated by structure: non-loopback authorities (e.g. an `attachOnly`
+ * profile pointing at a remote CDP service like Browserless/Browserbase) are
+ * not bypassed and continue to traverse the external proxy as configured.
+ *
+ * Honors `proxy.loopbackMode`:
+ * - `gateway-only` (default): register the bypass.
+ * - `proxy`: do not bypass — operator opted into proxy-everything routing.
+ * - `block`: throw — operator forbids loopback IPC under managed proxy.
+ *
+ * Note: A loopback `attachOnly` profile whose `cdpUrl` is e.g.
+ * `http://127.0.0.1:<port>` would also satisfy this gate. This mirrors the
+ * structural semantics of `registerManagedProxyGatewayLoopbackBypass` —
+ * loopback IPC on this host is assumed to be operator-trusted.
+ */
+export function registerManagedProxyBrowserCdpBypass(url: string): (() => void) | undefined {
+  const authority = getGatewayControlPlaneBypassAuthority(url);
+  if (!authority) {
+    return undefined;
+  }
+  const loopbackMode = getActiveManagedProxyLoopbackMode();
+  if (loopbackMode === "block") {
+    throw new Error("proxy: Browser loopback CDP connections are blocked by proxy.loopbackMode");
+  }
+  if (loopbackMode === "proxy") {
+    return undefined;
   }
 
-  const snapshot = nodeHttpStackSnapshot;
-  if (!snapshot) {
-    return withoutGatewayControlPlaneProxyEnv(run);
-  }
-
-  // Security-sensitive: this temporarily removes managed proxy hooks for the
-  // synchronous Gateway loopback WebSocket constructor only. Do not reuse this
-  // helper for provider, plugin, user WebUI, model server, or arbitrary egress.
-  return withoutGatewayControlPlaneProxyEnv(() => {
-    const activeStack = captureNodeHttpStack();
-    const globalRecord = global as Record<string, unknown>;
-    try {
-      http.request = snapshot.httpRequest;
-      http.get = snapshot.httpGet;
-      http.globalAgent = snapshot.httpGlobalAgent;
-      https.request = snapshot.httpsRequest;
-      https.get = snapshot.httpsGet;
-      https.globalAgent = snapshot.httpsGlobalAgent;
-      if (snapshot.hadGlobalAgent) {
-        globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
-      } else {
-        delete globalRecord["GLOBAL_AGENT"];
-      }
-      return run();
-    } finally {
-      http.request = activeStack.httpRequest;
-      http.get = activeStack.httpGet;
-      http.globalAgent = activeStack.httpGlobalAgent;
-      https.request = activeStack.httpsRequest;
-      https.get = activeStack.httpsGet;
-      https.globalAgent = activeStack.httpsGlobalAgent;
-      if (activeStack.hadGlobalAgent) {
-        globalRecord["GLOBAL_AGENT"] = activeStack.globalAgent;
-      } else {
-        delete globalRecord["GLOBAL_AGENT"];
-      }
-    }
-  });
+  return proxylineHandle?.registerBypass({ url });
 }

@@ -23,7 +23,7 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
       ]);
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toStrictEqual([]);
 
       await fs.rm(currentFile);
       await fs.writeFile(
@@ -109,7 +109,7 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([]);
     });
   });
 
@@ -185,6 +185,105 @@ describe("package dist inventory", () => {
         ]);
       },
     );
+  });
+
+  it("keeps publishable externalized bundled plugin dist trees out of the inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-externalized-" }, async (packageRoot) => {
+      const externalizedRuntime = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "external-chat",
+        "index.js",
+      );
+      const bundledRuntime = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "bundled-chat",
+        "index.js",
+      );
+      const externalizedPackageJson = path.join(
+        packageRoot,
+        "extensions",
+        "external-chat",
+        "package.json",
+      );
+      const bundledPackageJson = path.join(
+        packageRoot,
+        "extensions",
+        "bundled-chat",
+        "package.json",
+      );
+      const rootPackageJson = path.join(packageRoot, "package.json");
+
+      await fs.mkdir(path.dirname(externalizedRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(bundledRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(externalizedPackageJson), { recursive: true });
+      await fs.mkdir(path.dirname(bundledPackageJson), { recursive: true });
+      await fs.writeFile(externalizedRuntime, "export {};\n", "utf8");
+      await fs.writeFile(bundledRuntime, "export {};\n", "utf8");
+      await fs.writeFile(
+        rootPackageJson,
+        JSON.stringify({
+          files: ["dist/", "!dist/extensions/external-chat/**"],
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        externalizedPackageJson,
+        JSON.stringify({
+          name: "@openclaw/external-chat",
+          openclaw: {
+            release: {
+              publishToClawHub: true,
+              publishToNpm: true,
+            },
+          },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        bundledPackageJson,
+        JSON.stringify({
+          name: "@openclaw/bundled-chat",
+          openclaw: {},
+        }),
+        "utf8",
+      );
+
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/extensions/bundled-chat/index.js",
+      ]);
+    });
+  });
+
+  it("keeps publishable core-package runtime plugin dist trees in the inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-core-runtime-" }, async (packageRoot) => {
+      const coreRuntime = path.join(packageRoot, "dist", "extensions", "core-chat", "index.js");
+      const corePackageJson = path.join(packageRoot, "extensions", "core-chat", "package.json");
+
+      await fs.mkdir(path.dirname(coreRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(corePackageJson), { recursive: true });
+      await fs.writeFile(coreRuntime, "export {};\n", "utf8");
+      await fs.writeFile(
+        corePackageJson,
+        JSON.stringify({
+          name: "@openclaw/core-chat",
+          openclaw: {
+            release: {
+              publishToClawHub: true,
+              publishToNpm: true,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/extensions/core-chat/index.js",
+      ]);
+    });
   });
 
   it("reports runtime-created install staging dirs during installed dist verification", async () => {

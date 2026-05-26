@@ -1,6 +1,5 @@
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
-import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -9,7 +8,8 @@ import {
 } from "../shared/string-coerce.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
   type ApnsRelayPushResponse,
@@ -355,7 +355,7 @@ function normalizeStoredRegistration(record: unknown): ApnsRegistration | null {
 
 async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
   const filePath = resolveApnsRegistrationPath(baseDir);
-  const existing = await readJsonFile<ApnsRegistrationState>(filePath);
+  const existing = await tryReadJson<ApnsRegistrationState>(filePath);
   if (!existing || typeof existing !== "object") {
     return { registrationsByNodeId: {} };
   }
@@ -382,9 +382,9 @@ async function persistRegistrationsState(
   baseDir?: string,
 ): Promise<void> {
   const filePath = resolveApnsRegistrationPath(baseDir);
-  await writeJsonAtomic(filePath, state, {
+  await writeJson(filePath, state, {
     mode: 0o600,
-    ensureDirMode: 0o700,
+    dirMode: 0o700,
     trailingNewline: true,
   });
 }
@@ -658,8 +658,12 @@ async function sendApnsRequest(params: {
   const body = JSON.stringify(params.payload);
   const requestPath = `/3/device/${params.token}`;
 
+  const client = await connectApnsHttp2Session({
+    authority,
+    timeoutMs: params.timeoutMs,
+  });
+
   return await new Promise((resolve, reject) => {
-    const client = http2.connect(authority);
     let settled = false;
     const fail = (err: unknown) => {
       if (settled) {
@@ -698,7 +702,7 @@ async function sendApnsRequest(params: {
 
     req.setEncoding("utf8");
     req.setTimeout(params.timeoutMs, () => {
-      req.close(http2.constants.NGHTTP2_CANCEL);
+      req.close(APNS_HTTP2_CANCEL_CODE);
       fail(new Error(`APNs request timed out after ${params.timeoutMs}ms`));
     });
     req.on("response", (headers) => {

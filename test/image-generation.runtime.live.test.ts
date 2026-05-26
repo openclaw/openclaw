@@ -3,7 +3,7 @@ import {
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
@@ -31,6 +31,11 @@ const describeLive = LIVE ? describe : describe.skip;
 const providerFilter = parseCsvFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS);
 const caseFilter = parseCaseFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CASES);
 const envModelMap = parseProviderModelMap(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_MODELS);
+const DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS = 120_000;
+const LIVE_IMAGE_GENERATION_TIMEOUT_MS = resolvePositiveIntegerEnv(
+  process.env.OPENCLAW_LIVE_IMAGE_GENERATION_TIMEOUT_MS,
+  DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS,
+);
 
 type LiveProviderCase = {
   pluginId: string;
@@ -47,6 +52,14 @@ type LiveImageCase = {
   resolution?: "1K" | "2K" | "4K";
   inputImages?: Array<{ buffer: Buffer; mimeType: string; fileName?: string }>;
 };
+
+function resolvePositiveIntegerEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
 
 function loadBundledProviderPlugin(
   pluginId: string,
@@ -186,7 +199,7 @@ describeLive("image generation live (provider sweep)", () => {
     async () => {
       const cfg = withPluginsEnabled(loadConfig());
       const configuredModels = resolveConfiguredLiveImageModels(cfg);
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const attempted: string[] = [];
       const skipped: string[] = [];
       const failures: string[] = [];
@@ -255,7 +268,7 @@ describeLive("image generation live (provider sweep)", () => {
               size: testCase.size,
               resolution: testCase.resolution,
               inputImages: testCase.inputImages,
-              timeoutMs: 60_000,
+              timeoutMs: LIVE_IMAGE_GENERATION_TIMEOUT_MS,
             });
 
             expect(result.images.length).toBeGreaterThan(0);
@@ -287,12 +300,12 @@ describeLive("image generation live (provider sweep)", () => {
       );
 
       if (attempted.length === 0) {
-        expect(failures).toEqual([]);
+        expect(failures).toStrictEqual([]);
         console.warn("[live:image-generation] no provider had usable auth; skipping assertions");
         return;
       }
-      expect(failures).toEqual([]);
+      expect(failures).toStrictEqual([]);
     },
-    10 * 60_000,
+    15 * 60_000,
   );
 });

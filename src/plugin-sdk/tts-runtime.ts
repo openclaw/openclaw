@@ -3,16 +3,7 @@ import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsRuntimeFacade,
-  TtsSynthesisResult,
-  TtsTelephonyResult,
-} from "./tts-runtime.types.js";
+import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -31,9 +22,15 @@ function loadFacadeModule(): FacadeModule {
   });
 }
 
-export const _test: FacadeModule["_test"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()._test,
+export function prewarmTtsRuntimeFacade(): void {
+  loadFacadeModule();
+}
+
+export const testApi: FacadeModule["testApi"] = createLazyFacadeObjectValue(
+  () => loadFacadeModule().testApi,
 );
+/** @deprecated Use `testApi`. */
+export { testApi as _test };
 export const buildTtsSystemPromptHint: FacadeModule["buildTtsSystemPromptHint"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "buildTtsSystemPromptHint");
 export const getLastTtsAttempt: FacadeModule["getLastTtsAttempt"] = createLazyFacadeRuntimeValue(
@@ -116,9 +113,17 @@ export const synthesizeSpeech: FacadeModule["synthesizeSpeech"] = createLazyFaca
   loadFacadeModule,
   "synthesizeSpeech",
 );
+export const streamSpeech: FacadeModule["streamSpeech"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "streamSpeech",
+);
 export const textToSpeech: FacadeModule["textToSpeech"] = createLazyFacadeRuntimeValue(
   loadFacadeModule,
   "textToSpeech",
+);
+export const textToSpeechStream: FacadeModule["textToSpeechStream"] = createLazyFacadeRuntimeValue(
+  loadFacadeModule,
+  "textToSpeechStream",
 );
 export const textToSpeechTelephony: FacadeModule["textToSpeechTelephony"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "textToSpeechTelephony");
@@ -130,5 +135,7 @@ export type {
   TtsDirectiveParseResult,
   TtsResult,
   TtsSynthesisResult,
+  TtsSynthesisStreamResult,
+  TtsStreamResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";

@@ -11,6 +11,13 @@ dedicated reference page or is documented with the command it aliases; this
 index lists the commands, the global flags, and the output styling rules that
 apply across the CLI.
 
+Use the setup commands by intent:
+
+- `openclaw setup` creates the baseline config and workspace without walking the full guided onboarding flow.
+- `openclaw onboard` is the full guided first-run path for gateway, model auth, workspace, channels, skills, and health.
+- `openclaw configure` changes targeted parts of an existing setup, such as model auth, gateway, channels, plugins, or skills.
+- `openclaw channels add` configures channel accounts after the baseline exists; run it without flags for guided channel setup or with channel-specific flags for scripts.
+
 ## Command pages
 
 | Area                 | Commands                                                                                                                                                                                                                                  |
@@ -23,12 +30,12 @@ apply across the CLI.
 | Models and inference | [`models`](/cli/models) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`commitments`](/cli/commitments) · [`wiki`](/cli/wiki)                                                      |
 | Network and nodes    | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node)                                                                                                                                   |
 | Runtime and sandbox  | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)                 |
-| Automation           | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks)                                                                                                                                         |
+| Automation           | [`cron`](/cli/cron) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                     |
 | Discovery and docs   | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                                   |
 | Pairing and channels | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`channels`](/cli/channels)                                                                                                                                                                 |
 | Security and plugins | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                     |
 | Legacy aliases       | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                         |
-| Plugins (optional)   | [`voicecall`](/cli/voicecall) (if installed)                                                                                                                                                                                              |
+| Plugins (optional)   | [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) (if installed)                                                                                                                                              |
 
 ## Global flags
 
@@ -121,6 +128,16 @@ openclaw [--dev] [--profile <name>] <command>
     status
     index
     search
+  transcripts
+    list
+    show
+    path
+  path
+    resolve
+    find
+    set
+    validate
+    emit
   commitments
     list
     dismiss
@@ -243,6 +260,7 @@ openclaw [--dev] [--profile <name>] <command>
   cron
     status
     list
+    get
     add
     edit
     rm

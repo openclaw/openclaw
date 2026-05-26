@@ -7,7 +7,8 @@ import {
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeOptionalLowercaseString, sleep } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
@@ -350,7 +351,7 @@ export async function buildActivity(
         });
 
         // Tag the activity so the caller can store the activity ID after sending
-        consentActivity._pendingUploadId = uploadId;
+        consentActivity["_pendingUploadId"] = uploadId;
 
         // Return the consent activity (caller sends it)
         return consentActivity;
@@ -503,9 +504,11 @@ export async function sendMSTeamsMessages(params: {
 
         // Extract and strip the internal-only pending upload tag before sending.
         pendingUploadId =
-          typeof activity._pendingUploadId === "string" ? activity._pendingUploadId : undefined;
+          typeof activity["_pendingUploadId"] === "string"
+            ? activity["_pendingUploadId"]
+            : undefined;
         if (pendingUploadId) {
-          delete activity._pendingUploadId;
+          delete activity["_pendingUploadId"];
         }
 
         return await ctx.sendActivity(activity);
@@ -572,7 +575,7 @@ export async function sendMSTeamsMessages(params: {
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
+      return await sendProactively(messages, 0, resolvedThreadId);
     }
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {

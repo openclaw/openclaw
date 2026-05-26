@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { canUseBoundaryFileOpen, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -21,6 +21,9 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
 export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
+
+/** Maximum length for $include path and resolved path (CWE-22 hardening). */
+export const MAX_INCLUDE_PATH_LENGTH = 4096;
 
 // ============================================================================
 // Types
@@ -63,7 +66,7 @@ export class ConfigIncludeError extends Error {
   constructor(
     message: string,
     public readonly includePath: string,
-    public readonly cause?: Error,
+    public override readonly cause?: Error,
   ) {
     super(message);
     this.name = "ConfigIncludeError";
@@ -212,11 +215,28 @@ class IncludeProcessor {
   }
 
   private resolvePath(includePath: string): { resolvedPath: string; root: IncludeRoot } {
+    if (includePath.includes("\0")) {
+      throw new ConfigIncludeError("Include path must not contain null bytes", includePath);
+    }
+    if (includePath.length >= MAX_INCLUDE_PATH_LENGTH) {
+      throw new ConfigIncludeError(
+        `Include path exceeds maximum length (${MAX_INCLUDE_PATH_LENGTH} characters)`,
+        includePath,
+      );
+    }
+
     const configDir = path.dirname(this.basePath);
     const resolved = path.isAbsolute(includePath)
       ? includePath
       : path.resolve(configDir, includePath);
     const normalized = path.normalize(resolved);
+
+    if (normalized.length >= MAX_INCLUDE_PATH_LENGTH) {
+      throw new ConfigIncludeError(
+        `Resolved include path exceeds maximum length (${MAX_INCLUDE_PATH_LENGTH} characters)`,
+        includePath,
+      );
+    }
 
     // SECURITY: Reject paths outside the config directory and any caller-allowed
     // roots (CWE-22: Path Traversal). Allowed roots come from
@@ -359,11 +379,11 @@ function isNotFoundError(error: unknown): boolean {
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
-  if (!canUseBoundaryFileOpen(ioFs)) {
+  if (!canUseRootFileOpen(ioFs)) {
     return ioFs.readFileSync(params.resolvedPath, "utf-8");
   }
 
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: params.resolvedPath,
     rootPath: params.rootRealDir,
     rootRealPath: params.rootRealDir,

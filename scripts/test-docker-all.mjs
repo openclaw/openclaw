@@ -22,6 +22,7 @@ import {
   laneWeight,
   lanesNeedE2eImageKind,
   lanesNeedOpenClawPackage,
+  normalizeReleaseProfile,
   parseLaneSelection,
   parseLiveMode,
   parseProfile,
@@ -40,12 +41,50 @@ const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
-const cliArgs = new Set(IS_MAIN ? process.argv.slice(2) : []);
-if (IS_MAIN) {
-  for (const arg of cliArgs) {
-    if (arg !== "--plan-json") {
-      throw new Error(`unknown argument: ${arg}`);
+
+export function dockerAllUsage() {
+  return [
+    "Usage: node scripts/test-docker-all.mjs [--plan-json]",
+    "",
+    "Options:",
+    "  --plan-json    Print the resolved Docker E2E plan as JSON and exit.",
+    "  -h, --help     Show this help.",
+    "",
+    "Lane selection and scheduler settings are configured with OPENCLAW_DOCKER_ALL_* env vars.",
+  ].join("\n");
+}
+
+export function parseDockerAllCliArgs(argv) {
+  const options = {
+    help: false,
+    planJson: false,
+  };
+  for (const arg of argv) {
+    if (arg === "--plan-json") {
+      options.planJson = true;
+    } else if (arg === "--help" || arg === "-h") {
+      options.help = true;
+    } else {
+      throw new Error(`unknown argument: ${arg}\n\n${dockerAllUsage()}`);
     }
+  }
+  return options;
+}
+
+let cliOptions = {
+  help: false,
+  planJson: false,
+};
+if (IS_MAIN) {
+  try {
+    cliOptions = parseDockerAllCliArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  if (cliOptions.help) {
+    console.log(dockerAllUsage());
+    process.exit(0);
   }
 }
 
@@ -194,16 +233,38 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+function githubWorkflowRef() {
+  const explicit = process.env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
+  if (explicit) {
+    return explicit;
+  }
+  const refName = process.env.GITHUB_REF_NAME;
+  if (refName) {
+    return refName;
+  }
+  const ref = process.env.GITHUB_REF;
+  if (ref?.startsWith("refs/heads/")) {
+    return ref.slice("refs/heads/".length);
+  }
+  if (ref?.startsWith("refs/tags/")) {
+    return ref.slice("refs/tags/".length);
+  }
+  return undefined;
+}
+
 function githubWorkflowRerunCommand(laneNames, ref) {
+  const workflowRef = githubWorkflowRef();
+  const releasePath = process.env.OPENCLAW_DOCKER_ALL_PROFILE === RELEASE_PATH_PROFILE;
   const fields = [
     "gh workflow run",
     shellQuote(process.env.OPENCLAW_DOCKER_E2E_WORKFLOW || DEFAULT_GITHUB_WORKFLOW),
+    ...(workflowRef ? ["--ref", shellQuote(workflowRef)] : []),
     "-f",
     `ref=${shellQuote(ref)}`,
     "-f",
     "include_repo_e2e=false",
     "-f",
-    "include_release_path_suites=false",
+    `include_release_path_suites=${releasePath ? "true" : "false"}`,
     "-f",
     "include_openwebui=false",
     "-f",
@@ -454,12 +515,12 @@ function printLaneManifest(label, poolLanes, timingStore) {
   }
 }
 
-function dockerPreflightContainerNames(raw) {
+export function dockerPreflightContainerNames(raw) {
   return raw
     .split(/\r?\n/)
     .map((line) => line.trim().split(/\s+/, 1)[0])
     .filter((name) =>
-      /^(?:openclaw-(?:gateway-e2e|openwebui|openwebui-gateway|config-reload-e2e)-)/.test(name),
+      /^(?:openclaw-[a-z0-9-]+-e2e-\d+|openclaw-openwebui(?:-gateway)?-\d+)$/u.test(name),
     );
 }
 
@@ -736,6 +797,7 @@ function laneEnv(poolLane, baseEnv, logDir, cacheKey) {
     ...baseEnv,
   };
   const name = poolLane.name;
+  env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
@@ -1083,9 +1145,12 @@ async function main() {
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
   const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
   const planJson =
-    cliArgs.has("--plan-json") || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
+    cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
+  const releaseProfile = normalizeReleaseProfile(
+    process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
+  );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";
   const includeOpenWebUI = parseBool(
     process.env.OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI ?? process.env.INCLUDE_OPENWEBUI,
@@ -1137,6 +1202,7 @@ async function main() {
     planReleaseAll: planJson && planReleaseAll,
     profile,
     releaseChunk,
+    releaseProfile,
     selectedLaneNames,
     timingStore,
     upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
@@ -1151,6 +1217,9 @@ async function main() {
   await mkdir(logDir, { recursive: true });
   console.log(`==> Docker test logs: ${logDir}`);
   console.log(`==> Profile: ${profile}${releaseChunk ? ` chunk=${releaseChunk}` : ""}`);
+  if (profile === RELEASE_PATH_PROFILE) {
+    console.log(`==> Release profile: ${releaseProfile}`);
+  }
   console.log(`==> Parallelism: ${parallelism}`);
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
@@ -1213,7 +1282,7 @@ async function main() {
 
   if (buildEnabled) {
     const buildEntries = [];
-    if (scheduledLanes.some((poolLane) => poolLane.live)) {
+    if (scheduledLanes.some((poolLane) => poolLane.needsLiveImage)) {
       buildEntries.push({
         command: liveDockerHarnessScriptCommand("test-live-build-docker.sh"),
         label: "shared live-test image once",

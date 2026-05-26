@@ -132,12 +132,46 @@ export const sharedVitestConfig = {
   resolve: {
     alias: [
       {
+        find: "discord-api-types/v10",
+        replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
+      },
+      {
+        find: "discord-api-types/gateway/v10",
+        replacement: path.join(
+          repoRoot,
+          "test",
+          "vitest",
+          "discord-api-types-gateway-v10-runtime.ts",
+        ),
+      },
+      {
+        find: "discord-api-types/payloads/v10",
+        replacement: path.join(
+          repoRoot,
+          "test",
+          "vitest",
+          "discord-api-types-payloads-v10-runtime.ts",
+        ),
+      },
+      {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
       {
         find: "@openclaw/qa-channel/api.js",
         replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
+      },
+      {
+        find: "@openclaw/discord/api.js",
+        replacement: path.join(repoRoot, "extensions", "discord", "api.ts"),
+      },
+      {
+        find: "@openclaw/slack/api.js",
+        replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
+      },
+      {
+        find: "@openclaw/whatsapp/api.js",
+        replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
       },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
@@ -194,14 +228,16 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.e2e.config.ts",
       "test/vitest/vitest.extension-acpx-paths.mjs",
       "test/vitest/vitest.extension-acpx.config.ts",
-      "test/vitest/vitest.extension-bluebubbles-paths.mjs",
-      "test/vitest/vitest.extension-bluebubbles.config.ts",
       "test/vitest/vitest.extension-channel-single-config.ts",
       "test/vitest/vitest.extension-channel-split-paths.mjs",
       "test/vitest/vitest.extension-channels.config.ts",
       "test/vitest/vitest.extension-diffs-paths.mjs",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
+      "test/vitest/vitest.extension-active-memory-paths.mjs",
+      "test/vitest/vitest.extension-active-memory.config.ts",
+      "test/vitest/vitest.extension-codex-paths.mjs",
+      "test/vitest/vitest.extension-codex.config.ts",
       "test/vitest/vitest.extension-feishu-paths.mjs",
       "test/vitest/vitest.extension-feishu.config.ts",
       "test/vitest/vitest.extension-imessage.config.ts",
@@ -275,7 +311,7 @@ export const sharedVitestConfig = {
       "ui/src/ui/views/chat.test.ts",
       "ui/src/ui/views/nodes.devices.test.ts",
       "ui/src/ui/views/skills.test.ts",
-      "ui/src/ui/views/dreams.test.ts",
+      "ui/src/ui/views/dreaming.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
@@ -295,6 +331,7 @@ export const sharedVitestConfig = {
       "**/node_modules/**",
       "**/vendor/**",
       "dist/OpenClaw.app/**",
+      "**/._*",
       "**/*.live.test.ts",
       "**/*.e2e.test.ts",
     ],

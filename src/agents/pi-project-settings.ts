@@ -1,5 +1,6 @@
-import { SettingsManager } from "@mariozechner/pi-coding-agent";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   buildEmbeddedPiSettingsSnapshot,
   loadEnabledBundlePiSettingsSnapshot,
@@ -11,12 +12,14 @@ function createEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }): SettingsManager {
   const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
   const policy = resolveEmbeddedPiProjectSettingsPolicy(params.cfg);
   const pluginSettings = loadEnabledBundlePiSettingsSnapshot({
     cwd: params.cwd,
     cfg: params.cfg,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   });
   const hasPluginSettings = Object.keys(pluginSettings).length > 0;
   if (policy === "trusted" && !hasPluginSettings) {
@@ -46,6 +49,7 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Resolved context window budget so reserve-token floor can be capped for small models. */
   contextTokenBudget?: number;
 }): SettingsManager {
@@ -57,5 +61,10 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
+  // Disable the pi-coding-agent auto-retry. OpenClaw has its own comprehensive
+  // retry layer (failover rotation, auth profile rotation, empty-error retry,
+  // thinking-level fallback) in run.ts. Having both layers active creates a
+  // double-retry that can replay failed tool calls in an unbounded loop (#73781).
+  settingsManager.setRetryEnabled(false);
   return settingsManager;
 }

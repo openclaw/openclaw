@@ -9,7 +9,7 @@ import {
 const KNIP_VERSION = "6.8.0";
 const KNIP_ARGS = [
   "--config",
-  "knip.config.ts",
+  "config/knip.config.ts",
   "--production",
   "--no-progress",
   "--reporter",
@@ -26,6 +26,10 @@ function uniqueSorted(values) {
   return [...new Set(values.map(normalizeRepoPath))].toSorted((left, right) =>
     left.localeCompare(right),
   );
+}
+
+function isLikelyRepoFilePath(value) {
+  return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
 }
 
 export function parseKnipCompactUnusedFiles(output) {
@@ -50,7 +54,10 @@ export function parseKnipCompactUnusedFiles(output) {
     if (sawUnusedFilesSection && !inUnusedFilesSection) {
       continue;
     }
-    files.push(line.slice(separatorIndex + 2).trim());
+    const file = line.slice(separatorIndex + 2).trim();
+    if (isLikelyRepoFilePath(file)) {
+      files.push(file);
+    }
   }
 
   return uniqueSorted(files);

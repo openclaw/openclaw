@@ -6,6 +6,7 @@ import {
   defineChatCommand,
 } from "./commands-registry.shared.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import { listThinkingLevels } from "./thinking.js";
 
 type ChannelPlugin = ReturnType<typeof listLoadedChannelPlugins>[number];
 
@@ -28,7 +29,7 @@ let cachedRegistryVersion = -1;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
-    ...buildBuiltinChatCommands(),
+    ...buildBuiltinChatCommands({ listThinkingLevels }),
     ...listLoadedChannelPlugins()
       .filter(supportsNativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
