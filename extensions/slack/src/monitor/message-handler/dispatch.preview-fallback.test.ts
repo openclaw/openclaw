@@ -1540,6 +1540,44 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith("Shelling\n• No matches found\n• done");
   });
 
+  it("keeps real Slack command errors visible", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "command",
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        title: "command rg 'needle' missing-path",
+        summary: "rg: missing-path: No such file or directory\n\n(Command exited with code 2)",
+      },
+      {
+        kind: "command",
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        title: "command rg 'needle' missing-path",
+        outcomeClassification: "failure",
+        exitCode: 2,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      }),
+    );
+
+    const renderedUpdates = draftStream.update.mock.calls.flat().join("\n");
+    expect(renderedUpdates).toContain("exit 2");
+    expect(renderedUpdates).not.toContain("No matches found");
+  });
+
   it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {
     mockedSlackStreamingMode = "progress";
     mockedSlackDraftMode = "status_final";
