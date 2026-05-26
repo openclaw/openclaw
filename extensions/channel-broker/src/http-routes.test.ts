@@ -662,6 +662,10 @@ describe("channel-broker HTTP routes", () => {
         reply: {
           dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
             await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 1, block: 0, final: 0 },
+            };
           }),
         },
       },
