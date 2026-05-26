@@ -31,7 +31,6 @@ Docs: https://docs.openclaw.ai
 - Agents/Codex: honor yolo app-server approval policy only for the full `never` plus `danger-full-access` case. (#85909) Thanks @earlvanze.
 - Gateway/Gmail: clear Gmail watcher renewal intervals on re-entry so hot reloads do not leak lifecycle timers. (#82947) Thanks @SebTardif.
 - Logging: exit cleanly on broken stdout/stderr pipes without masking existing failure exit codes. (#80059) Thanks @pavelzak.
-- Mattermost: show `/new` and `/reset` acknowledgements (and other typed text-slash commands) in Mattermost direct chats and channels when the active harness defaults source replies to message-tool-only delivery (e.g. Codex), so authorized control commands no longer silently change session state without confirmation. Fixes #86664. Thanks @amknight.
 - Gateway/security: escape transcript metadata field names while extracting oversized session line prefixes. (#85934) Thanks @SebTardif.
 - Plugins/security: validate manifest model pattern regexes with the safe-regex compiler so unsafe patterns are ignored before matching. (#86046) Thanks @SebTardif.
 - Discord: route gateway metadata REST lookups through the configured Discord proxy so proxied accounts do not fall back to direct `discord.com` connections before opening the WebSocket. Fixes #80227. Thanks @Clivilwalker.

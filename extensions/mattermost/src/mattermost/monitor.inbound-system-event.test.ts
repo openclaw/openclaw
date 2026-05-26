@@ -575,7 +575,7 @@ describe("mattermost inbound user posts", () => {
           id: "post-reset",
           channel_id: "dm-1",
           user_id: "user-1",
-          message: "/reset",
+          message: " /reset",
           create_at: 1_714_000_000_000,
         }),
       },
@@ -590,6 +590,7 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("/reset");
+    expect(ctx?.CommandBody).toBe("/reset");
     expect(ctx?.CommandAuthorized).toBe(true);
     expect(ctx?.CommandSource).toBe("text");
   });
