@@ -256,7 +256,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextLimits.memoryGetDefaultLines":
     "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
   "agents.defaults.contextLimits.toolResultMaxChars":
-    "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
+    "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.list":
@@ -272,7 +272,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].contextLimits.memoryGetDefaultLines":
     "Per-agent override for the default memory_get line window when lines is omitted.",
   "agents.list[].contextLimits.toolResultMaxChars":
-    "Per-agent override for the live tool-result max character budget.",
+    "Per-agent advanced ceiling for the live tool-result max character budget. Omit to inherit defaults or the model-context auto cap.",
   "agents.list[].contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.list[].thinkingDefault":

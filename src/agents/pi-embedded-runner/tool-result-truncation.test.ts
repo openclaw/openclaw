@@ -12,6 +12,7 @@ let truncateToolResultText: typeof import("./tool-result-truncation.js").truncat
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
 let calculateMaxToolResultChars: typeof import("./tool-result-truncation.js").calculateMaxToolResultChars;
 let calculateMaxToolResultCharsWithCap: typeof import("./tool-result-truncation.js").calculateMaxToolResultCharsWithCap;
+let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveAutoLiveToolResultMaxChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
@@ -29,6 +30,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateToolResultMessage,
     calculateMaxToolResultChars,
     calculateMaxToolResultCharsWithCap,
+    resolveAutoLiveToolResultMaxChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInSession,
@@ -203,14 +205,19 @@ describe("calculateMaxToolResultChars", () => {
     expect(HARD_MAX_TOOL_RESULT_CHARS).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 
-  it("caps at HARD_MAX_TOOL_RESULT_CHARS for very large windows", () => {
+  it("keeps the old constant as the low-context cap alias", () => {
     const result = calculateMaxToolResultChars(2_000_000); // 2M token window
-    expect(result).toBeLessThanOrEqual(HARD_MAX_TOOL_RESULT_CHARS);
+    expect(result).toBeGreaterThan(HARD_MAX_TOOL_RESULT_CHARS);
   });
 
-  it("caps 128K contexts at the live tool-result ceiling", () => {
+  it("uses a larger auto cap for 128K contexts", () => {
     const result = calculateMaxToolResultChars(128_000);
-    expect(result).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+    expect(result).toBe(32_000);
+  });
+
+  it("uses the largest auto cap for 200K contexts", () => {
+    expect(resolveAutoLiveToolResultMaxChars(200_000)).toBe(64_000);
+    expect(calculateMaxToolResultChars(200_000)).toBe(64_000);
   });
 
   it("supports a higher configured hard cap", () => {
@@ -508,6 +515,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     const result = await truncateOversizedToolResultsInSession({
       sessionFile,
       contextWindowTokens: 128_000,
+      maxCharsOverride: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     });
 
     expect(result.truncated).toBe(true);
