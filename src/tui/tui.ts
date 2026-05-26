@@ -374,9 +374,6 @@ export function canSubmitTuiChatMessage(params: {
   pendingOptimisticUserMessage?: boolean;
 }): boolean {
   const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
-  if (params.activeChatRunId) {
-    return params.local === true && params.activityStatus === "finishing context" && !pending;
-  }
   return !pending;
 }
 

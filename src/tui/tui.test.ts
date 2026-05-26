@@ -98,14 +98,14 @@ describe("canSubmitTuiChatMessage", () => {
     ).toBe(true);
   });
 
-  it("does not allow gateway submit while a run is finishing", () => {
+  it("allows gateway submit while a run is active", () => {
     expect(
       canSubmitTuiChatMessage({
         local: false,
-        activityStatus: "finishing context",
+        activityStatus: "streaming",
         activeChatRunId: "run-active",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("blocks submits with pending optimistic state", () => {

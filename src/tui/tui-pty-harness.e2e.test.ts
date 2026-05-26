@@ -310,7 +310,25 @@ async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
-          const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
+          const responseDelayMs =
+            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+          if (opts.message === "streaming prompt") {
+            setTimeout(() => {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "delta",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
+                    timestamp: Date.now(),
+                  },
+                },
+              });
+            }, 5);
+          }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
           const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
@@ -580,6 +598,23 @@ describe.sequential("TUI PTY harness", () => {
       expect(slowPromptCalls).toHaveLength(1);
       expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
       await fixture.run.write("\x15", { delay: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "submits a follow-up prompt while a run is streaming",
+    async () => {
+      await fixture.run.write("\x15", { delay: false });
+      await fixture.run.write("streaming prompt\r");
+      await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt");
+      await fixture.run.write("queued while streaming\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "queued while streaming"),
+      );
+      await fixture.run.waitForOutput("PTY_RESPONSE: streaming prompt");
     },
     TEST_TIMEOUT_MS,
   );
