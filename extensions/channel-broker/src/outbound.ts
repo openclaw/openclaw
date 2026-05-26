@@ -98,6 +98,9 @@ function listUnsupportedDeliveryRequirements(params: {
   if (!platformCapabilities) {
     return [];
   }
+  if (!platformCapabilities.delivery) {
+    return [];
+  }
   if (
     brokerPlatformSupports({
       capabilities: {

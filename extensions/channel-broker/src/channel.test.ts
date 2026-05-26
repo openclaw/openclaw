@@ -405,6 +405,56 @@ describe("channel-broker plugin", () => {
     expect(sendOutboundRequest).not.toHaveBeenCalled();
   });
 
+  it("allows outbound sends when capability metadata does not constrain delivery", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-capability-metadata-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["native-metadata-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-capability-metadata-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+                capabilities: {
+                  slack: {
+                    receive: { webhook: true },
+                    native: { botApi: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      to: "broker:slack:C123",
+      text: "metadata only",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          platform: "slack",
+          payloads: [expect.objectContaining({ text: "metadata only" })],
+        }),
+      }),
+    );
+  });
+
   it("rejects invalid broker targets during outbound resolution", () => {
     const result = channelBrokerPlugin.outbound?.resolveTarget?.({
       cfg: {
