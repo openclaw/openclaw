@@ -297,8 +297,12 @@ function toInboundMediaFacts(
         attachment.mediaType === "document"
           ? attachment.mediaType
           : "unknown";
+      const contentBase64 = attachment.contentBase64?.trim();
+      const inlineUrl = contentBase64
+        ? `data:${attachment.mimeType ?? "application/octet-stream"};base64,${contentBase64}`
+        : undefined;
       return {
-        url: attachment.url,
+        url: attachment.url ?? inlineUrl,
         contentType: attachment.mimeType,
         kind,
         messageId: attachment.id ?? messageId,

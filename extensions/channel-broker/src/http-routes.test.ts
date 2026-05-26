@@ -589,6 +589,52 @@ describe("channel-broker HTTP routes", () => {
     expect(openKeyedStore.callCount()).toBe(2);
   });
 
+  it("preserves inline broker attachments as inbound media facts", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "see image",
+        attachments: [
+          {
+            id: "image-1",
+            mediaType: "image",
+            mimeType: "image/png",
+            contentBase64: "aGVsbG8=",
+          },
+        ],
+      },
+    });
+    const config = brokerConfig();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: [
+          expect.objectContaining({
+            url: "data:image/png;base64,aGVsbG8=",
+            contentType: "image/png",
+            kind: "image",
+            messageId: "image-1",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("deduplicates broker webhook redeliveries before dispatching another turn", async () => {
     const body = inboundBody();
     const config = brokerConfig();
