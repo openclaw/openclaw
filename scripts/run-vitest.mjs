@@ -15,6 +15,7 @@ const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
+export const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 300_000;
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
@@ -97,6 +98,94 @@ export function resolveVitestCliEntry() {
 
 export function resolveVitestNoOutputTimeoutMs(env = process.env) {
   return parsePositiveInt(env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS);
+}
+
+function resolveBooleanModeFlag(argv, index, longName, shortName = null) {
+  const arg = argv[index];
+  const parseValue = (rawValue) => rawValue !== "false";
+  for (const flag of [`--${longName}`, shortName].filter(Boolean)) {
+    if (arg === `--no-${longName}`) {
+      return { value: false, consumedNext: false };
+    }
+    if (arg === flag) {
+      const next = argv[index + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        return { value: parseValue(next), consumedNext: true };
+      }
+      return { value: true, consumedNext: false };
+    }
+    if (arg.startsWith(`${flag}=`)) {
+      return { value: parseValue(arg.slice(flag.length + 1)), consumedNext: false };
+    }
+  }
+  return null;
+}
+
+function resolveExplicitVitestMode(argv) {
+  let mode = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      break;
+    }
+    const watchFlag = resolveBooleanModeFlag(argv, index, "watch", "-w");
+    if (watchFlag) {
+      if (watchFlag.consumedNext) {
+        index += 1;
+      }
+      if (watchFlag.value) {
+        return "watch";
+      }
+      mode = "run";
+      continue;
+    }
+    const runFlag = resolveBooleanModeFlag(argv, index, "run");
+    if (runFlag) {
+      if (runFlag.consumedNext) {
+        index += 1;
+      }
+      if (runFlag.value) {
+        mode = "run";
+      }
+      continue;
+    }
+    if (optionConsumesNextArg(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (mode !== null) {
+      continue;
+    }
+    if (arg === "watch" || arg === "dev") {
+      return "watch";
+    }
+    if (arg === "run") {
+      mode = "run";
+      continue;
+    }
+    return null;
+  }
+  return mode;
+}
+
+export function resolveRunVitestSpawnEnv(env = process.env, argv = []) {
+  if (Object.hasOwn(env, "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS")) {
+    return env;
+  }
+  const explicitMode = resolveExplicitVitestMode(argv);
+  if (explicitMode === "watch") {
+    return env;
+  }
+  if (explicitMode !== "run" && !isTruthyEnvValue(env.CI)) {
+    return env;
+  }
+  return {
+    ...env,
+    OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: String(DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS),
+  };
 }
 
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
@@ -439,6 +528,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
+  const spawnEnv = resolveRunVitestSpawnEnv(env, vitestArgs);
   const { child, teardown } = spawnWatchedVitestProcess({
     pnpmArgs: [
       "exec",
@@ -447,8 +537,8 @@ function main(argv = process.argv.slice(2), env = process.env) {
       resolveVitestCliEntry(),
       ...vitestArgs,
     ],
-    spawnParams: resolveVitestSpawnParams(env),
-    env,
+    spawnParams: resolveVitestSpawnParams(spawnEnv),
+    env: spawnEnv,
     label: vitestArgs.join(" "),
   });
 

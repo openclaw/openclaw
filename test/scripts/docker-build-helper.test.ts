@@ -647,7 +647,10 @@ test -f "$TMPDIR/docker-cmd-seen"
 
       expect(runner, path).toContain('RUN_LOG="$(mktemp');
       expect(runner, path).toContain('STATS_LOG="$(mktemp');
-      expect(runner, path).toContain('docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME"');
+      expect(runner, path).toContain(
+        'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME"',
+      );
+      expect(runner, path).toContain('DOCKER_RUN_TIMEOUT="${OPENCLAW_');
       expect(runner, path).toContain('docker_e2e_docker_cmd inspect "$CONTAINER_NAME"');
       expect(runner, path).toContain("docker_e2e_docker_cmd stats --no-stream");
       expect(runner, path).not.toMatch(/(^|\n)docker run --name "\$CONTAINER_NAME"/u);

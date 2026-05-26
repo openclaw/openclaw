@@ -37,7 +37,11 @@ run_docker_build() {
 run_docker_pull() {
   local image="$1"
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+      timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    else
+      timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    fi
     return
   fi
   docker pull "$image"

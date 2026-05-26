@@ -87,13 +87,19 @@ describe("package acceptance workflow", () => {
     const setupPnpmAction = readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8");
 
     expect(packageJson.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+\+sha512\.[a-f0-9]+$/u);
-    expect(setupPnpmAction).toContain("uses: pnpm/action-setup@");
-    expect(setupPnpmAction).toContain("package_json_file: ${{ inputs.package-manager-file }}");
+    expect(setupPnpmAction).toContain("Setup pnpm from packageManager");
     expect(setupPnpmAction).toContain(
-      "cache: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
+      "PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}",
     );
-    expect(setupPnpmAction).toContain("cache_dependency_path: ${{ inputs.lockfile-path }}");
-    expect(setupPnpmAction).not.toContain("actions/cache");
+    expect(setupPnpmAction).toContain('case "$package_manager" in');
+    expect(setupPnpmAction).toContain('corepack prepare "$package_manager" --activate');
+    expect(setupPnpmAction).toContain(
+      "if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
+    );
+    expect(setupPnpmAction).toContain(
+      "key: pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles(inputs.lockfile-path) }}",
+    );
+    expect(setupPnpmAction).not.toContain("pnpm/action-setup");
     expect(setupPnpmAction).not.toContain("shasum");
     expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
     expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
@@ -116,6 +122,7 @@ describe("package acceptance workflow", () => {
       actions?: { job?: string };
     };
     const workflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
+    const workflowText = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
     const hydrate = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate");
     const hydrateGithub = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-github");
 
@@ -129,6 +136,10 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrate, "Setup pnpm and dependencies").run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
+    expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
+    expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3");
+    expect(workflowText).toContain("--retry-all-errors");
+    expect(workflowText).not.toContain("curl -fsSL https://get.docker.com | sudo sh");
 
     expect(hydrateGithub.if).toBe("${{ inputs.crabbox_job == 'hydrate-github' }}");
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
@@ -415,7 +426,7 @@ describe("package artifact reuse", () => {
       'retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-5}"',
     );
     expect(pullHelper).toContain(
-      'timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
+      'timeout --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
     );
   });
 
@@ -533,7 +544,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     );
-    expect(workflow).toContain("timeout --foreground --kill-after=30s 35m");
+    expect(workflow).toContain("timeout --kill-after=30s 35m");
     expect(workflow).toMatch(/suite_id: live-gateway-docker[\s\S]*?timeout_minutes: 40/u);
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
@@ -603,22 +614,22 @@ describe("package artifact reuse", () => {
     const stage = readFileSync("scripts/lib/live-docker-stage.sh", "utf8");
 
     expect(workflow).toContain(
-      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
+      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
     );
     expect(workflow).toContain(
       "command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1",
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
     );
     expect(scenarios).toContain("function liveDockerScriptCommand");
     expect(scenarios).toContain(
@@ -678,11 +689,35 @@ describe("package artifact reuse", () => {
     expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_DOCKER_RUN_TIMEOUT:-2700s',
     );
+    expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
+      'timeout --kill-after=30s "${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:-180}s"',
+    );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s',
     );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      'OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      'timeout --kill-after=30s "${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      "run_setup_command npm install -g @anthropic-ai/claude-code",
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
+    );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s',
+    );
+    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
+      'OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180',
+    );
+    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
+      'timeout --kill-after=30s "${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180}s"',
+    );
+    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
+      "run_setup_command npm install -g @openai/codex",
     );
     expect(readFileSync("scripts/test-live-subagent-announce-docker.sh", "utf8")).toContain(
       'OPENCLAW_LIVE_SUBAGENT_DOCKER_RUN_TIMEOUT:-1200s',
@@ -1257,7 +1292,7 @@ describe("package artifact reuse", () => {
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
-      "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
+      "timeout --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });

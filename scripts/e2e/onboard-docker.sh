@@ -7,6 +7,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E
 OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 MAX_MEMORY_MIB="${OPENCLAW_ONBOARD_MAX_MEMORY_MIB:-2048}"
 MAX_CPU_PERCENT="${OPENCLAW_ONBOARD_MAX_CPU_PERCENT:-1200}"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_ONBOARD_DOCKER_RUN_TIMEOUT:-1200s}"
 CONTAINER_NAME="openclaw-onboard-e2e-$$"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard-stats.XXXXXX")"
@@ -22,7 +23,7 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
 echo "Running onboarding E2E..."
 docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker_e2e_harness_mount_args
-docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" -t \
+DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" -t \
   -e "OPENCLAW_TEST_STATE_FUNCTION_B64=$OPENCLAW_TEST_STATE_FUNCTION_B64" \
   "$IMAGE_NAME" bash scripts/e2e/lib/onboard/scenario.sh >"$RUN_LOG" 2>&1 &
 docker_pid="$!"

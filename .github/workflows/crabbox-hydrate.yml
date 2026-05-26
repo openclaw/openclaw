@@ -141,7 +141,13 @@ jobs:
 
           if ! command -v docker >/dev/null 2>&1; then
             echo "docker not found; installing fallback engine"
-            curl -fsSL https://get.docker.com | sudo sh
+            curl --fail --show-error --location \
+              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+              --retry-all-errors \
+              https://get.docker.com | sudo sh
           fi
 
           if command -v systemctl >/dev/null 2>&1; then
@@ -166,7 +172,12 @@ jobs:
             esac
             buildx_version="${DOCKER_BUILDX_VERSION:-v0.15.1}"
             mkdir -p "$HOME/.docker/cli-plugins"
-            curl -fsSL \
+            curl --fail --show-error --location \
+              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+              --retry-all-errors \
               "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-${buildx_arch}" \
               -o "$HOME/.docker/cli-plugins/docker-buildx"
             chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"
@@ -307,7 +318,13 @@ jobs:
 
           if ! command -v docker >/dev/null 2>&1; then
             echo "docker not found; installing fallback engine"
-            curl -fsSL https://get.docker.com | sudo sh
+            curl --fail --show-error --location \
+              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+              --retry-all-errors \
+              https://get.docker.com | sudo sh
           fi
 
           if command -v systemctl >/dev/null 2>&1; then
@@ -332,7 +349,12 @@ jobs:
             esac
             buildx_version="${DOCKER_BUILDX_VERSION:-v0.15.1}"
             mkdir -p "$HOME/.docker/cli-plugins"
-            curl -fsSL \
+            curl --fail --show-error --location \
+              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+              --retry-all-errors \
               "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-${buildx_arch}" \
               -o "$HOME/.docker/cli-plugins/docker-buildx"
             chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"

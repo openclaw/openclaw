@@ -47,7 +47,11 @@ fail() {
 run_podman_pull() {
   local image="$1"
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"
+    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+      timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"
+    else
+      timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"
+    fi
     return
   fi
   podman pull "$image"

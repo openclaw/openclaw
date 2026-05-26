@@ -1,10 +1,7 @@
-import type {
-  MeetingNotesSessionDescriptor,
-  MeetingNotesUtterance,
-} from "openclaw/plugin-sdk/meeting-notes";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
-export type MeetingNotesSummary = {
+export type TranscriptsSummary = {
   sessionId: string;
   title: string;
   generatedAt: string;
@@ -22,13 +19,13 @@ const DECISION_PATTERNS = /\b(decided|decision|we will|we'll|agreed|approved|go 
 const RISK_PATTERNS =
   /\b(risk|blocked|blocker|concern|issue|problem|unknown|deadline|privacy|security)\b/i;
 
-function firstSentences(utterances: MeetingNotesUtterance[], limit: number): string {
+function firstSentences(utterances: TranscriptUtterance[], limit: number): string {
   const text = normalizeStringEntries(utterances.map((utterance) => utterance.text)).join(" ");
   const sentences = text.match(/[^.!?]+[.!?]?/g) ?? [];
   return normalizeStringEntries(sentences.slice(0, limit)).join(" ");
 }
 
-function collectMatches(utterances: MeetingNotesUtterance[], pattern: RegExp): string[] {
+function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): string[] {
   return utterances
     .filter((utterance) => pattern.test(utterance.text))
     .map(formatSpeakerLine)
@@ -36,7 +33,7 @@ function collectMatches(utterances: MeetingNotesUtterance[], pattern: RegExp): s
     .slice(0, 12);
 }
 
-function formatSpeakerLine(utterance: MeetingNotesUtterance): string {
+function formatSpeakerLine(utterance: TranscriptUtterance): string {
   const text = utterance.text.trim();
   if (!text) {
     return "";
@@ -45,15 +42,15 @@ function formatSpeakerLine(utterance: MeetingNotesUtterance): string {
   return speaker ? `${speaker}: ${text}` : text;
 }
 
-function formatTranscript(utterances: MeetingNotesUtterance[]): string[] {
+function formatTranscript(utterances: TranscriptUtterance[]): string[] {
   return utterances.map(formatSpeakerLine).filter(Boolean);
 }
 
-export function summarizeMeetingNotes(params: {
-  session: MeetingNotesSessionDescriptor;
-  utterances: MeetingNotesUtterance[];
-}): MeetingNotesSummary {
-  const title = params.session.title?.trim() || "Meeting notes";
+export function summarizeTranscripts(params: {
+  session: TranscriptSessionDescriptor;
+  utterances: TranscriptUtterance[];
+}): TranscriptsSummary {
+  const title = params.session.title?.trim() || "Transcripts";
   const overview = firstSentences(params.utterances, 4) || "No transcript captured yet.";
   return {
     sessionId: params.session.sessionId,
@@ -72,7 +69,7 @@ function renderList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "- None captured";
 }
 
-export function renderMeetingNotesMarkdown(summary: MeetingNotesSummary): string {
+export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
   return [
     `# ${summary.title}`,
     "",

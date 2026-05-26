@@ -7,46 +7,42 @@ import {
   buildCapabilityProviderMaps,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import type { MeetingNotesSourceProviderPlugin } from "./provider-types.js";
+import type { TranscriptSourceProvider } from "./provider-types.js";
 
-export function normalizeMeetingNotesSourceProviderId(
+export function normalizeTranscriptSourceProviderId(
   providerId: string | undefined,
 ): string | undefined {
   return normalizeCapabilityProviderId(providerId);
 }
 
-function resolveMeetingNotesSourceProviderEntries(
-  cfg?: OpenClawConfig,
-): MeetingNotesSourceProviderPlugin[] {
+function resolveTranscriptsSourceProviderEntries(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
   return resolvePluginCapabilityProviders({
-    key: "meetingNotesSourceProviders",
+    key: "transcriptSourceProviders",
     cfg,
   });
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, MeetingNotesSourceProviderPlugin>;
-  aliases: Map<string, MeetingNotesSourceProviderPlugin>;
+  canonical: Map<string, TranscriptSourceProvider>;
+  aliases: Map<string, TranscriptSourceProvider>;
 } {
-  return buildCapabilityProviderMaps(resolveMeetingNotesSourceProviderEntries(cfg));
+  return buildCapabilityProviderMaps(resolveTranscriptsSourceProviderEntries(cfg));
 }
 
-export function listMeetingNotesSourceProviders(
-  cfg?: OpenClawConfig,
-): MeetingNotesSourceProviderPlugin[] {
+export function listTranscriptSourceProviders(cfg?: OpenClawConfig): TranscriptSourceProvider[] {
   return [...buildProviderMaps(cfg).canonical.values()];
 }
 
-export function getMeetingNotesSourceProvider(
+export function getTranscriptSourceProvider(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
-): MeetingNotesSourceProviderPlugin | undefined {
-  const normalized = normalizeMeetingNotesSourceProviderId(providerId);
+): TranscriptSourceProvider | undefined {
+  const normalized = normalizeTranscriptSourceProviderId(providerId);
   if (!normalized) {
     return undefined;
   }
   const directProvider = resolvePluginCapabilityProvider({
-    key: "meetingNotesSourceProviders",
+    key: "transcriptSourceProviders",
     providerId: normalized,
     cfg,
   });
