@@ -158,8 +158,8 @@ Notes:
 
 - `user` is host-only. For Linux servers, containers, or remote hosts, prefer CDP profiles.
 - `user` / other `existing-session` profiles keep the current Chrome MCP limits:
-  ref-driven actions, one-file upload hooks, no dialog timeout overrides, no
-  `responsebody`, PDF export, download interception, or batch actions. Debug
+  ref-driven actions, one-file upload hooks, bounded dialog hook timeouts, no
+  `dialogId` responses, no `responsebody`, PDF export, download interception, or batch actions. Debug
   detail routes such as trace, heap snapshot, Lighthouse, screencast, console
   message detail, and request detail require an explicit Chrome MCP diagnostics
   capability opt-in for personal signed-in profiles.

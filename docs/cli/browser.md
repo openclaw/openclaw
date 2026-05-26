@@ -295,7 +295,8 @@ Current existing-session limits:
 - `select` supports one value only
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
-- dialog hooks do not support `--timeout`
+- dialog hooks accept a bounded `--timeout-ms` wait budget and do not support
+  `--dialog-id`
 - screenshots support page captures and `--ref`, but not CSS `--element`
 - console/request detail, trace, heap snapshot, Lighthouse, and screencast
   require `browser.profiles.<name>.chromeMcp.capabilities.diagnostics: true`

@@ -479,7 +479,7 @@ See [Inferred commitments](/concepts/commitments).
   left untouched.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
-  hooks, no dialog timeout overrides, and no
+  hooks, bounded dialog hook timeouts, no `dialogId` responses, and no
   `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
