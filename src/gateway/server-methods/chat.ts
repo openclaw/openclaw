@@ -57,6 +57,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
@@ -2049,6 +2050,54 @@ function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined)
   return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
 }
 
+function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const value = meta?.recordTimestampMs;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
+  const record = asOptionalRecord(message);
+  if (!record || record.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce";
+}
+
+function isChatHistoryAssistantMessage(message: unknown): boolean {
+  return asOptionalRecord(message)?.role === "assistant";
+}
+
+export function dropPreSessionStartAnnouncePairs(
+  messages: unknown[],
+  sessionStartedAt: number | undefined,
+): unknown[] {
+  if (sessionStartedAt === undefined || messages.length === 0) {
+    return messages;
+  }
+  let changed = false;
+  const kept: unknown[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const current = messages[i];
+    if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
+      const ts = readChatHistoryRecordTimestampMs(current);
+      if (typeof ts === "number" && ts < sessionStartedAt) {
+        const next = messages[i + 1];
+        if (isChatHistoryAssistantMessage(next)) {
+          // Skip the assistant reply paired with the pre-session-start announce
+          // so the contaminating turn is dropped as a unit (#85648).
+          i++;
+        }
+        changed = true;
+        continue;
+      }
+    }
+    kept.push(current);
+  }
+  return changed ? kept : messages;
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -2083,10 +2132,20 @@ export const chatHandlers: GatewayRequestHandlers = {
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];
+    // Drop subagent_announce pairs (user inter-session announce + adjacent
+    // assistant) whose record timestamp predates the current session's
+    // sessionStartedAt — these belong to a previous /new'd session under the
+    // same sessionKey and contaminate the fresh context (#85648). Mid-session
+    // announces (timestamp >= sessionStartedAt) are left to the existing
+    // display projection so the assistant's reply still surfaces.
+    const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
+      localMessages,
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    );
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
-      localMessages,
+      localMessages: recencyFilteredMessages,
     });
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const normalized = augmentChatHistoryWithCanvasBlocks(
