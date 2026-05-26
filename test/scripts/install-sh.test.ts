@@ -102,6 +102,28 @@ describe("install.sh", () => {
     expect(rawAptInstalls).toStrictEqual([]);
   });
 
+  it("rejects unknown installer options", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --bogus
+    `);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout + result.stderr).toContain("Unknown option: --bogus");
+  });
+
+  it("rejects installer options with missing values", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --version --no-onboard
+    `);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout + result.stderr).toContain("Missing value for --version");
+  });
+
   it("accepts GNU and musl Linux shells in OS detection", () => {
     expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
     expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');

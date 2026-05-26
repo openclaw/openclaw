@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -91,10 +91,12 @@ function runWrapper(
       PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
         .filter(Boolean)
         .join(path.delimiter),
+      OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
       ...(options.gitResponses
         ? { OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(options.gitResponses) }
         : {}),
     },
+    timeout: 10_000,
   });
 }
 
@@ -128,6 +130,35 @@ afterEach(() => {
 });
 
 describe("scripts/crabbox-wrapper", () => {
+  const advertisedProviderAliasHelp = [
+    "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
+    "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
+    "",
+  ].join("\n");
+  const advertisedProviderAliases = [
+    "blacksmith",
+    "cf",
+    "container",
+    "docker",
+    "exe",
+    "exedev",
+    "google",
+    "google-cloud",
+    "local-docker",
+    "namespace",
+    "namespace-devboxes",
+    "rail",
+    "railwayapp",
+    "run-pod",
+    "runpodio",
+    "sem",
+    "static",
+    "static-ssh",
+  ];
+  beforeAll(() => {
+    runWrapper("provider: aws\n", ["--version"]);
+  });
+
   it("accepts advertised canonical providers from Crabbox help", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -243,6 +274,9 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("shasum -a 256 -c -");
     expect(remoteCommand).not.toContain("set -euo pipefail");
     expect(remoteCommand).toContain('return "$status"');
+    expect(remoteCommand).toContain('if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;');
+    expect(remoteCommand).toContain('mkdir -p "$TMPDIR"');
+    expect(remoteCommand).toContain('usable TMPDIR not found: $TMPDIR');
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain("pnpm --version >&2");
     expectGroupedShellCommand(remoteCommand, "pnpm --version");
@@ -297,6 +331,7 @@ describe("scripts/crabbox-wrapper", () => {
       "bootstrapping a pinned user-local Node toolchain before the command",
     );
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(output.scriptContent).toContain('if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR"');
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
     expect(output.scriptContent).toContain(`\n${script}`);
   });
@@ -809,6 +844,7 @@ describe("scripts/crabbox-wrapper", () => {
           encoding: "utf8",
           env: {
             ...process.env,
+            OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
             OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(gitResponses),
             PATH: [gitBinDir, path.dirname(process.execPath)].join(path.delimiter),
           },
@@ -878,40 +914,21 @@ describe("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).args).toContain("aws");
   });
 
-  it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
-    const helpText = [
-      "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
-      "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
-      "",
-    ].join("\n");
-    const aliases = [
-      "blacksmith",
-      "cf",
-      "container",
-      "docker",
-      "exe",
-      "exedev",
-      "google",
-      "google-cloud",
-      "local-docker",
-      "namespace",
-      "namespace-devboxes",
-      "rail",
-      "railwayapp",
-      "run-pod",
-      "runpodio",
-      "sem",
-      "static",
-      "static-ssh",
-    ];
-
-    for (const alias of aliases) {
-      const result = runWrapper(helpText, ["run", "--provider", alias, "--", "echo ok"]);
+  it.each(advertisedProviderAliases)(
+    "accepts Crabbox provider alias %s when its canonical provider is advertised",
+    (alias) => {
+      const result = runWrapper(advertisedProviderAliasHelp, [
+        "run",
+        "--provider",
+        alias,
+        "--",
+        "echo ok",
+      ]);
 
       expect(result.status, alias).toBe(0);
       expect(result.stdout).toContain(`"${alias}"`);
-    }
-  });
+    },
+  );
 
   it("accepts Crabbox provider aliases when upstream help omits Tensorlake", () => {
     const helpText = [
@@ -1100,6 +1117,28 @@ describe("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, shellScript);
   });
 
+  it("preserves macOS JS and Git bootstraps for shell-wrapped sparse changed gates", () => {
+    const shellScript = "bash -lc 'pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expectGroupedShellCommand(remoteCommand, shellScript);
+  });
+
   it("preserves sparse changed-gate Git bootstrap for assignment-prefix command substitutions", () => {
     const shellScript = "TOOL_ROOT=$(pwd) pnpm check:changed";
     const result = runWrapper(
@@ -1123,6 +1162,94 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("preserves sparse changed-gate Git bootstrap for command-prefixed shell commands", () => {
     const shellScript = "command pnpm check:changed";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for bash -lc shell commands", () => {
+    const shellScript =
+      "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 bash -lc 'set -euo pipefail; pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for shell option values before -c", () => {
+    const shellScript = "bash -o pipefail -c 'pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for attached shell option values before -c", () => {
+    const shellScript = "bash --rcfile=./ci.bashrc -c 'pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for grouped shell options before -c", () => {
+    const shellScript = "bash -eo pipefail -c 'pnpm check:changed'";
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--shell", "--", shellScript],

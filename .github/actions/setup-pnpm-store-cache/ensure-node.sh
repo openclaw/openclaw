@@ -69,6 +69,56 @@ openclaw_find_toolcache_node() {
   return 1
 }
 
+openclaw_resolve_node_download_version() {
+  local requested_node="$1"
+  if [[ "$requested_node" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    [[ "$requested_node" == v* ]] && printf '%s\n' "$requested_node" || printf 'v%s\n' "$requested_node"
+    return 0
+  fi
+
+  local prefix="${requested_node#v}"
+  prefix="${prefix%%[xX]*}"
+  prefix="v${prefix}"
+  [[ "$prefix" == *. ]] || prefix="${prefix}."
+  curl -fsSL https://nodejs.org/dist/index.json |
+    OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
+prefix = os.environ["OPENCLAW_NODE_PREFIX"]
+for item in json.load(sys.stdin):
+    version = item.get("version", "")
+    if version.startswith(prefix):
+        print(version)
+        break
+'
+}
+
+openclaw_node_download_platform() {
+  local os_name arch_name
+  os_name="$(uname -s)"
+  arch_name="$(uname -m)"
+  case "$os_name:$arch_name" in
+    Linux:x86_64) printf 'linux-x64\n' ;;
+    Linux:aarch64 | Linux:arm64) printf 'linux-arm64\n' ;;
+    Darwin:x86_64) printf 'darwin-x64\n' ;;
+    Darwin:arm64) printf 'darwin-arm64\n' ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openclaw_download_node() {
+  local requested_node="$1"
+  local version platform archive_url install_root
+  version="$(openclaw_resolve_node_download_version "$requested_node")"
+  platform="$(openclaw_node_download_platform)" || return 1
+  install_root="${RUNNER_TEMP:-/tmp}/openclaw-node-${version}-${platform}"
+  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
+  mkdir -p "$install_root"
+  echo "Downloading Node ${version} from ${archive_url}"
+  curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
+  openclaw_prepend_node_bin "$install_root/bin"
+}
+
 openclaw_ensure_node() {
   local requested_node="${1:-}"
   requested_node="${requested_node#v}"
@@ -87,6 +137,8 @@ openclaw_ensure_node() {
   if [[ -n "$node_bin" ]]; then
     echo "Using Node $("$node_bin" -p 'process.versions.node') from $node_bin"
     openclaw_prepend_node_bin "$(dirname "$node_bin")"
+  else
+    openclaw_download_node "$requested_node" || true
   fi
 
   active_node_version="$(openclaw_active_node_version)"

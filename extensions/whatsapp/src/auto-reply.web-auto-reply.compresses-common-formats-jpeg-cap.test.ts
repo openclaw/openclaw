@@ -150,38 +150,28 @@ describe("web auto-reply", () => {
     });
   }
 
-  it("compresses common formats to jpeg under the cap", async () => {
+  it("sends common in-limit image formats without re-encoding", async () => {
     const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
     const webp = await fs.readFile("extensions/whatsapp/src/__fixtures__/large-noisy.webp");
     const formats = [
       {
         name: "png",
         mime: "image/png",
-        make: (opts: { width: number; height: number }) =>
-          Promise.resolve(createNoisyPngBuffer(opts.width, opts.height)),
+        image: createSolidPngBuffer(64, 64, { r: 80, g: 120, b: 200 }),
       },
       {
         name: "jpeg",
         mime: "image/jpeg",
-        make: () => Promise.resolve(jpeg),
+        image: jpeg,
       },
       {
         name: "webp",
         mime: "image/webp",
-        make: () => Promise.resolve(webp),
+        image: webp,
       },
     ] as const;
 
-    const width = 800;
-    const height = 800;
-
-    const renderedFormats = await Promise.all(
-      formats.map(async (fmt) =>
-        Object.assign({}, fmt, { image: await fmt.make({ width, height }) }),
-      ),
-    );
-
-    await withMediaCap(SMALL_MEDIA_CAP_MB, async () => {
+    await withMediaCap(1, async () => {
       const sendMedia = vi.fn();
       const { reply, dispatch } = await setupSingleInboundMessage({
         resolverValue: {
@@ -193,8 +183,7 @@ describe("web auto-reply", () => {
       let fetchIndex = 0;
 
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-        const matched =
-          renderedFormats[Math.min(fetchIndex, renderedFormats.length - 1)] ?? renderedFormats[0];
+        const matched = formats[Math.min(fetchIndex, formats.length - 1)] ?? formats[0];
         fetchIndex += 1;
         const { image, mime } = matched;
         return {
@@ -208,8 +197,7 @@ describe("web auto-reply", () => {
       });
 
       try {
-        for (const [index, fmt] of renderedFormats.entries()) {
-          expect(fmt.image.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
+        for (const [index, fmt] of formats.entries()) {
           const beforeCalls = sendMedia.mock.calls.length;
           await dispatch(`msg-${fmt.name}-${index}`, {
             from: `+1${index}`,
@@ -218,10 +206,11 @@ describe("web auto-reply", () => {
           });
           expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
           const payload = imagePayloadAt(sendMedia, beforeCalls);
-          expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
-          expect(payload.mimetype).toBe("image/jpeg");
+          expect(payload.image.length).toBeGreaterThan(0);
+          expect(payload.image.length).toBeLessThanOrEqual(1024 * 1024);
+          expect(payload.mimetype).toBe(fmt.mime);
         }
-        expect(sendMedia).toHaveBeenCalledTimes(renderedFormats.length);
+        expect(sendMedia).toHaveBeenCalledTimes(formats.length);
         expect(reply).not.toHaveBeenCalled();
       } finally {
         fetchMock.mockRestore();

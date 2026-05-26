@@ -633,7 +633,7 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
-  it("attaches meeting notes capture to an existing voice session", async () => {
+  it("attaches transcripts capture to an existing voice session", async () => {
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -641,7 +641,7 @@ describe("DiscordVoiceManager", () => {
     const result = await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -649,17 +649,17 @@ describe("DiscordVoiceManager", () => {
     );
 
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof onUtterance };
     };
     expect(result.ok).toBe(true);
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-    expect(entry.meetingNotes).toEqual({
+    expect(entry.transcripts).toEqual({
       sessionId: "notes-1",
       onUtterance,
     });
   });
 
-  it("does not leave a newer meeting-notes-only session for a stale stop", async () => {
+  it("does not leave a newer transcripts-only session for a stale stop", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -674,7 +674,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance: firstUtterance,
         },
@@ -683,7 +683,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-2",
           onUtterance: secondUtterance,
         },
@@ -692,21 +692,21 @@ describe("DiscordVoiceManager", () => {
 
     const result = await manager.leave(
       { guildId: "g1", channelId: "1001" },
-      { meetingNotesSessionId: "notes-1" },
+      { transcriptsSessionId: "notes-1" },
     );
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof secondUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof secondUtterance };
     };
 
     expect(result.ok).toBe(false);
-    expect(entry.meetingNotes).toEqual({
+    expect(entry.transcripts).toEqual({
       sessionId: "notes-2",
       onUtterance: secondUtterance,
     });
     expectConnectedStatus(manager, "1001");
   });
 
-  it("upgrades a meeting-notes-only session to realtime on a normal join", async () => {
+  it("upgrades a transcripts-only session to realtime on a normal join", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -720,7 +720,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -729,7 +729,7 @@ describe("DiscordVoiceManager", () => {
     expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
 
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof onUtterance };
       realtime?: unknown;
     };
     let resolveRealtimeReady!: () => void;
@@ -750,7 +750,7 @@ describe("DiscordVoiceManager", () => {
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
     expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1);
     expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
-    expect(entry.meetingNotes).toEqual({
+    expect(entry.transcripts).toEqual({
       sessionId: "notes-1",
       onUtterance,
     });
@@ -758,11 +758,11 @@ describe("DiscordVoiceManager", () => {
 
     const stopNotesResult = await manager.leave(
       { guildId: "g1", channelId: "1001" },
-      { meetingNotesSessionId: "notes-1" },
+      { transcriptsSessionId: "notes-1" },
     );
 
     expect(stopNotesResult.ok).toBe(true);
-    expect(entry.meetingNotes).toBeUndefined();
+    expect(entry.transcripts).toBeUndefined();
     expect(entry.realtime).toBeTruthy();
     expect(realtimeSessionMock.close).not.toHaveBeenCalled();
     expectConnectedStatus(manager, "1001");
@@ -782,7 +782,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -818,7 +818,7 @@ describe("DiscordVoiceManager", () => {
     expect(entry.realtime).toBeUndefined();
   });
 
-  it("detaches meeting notes without leaving voice during pending realtime upgrade", async () => {
+  it("detaches transcripts without leaving voice during pending realtime upgrade", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -832,14 +832,14 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
       },
     );
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof onUtterance };
       pendingRealtime?: unknown;
       realtime?: unknown;
     };
@@ -854,11 +854,11 @@ describe("DiscordVoiceManager", () => {
     await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
     const stopNotesResult = await manager.leave(
       { guildId: "g1", channelId: "1001" },
-      { meetingNotesSessionId: "notes-1" },
+      { transcriptsSessionId: "notes-1" },
     );
 
     expect(stopNotesResult.ok).toBe(true);
-    expect(entry.meetingNotes).toBeUndefined();
+    expect(entry.transcripts).toBeUndefined();
     expect(entry.pendingRealtime).toBeTruthy();
     expect(entry.realtime).toBeUndefined();
 
@@ -885,7 +885,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -912,7 +912,7 @@ describe("DiscordVoiceManager", () => {
     expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps realtime playback alive when meeting notes attaches to an existing voice session", async () => {
+  it("keeps realtime playback alive when transcripts attaches to an existing voice session", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -925,7 +925,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join({ guildId: "g1", channelId: "1001" });
     const player = getLastAudioPlayer();
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: (event: unknown) => Promise<void> };
+      transcripts?: { sessionId: string; onUtterance: (event: unknown) => Promise<void> };
       realtime?: {
         beginSpeakerTurn: (
           context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
@@ -941,13 +941,13 @@ describe("DiscordVoiceManager", () => {
       | undefined;
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
-    const stopCallsBeforeMeetingNotes = player.stop.mock.calls.length;
+    const stopCallsBeforeTranscripts = player.stop.mock.calls.length;
     const onUtterance = vi.fn(async () => undefined);
 
     const result = await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -955,9 +955,9 @@ describe("DiscordVoiceManager", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(entry.meetingNotes?.sessionId).toBe("notes-1");
+    expect(entry.transcripts?.sessionId).toBe("notes-1");
     expect(realtimeSessionMock.close).not.toHaveBeenCalled();
-    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeMeetingNotes);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeTranscripts);
 
     const turn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },

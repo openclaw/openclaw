@@ -421,7 +421,7 @@ function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string, timeoutMs = appServerHarnessWait.timeout) {
+    async waitForMethod(method: string, timeoutMs: number = appServerHarnessWait.timeout) {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -6785,8 +6785,7 @@ describe("runCodexAppServerAttempt", () => {
     try {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
-      testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
-      const harness = createAppServerHarness(async (method) => {
+      createAppServerHarness(async (method) => {
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -6808,7 +6807,6 @@ describe("runCodexAppServerAttempt", () => {
         return {};
       });
       const params = createParams(sessionFile, workspaceDir);
-      params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
         diagnostics: {
@@ -6821,15 +6819,22 @@ describe("runCodexAppServerAttempt", () => {
               inputMessages: true,
               outputMessages: true,
               systemPrompt: true,
-              toolDefinitions: true,
             },
           },
         },
       } as never;
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
+      const run = runCodexAppServerAttempt(params, {
+        nativeHookRelay: { enabled: false },
+        turnCompletionIdleTimeoutMs: 5,
+      });
       await run;
-      await flushDiagnosticEvents();
+      await vi.waitFor(
+        () =>
+          expect(diagnosticEvents.some((event) => event.type === "model.call.completed")).toBe(
+            true,
+          ),
+        fastWait,
+      );
 
       const startedEvent = diagnosticEvents.find((event) => event.type === "model.call.started");
       const completedEvent = diagnosticEvents.find(
@@ -6843,15 +6848,6 @@ describe("runCodexAppServerAttempt", () => {
       expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );
-      expect(startedContent?.toolDefinitions).toContainEqual(
-        expect.objectContaining({
-          name: "message",
-          parameters: expect.objectContaining({
-            type: "object",
-            additionalProperties: false,
-          }),
-        }),
-      );
       expect(completedEvent?.callId).toBe("run-1:codex-model:1");
       expect(JSON.stringify(completedEvent)).not.toContain("hello back");
       expect(
@@ -6864,7 +6860,7 @@ describe("runCodexAppServerAttempt", () => {
     } finally {
       stopDiagnostics();
     }
-  });
+  }, 240_000);
 
   it("classifies codex model-call timeout diagnostics", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];

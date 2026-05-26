@@ -9,7 +9,6 @@
   "type": "module",
   "dependencies": {
     "@clawdbot/lobster": "2026.5.22",
-    "ajv": "8.20.0",
     "typebox": "1.1.38"
   },
   "devDependencies": {

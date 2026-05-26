@@ -29,7 +29,7 @@ fi
 last_status=1
 for attempt in $(seq 1 "$attempts"); do
   echo "==> Pull Docker image attempt ${attempt}/${attempts}: ${image}"
-  if timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"; then
+  if timeout --kill-after=30s "${timeout_seconds}s" docker pull "$image"; then
     exit 0
   fi
   last_status="$?"

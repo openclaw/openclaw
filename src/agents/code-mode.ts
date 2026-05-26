@@ -133,6 +133,7 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
+let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -412,6 +413,9 @@ function rejectsModuleAccess(code: string): boolean {
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
+  if (typescriptRuntimeForTest) {
+    return typescriptRuntimeForTest;
+  }
   typescriptRuntimePromise ??= import("typescript");
   return await typescriptRuntimePromise;
 }
@@ -992,5 +996,8 @@ export const testing = {
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+    typescriptRuntimeForTest = runtime;
+  },
 };
 export { testing as __testing };

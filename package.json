@@ -50,7 +50,6 @@
     "!dist/extensions/line/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
-    "!dist/extensions/meeting-notes/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/msteams/**",
     "!dist/extensions/nextcloud-talk/**",
@@ -1011,9 +1010,9 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
-    "./plugin-sdk/meeting-notes": {
-      "types": "./dist/plugin-sdk/meeting-notes.d.ts",
-      "default": "./dist/plugin-sdk/meeting-notes.js"
+    "./plugin-sdk/transcripts": {
+      "types": "./dist/plugin-sdk/transcripts.d.ts",
+      "default": "./dist/plugin-sdk/transcripts.js"
     },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
@@ -1817,7 +1816,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.3.0",
     "@openclaw/proxyline": "0.3.3",
-    "ajv": "8.20.0",
+    "@silvia-odwyer/photon-node": "0.3.4",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "commander": "14.0.3",

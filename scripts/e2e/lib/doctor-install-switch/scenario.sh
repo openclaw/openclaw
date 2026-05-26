@@ -24,7 +24,7 @@ mkdir -p "$git_root"
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 (
   cd "$git_root"
-  npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
+  openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
   git init -q
   git config user.email "docker-e2e@openclaw.local"
   git config user.name "OpenClaw Docker E2E"
@@ -32,7 +32,7 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
   git commit -qm "test fixture"
 )
 npm_log="/tmp/openclaw-doctor-switch-npm-install.log"
-if ! npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz" >"$npm_log" 2>&1; then
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz" >"$npm_log" 2>&1; then
   cat "$npm_log"
   exit 1
 fi

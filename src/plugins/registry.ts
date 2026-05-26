@@ -175,7 +175,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
-  MeetingNotesSourceProviderPlugin,
+  TranscriptSourceProvider,
   MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -1287,16 +1287,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerMeetingNotesSourceProvider = (
+  const registerTranscriptSourceProvider = (
     record: PluginRecord,
-    provider: MeetingNotesSourceProviderPlugin,
+    provider: TranscriptSourceProvider,
   ) => {
     registerUniqueProviderLike({
       record,
       provider,
-      kindLabel: "meeting notes source provider",
-      registrations: registry.meetingNotesSourceProviders,
-      ownedIds: record.meetingNotesSourceProviderIds,
+      kindLabel: "transcripts source provider",
+      registrations: registry.transcriptSourceProviders,
+      ownedIds: record.transcriptSourceProviderIds,
     });
   };
 
@@ -2639,8 +2639,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerRealtimeVoiceProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
-              registerMeetingNotesSourceProvider: (provider) =>
-                registerMeetingNotesSourceProvider(record, provider),
+              registerTranscriptSourceProvider: (provider) =>
+                registerTranscriptSourceProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
@@ -3104,7 +3104,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
-    registerMeetingNotesSourceProvider,
+    registerTranscriptSourceProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,

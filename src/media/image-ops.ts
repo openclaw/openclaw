@@ -111,6 +111,22 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .toSorted((a, b) => b - a);
 }
 
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function buildFfmpegResizeFilter(maxSide: number, withoutEnlargement?: boolean): string {
+  const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+  if (withoutEnlargement === false) {
+    return `scale=w=${side}:h=${side}:force_original_aspect_ratio=decrease`;
+  }
+  return `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`;
+}
+
+export const testing = {
+  buildFfmpegResizeFilter,
+};
+
 function wrapRastermillUnavailable(operation: string, error: unknown): never {
   if (error instanceof RastermillUnavailableError) {
     throw new ImageProcessorUnavailableError(operation, error.message, error.causes);

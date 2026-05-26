@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoLocal = resolveCrabboxBinary(process.env, process.platform);
+const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
+const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const binary =
   repoLocal ??
@@ -133,6 +134,15 @@ const shellControlCommandPrefixes = new Set([
   "!",
 ]);
 const shellCommandExecutionPrefixes = new Set(["exec"]);
+const shellInlineCommandInterpreters = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+const shellInlineCommandOptionsWithNextValue = new Set([
+  "+O",
+  "+o",
+  "-O",
+  "-o",
+  "--init-file",
+  "--rcfile",
+]);
 
 function escapeBatchCommand(command) {
   return `${command}`.replace(cmdMetaCharactersRe, "^$1");
@@ -552,18 +562,38 @@ function commandRuntimeEntrypoint(commandArgs) {
 
 function commandWordsRuntimeEntrypoint(words) {
   const first = (words[0] ?? "").split("/").pop();
-  return jsRuntimeEntrypoints.has(first) ? first : "";
+  if (jsRuntimeEntrypoints.has(first)) {
+    return first;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return "";
+  }
+  for (const candidateWords of shellCommandWordCandidates(inlineCommand)) {
+    const shellRuntime = commandWordsRuntimeEntrypoint(candidateWords);
+    if (shellRuntime) {
+      return shellRuntime;
+    }
+  }
+  return "";
 }
 
 function isChangedGateCommand(commandArgs) {
   if (commandArgs.length === 1) {
-    return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateWords);
+    return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateCommandWords);
   }
   const words = normalizedCommandWords(commandArgs);
+  return isChangedGateCommandWords(words);
+}
+
+function isChangedGateCommandWords(words) {
   if (isChangedGateWords(words)) {
     return true;
   }
-  return false;
+
+  const inlineCommand = shellInlineCommand(words);
+  return inlineCommand ? shellCommandWordCandidates(inlineCommand).some(isChangedGateCommandWords) : false;
 }
 
 function isChangedGateWords(words) {
@@ -576,6 +606,34 @@ function isChangedGateWords(words) {
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
     (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
   );
+}
+
+function shellInlineCommand(words) {
+  const command = shellWordBasename(words[0]);
+  if (!shellInlineCommandInterpreters.has(command)) {
+    return "";
+  }
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--") {
+      return "";
+    }
+    if (!word.startsWith("-") && !word.startsWith("+")) {
+      return "";
+    }
+    if (word === "-c" || /^-[^-]*c/u.test(word)) {
+      return words[index + 1] ?? "";
+    }
+    if (shellInlineCommandOptionConsumesNextValue(word)) {
+      index += 1;
+    }
+  }
+  return "";
+}
+
+function shellInlineCommandOptionConsumesNextValue(word) {
+  return shellInlineCommandOptionsWithNextValue.has(word) || /^[+-][^-+]*[oO]$/u.test(word);
 }
 
 function shellCommandWordCandidates(command) {
@@ -1105,6 +1163,9 @@ function remoteAwsMacosJsBootstrap() {
     `node_version=${shellQuote(nodeVersion)};`,
     'arch="$(uname -m)";',
     'case "$arch" in arm64) node_arch=arm64 ;; x86_64) node_arch=x64 ;; *) echo "unsupported macOS arch: $arch" >&2; return 2 ;; esac;',
+    'if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR" 2>/dev/null || export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then echo "usable TMPDIR not found: $TMPDIR" >&2; return 1; fi;',
     'node_dir="$tool_root/node-v${node_version}-darwin-${node_arch}";',
     'export PATH="$node_dir/bin:$pnpm_home:$PATH";',
     'if [ ! -x "$node_dir/bin/node" ]; then',

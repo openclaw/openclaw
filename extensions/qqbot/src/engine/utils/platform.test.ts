@@ -177,15 +177,24 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     return dir;
   }
 
+  function isPathInsideOrEqual(candidate: string, parent: string): boolean {
+    const relative = path.relative(parent, candidate);
+    return (
+      relative === "" ||
+      (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    );
+  }
+
   it("accepts files under $OPENCLAW_HOME/.openclaw/media/qqbot when OPENCLAW_HOME differs from HOME", () => {
     const fakeOpenclawHome = makeFakeOpenclawHome();
-    // Sanity: the fake OPENCLAW_HOME must not be a subpath of the real OS home,
-    // otherwise the test would pass for the wrong reason on hosts where
-    // `os.tmpdir()` happens to live under `$HOME`.
-    expect(fakeOpenclawHome.startsWith(realOsHome)).toBe(false);
     vi.stubEnv("OPENCLAW_HOME", fakeOpenclawHome);
 
     const mediaFile = path.join(fakeOpenclawHome, ".openclaw", "media", "qqbot", "repro.png");
+    // Sanity: the fixture must not be accepted by the previous HOME media root.
+    // On Windows, `os.tmpdir()` commonly lives under the user profile, so a raw
+    // HOME-prefix assertion would make this test fail for the wrong reason.
+    const oldHomeMediaRoot = path.join(realOsHome, ".openclaw", "media", "qqbot");
+    expect(isPathInsideOrEqual(mediaFile, oldHomeMediaRoot)).toBe(false);
     fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
     fs.writeFileSync(mediaFile, "image", "utf8");
 

@@ -12,6 +12,29 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function resolveHomePath(value) {
+  if (value === "~") {
+    return process.env.HOME;
+  }
+  if (value?.startsWith("~/") || value?.startsWith("~\\")) {
+    return path.join(process.env.HOME ?? "", value.slice(2));
+  }
+  return value;
+}
+
+function comparablePath(value) {
+  const resolved = path.resolve(resolveHomePath(value));
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function pathsEqual(left, right) {
+  return comparablePath(left) === comparablePath(right);
+}
+
 function configPath() {
   return (
     process.env.OPENCLAW_CONFIG_PATH ??
@@ -27,6 +50,12 @@ function assert(condition, message) {
 
 function writeConfig(cfg) {
   fs.writeFileSync(configPath(), `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
+function installRecords() {
+  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
+  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
+  return records.installRecords ?? records.records ?? {};
 }
 
 function assertOnboard() {
@@ -65,16 +94,63 @@ function assertFileContains() {
   assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
 }
 
+function rememberPluginInstallPath() {
+  const pluginId = process.argv[3];
+  const installPathFile = process.argv[4];
+  const sourcePathFile = process.argv[5];
+  const expectedSourcePath = process.argv[6];
+  assert(pluginId, "missing plugin id");
+  assert(installPathFile, "missing install path file");
+  const record = installRecords()[pluginId];
+  assert(record, `missing install record for ${pluginId}`);
+  const installPath = resolveHomePath(record.installPath);
+  assert(installPath, `install path missing for ${pluginId}`);
+  assert(fs.existsSync(installPath), `install path missing on disk for ${pluginId}: ${installPath}`);
+  if (expectedSourcePath && record.sourcePath) {
+    assert(
+      pathsEqual(record.sourcePath, expectedSourcePath),
+      `unexpected source path for ${pluginId}: ${record.sourcePath}, expected ${expectedSourcePath}`,
+    );
+  }
+  fs.writeFileSync(installPathFile, installPath, "utf8");
+  if (sourcePathFile && (expectedSourcePath || record.sourcePath)) {
+    fs.writeFileSync(
+      sourcePathFile,
+      expectedSourcePath || resolveHomePath(record.sourcePath),
+      "utf8",
+    );
+  }
+}
+
 function assertPluginUninstalled() {
   const pluginId = process.argv[3];
+  const installPathFile = process.argv[4];
+  const sourcePathFile = process.argv[5];
   const cfg = readJson(configPath());
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  const installRecords = records.installRecords ?? records.records ?? {};
-  assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
+  const records = installRecords();
+  assert(!records[pluginId], `install record still present for ${pluginId}`);
   assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
   assert(!(cfg.plugins?.allow ?? []).includes(pluginId), `allowlist still contains ${pluginId}`);
   assert(!(cfg.plugins?.deny ?? []).includes(pluginId), `denylist still contains ${pluginId}`);
+  if (!installPathFile) {
+    return;
+  }
+  const installPath = fs.readFileSync(installPathFile, "utf8").trim();
+  const sourcePath =
+    sourcePathFile && fs.existsSync(sourcePathFile)
+      ? fs.readFileSync(sourcePathFile, "utf8").trim()
+      : "";
+  if (sourcePath) {
+    assert(
+      fs.existsSync(sourcePath),
+      `source path was deleted during uninstall for ${pluginId}: ${sourcePath}`,
+    );
+  }
+  const installPathIsSourcePath = sourcePath ? pathsEqual(installPath, sourcePath) : false;
+  assert(
+    installPathIsSourcePath || !fs.existsSync(installPath),
+    `managed plugin directory still present: ${installPath}`,
+  );
 }
 
 function configureClickClack() {
@@ -183,6 +259,7 @@ async function waitClickClackReply() {
 
 const commands = {
   "assert-onboard": assertOnboard,
+  "remember-plugin-install-path": rememberPluginInstallPath,
   "configure-mock-model": configureMockModel,
   "assert-agent-turn": assertAgentTurn,
   "assert-file-contains": assertFileContains,

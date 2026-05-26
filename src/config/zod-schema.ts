@@ -817,6 +817,28 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    transcripts: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxUtterances: z.number().int().min(1).max(10_000).optional(),
+        autoStart: z
+          .array(
+            z
+              .object({
+                providerId: z.string().min(1),
+                sessionId: z.string().min(1).optional(),
+                title: z.string().min(1).optional(),
+                accountId: z.string().min(1).optional(),
+                guildId: z.string().min(1).optional(),
+                channelId: z.string().min(1).optional(),
+                meetingUrl: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     commitments: CommitmentsSchema,
     hooks: z
       .object({
