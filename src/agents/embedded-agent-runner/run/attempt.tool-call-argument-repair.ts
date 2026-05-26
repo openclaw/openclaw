@@ -422,7 +422,6 @@ function tryExtractSmartQuotedToolCallArguments(raw: string): ToolCallArgumentRe
   }
   const suffix = raw.slice(parsed.endIndex).trim();
   if (
-    (leadingPrefix.length === 0 && suffix.length === 0) ||
     suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
     (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
   ) {

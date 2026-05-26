@@ -303,6 +303,15 @@ const re = /\d+/;
     expectAllToolCallArgs(result, { command: "pwd", workdir: "/tmp" });
   });
 
+  it("repairs an exact smart-quoted argument object without preamble or trailing junk", async () => {
+    const result = await runToolCallRepairCase({
+      toolName: "read",
+      delta: "{“path”:“safe.txt”}",
+    });
+
+    expectAllToolCallArgs(result, { path: "safe.txt" });
+  });
+
   it("keeps duplicate-looking smart-quoted args inside content", async () => {
     const result = await runToolCallRepairCase({
       delta: String.raw` {“path”:“safe.txt”,“content”:“text ”, “path”: “other.txt””}`,
