@@ -12,16 +12,12 @@ import {
   resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
-  buildExecApprovalPendingReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
-  getExecApprovalReplyMetadata,
-  resolveExecApprovalCommandDisplay,
-  resolveExecApprovalRequestAllowedDecisions,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type {
-  ExecApprovalReplyDecision,
-  ExecApprovalRequest,
-  PluginApprovalRequest,
+  buildApprovalReactionPendingContentForRequest,
+  shouldSuppressLocalNativeExecApprovalPrompt,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  type ExecApprovalRequest,
+  type PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type {
   ChannelApprovalCapability,
@@ -59,11 +55,6 @@ type SignalApprovalTarget = {
 };
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
-const DEFAULT_PLUGIN_APPROVAL_DECISIONS: readonly ExecApprovalReplyDecision[] = [
-  "allow-once",
-  "allow-always",
-  "deny",
-];
 
 function isSignalApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -406,44 +397,16 @@ export function shouldSuppressLocalSignalExecApprovalPrompt(params: {
   payload: ReplyPayload;
   hint?: ChannelOutboundPayloadHint;
 }): boolean {
-  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
-    return false;
-  }
-  if (params.hint.nativeRouteActive !== true) {
-    return false;
-  }
-  const metadata = getExecApprovalReplyMetadata(params.payload);
-  if (!metadata || metadata.approvalKind !== "exec") {
-    return false;
-  }
-  if (!isSignalApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig({
-    cfg: params.cfg,
-    approvalKind: "exec",
-  });
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (!approvalModeIncludesSession(mode)) {
-    return false;
-  }
-  if (getSignalApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0) {
-    const sessionTarget = resolveSignalSessionTargetFromSessionKey(metadata.sessionKey);
-    if (!sessionTarget || isSignalGroupTarget(sessionTarget)) {
-      return false;
-    }
-  }
-  return matchesApprovalRequestFilters({
-    request: {
-      agentId: metadata.agentId,
-      sessionKey: metadata.sessionKey,
+  return shouldSuppressLocalNativeExecApprovalPrompt({
+    ...params,
+    isTransportEnabled: isSignalApprovalTransportEnabled,
+    isSessionRouteEligible: ({ cfg, accountId, metadata }) => {
+      if (getSignalApprovalApprovers({ cfg, accountId }).length > 0) {
+        return true;
+      }
+      const sessionTarget = resolveSignalSessionTargetFromSessionKey(metadata.sessionKey);
+      return Boolean(sessionTarget && !isSignalGroupTarget(sessionTarget));
     },
-    agentFilter: config.agentFilter,
-    sessionFilter: config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
   });
 }
 
@@ -496,60 +459,15 @@ const resolveSignalApproverDmTargets = createChannelApproverDmTargetResolver({
   },
 });
 
-function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
-}
-
-function buildSignalExecPendingPayload(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ExecApprovalRequest;
-  nowMs: number;
-}) {
-  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
-  const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
-  const payload = buildExecApprovalPendingReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    approvalCommandId: params.request.id,
-    warningText: params.request.request.warningText ?? undefined,
-    ask: params.request.request.ask ?? null,
-    agentId: params.request.request.agentId ?? null,
-    allowedDecisions,
-    command,
-    cwd: params.request.request.cwd ?? undefined,
-    host: params.request.request.host === "node" ? "node" : "gateway",
-    nodeId: params.request.request.nodeId ?? undefined,
-    sessionKey: params.request.request.sessionKey ?? null,
-    expiresAtMs: params.request.expiresAtMs,
-    nowMs: params.nowMs,
-  });
-  return {
-    ...payload,
-    text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-  };
+function buildSignalExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
+  return buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload;
 }
 
 function buildSignalPluginPendingPayload(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
   request: PluginApprovalRequest;
   nowMs: number;
 }) {
-  const configuredDecisions = params.request.request.allowedDecisions;
-  const allowedDecisions =
-    configuredDecisions && configuredDecisions.length > 0
-      ? configuredDecisions
-      : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
-  const payload = buildPluginApprovalPendingReplyPayload({
-    request: params.request,
-    nowMs: params.nowMs,
-    allowedDecisions,
-  });
-  return {
-    ...payload,
-    text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-  };
+  return buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload;
 }
 
 export const signalApprovalCapability: ChannelApprovalCapability = createChannelApprovalCapability({
@@ -644,19 +562,15 @@ export const signalApprovalCapability: ChannelApprovalCapability = createChannel
   },
   render: {
     exec: {
-      buildPendingPayload: ({ cfg, request, target, nowMs }) =>
+      buildPendingPayload: ({ request, nowMs }) =>
         buildSignalExecPendingPayload({
-          cfg,
-          accountId: target.accountId,
           request,
           nowMs,
         }),
     },
     plugin: {
-      buildPendingPayload: ({ cfg, request, target, nowMs }) =>
+      buildPendingPayload: ({ request, nowMs }) =>
         buildSignalPluginPendingPayload({
-          cfg,
-          accountId: target.accountId,
           request,
           nowMs,
         }),

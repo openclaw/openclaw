@@ -1,4 +1,12 @@
 import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
+import {
+  buildApprovalReactionHint,
+  createApprovalReactionTargetStore,
+  listApprovalReactionBindings,
+  resolveApprovalReactionTarget,
+  type ApprovalReactionDecisionBinding,
+  type ApprovalReactionTargetRecord,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -11,31 +19,11 @@ import { looksLikeUuid } from "./identity.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
-const SIGNAL_APPROVAL_REACTION_META = {
-  "allow-once": {
-    emoji: "👍",
-    label: "Allow Once",
-  },
-  deny: {
-    emoji: "👎",
-    label: "Deny",
-  },
-} satisfies Partial<Record<ExecApprovalReplyDecision, { emoji: string; label: string }>>;
-
-const SIGNAL_APPROVAL_REACTION_ORDER = [
-  "allow-once",
-  "deny",
-] as const satisfies readonly ExecApprovalReplyDecision[];
-
 const PERSISTENT_NAMESPACE = "signal.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type SignalApprovalReactionBinding = {
-  decision: ExecApprovalReplyDecision;
-  emoji: string;
-  label: string;
-};
+export type SignalApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type SignalApprovalReactionResolution = {
   approvalId: string;
@@ -54,33 +42,23 @@ type SignalApprovalReactionRoute = {
   sessionKey?: string;
 };
 
-type SignalApprovalReactionTarget = {
-  approvalId: string;
+type SignalApprovalReactionTarget = ApprovalReactionTargetRecord<SignalApprovalReactionRoute> & {
   approvalKind: ApprovalKind;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
   targetAuthorKeys: readonly string[];
   route: SignalApprovalReactionRoute;
 };
 
-type PersistedSignalApprovalReactionTarget = {
-  version: 1;
-  target: SignalApprovalReactionTarget;
-};
-
-type SignalApprovalReactionStore = {
-  register(
-    key: string,
-    value: PersistedSignalApprovalReactionTarget,
-    opts?: { ttlMs?: number },
-  ): Promise<void>;
-  lookup(key: string): Promise<PersistedSignalApprovalReactionTarget | undefined>;
-  delete(key: string): Promise<boolean>;
-};
-
-const signalApprovalReactionTargets = new Map<string, SignalApprovalReactionTarget>();
-let persistentStore: SignalApprovalReactionStore | undefined;
-let persistentStoreDisabled = false;
 let resolverRuntimePromise: Promise<typeof import("./approval-resolver.js")> | undefined;
+
+const signalApprovalReactionTargets =
+  createApprovalReactionTargetStore<SignalApprovalReactionTarget>({
+    namespace: PERSISTENT_NAMESPACE,
+    maxEntries: PERSISTENT_MAX_ENTRIES,
+    defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
+    openStore: (storeParams) => getOptionalSignalRuntime()?.state.openKeyedStore(storeParams),
+    logPersistentError: reportPersistentApprovalReactionError,
+    readPersistedTarget,
+  });
 
 function loadApprovalResolver(): Promise<typeof import("./approval-resolver.js")> {
   resolverRuntimePromise ??= import("./approval-resolver.js");
@@ -197,112 +175,42 @@ function reportPersistentApprovalReactionError(error: unknown): void {
   }
 }
 
-function disablePersistentApprovalReactionStore(error: unknown): void {
-  persistentStoreDisabled = true;
-  persistentStore = undefined;
-  reportPersistentApprovalReactionError(error);
-}
-
-function getPersistentApprovalReactionStore(): SignalApprovalReactionStore | undefined {
-  if (persistentStoreDisabled) {
-    return undefined;
-  }
-  if (persistentStore) {
-    return persistentStore;
-  }
-  const runtime = getOptionalSignalRuntime();
-  if (!runtime) {
-    return undefined;
-  }
-  try {
-    persistentStore = runtime.state.openKeyedStore<PersistedSignalApprovalReactionTarget>({
-      namespace: PERSISTENT_NAMESPACE,
-      maxEntries: PERSISTENT_MAX_ENTRIES,
-      defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    });
-    return persistentStore;
-  } catch (error) {
-    disablePersistentApprovalReactionStore(error);
-    return undefined;
-  }
-}
-
-function readPersistedTarget(value: unknown): SignalApprovalReactionTarget | null {
-  const persisted = value as PersistedSignalApprovalReactionTarget | undefined;
+function readPersistedTarget(target: unknown): SignalApprovalReactionTarget | null {
+  const value = target as Partial<SignalApprovalReactionTarget> | null | undefined;
   if (
-    persisted?.version !== 1 ||
-    !persisted.target ||
-    typeof persisted.target.approvalId !== "string" ||
-    (persisted.target.approvalKind !== "exec" && persisted.target.approvalKind !== "plugin") ||
-    !persisted.target.route ||
-    persisted.target.route.deliveryMode !== "session" ||
-    !Array.isArray(persisted.target.targetAuthorKeys) ||
-    !Array.isArray(persisted.target.allowedDecisions)
+    !value ||
+    typeof value.approvalId !== "string" ||
+    (value.approvalKind !== "exec" && value.approvalKind !== "plugin") ||
+    !value.route ||
+    value.route.deliveryMode !== "session" ||
+    !Array.isArray(value.targetAuthorKeys) ||
+    !Array.isArray(value.allowedDecisions)
   ) {
     return null;
   }
-  return persisted.target;
-}
-
-function rememberPersistentApprovalReactionTarget(params: {
-  key: string;
-  target: SignalApprovalReactionTarget;
-  ttlMs?: number;
-}): void {
-  const ttlMs = params.ttlMs == null ? DEFAULT_REACTION_TARGET_TTL_MS : Math.max(1, params.ttlMs);
-  const store = getPersistentApprovalReactionStore();
-  if (!store) {
-    return;
-  }
-  void store
-    .register(params.key, { version: 1, target: params.target }, { ttlMs })
-    .catch(disablePersistentApprovalReactionStore);
-}
-
-function forgetPersistentApprovalReactionTarget(key: string): void {
-  const store = getPersistentApprovalReactionStore();
-  if (!store) {
-    return;
-  }
-  void store.delete(key).catch(disablePersistentApprovalReactionStore);
-}
-
-async function lookupPersistentApprovalReactionTarget(
-  key: string,
-): Promise<SignalApprovalReactionTarget | null> {
-  const store = getPersistentApprovalReactionStore();
-  if (!store) {
-    return null;
-  }
-  try {
-    return readPersistedTarget(await store.lookup(key));
-  } catch (error) {
-    disablePersistentApprovalReactionStore(error);
-    return null;
-  }
+  return {
+    approvalId: value.approvalId,
+    approvalKind: value.approvalKind,
+    allowedDecisions: value.allowedDecisions,
+    targetAuthorKeys: value.targetAuthorKeys,
+    route: {
+      deliveryMode: "session",
+      ...(typeof value.route.agentId === "string" ? { agentId: value.route.agentId } : {}),
+      ...(typeof value.route.sessionKey === "string" ? { sessionKey: value.route.sessionKey } : {}),
+    },
+  };
 }
 
 export function listSignalApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): SignalApprovalReactionBinding[] {
-  const allowed = new Set(allowedDecisions);
-  return SIGNAL_APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision)).map(
-    (decision) => ({
-      decision,
-      emoji: SIGNAL_APPROVAL_REACTION_META[decision].emoji,
-      label: SIGNAL_APPROVAL_REACTION_META[decision].label,
-    }),
-  );
+  return listApprovalReactionBindings({ allowedDecisions });
 }
 
 export function buildSignalApprovalReactionHint(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): string | null {
-  const bindings = listSignalApprovalReactionBindings(allowedDecisions);
-  if (bindings.length === 0) {
-    return null;
-  }
-  return `React with:\n\n${bindings.map((binding) => `${binding.emoji} ${binding.label}`).join("\n")}`;
+  return buildApprovalReactionHint({ allowedDecisions });
 }
 
 function insertSignalApprovalReactionHintNearHeader(params: {
@@ -340,26 +248,6 @@ export function hasSignalApprovalReactionApprovers(params: {
   accountId?: string | null;
 }): boolean {
   return getSignalApprovalApprovers(params).length > 0;
-}
-
-function resolveSignalApprovalReactionDecision(
-  reactionKey: string,
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): ExecApprovalReplyDecision | null {
-  const normalizedReaction = reactionKey.trim();
-  if (!normalizedReaction) {
-    return null;
-  }
-  const allowed = new Set(allowedDecisions);
-  for (const decision of SIGNAL_APPROVAL_REACTION_ORDER) {
-    if (!allowed.has(decision)) {
-      continue;
-    }
-    if (SIGNAL_APPROVAL_REACTION_META[decision].emoji === normalizedReaction) {
-      return decision;
-    }
-  }
-  return null;
 }
 
 export function registerSignalApprovalReactionTarget(params: {
@@ -407,8 +295,7 @@ export function registerSignalApprovalReactionTarget(params: {
     targetAuthorKeys,
     route,
   };
-  signalApprovalReactionTargets.set(key, target);
-  rememberPersistentApprovalReactionTarget({ key, target, ttlMs: params.ttlMs });
+  signalApprovalReactionTargets.register(key, target, { ttlMs: params.ttlMs });
   return target;
 }
 
@@ -422,7 +309,6 @@ export function unregisterSignalApprovalReactionTarget(params: {
     return;
   }
   signalApprovalReactionTargets.delete(key);
-  forgetPersistentApprovalReactionTarget(key);
 }
 
 function resolveTarget(params: {
@@ -440,18 +326,19 @@ function resolveTarget(params: {
   ) {
     return null;
   }
-  const decision = resolveSignalApprovalReactionDecision(
-    params.reactionKey,
-    target.allowedDecisions,
-  );
-  return decision
-    ? {
-        approvalId: target.approvalId,
-        approvalKind: target.approvalKind,
-        decision,
-        route: target.route,
-      }
-    : null;
+  const resolved = resolveApprovalReactionTarget<SignalApprovalReactionRoute>({
+    target,
+    reactionKey: params.reactionKey,
+  });
+  if (!resolved?.route) {
+    return null;
+  }
+  return {
+    approvalId: resolved.approvalId,
+    approvalKind: resolved.approvalKind,
+    decision: resolved.decision,
+    route: resolved.route,
+  };
 }
 
 export async function resolveSignalApprovalReactionTargetWithPersistence(params: {
@@ -470,23 +357,11 @@ export async function resolveSignalApprovalReactionTargetWithPersistence(params:
   if (targetAuthorKeys.length === 0) {
     return null;
   }
-  const inMemory = resolveTarget({
-    target: signalApprovalReactionTargets.get(key),
+  return resolveTarget({
+    target: await signalApprovalReactionTargets.lookup(key),
     reactionKey: params.reactionKey,
     targetAuthorKeys,
   });
-  if (inMemory) {
-    return inMemory;
-  }
-  const persisted = resolveTarget({
-    target: await lookupPersistentApprovalReactionTarget(key),
-    reactionKey: params.reactionKey,
-    targetAuthorKeys,
-  });
-  if (persisted) {
-    return persisted;
-  }
-  return null;
 }
 
 export async function maybeResolveSignalApprovalReaction(params: {
@@ -582,8 +457,6 @@ export async function maybeResolveSignalApprovalReaction(params: {
 }
 
 export function clearSignalApprovalReactionTargetsForTest(): void {
-  signalApprovalReactionTargets.clear();
-  persistentStore = undefined;
-  persistentStoreDisabled = false;
+  signalApprovalReactionTargets.clearForTest();
   resolverRuntimePromise = undefined;
 }

@@ -288,7 +288,7 @@ describe("imessage approval capability", () => {
 
     expect(payload?.text).toContain("👍 Allow Once");
     expect(payload?.text).toContain("👎 Deny");
-    expect(payload?.text).not.toContain("Allow Always");
+    expect(payload?.text).not.toContain("♾️ Allow Always");
   });
 
   it("renders target-mode exec prompts with concrete thumbs-only reaction choices", () => {

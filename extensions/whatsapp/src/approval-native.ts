@@ -11,15 +11,9 @@ import {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
-import {
-  buildExecApprovalPendingReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
-  resolveExecApprovalCommandDisplay,
-  resolveExecApprovalRequestAllowedDecisions,
-} from "openclaw/plugin-sdk/approval-runtime";
+import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
   ExecApprovalRequest,
-  ExecApprovalReplyDecision,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
@@ -36,7 +30,6 @@ import {
   resolveWhatsAppAccount,
 } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
-import { addWhatsAppApprovalReactionHintToText } from "./approval-reactions.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -55,11 +48,6 @@ type WhatsAppApprovalTarget = {
 };
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
-const DEFAULT_PLUGIN_APPROVAL_DECISIONS: readonly ExecApprovalReplyDecision[] = [
-  "allow-once",
-  "allow-always",
-  "deny",
-];
 
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -422,69 +410,15 @@ const resolveWhatsAppApproverDmTargets = createChannelApproverDmTargetResolver({
   },
 });
 
-function appendWhatsAppReactionHint(params: {
-  text?: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addWhatsAppApprovalReactionHintToText({
-    text: params.text ?? "",
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
-function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
-}
-
 function buildWhatsAppExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
-  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
-  const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
-  const payload = buildExecApprovalPendingReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    approvalCommandId: params.request.id,
-    warningText: params.request.request.warningText ?? undefined,
-    ask: params.request.request.ask ?? null,
-    agentId: params.request.request.agentId ?? null,
-    allowedDecisions,
-    command,
-    cwd: params.request.request.cwd ?? undefined,
-    host: params.request.request.host === "node" ? "node" : "gateway",
-    nodeId: params.request.request.nodeId ?? undefined,
-    sessionKey: params.request.request.sessionKey ?? null,
-    expiresAtMs: params.request.expiresAtMs,
-    nowMs: params.nowMs,
-  });
-  return {
-    ...payload,
-    text: appendWhatsAppReactionHint({
-      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-      allowedDecisions,
-    }),
-  };
+  return buildApprovalReactionPromptPayloadForRequest(params);
 }
 
 function buildWhatsAppPluginPendingPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
 }) {
-  const configuredDecisions = params.request.request.allowedDecisions;
-  const allowedDecisions =
-    configuredDecisions && configuredDecisions.length > 0
-      ? configuredDecisions
-      : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
-  const payload = buildPluginApprovalPendingReplyPayload({
-    request: params.request,
-    nowMs: params.nowMs,
-    allowedDecisions,
-  });
-  return {
-    ...payload,
-    text: appendWhatsAppReactionHint({
-      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-      allowedDecisions,
-    }),
-  };
+  return buildApprovalReactionPromptPayloadForRequest(params);
 }
 
 export const whatsappApprovalCapability: ChannelApprovalCapability =

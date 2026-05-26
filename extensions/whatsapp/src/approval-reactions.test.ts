@@ -59,13 +59,13 @@ describe("WhatsApp approval reactions", () => {
     expect(appendWhatsAppApprovalReactionHintForOutboundMessage(prompt)).toBe(prompt);
   });
 
-  it("does not expose allow-always as a reaction choice", () => {
+  it("exposes allow-always as a reaction choice when allowed", () => {
     expect(buildWhatsAppApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
+      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
     );
   });
 
-  it("does not register reaction state when only allow-always is available", () => {
+  it("registers reaction state when only allow-always is available", async () => {
     expect(
       registerWhatsAppApprovalReactionTarget({
         accountId: "default",
@@ -74,7 +74,22 @@ describe("WhatsApp approval reactions", () => {
         approvalId: "exec-allow-always",
         allowedDecisions: ["allow-always"],
       }),
-    ).toBeNull();
+    ).toEqual({
+      approvalId: "exec-allow-always",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-always"],
+    });
+    await expect(
+      resolveWhatsAppApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "msg-allow-always",
+        reactionKey: "♾",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-allow-always",
+      decision: "allow-always",
+    });
   });
 
   it("resolves a registered reaction target", async () => {

@@ -11,15 +11,9 @@ import {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
-import {
-  buildExecApprovalPendingReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
-  resolveExecApprovalCommandDisplay,
-  resolveExecApprovalRequestAllowedDecisions,
-} from "openclaw/plugin-sdk/approval-runtime";
+import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type {
   ExecApprovalRequest,
-  ExecApprovalReplyDecision,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
@@ -36,8 +30,6 @@ import {
   resolveIMessageAccount,
 } from "./accounts.js";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
-import { addIMessageApprovalReactionHintToText } from "./approval-reactions.js";
-import { replaceApprovalIdPlaceholder } from "./approval-text.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
@@ -57,11 +49,6 @@ type IMessageApprovalTarget = {
 };
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
-const DEFAULT_PLUGIN_APPROVAL_DECISIONS: readonly ExecApprovalReplyDecision[] = [
-  "allow-once",
-  "allow-always",
-  "deny",
-];
 
 function isIMessageApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -426,65 +413,15 @@ const resolveIMessageApproverDmTargets = createChannelApproverDmTargetResolver({
   },
 });
 
-function appendIMessageReactionHint(params: {
-  text?: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addIMessageApprovalReactionHintToText({
-    text: params.text ?? "",
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
 function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
-  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
-  const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
-  const payload = buildExecApprovalPendingReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    approvalCommandId: params.request.id,
-    warningText: params.request.request.warningText ?? undefined,
-    ask: params.request.request.ask ?? null,
-    agentId: params.request.request.agentId ?? null,
-    allowedDecisions,
-    command,
-    cwd: params.request.request.cwd ?? undefined,
-    host: params.request.request.host === "node" ? "node" : "gateway",
-    nodeId: params.request.request.nodeId ?? undefined,
-    sessionKey: params.request.request.sessionKey ?? null,
-    expiresAtMs: params.request.expiresAtMs,
-    nowMs: params.nowMs,
-  });
-  return {
-    ...payload,
-    text: appendIMessageReactionHint({
-      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-      allowedDecisions,
-    }),
-  };
+  return buildApprovalReactionPromptPayloadForRequest(params);
 }
 
 function buildIMessagePluginPendingPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
 }) {
-  const configuredDecisions = params.request.request.allowedDecisions;
-  const allowedDecisions =
-    configuredDecisions && configuredDecisions.length > 0
-      ? configuredDecisions
-      : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
-  const payload = buildPluginApprovalPendingReplyPayload({
-    request: params.request,
-    nowMs: params.nowMs,
-    allowedDecisions,
-  });
-  return {
-    ...payload,
-    text: appendIMessageReactionHint({
-      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-      allowedDecisions,
-    }),
-  };
+  return buildApprovalReactionPromptPayloadForRequest(params);
 }
 
 export const imessageApprovalCapability: ChannelApprovalCapability =

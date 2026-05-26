@@ -39,9 +39,9 @@ describe("Signal approval reactions", () => {
     );
   });
 
-  it("does not expose allow-always as a reaction choice", () => {
+  it("exposes allow-always as a reaction choice when allowed", () => {
     expect(buildSignalApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
+      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
     );
   });
 
@@ -75,7 +75,7 @@ describe("Signal approval reactions", () => {
     ).toBe(prompt);
   });
 
-  it("does not register reaction state when only allow-always is available", () => {
+  it("registers reaction state when only allow-always is available", async () => {
     expect(
       registerSignalApprovalReactionTarget({
         accountId: "default",
@@ -87,7 +87,27 @@ describe("Signal approval reactions", () => {
         route: approvalRoute,
         routeAllowed: true,
       }),
-    ).toBeNull();
+    ).toEqual({
+      approvalId: "exec-allow-always",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-always"],
+      targetAuthorKeys: ["+15550009999"],
+      route: approvalRoute,
+    });
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId: "1700000000000",
+        reactionKey: "♾️",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-allow-always",
+      approvalKind: "exec",
+      decision: "allow-always",
+      route: approvalRoute,
+    });
   });
 
   it("resolves a registered reaction target", async () => {

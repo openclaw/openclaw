@@ -218,6 +218,10 @@
       "types": "./dist/plugin-sdk/approval-native-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-native-runtime.js"
     },
+    "./plugin-sdk/approval-reaction-runtime": {
+      "types": "./dist/plugin-sdk/approval-reaction-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-reaction-runtime.js"
+    },
     "./plugin-sdk/approval-reply-runtime": {
       "types": "./dist/plugin-sdk/approval-reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-reply-runtime.js"
