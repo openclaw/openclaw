@@ -340,6 +340,7 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
 
 describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
+    vi.useRealTimers();
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     rewriteTranscriptEntriesInSessionFileMock.mockClear();
     await loadFreshContextEngineMaintenanceModuleForTest();
@@ -841,6 +842,118 @@ describe("runContextEngineMaintenance", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  it("disposes owned deferred engines only after their maintenance run finishes", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-dispose-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const waitForRealAssertion = async (assertion: () => void): Promise<void> => {
+        const startedAt = Date.now();
+        for (;;) {
+          try {
+            assertion();
+            return;
+          } catch (error) {
+            if (Date.now() - startedAt >= 2_000) {
+              throw error;
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 5));
+          }
+        }
+      };
+
+      const sessionKey = "agent:main:session-owned-dispose";
+      const events: string[] = [];
+      let releaseFirstMaintenance: (() => void) | undefined;
+      let releaseSecondMaintenance: (() => void) | undefined;
+
+      const createBackgroundEngine = (id: "first" | "second") =>
+        ({
+          info: {
+            id,
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain: vi.fn(async () => {
+            events.push(`maintain:${id}`);
+            await new Promise<void>((resolve) => {
+              if (id === "first") {
+                releaseFirstMaintenance = resolve;
+              } else {
+                releaseSecondMaintenance = resolve;
+              }
+            });
+            return {
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+            };
+          }),
+          dispose: vi.fn(async () => {
+            events.push(`dispose:${id}`);
+          }),
+        }) as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+      const firstEngine = createBackgroundEngine("first");
+      const secondEngine = createBackgroundEngine("second");
+      const deferredPromises: Promise<void>[] = [];
+
+      await runContextEngineMaintenance({
+        contextEngine: firstEngine,
+        sessionId: "session-owned-dispose",
+        sessionKey,
+        sessionFile: "/tmp/session-owned-dispose.jsonl",
+        reason: "turn",
+        disposeDeferredContextEngineAfterMaintenance: true,
+        onDeferredMaintenance: (promise) => {
+          deferredPromises.push(promise);
+        },
+      });
+
+      await waitForRealAssertion(() => expect(events).toContain("maintain:first"));
+
+      await runContextEngineMaintenance({
+        contextEngine: secondEngine,
+        sessionId: "session-owned-dispose",
+        sessionKey,
+        sessionFile: "/tmp/session-owned-dispose.jsonl",
+        reason: "turn",
+        disposeDeferredContextEngineAfterMaintenance: true,
+        onDeferredMaintenance: (promise) => {
+          deferredPromises.push(promise);
+        },
+      });
+
+      if (!releaseFirstMaintenance) {
+        throw new Error("Expected first maintenance release callback to be initialized");
+      }
+      releaseFirstMaintenance();
+      await waitForRealAssertion(() => expect(events).toContain("maintain:second"));
+      expect(secondEngine.dispose).not.toHaveBeenCalled();
+
+      if (!releaseSecondMaintenance) {
+        throw new Error("Expected second maintenance release callback to be initialized");
+      }
+      releaseSecondMaintenance();
+      await deferredPromises[1];
+
+      expect(firstEngine.dispose).toHaveBeenCalledTimes(1);
+      expect(secondEngine.dispose).toHaveBeenCalledTimes(1);
+      expect(events).toEqual([
+        "maintain:first",
+        "dispose:first",
+        "maintain:second",
+        "dispose:second",
+      ]);
     });
   });
 

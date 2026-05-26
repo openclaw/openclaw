@@ -43,6 +43,45 @@ afterEach(() => {
 });
 
 describe("package-mac-app plist stamping", () => {
+  it("keeps dependency installation lockfile-safe", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const installBlock = script.slice(
+      script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]'),
+      script.indexOf('if [[ -z "${APP_BUILD:-}" ]]'),
+    );
+
+    expect(installBlock).toContain("pnpm install --frozen-lockfile");
+    expect(installBlock).toContain("--config.node-linker=hoisted");
+    expect(installBlock).not.toContain("--no-frozen-lockfile");
+  });
+
+  it("does not kill unrelated OpenClaw processes during packaging", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const stopBlock = script.slice(
+      script.indexOf("running_packaged_app_pids()"),
+      script.indexOf('echo "🔏 Signing bundle'),
+    );
+
+    expect(script).not.toContain("killall -q OpenClaw");
+    expect(stopBlock).toContain('local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"');
+    expect(stopBlock).toContain('pgrep -x "$PRODUCT"');
+    expect(stopBlock).toContain('grep -Fx "$app_binary"');
+    expect(stopBlock).toContain(
+      '[[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]',
+    );
+  });
+
+  it("keeps mac packaging script checks in the macOS CI lane", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const macosCi = pkg.scripts?.["test:macos:ci"] ?? "";
+
+    expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
+    expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
+    expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
+  });
+
   it("fails closed when required bundled resources are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
     const modelCatalogBlock = script.slice(

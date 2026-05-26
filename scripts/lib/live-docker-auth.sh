@@ -206,6 +206,11 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
+openclaw_live_timeout_supports_kill_after() {
+  command -v timeout >/dev/null 2>&1 || return 1
+  timeout --kill-after=1s 1s true >/dev/null 2>&1
+}
+
 openclaw_live_init_docker_run_args() {
   local target_array="${1:?target array required}"
   local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
@@ -213,7 +218,11 @@ openclaw_live_init_docker_run_args() {
 
   if command -v timeout >/dev/null 2>&1; then
     quoted_timeout="$(printf '%q' "$timeout_value")"
-    eval "${target_array}=(timeout ${quoted_timeout} docker run)"
+    if openclaw_live_timeout_supports_kill_after; then
+      eval "${target_array}=(timeout --kill-after=30s ${quoted_timeout} docker run)"
+    else
+      eval "${target_array}=(timeout ${quoted_timeout} docker run)"
+    fi
     return
   fi
   eval "${target_array}=(docker run)"

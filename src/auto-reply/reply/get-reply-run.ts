@@ -11,6 +11,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -46,6 +47,7 @@ import {
   normalizeThinkLevel,
   type ReasoningLevel,
   resolveSupportedThinkingLevel,
+  type ThinkingCatalogEntry,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
@@ -109,6 +111,23 @@ type InternalGetReplyOptions = GetReplyOptions & {
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function hasResolvedThinkingCatalogEntry(params: {
+  catalog?: readonly ThinkingCatalogEntry[];
+  provider: string;
+  model: string;
+}): boolean {
+  const modelId = normalizeOptionalString(params.model);
+  if (!modelId) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const entry = params.catalog?.find(
+    (candidate) =>
+      normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
+  );
+  return entry?.reasoning !== undefined;
+}
 
 export function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
@@ -708,7 +727,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    const thinkingCatalog = maybeLevel
+      ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
+          modelState.resolveThinkingCatalog(),
+        )
+      : undefined;
     if (
       maybeLevel &&
       isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
@@ -789,17 +812,38 @@ export async function runPreparedReply(
     await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+    resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
+      modelState.resolveDefaultThinkingLevel(),
+    );
   }
-  const thinkingCatalog = await modelState.resolveThinkingCatalog();
-  if (
-    !isThinkingLevelSupported({
+  const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
+  let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
+  let thinkingLevelSupported = isThinkingLevelSupported({
+    provider,
+    model,
+    level: resolvedThinkLevel,
+    catalog: thinkingCatalog,
+  });
+  const shouldHydrateThinkingCatalog =
+    !thinkingLevelSupported ||
+    (resolvedThinkLevel !== "off" &&
+      !hasResolvedThinkingCatalogEntry({ catalog: thinkingCatalog, provider, model }));
+  if (shouldHydrateThinkingCatalog) {
+    // Hydrate the runtime model catalog only when the lightweight catalog cannot
+    // prove support or lacks reasoning metadata for the selected model. The full
+    // catalog load was a 14s+ reply-blocking cost for known Codex models that
+    // already publish authoritative thinking metadata.
+    thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
+      modelState.resolveThinkingCatalog(),
+    );
+    thinkingLevelSupported = isThinkingLevelSupported({
       provider,
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
-    })
-  ) {
+    });
+  }
+  if (!thinkingLevelSupported) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();

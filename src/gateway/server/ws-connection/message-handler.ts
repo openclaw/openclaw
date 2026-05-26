@@ -1776,7 +1776,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           presence: snapshot.presence.length,
           stateVersion: snapshot.stateVersion.presence,
         });
-        void refreshHealthSnapshot({ probe: true }).catch((err) =>
+        // Post-connect refresh only needs a cached/config snapshot for UI state;
+        // live channel probes here pulled slow Discord/Telegram HTTP checks into
+        // reply-adjacent websocket handshakes.
+        void refreshHealthSnapshot({ probe: false }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;

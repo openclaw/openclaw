@@ -15,8 +15,17 @@ if ! declare -F docker_e2e_docker_cmd >/dev/null 2>&1; then
 fi
 if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   docker_e2e_docker_run_cmd() {
-    if [ -n "${DOCKER_COMMAND_TIMEOUT:-}" ] && command -v timeout >/dev/null 2>&1; then
-      timeout "$DOCKER_COMMAND_TIMEOUT" docker "$@"
+    if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+      docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
+      return
+    fi
+    local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+        timeout --kill-after=30s "$timeout_value" docker "$@"
+      else
+        timeout "$timeout_value" docker "$@"
+      fi
       return
     fi
     docker "$@"

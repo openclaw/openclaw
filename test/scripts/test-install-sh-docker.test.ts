@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -126,6 +127,8 @@ describe("test-install-sh-docker", () => {
 
     expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
     expect(script).toContain("run_docker_pull()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
     expect(script).toContain('timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
     expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
     expect(script).not.toContain('docker pull "$IMAGE_NAME"');
@@ -138,9 +141,25 @@ describe("test-install-sh-docker", () => {
       'PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"',
     );
     expect(script).toContain("run_podman_pull()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
     expect(script).toContain('timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
     expect(script).toContain('run_podman_pull "$OPENCLAW_IMAGE"');
     expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
+  });
+
+  it("bounds Podman setup image builds", () => {
+    const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
+
+    expect(script).toContain(
+      'PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"',
+    );
+    expect(script).toContain("run_podman_build()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('run_podman_build -t "$OPENCLAW_IMAGE"');
+    expect(script).not.toContain('podman build -t "$OPENCLAW_IMAGE"');
   });
 
   it("bounds detached Podman launches without timing out onboarding", () => {
@@ -149,6 +168,8 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
     expect(script).toContain("run_podman_detached()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
     expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
@@ -372,10 +393,12 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("install-smoke-fast:");
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
-    expect(workflow).toContain("timeout 45m docker buildx build");
-    expect(workflow).toContain('timeout 600s docker pull "$IMAGE_REF"');
+    expect(workflow).toContain("timeout --kill-after=30s 45m docker buildx build");
+    expect(workflow).toContain('timeout --kill-after=30s 600s docker pull "$IMAGE_REF"');
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
-    expect(workflow.match(/timeout 20m docker run --rm/g)?.length).toBe(6);
+    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(
+      6,
+    );
     expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
@@ -397,5 +420,31 @@ describe("bun global install smoke", () => {
     expect(releaseChecks).toContain("install_smoke_release_checks:");
     expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");
     expect(releaseChecks).toContain("run_bun_global_install_smoke: true");
+  });
+
+  it("kills Bun global install smoke commands that ignore TERM after timeout", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        BUN_GLOBAL_ASSERTIONS_PATH,
+        "run-with-timeout",
+        "50",
+        process.execPath,
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS: "50",
+        },
+        timeout: 5000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`command timed out after 50ms: ${process.execPath}`);
   });
 });

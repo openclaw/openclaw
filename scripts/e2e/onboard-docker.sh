@@ -42,7 +42,10 @@ set -e
 
 cat "$RUN_LOG"
 
-node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" onboard
-
-echo "E2E complete."
+if [ "$run_status" -eq 0 ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" onboard
+  echo "E2E complete."
+elif [ -s "$STATS_LOG" ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" onboard || true
+fi
 exit "$run_status"

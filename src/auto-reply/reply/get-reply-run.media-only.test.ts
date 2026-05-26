@@ -338,6 +338,39 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
+  it("hydrates runtime thinking metadata before trusting static provider support", async () => {
+    const resolveThinkingCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "high",
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog,
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.thinkLevel).toBe("off");
+  });
+
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
     await runPreparedReply(
       baseParams({

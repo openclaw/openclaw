@@ -115,7 +115,28 @@ describe("native hook relay registry", () => {
     );
   });
 
-  it("preserves safety relays while marking hook-only events without handlers inactive", () => {
+  it("preserves permission relays while marking hook-only events without handlers inactive", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
+    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
+    expect(relay.shouldRelayEvent("permission_request")).toBe(true);
+  });
+
+  it("builds pre-tool relay commands only when before-tool policy is active", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
@@ -128,9 +149,42 @@ describe("native hook relay registry", () => {
     });
 
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
-    expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
-    expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
-    expect(relay.shouldRelayEvent("permission_request")).toBe(true);
+    expect(relay.commandForEvent("pre_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --event pre_tool_use --timeout 1234`,
+    );
+  });
+
+  it("keeps pre-tool relays active when native loop detection is not disabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      command: {
+        executable: "/opt/Open Claw/openclaw.mjs",
+        nodeExecutable: "/usr/local/bin/node",
+        timeoutMs: 1234,
+      },
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.commandForEvent("pre_tool_use")).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --event pre_tool_use --timeout 1234`,
+    );
+  });
+
+  it("omits pre-tool relays when native loop detection is explicitly disabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: false } } } as never,
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
   });
 
   it("builds relay commands only for native events with matching local hooks", () => {
@@ -148,7 +202,7 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
     expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
     expect(relay.shouldRelayEvent("before_agent_finalize")).toBe(false);
     expect(relay.commandForEvent("post_tool_use")).toBe(
@@ -2282,6 +2336,21 @@ describe("native hook relay command builder", () => {
       }),
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --event permission_request --timeout 5000",
+    );
+  });
+
+  it("can lower native hook relay process priority", () => {
+    const prefix = process.platform === "win32" ? "" : "nice -n 10 ";
+    expect(
+      buildNativeHookRelayCommand({
+        provider: "codex",
+        relayId: "relay-1",
+        event: "pre_tool_use",
+        executable: "openclaw",
+        nice: 10,
+      }),
+    ).toBe(
+      `${prefix}openclaw hooks relay --provider codex --relay-id relay-1 --event pre_tool_use --timeout 5000`,
     );
   });
 });

@@ -347,6 +347,31 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Memory Get",
       detailKeys: ["path", "from", "lines"],
     },
+    transcripts: {
+      emoji: "📝",
+      title: "Transcripts",
+      actions: {
+        start: {
+          label: "start",
+          detailKeys: ["providerId", "accountId", "guildId", "channelId", "title"],
+        },
+        stop: {
+          label: "stop",
+          detailKeys: ["sessionId"],
+        },
+        status: {
+          label: "status",
+        },
+        import: {
+          label: "import",
+          detailKeys: ["providerId", "title", "speakerLabel"],
+        },
+        summarize: {
+          label: "summarize",
+          detailKeys: ["sessionId"],
+        },
+      },
+    },
     web_search: {
       emoji: "🔎",
       title: "Web Search",

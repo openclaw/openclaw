@@ -17,6 +17,7 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="$(openclaw_live_default_profile_file)"
 CODEX_HARNESS_AUTH_MODE="${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}"
+CODEX_CLI_PACKAGE_SPEC="${OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC:-}"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
@@ -69,6 +70,16 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" && ! -s "$HOME/.codex/auth.json" ]
     echo "If this is a Testbox/API-key run, set OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key and run through openclaw-testbox-env." >&2
   fi
   exit 1
+fi
+if [[ -z "$CODEX_CLI_PACKAGE_SPEC" ]]; then
+  CODEX_CLI_PACKAGE_SPEC="$(
+    node -e '
+      const pkg = require(process.argv[1]);
+      const version = pkg.dependencies?.["@openai/codex"];
+      if (!version || typeof version !== "string") process.exit(1);
+      process.stdout.write(`@openai/codex@${version}`);
+    ' "$ROOT_DIR/extensions/codex/package.json"
+  )"
 fi
 
 cleanup_temp_dirs() {
@@ -227,9 +238,8 @@ trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" != "api-key" ]; then
   node --import tsx "$trusted_scripts_dir/prepare-codex-ci-auth.ts" "$HOME/.codex/auth.json"
 fi
-if [ ! -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
-  run_setup_command npm install -g @openai/codex
-fi
+run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"
+"$NPM_CONFIG_PREFIX/bin/codex" --version
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" = "api-key" ]; then
   printf '%s\n' "$OPENAI_API_KEY" | "$NPM_CONFIG_PREFIX/bin/codex" login --with-api-key >/dev/null
 fi
@@ -299,6 +309,7 @@ echo "==> Auth mode: $CODEX_HARNESS_AUTH_MODE"
 echo "==> Profile file: $PROFILE_STATUS"
 echo "==> CI-safe Codex config: ${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}"
 echo "==> Test files: ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}"
+echo "==> Codex CLI package: $CODEX_CLI_PACKAGE_SPEC"
 echo "==> Harness fallback: none"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=()
@@ -334,6 +345,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY:-}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG="${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}" \
+  -e OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC="$CODEX_CLI_PACKAGE_SPEC" \
   -e OPENCLAW_CLI_BACKEND_LOG_OUTPUT="${OPENCLAW_CLI_BACKEND_LOG_OUTPUT:-}" \
   -e OPENCLAW_TEST_CONSOLE="${OPENCLAW_TEST_CONSOLE:-}" \
   -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \

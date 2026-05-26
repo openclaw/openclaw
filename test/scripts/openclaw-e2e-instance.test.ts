@@ -116,6 +116,70 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+  it("falls back to plain timeout when kill-after is unavailable", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-plain-timeout-"));
+    try {
+      const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
+      const npmArgsPath = path.join(tempDir, "npm-args.txt");
+      const logPath = path.join(tempDir, "install.log");
+      const packagePath = path.join(tempDir, "openclaw.tgz");
+      fs.writeFileSync(packagePath, "");
+      fs.writeFileSync(
+        path.join(tempDir, "timeout"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then',
+          "  exit 1",
+          "fi",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
+          'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "npm"),
+        ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
+      );
+      fs.chmodSync(path.join(tempDir, "timeout"), 0o755);
+      fs.chmodSync(path.join(tempDir, "npm"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")}`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
+            OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+            OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
+            OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+        `42s npm install -g ${packagePath} --no-fund --no-audit`,
+      );
+      expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
+        `install -g ${packagePath} --no-fund --no-audit`,
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("runs package installs without a wrapper when timeout is unavailable", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-no-timeout-"));
     try {

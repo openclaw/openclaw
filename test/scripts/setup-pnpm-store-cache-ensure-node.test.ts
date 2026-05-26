@@ -94,6 +94,58 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     }
   });
 
+  it("normalizes Windows toolcache paths for Git Bash before prepending PATH", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.22.3");
+      const toolcacheBin = join(root, "toolcache", "node", "24.15.0", "x64");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "24.15.0");
+      const helperBin = join(root, "helpers");
+      mkdirSync(helperBin, { recursive: true });
+      const cygpath = join(helperBin, "cygpath");
+      writeFileSync(
+        cygpath,
+        `#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then
+  echo "${toolcacheBin}"
+  exit 0
+fi
+if [[ "$1" == "-w" ]]; then
+  echo "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.15.0\\\\x64"
+  exit 0
+fi
+exit 1
+`,
+      );
+      chmodSync(cygpath, 0o755);
+      const githubPath = join(root, "github-path");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -e",
+            `export PATH=${JSON.stringify(`${helperBin}:${activeBin}:${process.env.PATH ?? ""}`)}`,
+            `export GITHUB_PATH=${JSON.stringify(githubPath)}`,
+            `source "${ensureNodeScript}"`,
+            `openclaw_prepend_node_bin "C:\\\\hostedtoolcache\\\\windows/node/24.15.0/x64"`,
+            "command -v node",
+            "node -p 'process.versions.node'",
+            `cat "${githubPath}"`,
+          ].join("; "),
+        ],
+        { encoding: "utf8", env: process.env },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
+      expect(result.stdout).toContain("C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("repairs PATH from the container-mounted GitHub Actions toolcache", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isUiTestTarget, isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
@@ -73,6 +74,7 @@ const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
   "--typecheck.",
 ];
 const require = createRequire(import.meta.url);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function isTruthyEnvValue(value) {
   return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
@@ -91,8 +93,43 @@ export function resolveVitestNodeArgs(env = process.env) {
   return ["--no-maglev"];
 }
 
-export function resolveVitestCliEntry() {
-  const vitestPackageJson = require.resolve("vitest/package.json");
+function isMissingVitestResolveError(error) {
+  return (
+    error instanceof Error &&
+    error.code === "MODULE_NOT_FOUND" &&
+    error.message.includes("vitest/package.json")
+  );
+}
+
+export function resolveMissingVitestDependencyMessage(baseDir = repoRoot, fsImpl = fs) {
+  const hasNodeModules = fsImpl.existsSync(path.join(baseDir, "node_modules"));
+  const reason = hasNodeModules
+    ? "[vitest] Vitest is not installed in node_modules."
+    : "[vitest] node_modules is missing; Vitest cannot be resolved.";
+  return [
+    reason,
+    "Install dependencies before running scripts/run-vitest.mjs:",
+    "  pnpm install --frozen-lockfile",
+    "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
+  ].join("\n");
+}
+
+export function resolveVitestCliEntry({
+  baseDir = repoRoot,
+  fsImpl = fs,
+  requireResolve = require.resolve.bind(require),
+} = {}) {
+  let vitestPackageJson;
+  try {
+    vitestPackageJson = requireResolve("vitest/package.json");
+  } catch (error) {
+    if (isMissingVitestResolveError(error)) {
+      const wrappedError = new Error(resolveMissingVitestDependencyMessage(baseDir, fsImpl));
+      wrappedError.code = "OPENCLAW_MISSING_VITEST";
+      throw wrappedError;
+    }
+    throw error;
+  }
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 }
 
@@ -529,12 +566,23 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
   const spawnEnv = resolveRunVitestSpawnEnv(env, vitestArgs);
+  let vitestCliEntry;
+  try {
+    vitestCliEntry = resolveVitestCliEntry();
+  } catch (error) {
+    if (error instanceof Error && error.code === "OPENCLAW_MISSING_VITEST") {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+
   const { child, teardown } = spawnWatchedVitestProcess({
     pnpmArgs: [
       "exec",
       "node",
       ...resolveVitestNodeArgs(env),
-      resolveVitestCliEntry(),
+      vitestCliEntry,
       ...vitestArgs,
     ],
     spawnParams: resolveVitestSpawnParams(spawnEnv),

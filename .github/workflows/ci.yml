@@ -435,7 +435,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -659,7 +659,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -745,7 +745,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -825,7 +825,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -902,7 +902,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -977,7 +977,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1099,7 +1099,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1229,7 +1229,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1378,7 +1378,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1748,7 +1748,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
