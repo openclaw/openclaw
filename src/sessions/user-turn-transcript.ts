@@ -1,13 +1,17 @@
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { logVerbose } from "../globals.js";
 import { mimeTypeFromFilePath } from "../media/mime.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
+
+type TranscriptAppendConfig = Parameters<typeof appendSessionTranscriptMessage>[0]["config"];
+
+type UserTurnSessionEntry = {
+  sessionId: string;
+  updatedAt: number;
+  sessionFile?: string;
+  threadId?: string | number;
+} & Record<string, unknown>;
 
 type PersistedUserTurnMediaInput = {
   path?: string | null;
@@ -35,6 +39,12 @@ export type UserTurnInput = {
 
 type UserTurnTranscriptUpdateMode = "inline" | "none";
 
+export type UserTurnBeforeMessageWrite = (params: {
+  message: PersistedUserTurnMessage;
+  agentId?: string;
+  sessionKey?: string;
+}) => AgentMessage | null;
+
 type AppendUserTurnTranscriptMessageParams = {
   transcriptPath: string;
   input?: UserTurnInput;
@@ -43,8 +53,9 @@ type AppendUserTurnTranscriptMessageParams = {
   agentId?: string;
   sessionKey?: string;
   cwd?: string;
-  config?: OpenClawConfig;
+  config?: TranscriptAppendConfig;
   updateMode?: UserTurnTranscriptUpdateMode;
+  beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
 type PersistUserTurnTranscriptParams = {
@@ -52,14 +63,15 @@ type PersistUserTurnTranscriptParams = {
   message?: PersistedUserTurnMessage;
   sessionId: string;
   sessionKey: string;
-  sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionEntry: UserTurnSessionEntry | undefined;
+  sessionStore?: Record<string, UserTurnSessionEntry>;
   storePath?: string;
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: OpenClawConfig;
+  config?: TranscriptAppendConfig;
   updateMode?: UserTurnTranscriptUpdateMode;
+  beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
 type UserTurnTranscriptPersistenceTarget = Omit<
@@ -73,14 +85,14 @@ type UserTurnTranscriptFileTarget = {
   agentId?: string;
   sessionKey?: string;
   cwd?: string;
-  config?: OpenClawConfig;
+  config?: TranscriptAppendConfig;
 };
 
 type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget | UserTurnTranscriptFileTarget;
 
 type UserTurnTranscriptPersistResult = {
   sessionFile: string;
-  sessionEntry: SessionEntry | undefined;
+  sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
 };
@@ -113,6 +125,7 @@ type CreateUserTurnTranscriptRecorderParams = {
   message?: PersistedUserTurnMessage;
   target: UserTurnTranscriptTargetResolver;
   updateMode?: UserTurnTranscriptUpdateMode;
+  beforeMessageWrite?: UserTurnBeforeMessageWrite;
   errorContext?: string;
   onPersistenceError?: (error: unknown) => void;
 };
@@ -351,12 +364,18 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
 
 function applyBeforeMessageWriteToUserTurn(
   message: PersistedUserTurnMessage,
-  params: Pick<AppendUserTurnTranscriptMessageParams, "agentId" | "sessionKey">,
+  params: Pick<
+    AppendUserTurnTranscriptMessageParams,
+    "agentId" | "sessionKey" | "beforeMessageWrite"
+  >,
 ): PersistedUserTurnMessage | undefined {
+  if (!params.beforeMessageWrite) {
+    return message;
+  }
   const originalMessage = message as unknown as { idempotencyKey?: unknown };
   const idempotencyKey =
     typeof originalMessage.idempotencyKey === "string" ? originalMessage.idempotencyKey : undefined;
-  const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+  const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -429,6 +448,7 @@ export async function persistUserTurnTranscript(
     return undefined;
   }
 
+  const { resolveSessionTranscriptFile } = await import("../config/sessions/transcript.js");
   const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -448,6 +468,7 @@ export async function persistUserTurnTranscript(
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.config ? { config: params.config } : {}),
     ...(params.updateMode ? { updateMode: params.updateMode } : {}),
+    ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
   });
   if (!appended) {
     return undefined;
@@ -486,9 +507,13 @@ export function createUserTurnTranscriptRecorder(
       params.onPersistenceError(error);
       return;
     }
-    logVerbose(
-      `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
-    );
+    void import("../globals.js")
+      .then(({ logVerbose }) => {
+        logVerbose(
+          `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
+        );
+      })
+      .catch(() => undefined);
   };
 
   const waitForRuntimePersistence = async () => {
@@ -537,6 +562,7 @@ export function createUserTurnTranscriptRecorder(
             ...target,
             message,
             updateMode,
+            ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
           }).then((appended) =>
             appended
               ? {
@@ -549,6 +575,7 @@ export function createUserTurnTranscriptRecorder(
             ...target,
             message,
             updateMode,
+            ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
           });
       if (result) {
         persisted = true;

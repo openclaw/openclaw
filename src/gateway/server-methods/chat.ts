@@ -10,6 +10,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -2721,6 +2722,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               };
             },
             errorContext: "gateway chat user turn transcript",
+            beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
             onPersistenceError: (error) => {
               context.logGateway.warn(
                 `gateway user transcript persistence failed: ${formatForLog(error)}`,
@@ -2964,7 +2966,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               // assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
               if (!agentRunStarted) {
-                await persistGatewayUserTurnTranscript();
                 const btwReplies = deliveredReplies
                   .map((entry) => entry.payload)
                   .filter(isBtwReplyPayload);
@@ -2992,6 +2993,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     sessionKey,
                   });
                 } else {
+                  await persistGatewayUserTurnTranscript();
                   const rawFinalPayloads = appendedWebchatAgentMedia
                     ? []
                     : deliveredReplies

@@ -28,6 +28,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
@@ -242,6 +243,7 @@ async function persistTextTurnTranscript(
         sessionKey: params.sessionKey,
         cwd: params.sessionCwd,
         config: params.config,
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         ...(userMessage
           ? { message: userMessage }
           : {

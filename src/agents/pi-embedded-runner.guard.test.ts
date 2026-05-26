@@ -101,6 +101,7 @@ describe("guardSessionManager integration", () => {
       preparedUserTurnMessage: {
         role: "user",
         content: "What is in this image?",
+        timestamp: 123,
         MediaPath: "/tmp/a.png",
         MediaPaths: ["/tmp/a.png"],
         MediaType: "image/png",
@@ -138,6 +139,7 @@ describe("guardSessionManager integration", () => {
       preparedUserTurnMessage: {
         role: "user",
         content: "visible prompt",
+        timestamp: 123,
         MediaPath: "/tmp/a.png",
         MediaPaths: ["/tmp/a.png"],
         MediaType: "image/png",
@@ -149,6 +151,7 @@ describe("guardSessionManager integration", () => {
     appendMessage({
       role: "user",
       content: [{ type: "text", text: "blocked" }],
+      timestamp: 124,
       __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
     } as AgentMessage);
     appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);

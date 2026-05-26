@@ -589,7 +589,8 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
-    expect(call.userTurnTranscriptRecorder?.message).toBe(preparedUserTurnMessage);
+    const recorder = requireRecord(call.userTurnTranscriptRecorder, "embedded user turn recorder");
+    expect(recorder.message).toBe(preparedUserTurnMessage);
   });
 
   it("runs queued followups with the session id returned by admission", async () => {
@@ -873,7 +874,8 @@ describe("createFollowupRunner runtime config", () => {
       config: runtimeConfig,
       suppressNextUserMessagePersistence: false,
     });
-    expect(call.userTurnTranscriptRecorder?.message).toMatchObject({
+    const recorder = requireRecord(call.userTurnTranscriptRecorder, "cli user turn recorder");
+    expect(recorder.message).toMatchObject({
       role: "user",
       content: "hello",
     });
@@ -924,7 +926,8 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
-    expect(mediaCall.userTurnTranscriptRecorder?.message).toBe(preparedUserTurnMessage);
+    const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
+    expect(recorder.message).toBe(preparedUserTurnMessage);
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
@@ -2948,11 +2951,6 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     });
 
     const runner = createFollowupRunner({
-      opts: {
-        onUserMessagePersisted: async () => {
-          throw new Error("gateway notification failed");
-        },
-      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",

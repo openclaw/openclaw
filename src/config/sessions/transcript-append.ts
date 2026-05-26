@@ -309,10 +309,10 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
   const idempotencyKey = readMessageIdempotencyKey(params.message);
   const existing =
     idempotencyKey && params.idempotencyLookup === "scan"
-      ? await findTranscriptMessageByIdempotencyKey<TMessage>(params.transcriptPath, idempotencyKey)
+      ? await findTranscriptMessageByIdempotencyKey(params.transcriptPath, idempotencyKey)
       : undefined;
   if (existing) {
-    return { ...existing, appended: false };
+    return { ...existing, message: existing.message as TMessage, appended: false };
   }
 
   const messageId = randomUUID();
@@ -359,10 +359,10 @@ function readMessageIdempotencyKey(message: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-async function findTranscriptMessageByIdempotencyKey<TMessage>(
+async function findTranscriptMessageByIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,
-): Promise<{ messageId: string; message: TMessage } | undefined> {
+): Promise<{ messageId: string; message: unknown } | undefined> {
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     try {
       const parsed = JSON.parse(line) as {
@@ -376,7 +376,7 @@ async function findTranscriptMessageByIdempotencyKey<TMessage>(
       return {
         messageId:
           typeof parsed.id === "string" && parsed.id.trim().length > 0 ? parsed.id : idempotencyKey,
-        message: message as TMessage,
+        message,
       };
     } catch {
       continue;

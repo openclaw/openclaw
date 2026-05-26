@@ -6046,15 +6046,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
-      createMinimalRunAgentTurnParams({
-        opts: {
-          onUserMessagePersisted: async () => {
-            throw new Error("gateway notification failed");
-          },
-        },
-      }),
-    );
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
     expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "primary candidate", {

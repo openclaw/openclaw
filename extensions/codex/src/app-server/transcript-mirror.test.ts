@@ -77,7 +77,7 @@ describe("buildCodexUserPromptMessage", () => {
           MediaTypes: ["image/png"],
         },
       },
-    } as Parameters<typeof buildCodexUserPromptMessage>[0]);
+    } as unknown as Parameters<typeof buildCodexUserPromptMessage>[0]);
 
     expect(message).toMatchObject({
       role: "user",

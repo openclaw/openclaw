@@ -7,6 +7,7 @@ import {
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
@@ -1175,6 +1176,7 @@ export async function runPreparedReply(
             config: cfg,
           }),
           errorContext: "reply user turn transcript",
+          beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
         })
       : undefined);
   const followupRun = {
