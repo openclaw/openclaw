@@ -396,7 +396,7 @@ See [Inferred commitments](/concepts/commitments).
     chromeMcp: {
       capabilities: {
         diagnostics: "auto",
-        extensions: "auto",
+        extensions: false,
         extensionMutation: false,
         thirdPartyTools: false,
         thirdPartyToolExecution: false,
@@ -465,9 +465,11 @@ See [Inferred commitments](/concepts/commitments).
 "--no-usage-statistics"]` instead of `userDataDir`. That launches a temporary
   Chrome MCP browser path without depending on signed-in browser state.
 - `chromeMcp.capabilities` gates higher-risk Chrome MCP routes on
-  `existing-session` profiles. `"auto"` enables diagnostics and extension
-  inventory only for OpenClaw-managed existing-session profile data dirs;
-  personal signed-in profiles require explicit per-profile opt-in.
+  `existing-session` profiles. `"auto"` enables diagnostics only for
+  OpenClaw-managed existing-session profile data dirs. Extension inventory
+  should be enabled explicitly only for Chrome MCP pipe-launch profiles because
+  Chrome DevTools MCP does not currently support that category for auto-connect,
+  browser URL, or websocket endpoint sessions.
 - Legacy Chrome MCP diagnostic/category flags in `mcpArgs` are accepted as
   upgrade compatibility defaults when no explicit capability policy overrides
   them. They are not a substitute for new configs: set

@@ -210,24 +210,24 @@ function createFakeSession(): ChromeMcpSession {
         content: [{ type: "text", text: `Insight ${readTextArg(args?.insightName)} details.` }],
       };
     }
-    if (name === "take_memory_snapshot") {
+    if (name === "take_heapsnapshot") {
       return {
         content: [{ type: "text", text: `Heap snapshot saved to ${readTextArg(args?.filePath)}` }],
       };
     }
-    if (name === "load_memory_snapshot") {
+    if (name === "get_heapsnapshot_summary") {
       return {
         content: [{ type: "text", text: "Heap snapshot summary." }],
         structuredContent: { stats: { totalSize: 1024 } },
       };
     }
-    if (name === "get_memory_snapshot_details") {
+    if (name === "get_heapsnapshot_details") {
       return { content: [{ type: "text", text: "Heap snapshot details." }] };
     }
-    if (name === "get_nodes_by_class") {
+    if (name === "get_heapsnapshot_class_nodes") {
       return { content: [{ type: "text", text: "Heap snapshot class nodes." }] };
     }
-    if (name === "get_node_retainers") {
+    if (name === "get_heapsnapshot_retainers") {
       return { content: [{ type: "text", text: "Heap snapshot retainers." }] };
     }
     if (name === "lighthouse_audit") {
@@ -863,16 +863,140 @@ describe("chrome MCP page parsing", () => {
     const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls;
     expect(calls.slice(-5).map(([call]) => call)).toEqual([
       {
+        name: "take_heapsnapshot",
+        arguments: { pageId: 2, filePath: "/tmp/openclaw/page.heapsnapshot" },
+      },
+      {
+        name: "get_heapsnapshot_summary",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot" },
+      },
+      {
+        name: "get_heapsnapshot_details",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", pageIdx: 1, pageSize: 25 },
+      },
+      {
+        name: "get_heapsnapshot_class_nodes",
+        arguments: {
+          filePath: "/tmp/openclaw/page.heapsnapshot",
+          id: 42,
+          pageIdx: 2,
+          pageSize: 10,
+        },
+      },
+      {
+        name: "get_heapsnapshot_retainers",
+        arguments: {
+          filePath: "/tmp/openclaw/page.heapsnapshot",
+          nodeId: 99,
+          pageIdx: 3,
+          pageSize: 5,
+        },
+      },
+    ]);
+  });
+
+  it("falls back to published Chrome MCP heap snapshot names when current names are missing", async () => {
+    const currentNames = new Set([
+      "take_heapsnapshot",
+      "get_heapsnapshot_summary",
+      "get_heapsnapshot_details",
+      "get_heapsnapshot_class_nodes",
+      "get_heapsnapshot_retainers",
+    ]);
+    const session = createFakeSession();
+    const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
+      if (currentNames.has(name)) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `MCP error -32602: Tool ${name} not found` }],
+        };
+      }
+      if (name === "take_memory_snapshot") {
+        return {
+          content: [{ type: "text", text: `Heap snapshot saved to ${String(args?.filePath)}` }],
+        };
+      }
+      if (name === "load_memory_snapshot") {
+        return { content: [{ type: "text", text: "Heap snapshot summary." }] };
+      }
+      if (name === "get_memory_snapshot_details") {
+        return { content: [{ type: "text", text: "Heap snapshot details." }] };
+      }
+      if (name === "get_nodes_by_class") {
+        return { content: [{ type: "text", text: "Heap snapshot class nodes." }] };
+      }
+      if (name === "get_node_retainers") {
+        return { content: [{ type: "text", text: "Heap snapshot retainers." }] };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    (session.client as unknown as { callTool: typeof callTool }).callTool = callTool;
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await takeChromeMcpHeapSnapshot({
+      profileName: "chrome-live",
+      targetId: "2",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+    });
+    await getChromeMcpHeapSnapshotSummary({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+    });
+    await getChromeMcpHeapSnapshotDetails({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+      pageIdx: 1,
+      pageSize: 25,
+    });
+    await getChromeMcpHeapSnapshotClassNodes({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+      id: 42,
+      pageIdx: 2,
+      pageSize: 10,
+    });
+    await getChromeMcpHeapSnapshotRetainers({
+      profileName: "chrome-live",
+      filePath: "/tmp/openclaw/page.heapsnapshot",
+      nodeId: 99,
+      pageIdx: 3,
+      pageSize: 5,
+    });
+
+    expect(callTool.mock.calls.map(([call]) => call)).toEqual([
+      {
+        name: "take_heapsnapshot",
+        arguments: { pageId: 2, filePath: "/tmp/openclaw/page.heapsnapshot" },
+      },
+      {
         name: "take_memory_snapshot",
         arguments: { pageId: 2, filePath: "/tmp/openclaw/page.heapsnapshot" },
+      },
+      {
+        name: "get_heapsnapshot_summary",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot" },
       },
       {
         name: "load_memory_snapshot",
         arguments: { filePath: "/tmp/openclaw/page.heapsnapshot" },
       },
       {
+        name: "get_heapsnapshot_details",
+        arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", pageIdx: 1, pageSize: 25 },
+      },
+      {
         name: "get_memory_snapshot_details",
         arguments: { filePath: "/tmp/openclaw/page.heapsnapshot", pageIdx: 1, pageSize: 25 },
+      },
+      {
+        name: "get_heapsnapshot_class_nodes",
+        arguments: {
+          filePath: "/tmp/openclaw/page.heapsnapshot",
+          id: 42,
+          pageIdx: 2,
+          pageSize: 10,
+        },
       },
       {
         name: "get_nodes_by_class",
@@ -881,6 +1005,15 @@ describe("chrome MCP page parsing", () => {
           uid: 42,
           pageIdx: 2,
           pageSize: 10,
+        },
+      },
+      {
+        name: "get_heapsnapshot_retainers",
+        arguments: {
+          filePath: "/tmp/openclaw/page.heapsnapshot",
+          nodeId: 99,
+          pageIdx: 3,
+          pageSize: 5,
         },
       },
       {

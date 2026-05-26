@@ -1002,11 +1002,40 @@ describe("browser config", () => {
       true,
     );
     expect(resolveProfile(resolved, "brave")?.chromeMcp?.capabilities.diagnostics).toBe(false);
-    expect(resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.extensions).toBe(true);
+    expect(resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.extensions).toBe(
+      false,
+    );
     expect(resolveProfile(resolved, "brave")?.chromeMcp?.capabilities.extensions).toBe(false);
     expect(
       resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.extensionMutation,
     ).toBe(false);
+  });
+
+  it("keeps Chrome MCP extension inventory off unless policy or legacy args opt in", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "agent-chrome": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: path.join(CONFIG_DIR, "browser", "agent-chrome", "user-data"),
+          color: "#00AA00",
+        },
+        "agent-chrome-pipe": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: path.join(CONFIG_DIR, "browser", "agent-chrome-pipe", "user-data"),
+          executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          color: "#00AA00",
+        },
+      },
+    });
+
+    expect(resolveProfile(resolved, "agent-chrome")?.chromeMcp?.capabilities.extensions).toBe(
+      false,
+    );
+    expect(resolveProfile(resolved, "agent-chrome-pipe")?.chromeMcp?.capabilities.extensions).toBe(
+      false,
+    );
   });
 
   it("lets global and per-profile Chrome MCP capability policy opt into risky surfaces", () => {

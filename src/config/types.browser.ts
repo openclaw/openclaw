@@ -5,7 +5,7 @@ export type BrowserChromeMcpCapabilitySetting = boolean | "auto";
 export type BrowserChromeMcpCapabilitiesConfig = {
   /** Enable Chrome MCP diagnostic routes such as trace, heap snapshot, Lighthouse, and screencast. Default: auto (OpenClaw-managed existing-session profile data dirs only) */
   diagnostics?: BrowserChromeMcpCapabilitySetting;
-  /** Enable Chrome MCP extension inventory/tab helpers. Default: auto */
+  /** Enable Chrome MCP extension inventory/tab helpers. Default: false */
   extensions?: BrowserChromeMcpCapabilitySetting;
   /** Allow Chrome MCP extension install, reload, action, and uninstall operations. Default: false */
   extensionMutation?: BrowserChromeMcpCapabilitySetting;

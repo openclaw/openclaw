@@ -359,6 +359,11 @@ function createLiveBrowserConfig(
       [profileName]: {
         driver: "existing-session",
         cdpUrl: `http://127.0.0.1:${fixture.cdpPort}`,
+        chromeMcp: {
+          capabilities: {
+            diagnostics: true,
+          },
+        },
         color: "#00AA00",
       },
       ...(opts.extensionPipeProfileName
@@ -368,6 +373,11 @@ function createLiveBrowserConfig(
               executablePath: CHROME_BIN,
               headless: true,
               mcpArgs: ["--isolated", "--no-usage-statistics"],
+              chromeMcp: {
+                capabilities: {
+                  extensions: true,
+                },
+              },
               color: "#AA00AA",
             },
           }
@@ -1185,17 +1195,20 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           insightName: "DocumentLatency",
         });
 
-        await tryAction("heap-snapshot:take", {
-          action: "heap-snapshot",
-          operation: "take",
-          timeoutMs: 20_000,
-        });
+        await expect(
+          action({
+            action: "heap-snapshot",
+            operation: "take",
+            timeoutMs: 30_000,
+          }),
+        ).resolves.toEqual(expect.objectContaining({ ok: true }));
+        mark("heap-snapshot:take");
         await expect(
           action({
             action: "lighthouse",
             mode: "snapshot",
             device: "desktop",
-            outputDirPath: path.join(fixture.root, "out"),
+            outputDirPath: "browser-tool-surface-lighthouse",
             timeoutMs: 60_000,
           }),
         ).resolves.toEqual(expect.objectContaining({ ok: true }));
@@ -1218,10 +1231,10 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           }),
         ).resolves.toEqual(expect.objectContaining({ ok: true, extensions: expect.any(Array) }));
         mark("extensions:list");
-        await expect(action({ action: "extensions", operation: "tab-id" })).resolves.toEqual(
-          expect.objectContaining({ ok: true, tabId: expect.any(String) }),
+        await expect(action({ action: "extensions", operation: "tab-id" })).rejects.toThrow(
+          /capabilities\.extensions=true/,
         );
-        mark("extensions:tab-id");
+        mark("extensions:tab-id-disabled");
         await tryAction("third-party-tools:list", {
           action: "third-party-tools",
           operation: "list",
@@ -1258,11 +1271,12 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           requests: { status: "pass" },
           "request-detail": { status: "pass" },
           "emulate:media": { status: "pass" },
+          "heap-snapshot:take": { status: "pass" },
           lighthouse: { status: "pass" },
           "screencast:start": { status: "pass" },
           "screencast:stop": { status: "pass" },
           "extensions:list": { status: "pass" },
-          "extensions:tab-id": { status: "pass" },
+          "extensions:tab-id-disabled": { status: "pass" },
           "act:evaluate": { status: "pass" },
           "act:close": { status: "pass" },
           stop: { status: "pass" },

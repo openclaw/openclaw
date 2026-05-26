@@ -1995,6 +1995,35 @@ async function callTool(
   throw new Error(`Chrome MCP tool "${name}" failed after reconnect.`);
 }
 
+function isChromeMcpToolNotFoundError(err: unknown, toolName: string): boolean {
+  return formatErrorMessage(err).includes(`Tool ${toolName} not found`);
+}
+
+// Chrome DevTools MCP source/docs renamed these tools to get_heapsnapshot_*,
+// while the current npm package can still expose the legacy memory names.
+async function callToolWithNameFallback(
+  profileName: string,
+  profileOptions: ChromeMcpOptionsInput | undefined,
+  calls: readonly [
+    { name: string; args?: Record<string, unknown> },
+    ...Array<{ name: string; args?: Record<string, unknown> }>,
+  ],
+  options: ChromeMcpCallOptions = {},
+): Promise<ChromeMcpToolResult> {
+  let lastError: unknown;
+  for (const call of calls) {
+    try {
+      return await callTool(profileName, profileOptions, call.name, call.args ?? {}, options);
+    } catch (err) {
+      lastError = err;
+      if (!isChromeMcpToolNotFoundError(err, call.name)) {
+        throw err;
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-chrome-mcp-"));
   const filePath = path.join(dir, randomUUID());
@@ -2571,14 +2600,25 @@ export async function takeChromeMcpHeapSnapshot(params: {
   filePath: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const result = await callTool(
+  const result = await callToolWithNameFallback(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
-    "take_memory_snapshot",
-    {
-      pageId: parsePageId(params.targetId),
-      filePath: params.filePath,
-    },
+    [
+      {
+        name: "take_heapsnapshot",
+        args: {
+          pageId: parsePageId(params.targetId),
+          filePath: params.filePath,
+        },
+      },
+      {
+        name: "take_memory_snapshot",
+        args: {
+          pageId: parsePageId(params.targetId),
+          filePath: params.filePath,
+        },
+      },
+    ],
     { timeoutMs: params.timeoutMs },
   );
   return extractMessageText(result);
@@ -2591,11 +2631,13 @@ export async function getChromeMcpHeapSnapshotSummary(params: {
   filePath: string;
   timeoutMs?: number;
 }): Promise<ChromeMcpHeapSnapshotInspectionResult> {
-  const result = await callTool(
+  const result = await callToolWithNameFallback(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
-    "load_memory_snapshot",
-    { filePath: params.filePath },
+    [
+      { name: "get_heapsnapshot_summary", args: { filePath: params.filePath } },
+      { name: "load_memory_snapshot", args: { filePath: params.filePath } },
+    ],
     { timeoutMs: params.timeoutMs },
   );
   return toHeapSnapshotInspectionResult(result);
@@ -2610,15 +2652,27 @@ export async function getChromeMcpHeapSnapshotDetails(params: {
   pageSize?: number;
   timeoutMs?: number;
 }): Promise<ChromeMcpHeapSnapshotInspectionResult> {
-  const result = await callTool(
+  const result = await callToolWithNameFallback(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
-    "get_memory_snapshot_details",
-    {
-      filePath: params.filePath,
-      ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
-      ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
-    },
+    [
+      {
+        name: "get_heapsnapshot_details",
+        args: {
+          filePath: params.filePath,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+      {
+        name: "get_memory_snapshot_details",
+        args: {
+          filePath: params.filePath,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+    ],
     { timeoutMs: params.timeoutMs },
   );
   return toHeapSnapshotInspectionResult(result);
@@ -2634,16 +2688,29 @@ export async function getChromeMcpHeapSnapshotClassNodes(params: {
   pageSize?: number;
   timeoutMs?: number;
 }): Promise<ChromeMcpHeapSnapshotInspectionResult> {
-  const result = await callTool(
+  const result = await callToolWithNameFallback(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
-    "get_nodes_by_class",
-    {
-      filePath: params.filePath,
-      uid: params.id,
-      ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
-      ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
-    },
+    [
+      {
+        name: "get_heapsnapshot_class_nodes",
+        args: {
+          filePath: params.filePath,
+          id: params.id,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+      {
+        name: "get_nodes_by_class",
+        args: {
+          filePath: params.filePath,
+          uid: params.id,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+    ],
     { timeoutMs: params.timeoutMs },
   );
   return toHeapSnapshotInspectionResult(result);
@@ -2659,16 +2726,29 @@ export async function getChromeMcpHeapSnapshotRetainers(params: {
   pageSize?: number;
   timeoutMs?: number;
 }): Promise<ChromeMcpHeapSnapshotInspectionResult> {
-  const result = await callTool(
+  const result = await callToolWithNameFallback(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
-    "get_node_retainers",
-    {
-      filePath: params.filePath,
-      nodeId: params.nodeId,
-      ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
-      ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
-    },
+    [
+      {
+        name: "get_heapsnapshot_retainers",
+        args: {
+          filePath: params.filePath,
+          nodeId: params.nodeId,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+      {
+        name: "get_node_retainers",
+        args: {
+          filePath: params.filePath,
+          nodeId: params.nodeId,
+          ...(params.pageIdx !== undefined ? { pageIdx: params.pageIdx } : {}),
+          ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+        },
+      },
+    ],
     { timeoutMs: params.timeoutMs },
   );
   return toHeapSnapshotInspectionResult(result);

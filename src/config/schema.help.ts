@@ -401,11 +401,11 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.chromeMcp":
     "Capability policy for Chrome MCP existing-session profiles. Use per-profile overrides under browser.profiles.<name>.chromeMcp when one browser profile should expose more or fewer capabilities than the global default.",
   "browser.chromeMcp.capabilities":
-    'Fine-grained Chrome MCP capability toggles. Each value accepts true, false, or "auto"; auto allows diagnostics and extension inventory only for OpenClaw-managed existing-session profile data dirs, and keeps mutation/page-tool execution disabled.',
+    'Fine-grained Chrome MCP capability toggles. Each value accepts true, false, or "auto"; auto allows diagnostics only for OpenClaw-managed existing-session profile data dirs, and keeps extension inventory, mutation, and page-tool execution disabled.',
   "browser.chromeMcp.capabilities.diagnostics":
     "Allows Chrome MCP diagnostic routes such as console/request detail, trace, heap snapshot, Lighthouse, and screencast. Use false for attached browsers where diagnostics should not inspect or export page runtime artifacts.",
   "browser.chromeMcp.capabilities.extensions":
-    "Allows Chrome MCP extension inventory and tab-id helpers. Auto enables this only for OpenClaw-managed Chrome MCP profile data dirs.",
+    "Allows Chrome MCP extension inventory and tab-id helpers. Enable explicitly only for profiles launched through a Chrome MCP pipe connection; Chrome DevTools MCP does not currently support this category for autoConnect, browserUrl, or wsEndpoint sessions.",
   "browser.chromeMcp.capabilities.extensionMutation":
     "Allows Chrome MCP extension install, uninstall, reload, and action operations. Keep disabled unless the selected profile is dedicated to automation.",
   "browser.chromeMcp.capabilities.thirdPartyTools":

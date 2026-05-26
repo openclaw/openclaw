@@ -160,7 +160,7 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     chromeMcp: {
       capabilities: {
         diagnostics: "auto", // auto enables only for OpenClaw-managed existing-session data dirs
-        extensions: "auto", // auto enables only for OpenClaw-managed existing-session data dirs
+        extensions: false, // enable explicitly only for Chrome MCP pipe-launch profiles
         extensionMutation: false,
         thirdPartyTools: false,
         thirdPartyToolExecution: false,
@@ -311,7 +311,7 @@ main model can read the screenshot directly.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
-- `browser.chromeMcp.capabilities` controls higher-risk existing-session Chrome MCP surfaces. The `"auto"` default enables diagnostics and extension inventory only for OpenClaw-managed existing-session profile data dirs; personal signed-in profiles must opt in explicitly.
+- `browser.chromeMcp.capabilities` controls higher-risk existing-session Chrome MCP surfaces. The `"auto"` default enables diagnostics only for OpenClaw-managed existing-session profile data dirs. Extension inventory, mutation, and page-provided tools require explicit opt-in.
 
 </Accordion>
 
