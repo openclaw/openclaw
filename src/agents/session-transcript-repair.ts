@@ -125,37 +125,6 @@ function isReplaySafeThinkingAssistantTurn(
   return sawToolCall;
 }
 
-function collectDuplicatedReplaySafeThinkingToolCallIds(
-  messages: AgentMessage[],
-  allowedToolNames: Set<string> | null,
-): Set<string> {
-  const counts = new Map<string, number>();
-  for (const message of messages) {
-    if (
-      !message ||
-      typeof message !== "object" ||
-      message.role !== "assistant" ||
-      !Array.isArray(message.content) ||
-      !message.content.some((block) => isThinkingLikeBlock(block)) ||
-      countRawToolCallBlocks(message.content) === 0 ||
-      !isReplaySafeThinkingAssistantTurn(message.content, allowedToolNames)
-    ) {
-      continue;
-    }
-    for (const toolCall of extractToolCallsFromAssistant(message)) {
-      counts.set(toolCall.id, (counts.get(toolCall.id) ?? 0) + 1);
-    }
-  }
-
-  const duplicated = new Set<string>();
-  for (const [id, count] of counts) {
-    if (count > 1) {
-      duplicated.add(id);
-    }
-  }
-  return duplicated;
-}
-
 function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
   for (const block of content) {
     if (!isRawToolCallBlock(block) || block.name !== "sessions_spawn") {
@@ -325,9 +294,6 @@ function repairToolCallInputs(
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
-  const duplicatedThinkingToolCallIds = allowProviderOwnedThinkingReplay
-    ? collectDuplicatedReplaySafeThinkingToolCallIds(messages, allowedToolNames)
-    : new Set<string>();
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
 
@@ -358,7 +324,6 @@ function repairToolCallInputs(
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
         replaySafeToolCalls.every(
           (toolCall) =>
-            !duplicatedThinkingToolCallIds.has(toolCall.id) &&
             !preservedThinkingToolCallIds.has(toolCall.id) &&
             (!hasSessionsSpawnAttachmentToolCall(msg.content) ||
               followingToolResults.ids.has(toolCall.id)) &&
