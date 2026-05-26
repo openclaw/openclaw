@@ -97,6 +97,7 @@ function getSnapshotGetHandler() {
   registerBrowserAgentSnapshotRoutes(app, {
     state: () => ({
       resolved: {
+        extraArgs: [],
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       },
     }),
