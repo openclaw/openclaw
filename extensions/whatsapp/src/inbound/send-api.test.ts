@@ -8,6 +8,10 @@ import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
+const imageOps = vi.hoisted(() => ({
+  getImageMetadata: vi.fn(),
+  resizeToJpeg: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
@@ -16,6 +20,17 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    getImageMetadata: imageOps.getImageMetadata,
+    resizeToJpeg: imageOps.resizeToJpeg,
   };
 });
 
@@ -53,6 +68,8 @@ describe("createWebSendApi", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    imageOps.getImageMetadata.mockResolvedValue(null);
+    imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
@@ -244,6 +261,30 @@ describe("createWebSendApi", () => {
       image: payload,
       caption: "cap",
       mimetype: "image/jpeg",
+    });
+  });
+
+  it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
+    const payload = Buffer.from("img");
+    const thumbnail = Buffer.from("thumb");
+    imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
+    imageOps.resizeToJpeg.mockResolvedValueOnce(thumbnail);
+
+    await api.sendMessage("+1555", "cap", payload, "image/png");
+
+    expect(imageOps.resizeToJpeg).toHaveBeenCalledWith({
+      buffer: payload,
+      maxSide: 32,
+      quality: 50,
+      withoutEnlargement: true,
+    });
+    expectSendContentFields(0, {
+      image: payload,
+      caption: "cap",
+      mimetype: "image/png",
+      jpegThumbnail: thumbnail.toString("base64"),
+      width: 640,
+      height: 480,
     });
   });
 
@@ -555,6 +596,28 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       "send poll payload",
     );
     expect("poll" in payload).toBe(true);
+  });
+
+  it("resolves PN to LID for sendReaction", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendReaction("+15555550000", "msg-2", "1️⃣", true);
+    expect(requireMockArg(sendMessage, 0, 0, "send reaction")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "send reaction"),
+      "send reaction payload",
+    );
+    const react = requireRecord(payload.react, "reaction content");
+    expect(react.text).toBe("1️⃣");
+    expect(requireRecord(react.key, "reaction key")).toMatchObject({
+      remoteJid: "987654@lid",
+      id: "msg-2",
+      fromMe: true,
+    });
+    expect(requireRecord(react.key, "reaction key").participant).toBeUndefined();
   });
 
   it("resolves PN to LID for sendComposingTo presence", async () => {

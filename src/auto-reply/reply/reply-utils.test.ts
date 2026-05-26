@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
@@ -107,6 +108,31 @@ describe("matchesMentionWithExplicit", () => {
 
 // Keep channelData-only payloads so channel-specific replies survive normalization.
 describe("normalizeReplyPayload", () => {
+  it("preserves reply payload metadata across normalization clones", () => {
+    const payload = setReplyPayloadMetadata(
+      {
+        text: " Visible reply ",
+      },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          text: " Visible reply ",
+          idempotencyKey: "run-1:source-reply",
+        },
+      },
+    );
+
+    const normalized = normalizeReplyPayload(payload);
+
+    const reply = expectNormalizedReply(normalized);
+    expect(reply).not.toBe(payload);
+    expect(getReplyPayloadMetadata(reply)?.sourceReplyTranscriptMirror).toEqual({
+      sessionKey: "main",
+      text: " Visible reply ",
+      idempotencyKey: "run-1:source-reply",
+    });
+  });
+
   it("keeps channelData-only replies", () => {
     const payload = {
       channelData: {
@@ -769,6 +795,19 @@ describe("block reply coalescer", () => {
     return { flushes, coalescer };
   }
 
+  type FlushedPayload = Parameters<Parameters<typeof createBlockReplyCoalescer>[0]["onFlush"]>[0];
+  function createPayloadCoalescerHarness<T>(pick: (payload: FlushedPayload) => T) {
+    const flushes: T[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(pick(payload));
+      },
+    });
+    return { flushes, coalescer };
+  }
+
   it("coalesces chunks within the idle window", async () => {
     vi.useFakeTimers();
     const { flushes, coalescer } = createBlockCoalescerHarness({
@@ -941,26 +980,107 @@ describe("block reply coalescer", () => {
     }
   });
 
-  it("flushes buffered text before media payloads", () => {
-    const flushes: Array<{ text?: string; mediaUrls?: string[] }> = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
-        flushes.push({
-          text: payload.text,
-          mediaUrls: payload.mediaUrls,
-        });
-      },
-    });
+  it("merges compatible buffered text into following media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      replyToId?: string;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      replyToId: payload.replyToId,
+    }));
 
-    coalescer.enqueue({ text: "Hello" });
+    coalescer.enqueue({ text: "Hello", replyToId: "thread-1" });
     coalescer.enqueue({ text: "world" });
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
-    void coalescer.flush({ force: true });
+    await coalescer.flush({ force: true });
 
-    expect(flushes[0].text).toBe("Hello world");
-    expect(flushes[1].mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(flushes).toEqual([
+      {
+        text: "Hello world",
+        mediaUrls: ["https://example.com/a.png"],
+        replyToId: "thread-1",
+      },
+    ]);
+    coalescer.stop();
+  });
+
+  it("keeps reasoning text separate from media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      isReasoning?: boolean;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      isReasoning: payload.isReasoning,
+    }));
+
+    coalescer.enqueue({ text: "hidden", isReasoning: true });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "hidden", mediaUrls: undefined, isReasoning: true },
+      {
+        text: undefined,
+        mediaUrls: ["https://example.com/a.png"],
+        isReasoning: undefined,
+      },
+    ]);
+    coalescer.stop();
+  });
+
+  it("keeps buffered text separate when media changes reply target", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      replyToId?: string;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      replyToId: payload.replyToId,
+    }));
+
+    coalescer.enqueue({ text: "Unthreaded caption" });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"], replyToId: "thread-2" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Unthreaded caption", mediaUrls: undefined, replyToId: undefined },
+      {
+        text: undefined,
+        mediaUrls: ["https://example.com/a.png"],
+        replyToId: "thread-2",
+      },
+    ]);
+    coalescer.stop();
+  });
+
+  it("keeps text separate from voice media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      audioAsVoice?: boolean;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      audioAsVoice: payload.audioAsVoice,
+    }));
+
+    coalescer.enqueue({ text: "Listen to this" });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.ogg"], audioAsVoice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Listen to this", mediaUrls: undefined, audioAsVoice: undefined },
+      {
+        text: undefined,
+        mediaUrls: ["https://example.com/a.ogg"],
+        audioAsVoice: true,
+      },
+    ]);
     coalescer.stop();
   });
 });

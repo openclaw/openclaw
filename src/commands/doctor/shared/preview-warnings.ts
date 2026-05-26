@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -20,10 +21,6 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
 
 function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
   return channelDoctorModuleLoader.load();
-}
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
@@ -373,11 +370,17 @@ export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig
   });
 }
 
-export async function collectDoctorPreviewWarnings(params: {
+export type DoctorPreviewNotes = {
+  infoNotes: string[];
+  warningNotes: string[];
+};
+
+export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+}): Promise<DoctorPreviewNotes> {
+  const infoNotes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const hasChannelConfig = hasChannels(params.cfg);
@@ -469,8 +472,8 @@ export async function collectDoctorPreviewWarnings(params: {
       );
     }
   }
-  const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
-  warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
+  const { collectCodexNativeAssetInfoNotes } = await import("./codex-native-assets.js");
+  infoNotes.push(...(await collectCodexNativeAssetInfoNotes({ cfg: params.cfg, env })));
 
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
@@ -565,5 +568,13 @@ export async function collectDoctorPreviewWarnings(params: {
     );
   }
 
-  return warnings;
+  return { infoNotes, warningNotes: warnings };
+}
+
+export async function collectDoctorPreviewWarnings(params: {
+  cfg: OpenClawConfig;
+  doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

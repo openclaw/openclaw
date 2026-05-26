@@ -29,6 +29,7 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-blo
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
 import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
+import { resolveEmbeddedAgentStreamFn } from "./pi-embedded-runner/stream-resolution.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
@@ -447,6 +448,15 @@ export async function runBtwSideQuestion(
     workspaceDir,
     env: process.env,
   });
+  const streamFn = resolveEmbeddedAgentStreamFn({
+    currentStreamFn: streamSimple,
+    providerStreamFn,
+    sessionId,
+    signal: params.opts?.abortSignal,
+    model: runtimeModel,
+    resolvedApiKey: apiKey,
+    authProfileId,
+  });
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
@@ -475,7 +485,7 @@ export async function runBtwSideQuestion(
   };
 
   const stream = await streamWithPayloadPatch(
-    providerStreamFn ?? streamSimple,
+    streamFn,
     runtimeModel,
     {
       systemPrompt: buildBtwSystemPrompt(),

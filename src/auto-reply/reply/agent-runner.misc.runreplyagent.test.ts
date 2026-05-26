@@ -8,6 +8,7 @@ import {
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
@@ -292,6 +293,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   async function runBaseReplyWithAgentMeta(params: {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
+    config?: OpenClawConfig;
     tmpPrefix: string;
     workspaceDir?: string;
   }) {
@@ -322,6 +324,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
+      config: params.config,
       workspaceDir: params.workspaceDir,
     });
 
@@ -507,7 +510,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("reads post-compaction context from the queued workspace instead of process cwd", async () => {
+  it("reads opted-in post-compaction context from the queued workspace instead of process cwd", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
     );
@@ -529,6 +532,13 @@ describe("runReplyAgent auto-compaction token update", () => {
       const { sessionKey } = await runBaseReplyWithAgentMeta({
         tmpPrefix: "openclaw-post-compaction-workspace-root-",
         workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
+          },
+        },
         agentMeta: {
           compactionCount: 1,
           lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
@@ -2493,7 +2503,13 @@ describe("runReplyAgent fallback reasoning tags", () => {
 });
 
 describe("runReplyAgent response usage footer", () => {
-  function createRun(params: { responseUsage: "tokens" | "full"; sessionKey: string }) {
+  function createRun(params: {
+    responseUsage: "tokens" | "full";
+    sessionKey: string;
+    config?: unknown;
+    provider?: string;
+    model?: string;
+  }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -2521,10 +2537,10 @@ describe("runReplyAgent response usage footer", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
+        config: params.config ?? createCliBackendTestConfig(),
         skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
+        provider: params.provider ?? "anthropic",
+        model: params.model ?? "claude",
         thinkLevel: "low",
         verboseLevel: "off",
         elevatedLevel: "off",
@@ -2582,25 +2598,94 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).toContain(`· session \`${sessionKey}\``);
   });
 
-  it("does not append session key when responseUsage=tokens", async () => {
+  it("does not append session key or cost when responseUsage=tokens", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
-          provider: "anthropic",
-          model: "claude",
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6",
           usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 2 },
         },
       },
     });
 
     const sessionKey = "agent:main:whatsapp:dm:+1000";
-    const res = await createRun({ responseUsage: "tokens", sessionKey });
+    const res = await createRun({
+      responseUsage: "tokens",
+      sessionKey,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [
+                {
+                  id: "us.anthropic.claude-sonnet-4-6",
+                  cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
     expect(text).toContain("Usage:");
     expect(text).toContain("cache 4 cached / 2 new");
+    expect(text).not.toContain("est $");
     expect(text).not.toContain("· session ");
+  });
+
+  it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "amazon-bedrock",
+          model: "us.anthropic.claude-sonnet-4-6",
+          usage: { input: 1_000, output: 2_000, cacheRead: 500, cacheWrite: 2_000 },
+        },
+      },
+    });
+
+    const sessionKey = "agent:main:whatsapp:dm:+1000";
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6",
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [
+                {
+                  id: "us.anthropic.claude-sonnet-4-6",
+                  cost: {
+                    input: 3,
+                    output: 15,
+                    cacheRead: 0.3,
+                    cacheWrite: 3.75,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+
+    expect(text).toContain("Usage: 1.0k in / 2.0k out");
+    expect(text).toContain("cache 500 cached / 2.0k new");
+    expect(text).toContain("est $0.04");
+    expect(text).toContain(`· session \`${sessionKey}\``);
   });
 });
 

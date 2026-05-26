@@ -68,6 +68,8 @@ export type CodexPluginThreadConfigProvider = {
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
+export const CODEX_NATIVE_PERSONALITY_NONE = "none";
+
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
@@ -604,6 +606,7 @@ export function buildThreadStartParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
@@ -647,6 +650,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
@@ -716,6 +720,7 @@ export function buildTurnStartParams(
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    turnScopedDeveloperInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
@@ -728,10 +733,12 @@ export function buildTurnStartParams(
     sandboxPolicy:
       options.sandboxPolicy ?? codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
+    personality: CODEX_NATIVE_PERSONALITY_NONE,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
@@ -754,7 +761,10 @@ type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaboratio
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
-  options: { heartbeatCollaborationInstructions?: string } = {},
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): CodexTurnCollaborationMode {
   return {
     mode: "default",
@@ -768,18 +778,50 @@ export function buildTurnCollaborationMode(
 
 function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
-  options: { heartbeatCollaborationInstructions?: string } = {},
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): string | null {
   if (params.trigger === "cron") {
-    return buildCronCollaborationInstructions();
+    return joinPresentSections(
+      buildCronCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
+    );
   }
   if (params.trigger === "heartbeat") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
       options.heartbeatCollaborationInstructions,
     );
   }
+  if (options.turnScopedDeveloperInstructions?.trim()) {
+    return joinPresentSections(
+      buildDefaultCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
+    );
+  }
   return null;
+}
+
+function buildDefaultCollaborationInstructions(): string {
+  // Codex only applies the built-in Default-mode preset when `developer_instructions`
+  // is null. OpenClaw adds per-turn workspace instructions here, so preserve that
+  // pinned Codex default behavior before appending the workspace overlay.
+  return [
+    "# Collaboration Mode: Default",
+    "",
+    "You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.",
+    "",
+    "Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.",
+    "",
+    "## request_user_input availability",
+    "",
+    "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
+    "",
+    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
+  ].join("\n");
 }
 
 function buildCronCollaborationInstructions(): string {
@@ -979,7 +1021,7 @@ export function resolveCodexAppServerModelProvider(params: {
   return normalizedLower === "openai-codex" ? "openai" : normalized;
 }
 
-// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in

@@ -61,6 +61,7 @@ import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -713,9 +714,91 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   });
 }
 
-const CONTEXT_OVERFLOW_RESET_HINT =
-  "\n\nTo prevent this, increase your compaction buffer by setting " +
-  "`agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.";
+const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
+
+export function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
+  if (typeof contextWindow !== "number" || contextWindow <= 0) {
+    return DEFAULT_RESERVE_TOKENS_FLOOR;
+  }
+  if (contextWindow >= 1_000_000) {
+    return 100_000;
+  }
+  if (contextWindow >= 200_000) {
+    return 50_000;
+  }
+  if (contextWindow >= 100_000) {
+    return 35_000;
+  }
+  return DEFAULT_RESERVE_TOKENS_FLOOR;
+}
+
+function resolveContextWindowForCompactionHint(params: {
+  cfg: FollowupRun["run"]["config"];
+  primaryProvider?: string;
+  primaryModel?: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
+  agentId?: string;
+  activeSessionEntry?: SessionEntry;
+}): number | undefined {
+  let modelWindow: number | undefined;
+  const entryProvider = params.activeSessionEntry?.modelProvider;
+  const entryModel = params.activeSessionEntry?.model;
+  const runtimeProvider = params.runtimeProvider ?? entryProvider;
+  const runtimeModel = params.runtimeModel ?? entryModel;
+  const hasExplicitRuntimeRef = Boolean(params.runtimeProvider && params.runtimeModel);
+  if (runtimeProvider && runtimeModel) {
+    const resolved = resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: runtimeProvider,
+      model: runtimeModel,
+      allowAsyncLoad: false,
+    });
+    if (typeof resolved === "number" && resolved > 0) {
+      modelWindow = resolved;
+    }
+  }
+  const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
+  const sessionMatchesRuntimeRef = runtimeProvider === entryProvider && runtimeModel === entryModel;
+  const trustedSessionWindow =
+    !hasExplicitRuntimeRef || sessionMatchesRuntimeRef ? sessionWindow : undefined;
+  if (modelWindow === undefined && sessionMatchesRuntimeRef && sessionWindow !== undefined) {
+    modelWindow = sessionWindow;
+  }
+  if (
+    modelWindow === undefined &&
+    !hasExplicitRuntimeRef &&
+    params.primaryProvider &&
+    params.primaryModel
+  ) {
+    const resolved = resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.primaryProvider,
+      model: params.primaryModel,
+      allowAsyncLoad: false,
+    });
+    if (typeof resolved === "number" && resolved > 0) {
+      modelWindow = resolved;
+    }
+  }
+  const contextWindow = modelWindow ?? trustedSessionWindow;
+  const agentCap = resolveAgentContextTokensForHint({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (agentCap !== undefined && contextWindow !== undefined) {
+    return Math.min(agentCap, contextWindow);
+  }
+  return agentCap ?? contextWindow;
+}
+
+function buildContextOverflowResetHint(contextWindowTokens: number | undefined): string {
+  const reserveFloor = computeContextAwareReserveTokensFloor(contextWindowTokens);
+  return (
+    "\n\nTo prevent this, increase your compaction buffer by setting " +
+    `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
+  );
+}
 
 type ModelRefLike = {
   provider: string;
@@ -899,6 +982,8 @@ export function buildContextOverflowRecoveryText(params: {
   agentId?: string;
   primaryProvider?: string;
   primaryModel?: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
   activeSessionEntry?: SessionEntry;
 }): string {
   const prefix = params.preserveSessionMapping
@@ -906,16 +991,30 @@ export function buildContextOverflowRecoveryText(params: {
     : params.duringCompaction
       ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
       : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
-  return (
-    prefix +
-    (resolveHeartbeatBleedHint({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      primaryProvider: params.primaryProvider,
-      primaryModel: params.primaryModel,
-      activeSessionEntry: params.activeSessionEntry,
-    }) ?? CONTEXT_OVERFLOW_RESET_HINT)
-  );
+  const primaryContextWindow = resolveContextWindowForCompactionHint({
+    cfg: params.cfg,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
+    runtimeProvider: params.runtimeProvider,
+    runtimeModel: params.runtimeModel,
+    agentId: params.agentId,
+    activeSessionEntry: params.activeSessionEntry,
+  });
+  const explicitRuntimeMatchesSession =
+    !params.runtimeProvider ||
+    !params.runtimeModel ||
+    (params.runtimeProvider === params.activeSessionEntry?.modelProvider &&
+      params.runtimeModel === params.activeSessionEntry?.model);
+  const heartbeatBleedHint = explicitRuntimeMatchesSession
+    ? resolveHeartbeatBleedHint({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        primaryProvider: params.primaryProvider,
+        primaryModel: params.primaryModel,
+        activeSessionEntry: params.activeSessionEntry,
+      })
+    : undefined;
+  return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint(primaryContextWindow));
 }
 
 function buildRestartLifecycleReplyText(): string {
@@ -1188,6 +1287,9 @@ export async function runAgentTurnWithFallback(params: {
           ...runnableRun,
           config: runtimeConfig,
         };
+  const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+    effectiveRun.inputProvenance,
+  );
   const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
     const probe = effectiveRun.autoFallbackPrimaryProbe;
     const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
@@ -1335,6 +1437,8 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let attemptedRuntimeProvider = fallbackProvider;
+  let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
@@ -1372,12 +1476,10 @@ export async function runAgentTurnWithFallback(params: {
     model: string,
     candidateRun: FollowupRun["run"],
   ): Promise<(() => Promise<void>) | undefined> => {
-    if (effectiveRun.hasOneTurnModelOverride === true) {
-      return undefined;
-    }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
+      preserveUserFacingSessionState ||
       (provider === effectiveRun.provider && model === effectiveRun.model)
     ) {
       return undefined;
@@ -1484,6 +1586,9 @@ export async function runAgentTurnWithFallback(params: {
     provider: string;
     model: string;
   }): Promise<void> => {
+    if (preserveUserFacingSessionState) {
+      return;
+    }
     const probe = effectiveRun.autoFallbackPrimaryProbe;
     if (!probe) {
       return;
@@ -1653,6 +1758,8 @@ export async function runAgentTurnWithFallback(params: {
           return classification;
         },
         run: async (provider, model, runOptions) => {
+          attemptedRuntimeProvider = provider;
+          attemptedRuntimeModel = model;
           const suppressQueuedUserPersistenceForCandidate =
             (params.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
             queuedUserMessagePersistedAcrossFallback;
@@ -1906,7 +2013,9 @@ export async function runAgentTurnWithFallback(params: {
                   return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                 })(),
                 toolProgressDetail: params.toolProgressDetail,
-                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings:
+                  params.opts?.shouldSuppressToolErrorWarnings ??
+                  params.opts?.suppressToolErrorWarnings,
                 disableTools: params.opts?.disableTools,
                 enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,
@@ -2268,6 +2377,8 @@ export async function runAgentTurnWithFallback(params: {
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
               primaryModel: params.followupRun.run.model,
+              runtimeProvider: attemptedRuntimeProvider,
+              runtimeModel: attemptedRuntimeModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
           }),
@@ -2398,6 +2509,8 @@ export async function runAgentTurnWithFallback(params: {
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
               primaryModel: params.followupRun.run.model,
+              runtimeProvider: attemptedRuntimeProvider,
+              runtimeModel: attemptedRuntimeModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
           }),

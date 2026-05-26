@@ -518,6 +518,7 @@ export function runAgentAttempt(params: {
       runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        sessionEntry: params.sessionEntry,
         agentId: params.sessionAgentId,
         trigger: "user",
         sessionFile: params.sessionFile,
@@ -677,6 +678,7 @@ export function runAgentAttempt(params: {
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+    disableMessageTool: params.opts.disableMessageTool,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,

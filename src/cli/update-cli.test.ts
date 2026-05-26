@@ -310,7 +310,7 @@ const { defaultRuntime } = await import("../runtime.js");
 const { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardCommand } =
   await import("./update-cli.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { resolveGitInstallDir } = updateCliShared;
+const { ensureGitCheckout, resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
 
 function requireValue<T>(value: T | undefined, label: string): T {
@@ -893,9 +893,14 @@ describe("update-cli", () => {
     expect(call?.[1]).toEqual([entrypoints[0], "update", "--yes", "--timeout", "1800"]);
     expect(call?.[2]?.stdio).toBe("inherit");
     expect(call?.[2]?.env?.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(call?.[2]?.env?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
     expect(call?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
     expect(call?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe("dev");
     expect(call?.[2]?.env?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("1.0.0");
+    expect(vi.mocked(readConfigFileSnapshot).mock.calls[1]?.[0]).toEqual({
+      skipPluginValidation: true,
+      suppressFutureVersionWarning: true,
+    });
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
@@ -1179,7 +1184,10 @@ describe("update-cli", () => {
     expect(
       vi
         .mocked(readConfigFileSnapshot)
-        .mock.calls.some(([options]) => options?.skipPluginValidation === true),
+        .mock.calls.some(
+          ([options]) =>
+            options?.skipPluginValidation === true && options.suppressFutureVersionWarning === true,
+        ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
@@ -5222,6 +5230,21 @@ describe("update-cli", () => {
     }
   });
 
+  it("marks the whole update command as update-in-progress", async () => {
+    await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
+      let observedUpdateEnv: string | undefined;
+      vi.mocked(runGatewayUpdate).mockImplementationOnce(async () => {
+        observedUpdateEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+        return makeOkUpdateResult();
+      });
+
+      await updateCommand({ restart: false });
+
+      expect(observedUpdateEnv).toBe("1");
+      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+    });
+  });
+
   it("updateFinalizeCommand runs doctor and plugin convergence with full update env", async () => {
     await withEnvAsync(
       {
@@ -5486,9 +5509,57 @@ describe("update-cli", () => {
 
   it("uses ~/openclaw as the default dev checkout directory", async () => {
     const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/tmp/oc-home");
-    await withEnvAsync({ OPENCLAW_GIT_DIR: undefined }, async () => {
-      expect(resolveGitInstallDir()).toBe(path.posix.join("/tmp/oc-home", "openclaw"));
+    try {
+      await withEnvAsync(
+        {
+          HOME: undefined,
+          OPENCLAW_GIT_DIR: undefined,
+          OPENCLAW_HOME: undefined,
+          USERPROFILE: undefined,
+        },
+        async () => {
+          expect(resolveGitInstallDir()).toBe(path.posix.join("/tmp/oc-home", "openclaw"));
+        },
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+  });
+
+  it("uses OPENCLAW_HOME for the default dev checkout directory", async () => {
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/tmp/oc-home");
+    try {
+      await withEnvAsync(
+        { OPENCLAW_GIT_DIR: undefined, OPENCLAW_HOME: "/srv/openclaw-home" },
+        async () => {
+          expect(resolveGitInstallDir()).toBe(path.posix.join("/srv/openclaw-home", "openclaw"));
+        },
+      );
+    } finally {
+      homedirSpy.mockRestore();
+    }
+  });
+
+  it("creates the parent directory before cloning the default dev checkout", async () => {
+    const root = await createTrackedTempDir("openclaw-update-home-");
+    const home = path.join(root, "custom-openclaw-home");
+    const checkoutDir = path.join(home, "openclaw");
+
+    await withEnvAsync({ OPENCLAW_GIT_DIR: undefined, OPENCLAW_HOME: home }, async () => {
+      const dir = resolveGitInstallDir();
+      expect(dir).toBe(checkoutDir);
+      await ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env });
     });
-    homedirSpy.mockRestore();
+
+    expect((await fs.stat(home)).isDirectory()).toBe(true);
+    const cloneCall = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.find((call) => call[0][0] === "git" && call[0][1] === "clone");
+    expect(cloneCall?.[0]).toEqual([
+      "git",
+      "clone",
+      "https://github.com/openclaw/openclaw.git",
+      checkoutDir,
+    ]);
   });
 });

@@ -649,6 +649,7 @@ Each list is optional:
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                       |
 | `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                                                     |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                  |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                    |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                     |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                     |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                            |
@@ -864,6 +865,11 @@ Fields:
 | `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
 | `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
 
+`modelPatterns` entries are compiled through `compileSafeRegex`, which rejects
+patterns containing nested repetition (for example `(a+)+$`). Patterns that fail
+the safety check are silently skipped, the same as syntactically invalid regex.
+Keep patterns simple and avoid nested quantifiers.
+
 ## modelCatalog reference
 
 Use `modelCatalog` when OpenClaw should know provider model metadata before
@@ -921,12 +927,13 @@ is required.
 
 Top-level fields:
 
-| Field          | Type                                                     | What it means                                                                                               |
-| -------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `providers`    | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
-| `aliases`      | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
-| `suppressions` | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
-| `discovery`    | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
+| Field            | Type                                                     | What it means                                                                                               |
+| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
+| `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
+| `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
+| `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
+| `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning.       |
 
 `aliases` participates in provider ownership lookup for model-catalog planning.
 Alias targets must be top-level providers owned by the same plugin. When a

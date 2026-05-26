@@ -149,7 +149,7 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
+  "pnpm test:changed"
 ```
 
 Full suite:
@@ -160,7 +160,7 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+  "pnpm test"
 ```
 
 Focused rerun:
@@ -171,7 +171,7 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test <path-or-filter>"
+  "pnpm test <path-or-filter>"
 ```
 
 Read the JSON summary. Useful fields:
@@ -206,7 +206,7 @@ node scripts/crabbox-wrapper.mjs run \
   --ttl 240m \
   --timing-json \
   -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 pnpm check:changed
+  corepack pnpm check:changed
 ```
 
 Read the JSON summary and the Testbox line. Useful fields:
@@ -544,14 +544,14 @@ If brokered AWS cannot dispatch, sync, attach, or stop, retry once with
 
 ```sh
 pnpm crabbox:run -- --debug --timing-json -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed
+  pnpm test:changed
 ```
 
 Full suite:
 
 ```sh
 pnpm crabbox:run -- --debug --timing-json -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test
+  pnpm test
 ```
 
 Auth fallback, only when `blacksmith` says auth is missing:
@@ -591,7 +591,7 @@ Minimal Blacksmith-backed Crabbox run, from repo root:
 
 ```sh
 pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed
+  corepack pnpm test:changed
 ```
 
 Use direct Blacksmith only when Crabbox is the broken layer and you are
@@ -617,7 +617,7 @@ provider deliberately.
 ```sh
 pnpm crabbox:warmup -- --class beast --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
+pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "pnpm test:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
 ```
 

@@ -2,7 +2,9 @@ import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { getDefaultLocalRoots } from "../../media/web-media.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
+import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
@@ -10,6 +12,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
@@ -27,7 +30,7 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
-  hasAuthForProvider,
+  hasProviderAuthForTool,
   hasToolModelConfig,
   resolveDefaultModelRef,
   type ToolModelConfig,
@@ -192,6 +195,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -203,8 +207,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({
+      ? hasProviderAuthForTool({
           provider: params.providerId,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
         })
@@ -216,8 +222,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({
+  return hasProviderAuthForTool({
     provider: provider.id,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
@@ -251,6 +259,7 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
 
 function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   providers: CapabilityProvider[];
@@ -267,6 +276,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
         providers: params.providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       })
@@ -309,6 +319,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
 
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
@@ -326,10 +337,13 @@ export function resolveCapabilityModelConfigForTool(params: {
   };
   return buildToolModelConfigFromCandidates({
     explicit,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
       providers: getProviders(),
@@ -339,6 +353,7 @@ export function resolveCapabilityModelConfigForTool(params: {
         providers: getProviders(),
         providerId,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -367,6 +382,7 @@ export function hasGenerationToolAvailability(params: {
         providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -396,8 +412,10 @@ export function hasGenerationToolAvailability(params: {
     contract: params.providerKey,
     config: params.cfg,
   }).some((providerId) =>
-    hasAuthForProvider({
+    hasProviderAuthForTool({
       provider: providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
     }),
@@ -526,7 +544,12 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: {
+    workspaceOnly?: boolean;
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  },
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
@@ -534,7 +557,25 @@ export function resolveMediaToolLocalRoots(
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+}
+
+export function resolveMediaToolInboundRoots(options?: {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): string[] {
+  if (options?.workspaceOnly || !options?.cfg || !options.channelId) {
+    return [];
+  }
+  return normalizeInboundPathRoots(
+    resolveChannelInboundAttachmentRootsForChannel({
+      cfg: options.cfg,
+      channelId: options.channelId,
+      accountId: options.accountId,
+    }),
+  );
 }
 
 export function resolvePromptAndModelOverride(

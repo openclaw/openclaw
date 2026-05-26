@@ -19,6 +19,10 @@ LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 DOCKER_RUN_USER_ARGS=()
+cleanup_outer() {
+  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
+}
+trap cleanup_outer EXIT
 
 if [ "$ROOT_MANAGED_VPS" = "1" ]; then
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
@@ -107,7 +111,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     "${DOCKER_RUN_USER_ARGS[@]}" \
     "$IMAGE_NAME" \
-    timeout "$DOCKER_RUN_TIMEOUT" bash scripts/e2e/lib/upgrade-survivor/run.sh
+    timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash scripts/e2e/lib/upgrade-survivor/run.sh
   exit 0
 fi
 
@@ -133,7 +137,7 @@ docker_e2e_run_with_harness \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${DOCKER_RUN_USER_ARGS[@]}" \
   "$IMAGE_NAME" \
-  timeout "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
+  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc 'set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 
 export npm_config_loglevel=error

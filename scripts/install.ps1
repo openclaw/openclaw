@@ -23,6 +23,12 @@ function Fail-Install {
     return $false
 }
 
+function Test-BooleanSuccessResult {
+    param([object[]]$Results)
+
+    return ($Results.Count -gt 0 -and $Results[-1] -eq $true)
+}
+
 function Complete-Install {
     param([bool]$Succeeded)
 
@@ -924,6 +930,63 @@ function Test-OpenClawSourcePackageInstallSpec {
     )
 }
 
+function Resolve-NpmConfigPath {
+    param([string]$RawPath)
+    if ([string]::IsNullOrWhiteSpace($RawPath) -or $RawPath -eq "null" -or $RawPath -eq "undefined") {
+        return $null
+    }
+    if (($RawPath.StartsWith("~/") -or $RawPath.StartsWith("~\")) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(2))
+    }
+    if (($RawPath.StartsWith('${HOME}/') -or $RawPath.StartsWith('${HOME}\')) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(8))
+    }
+    return $RawPath
+}
+
+function Test-NpmConfigFileKey {
+    param(
+        [string]$Path,
+        [string]$Key
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $escapedKey = [regex]::Escape($Key)
+    return [bool](Select-String -LiteralPath $Path -Pattern "^\s*$escapedKey\s*=" -Quiet)
+}
+
+function Test-NpmConfigRawKey {
+    param([string]$Key)
+    $files = New-Object System.Collections.Generic.List[string]
+    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    if ($userConfig) {
+        $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
+        if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
+    } elseif (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $files.Add((Join-Path $HOME ".npmrc"))
+    }
+
+    $globalConfig = if ($env:NPM_CONFIG_GLOBALCONFIG) { $env:NPM_CONFIG_GLOBALCONFIG } else { $env:npm_config_globalconfig }
+    if ($globalConfig) {
+        $resolvedGlobalConfig = Resolve-NpmConfigPath $globalConfig
+        if ($resolvedGlobalConfig) { $files.Add($resolvedGlobalConfig) }
+    }
+
+    $detectedGlobalConfig = (Invoke-NpmCommand -Arguments @("config", "get", "globalconfig", "--global") 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $resolvedDetectedGlobalConfig = Resolve-NpmConfigPath $detectedGlobalConfig
+        if ($resolvedDetectedGlobalConfig) { $files.Add($resolvedDetectedGlobalConfig) }
+    }
+
+    foreach ($file in ($files | Select-Object -Unique)) {
+        if (Test-NpmConfigFileKey -Path $file -Key $Key) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Install-OpenClaw {
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         $Tag = "latest"
@@ -945,9 +1008,12 @@ function Install-OpenClaw {
     $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName $packageName -RequestedTag $Tag
     Write-Host "[*] Installing OpenClaw ($installSpec)..." -ForegroundColor Yellow
     $freshnessArgs = @("--min-release-age=0")
-    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age") 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
-        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before") 2>$null)
+    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age", "--global") 2>$null)
+    $minReleaseAgeStatus = $LASTEXITCODE
+    if (Test-NpmConfigRawKey -Key "min-release-age") {
+        $freshnessArgs = @("--min-release-age=0")
+    } elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
+        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before", "--global") 2>$null)
         if ($LASTEXITCODE -eq 0 -and $beforeValue -and $beforeValue.Trim() -ne "null" -and $beforeValue.Trim() -ne "undefined") {
             $freshnessArgs = @("--before=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))")
         }
@@ -1043,10 +1109,18 @@ function Install-OpenClawFromGit {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
         & $pnpmCommand install
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
+            return $false
+        }
         if (-not (& $pnpmCommand ui:build)) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
         & $pnpmCommand build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[!] pnpm build failed for the Git checkout" -ForegroundColor Red
+            return $false
+        }
     } finally {
         if ($pushedRepoLocation) {
             Pop-Location
@@ -1054,12 +1128,18 @@ function Install-OpenClawFromGit {
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
     }
 
+    $entryPath = Join-Path $RepoDir "dist\\entry.js"
+    if (-not (Test-Path $entryPath)) {
+        Write-Host "[!] OpenClaw build did not produce $entryPath" -ForegroundColor Red
+        return $false
+    }
+
     $binDir = Join-Path $env:USERPROFILE ".local\\bin"
     if (-not (Test-Path $binDir)) {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     }
     $cmdPath = Join-Path $binDir "openclaw.cmd"
-    $cmdContents = "@echo off`r`nnode ""$RepoDir\\dist\\entry.js"" %*`r`n"
+    $cmdContents = "@echo off`r`nnode ""$entryPath"" %*`r`n"
     Set-Content -Path $cmdPath -Value $cmdContents -NoNewline
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -1202,7 +1282,8 @@ function Main {
             }
         } catch { }
         $finalGitDir = $GitDir
-        if (-not (Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)) {
+        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
+        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
             return (Fail-Install)
         }
     } else {
@@ -1211,7 +1292,8 @@ function Main {
             Remove-Item -Force $gitWrapper
             Write-Host "[OK] Removed git wrapper (switching to npm)" -ForegroundColor Green
         }
-        if (-not (Install-OpenClaw)) {
+        $npmInstallResults = @(Install-OpenClaw)
+        if (-not (Test-BooleanSuccessResult -Results $npmInstallResults)) {
             return (Fail-Install)
         }
     }
@@ -1321,5 +1403,5 @@ function Main {
 }
 
 $mainResults = @(Main)
-$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true
+$installSucceeded = Test-BooleanSuccessResult -Results $mainResults
 Complete-Install -Succeeded:$installSucceeded

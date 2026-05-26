@@ -20,6 +20,10 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  asOptionalRecord as readRecord,
+  isRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
@@ -192,16 +196,25 @@ export function createCodexDynamicToolBridge(params: {
           startedAt,
         });
         const terminalType = inferToolResultDiagnosticTerminalType(result, resultIsError);
-        return withSideEffectEvidence(
-          withDiagnosticTerminalType(
-            {
-              contentItems: convertToolContents(result.content, toolResultMaxChars),
-              success: !resultIsError,
-            },
-            terminalType,
-          ),
-          terminalType !== "blocked",
+        const response = withDiagnosticTerminalType(
+          {
+            contentItems: convertToolContents(result.content, toolResultMaxChars),
+            success: !resultIsError,
+          },
+          terminalType,
         );
+        withDynamicToolTermination(
+          response,
+          rawResult.terminate === true ||
+            result.terminate === true ||
+            isToolResultYield(rawResult) ||
+            isToolResultYield(result),
+        );
+        withDynamicToolAsyncStarted(
+          response,
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
+        );
+        return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
         collectToolTelemetry({
           toolName: tool.name,
@@ -426,14 +439,6 @@ function extractInternalSourceReplyPayload(
     : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
 function readPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -463,8 +468,24 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "success" &&
     status !== "completed" &&
     status !== "recorded" &&
-    status !== "running"
+    status !== "pending" &&
+    status !== "started" &&
+    status !== "running" &&
+    status !== "yielded"
   );
+}
+
+function isToolResultYield(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  if (!isRecord(details) || typeof details.status !== "string") {
+    return false;
+  }
+  return details.status.trim().toLowerCase() === "yielded";
+}
+
+function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  return isRecord(details) && details.async === true && details.status === "started";
 }
 
 function inferToolResultDiagnosticTerminalType(
@@ -501,6 +522,36 @@ function withSideEffectEvidence<T extends CodexDynamicToolCallResponse>(
     return response;
   }
   Object.defineProperty(response, "sideEffectEvidence", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
+}
+
+function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  terminate: boolean,
+): T {
+  if (!terminate) {
+    return response;
+  }
+  Object.defineProperty(response, "terminate", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
+}
+
+function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  asyncStarted: boolean,
+): T {
+  if (!asyncStarted) {
+    return response;
+  }
+  Object.defineProperty(response, "asyncStarted", {
     configurable: true,
     enumerable: false,
     value: true,

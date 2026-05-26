@@ -27,10 +27,11 @@ execution:
   kind: flow
   summary: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
   config:
-    setupPrompt: "Capability flip setup: acknowledge this setup so restart wake-up has a route."
     imagePrompt: "Capability flip image check: generate a QA lighthouse image in this turn right now. Do not acknowledge first, do not promise future work, and do not stop before using image_generate. Final reply must include the MEDIA path."
     imagePromptSnippet: "Capability flip image check"
     deniedTool: image_generate
+    imageTurnTimeoutMs: 120000
+    mediaPathTimeoutMs: 30000
 ```
 
 ```yaml qa-flow
@@ -66,9 +67,6 @@ steps:
           - ref: env
           - Capability flip
           - ref: sessionKey
-      - set: setupStartIndex
-        value:
-          expr: state.getSnapshot().messages.length
       - try:
           actions:
             - call: patchConfig
@@ -86,24 +84,6 @@ steps:
               args:
                 - ref: env
                 - 60000
-            - call: runAgentPrompt
-              args:
-                - ref: env
-                - sessionKey:
-                    ref: sessionKey
-                  message:
-                    expr: config.setupPrompt
-                  timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 30000)
-            - call: waitForOutboundMessage
-              args:
-                - ref: state
-                - lambda:
-                    params: [candidate]
-                    expr: "candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').includes('Protocol note')"
-                - expr: liveTurnTimeoutMs(env, 30000)
-                - sinceIndex:
-                    ref: setupStartIndex
             - call: readEffectiveTools
               saveAs: beforeTools
               args:
@@ -116,6 +96,9 @@ steps:
             - set: wakeMarker
               value:
                 expr: "`QA-CAPABILITY-${randomUUID().slice(0, 8)}`"
+            - set: wakeStartIndex
+              value:
+                expr: "state.getSnapshot().messages.length"
             - call: patchConfig
               args:
                 - env:
@@ -131,6 +114,9 @@ steps:
                             ref: originalImageGenerationModelPrimary
                   sessionKey:
                     ref: sessionKey
+                  deliveryContext:
+                    channel: qa-channel
+                    to: dm:qa-operator
                   note:
                     ref: wakeMarker
             - call: waitForGatewayHealthy
@@ -141,13 +127,23 @@ steps:
               args:
                 - ref: env
                 - 60000
+            - call: waitForOutboundMessage
+              saveAs: wakeReply
+              args:
+                - ref: state
+                - lambda:
+                    params: [candidate]
+                    expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').includes(wakeMarker)"
+                - expr: liveTurnTimeoutMs(env, 60000)
+                - sinceIndex:
+                    ref: wakeStartIndex
             - call: waitForCondition
               saveAs: afterTools
               args:
                 - lambda:
                     async: true
                     expr: "(() => readEffectiveTools(env, sessionKey).then((tools) => (tools.has('image_generate') ? tools : undefined)))()"
-                - expr: liveTurnTimeoutMs(env, 45000)
+                - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
                 - 500
             - set: imageStartedAtMs
               value:
@@ -164,7 +160,7 @@ steps:
                   message:
                     expr: config.imagePrompt
                   timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 45000)
+                    expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
             - try:
                 actions:
                   - call: resolveGeneratedImagePath
@@ -177,7 +173,7 @@ steps:
                         startedAtMs:
                           ref: imageStartedAtMs
                         timeoutMs:
-                          expr: liveTurnTimeoutMs(env, 15000)
+                          expr: liveTurnTimeoutMs(env, config.mediaPathTimeoutMs)
                 catch:
                   - set: mediaPath
                     value: ""
@@ -191,7 +187,7 @@ steps:
                       - lambda:
                           params: [candidate]
                           expr: "candidate.conversation.id === 'qa-operator' && (String(candidate.text ?? '').includes('MEDIA:') || /media failed|image generation failed/i.test(String(candidate.text ?? '')))"
-                      - expr: liveTurnTimeoutMs(env, 45000)
+                      - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
                   - set: imageReplyText
                     value:
                       expr: "String(imageReply.text ?? '')"

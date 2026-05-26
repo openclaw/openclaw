@@ -1,21 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const manifestMocks = vi.hoisted(() => ({
-  isManifestPluginAvailableForControlPlane: vi.fn(() => true),
-  loadManifestMetadataSnapshot: vi.fn(),
+  listOpenClawPluginManifestMetadata: vi.fn(),
+  loadPluginManifest: vi.fn(),
 }));
 
-vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
-  isManifestPluginAvailableForControlPlane: manifestMocks.isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot: manifestMocks.loadManifestMetadataSnapshot,
+vi.mock("../../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: manifestMocks.listOpenClawPluginManifestMetadata,
+}));
+
+vi.mock("../../plugins/manifest.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/manifest.js")>()),
+  loadPluginManifest: manifestMocks.loadPluginManifest,
 }));
 
 import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
-  manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
-    index: undefined,
-    plugins,
+  const byPluginDir = new Map(
+    plugins.map((plugin) => {
+      const id = (plugin as { id?: string }).id ?? "plugin";
+      return [`/fixtures/${id}`, plugin];
+    }),
+  );
+  manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue(
+    [...byPluginDir].map(([pluginDir, plugin]) => ({
+      pluginDir,
+      manifest: plugin,
+      origin: (plugin as { origin?: string }).origin,
+    })),
+  );
+  manifestMocks.loadPluginManifest.mockImplementation((pluginDir: string) => {
+    const plugin = byPluginDir.get(pluginDir);
+    return plugin
+      ? { ok: true, manifest: plugin }
+      : { ok: false, error: "missing manifest", manifestPath: `${pluginDir}/openclaw.plugin.json` };
   });
 }
 
@@ -41,6 +60,9 @@ function createMistralManifestPlugin(overrides?: {
               contextWindow: 262144,
               maxTokens: 8192,
               cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
+              },
             },
           ],
         },
@@ -53,9 +75,8 @@ function createMistralManifestPlugin(overrides?: {
 }
 
 beforeEach(() => {
-  manifestMocks.isManifestPluginAvailableForControlPlane.mockReset();
-  manifestMocks.isManifestPluginAvailableForControlPlane.mockReturnValue(true);
-  manifestMocks.loadManifestMetadataSnapshot.mockReset();
+  manifestMocks.listOpenClawPluginManifestMetadata.mockReset();
+  manifestMocks.loadPluginManifest.mockReset();
   setManifestPlugins([]);
 });
 
@@ -80,6 +101,9 @@ describe("resolveBundledStaticCatalogModel", () => {
       id: "mistral-medium-3-5",
       input: ["text", "image"],
       maxTokens: 8192,
+      mediaInput: {
+        image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
+      },
       name: "Mistral Medium 3.5",
       provider: "mistral",
       reasoning: true,

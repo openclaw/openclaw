@@ -559,6 +559,68 @@ describe("run-node script", () => {
     });
   });
 
+  it("routes local build stdout to stderr before JSON command output", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+      const outputPath = path.join(tmp, ".artifacts", "run-node", "output.log");
+      const spawn = (_cmd: string, args: string[]) => {
+        if (args[0] === "scripts/bundled-plugin-assets.mjs") {
+          return createPipedExitedProcess({
+            stdout: "asset stdout\n",
+            stderr: "asset stderr\n",
+          });
+        }
+        if (args[0] === "scripts/tsdown-build.mjs") {
+          return createPipedExitedProcess({
+            stdout: "build stdout\n",
+            stderr: "build stderr\n",
+          });
+        }
+        return createPipedExitedProcess({ stdout: '{"plugins":[]}\n' });
+      };
+      const stdoutChunks: string[] = [];
+      const stderrChunks: string[] = [];
+      const stdout = {
+        write: (chunk: string | Buffer) => {
+          stdoutChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["plugins", "list", "--json"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_OUTPUT_LOG: outputPath,
+        },
+        spawn,
+        stdout,
+        stderr,
+        execPath: process.execPath,
+        platform: process.platform,
+      } as Parameters<typeof runNodeMain>[0] & {
+        stdout: NodeJS.WriteStream;
+        stderr: NodeJS.WriteStream;
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stdoutChunks.join("")).toBe('{"plugins":[]}\n');
+      expect(stderrChunks.join("")).toContain("asset stdout\n");
+      expect(stderrChunks.join("")).toContain("asset stderr\n");
+      expect(stderrChunks.join("")).toContain("build stdout\n");
+      expect(stderrChunks.join("")).toContain("build stderr\n");
+    });
+  });
+
   it("routes sync I/O trace stderr blocks to the output log without flooding stderr", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp);
@@ -670,6 +732,60 @@ describe("run-node script", () => {
       expect(childArgs.slice(3)).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_CPU_PROF_DIR).toBe(profileDir);
       expect(fsSync.existsSync(profileDir)).toBe(true);
+    });
+  });
+
+  it("rotates old Node CPU profiles when a retention cap is set", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const profileDir = path.join(tmp, ".artifacts", "profiles");
+      fsSync.mkdirSync(profileDir, { recursive: true });
+      const oldProfiles = [
+        "openclaw-status-oldest.cpuprofile",
+        "openclaw-status-middle.cpuprofile",
+        "openclaw-status-newest.cpuprofile",
+      ];
+      for (const [index, name] of oldProfiles.entries()) {
+        const filePath = path.join(profileDir, name);
+        fsSync.writeFileSync(filePath, "{}");
+        const mtime = new Date(1_700_000_000_000 + index * 1000);
+        fsSync.utimesSync(filePath, mtime, mtime);
+      }
+      fsSync.writeFileSync(path.join(profileDir, "openclaw-models-old.cpuprofile"), "{}");
+
+      const spawn = () => createExitedProcess(0);
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_CPU_PROF_DIR: ".artifacts/profiles",
+          OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES: "2",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+        process: createFakeProcess(),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[0]))).toBe(false);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[1]))).toBe(false);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[2]))).toBe(true);
+      expect(fsSync.existsSync(path.join(profileDir, "openclaw-models-old.cpuprofile"))).toBe(true);
     });
   });
 

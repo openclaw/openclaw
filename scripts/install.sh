@@ -39,6 +39,23 @@ mktempfile() {
     echo "$f"
 }
 
+resolve_openclaw_effective_home() {
+    local openclaw_home="${OPENCLAW_HOME:-}"
+    if [[ -z "$openclaw_home" ]]; then
+        echo "$HOME"
+        return
+    fi
+    if [[ "$openclaw_home" == "~" ]]; then
+        echo "$HOME"
+        return
+    fi
+    if [[ "$openclaw_home" == \~/* ]]; then
+        echo "${HOME}${openclaw_home:1}"
+        return
+    fi
+    echo "$openclaw_home"
+}
+
 DOWNLOADER=""
 detect_downloader() {
     if command -v curl &> /dev/null; then
@@ -267,7 +284,7 @@ detect_os_or_die() {
     OS="unknown"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         OS="macos"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    elif [[ "$OSTYPE" == "linux"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
         OS="linux"
     fi
 
@@ -321,6 +338,14 @@ ui_error() {
 
 INSTALL_STAGE_TOTAL=3
 INSTALL_STAGE_CURRENT=0
+
+configure_install_stage_total() {
+    INSTALL_STAGE_TOTAL=3
+    INSTALL_STAGE_CURRENT=0
+    if [[ "${VERIFY_INSTALL:-0}" == "1" ]]; then
+        INSTALL_STAGE_TOTAL=4
+    fi
+}
 
 ui_section() {
     local title="$1"
@@ -599,6 +624,21 @@ is_arch_linux() {
     return 1
 }
 
+is_alpine_linux() {
+    if [[ -f /etc/alpine-release ]]; then
+        return 0
+    fi
+    if [[ -f /etc/os-release ]]; then
+        local os_id os_id_like
+        os_id="$(grep -E '^ID=' /etc/os-release 2>/dev/null | cut -d'=' -f2 | tr -d '"' || true)"
+        os_id_like="$(grep -E '^ID_LIKE=' /etc/os-release 2>/dev/null | cut -d'=' -f2 | tr -d '"' || true)"
+        if [[ "$os_id" == "alpine" || "$os_id_like" == *alpine* ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 apt_get() {
     if is_root; then
         env DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" apt-get "$@"
@@ -654,7 +694,7 @@ install_build_tools_linux() {
         return 0
     fi
 
-    if command -v apk &> /dev/null; then
+    if command -v apk &> /dev/null && is_alpine_linux; then
         if is_root; then
             run_quiet_step "Installing build tools" apk add --no-cache build-base python3 cmake
         else
@@ -719,23 +759,105 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
+resolve_npm_config_path() {
+    local raw="$1"
+    if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
+        return 1
+    fi
+    if [[ "$raw" == \~/* && -n "${HOME:-}" ]]; then
+        printf '%s\n' "${HOME}/${raw#"~/"}"
+        return 0
+    fi
+    if [[ "$raw" == "\${HOME}/"* && -n "${HOME:-}" ]]; then
+        printf '%s\n' "${HOME}/${raw#"\${HOME}/"}"
+        return 0
+    fi
+    printf '%s\n' "$raw"
+}
+
+npm_config_file_has_key() {
+    local file="$1"
+    local key="$2"
+    [[ -f "$file" ]] || return 1
+    grep -Eiq "^[[:space:]]*${key}[[:space:]]*=" "$file"
+}
+
+npm_command_path() {
+    local npm_cmd="$1"
+    local npm_path="$npm_cmd"
+    if [[ "$npm_path" != */* ]]; then
+        npm_path="$(command -v "$npm_cmd" 2>/dev/null)" || return 1
+    fi
+    if command -v node >/dev/null 2>&1; then
+        node -e 'const fs = require("node:fs"); console.log(fs.realpathSync(process.argv[1]));' "$npm_path" 2>/dev/null && return 0
+    fi
+    printf '%s\n' "$npm_path"
+}
+
+npm_builtin_config_path() {
+    local npm_cmd="$1"
+    local npm_path
+    npm_path="$(npm_command_path "$npm_cmd")" || return 1
+    local npm_root
+    npm_root="$(cd "$(dirname "$npm_path")/.." >/dev/null 2>&1 && pwd -P)" || return 1
+    printf '%s\n' "${npm_root}/npmrc"
+}
+
+npm_config_has_raw_key() {
+    local npm_cmd="$1"
+    local key="$2"
+    local raw=""
+    local file=""
+    local -a files=()
+
+    raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    if [[ -n "$raw" ]]; then
+        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+        [[ -n "$file" ]] && files+=("$file")
+    elif [[ -n "${HOME:-}" ]]; then
+        files+=("${HOME}/.npmrc")
+    fi
+
+    raw="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+    if [[ -n "$raw" ]]; then
+        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+        [[ -n "$file" ]] && files+=("$file")
+    fi
+
+    raw="$(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get globalconfig --global 2>/dev/null || true)"
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+
+    file="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+
+    for file in "${files[@]}"; do
+        if npm_config_file_has_key "$file" "$key"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
 
     local freshness_flag="--min-release-age=0"
     local min_release_age=""
-    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
-    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age --global 2>/dev/null || true)"
+    if npm_config_has_raw_key npm "min-release-age"; then
+        freshness_flag="--min-release-age=0"
+    elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
         local before_value=""
-        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before --global 2>/dev/null || true)"
         if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
             freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
         fi
     fi
 
     local -a cmd
-    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
+    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm --loglevel "$NPM_LOGLEVEL")
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
@@ -1024,10 +1146,9 @@ DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
-GIT_DIR_DEFAULT="${HOME}/openclaw"
+GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
 GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
@@ -1070,8 +1191,6 @@ Environment variables:
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
-
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
@@ -1113,10 +1232,18 @@ parse_args() {
                 shift
                 ;;
             --install-method|--method)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 INSTALL_METHOD="$2"
                 shift 2
                 ;;
             --version)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 OPENCLAW_VERSION="$2"
                 shift 2
                 ;;
@@ -1133,6 +1260,10 @@ parse_args() {
                 shift
                 ;;
             --git-dir|--dir)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 GIT_DIR="$2"
                 shift 2
                 ;;
@@ -1141,7 +1272,8 @@ parse_args() {
                 shift
                 ;;
             *)
-                shift
+                ui_error "Unknown option: $1"
+                return 2
                 ;;
         esac
     done
@@ -1596,6 +1728,59 @@ check_node() {
     fi
 }
 
+finish_linux_node_install() {
+    activate_supported_node_on_path || true
+    if ! node_is_at_least_required; then
+        local active_path active_version
+        active_path="$(command -v node 2>/dev/null || echo "not found")"
+        active_version="$(node -v 2>/dev/null || echo "missing")"
+        ui_error "Installed Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+        echo "Upgrade the system Node.js package or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
+        exit 1
+    fi
+
+    ui_success "Node.js v$(node -v | cut -d'v' -f2) installed"
+    print_active_node_paths || true
+}
+
+install_node_with_apk() {
+    ui_info "Installing Node.js via apk (Alpine Linux detected)"
+    if is_root; then
+        run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+    else
+        run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+    fi
+
+    activate_supported_node_on_path || true
+    if node_is_at_least_required; then
+        finish_linux_node_install
+        return 0
+    fi
+
+    local apk_node_version
+    apk_node_version="$(node -v 2>/dev/null || echo "missing")"
+    ui_warn "Alpine nodejs package installed ${apk_node_version}, below required v${NODE_MIN_VERSION}+"
+    ui_info "Trying Alpine nodejs-current package"
+    if is_root; then
+        run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
+    else
+        run_quiet_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
+    fi
+
+    activate_supported_node_on_path || true
+    if node_is_at_least_required; then
+        finish_linux_node_install
+        return 0
+    fi
+
+    local active_path active_version
+    active_path="$(command -v node 2>/dev/null || echo "not found")"
+    active_version="$(node -v 2>/dev/null || echo "missing")"
+    ui_error "Alpine apk repositories did not provide Node.js v${NODE_MIN_VERSION}+; found ${active_version} (${active_path})"
+    echo "Use Alpine 3.21+ or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
+    exit 1
+}
+
 # Install Node.js
 install_node() {
     if [[ "$OS" == "macos" ]]; then
@@ -1628,9 +1813,12 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
-            promote_supported_node_binary || true
-            ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
-            print_active_node_paths || true
+            finish_linux_node_install
+            return 0
+        fi
+
+        if command -v apk &> /dev/null && is_alpine_linux; then
+            install_node_with_apk
             return 0
         fi
 
@@ -1674,9 +1862,7 @@ install_node() {
             exit 1
         fi
 
-        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
-        activate_supported_node_on_path || true
-        print_active_node_paths || true
+        finish_linux_node_install
     fi
 }
 
@@ -1731,7 +1917,13 @@ install_git() {
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
-        if command -v apt-get &> /dev/null; then
+        if command -v apk &> /dev/null && is_alpine_linux; then
+            if is_root; then
+                run_quiet_step "Installing Git" apk add --no-cache git
+            else
+                run_quiet_step "Installing Git" sudo apk add --no-cache git
+            fi
+        elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
             run_quiet_step "Installing Git" apt_get_install git
         elif command -v pacman &> /dev/null || is_arch_linux; then
@@ -2388,6 +2580,7 @@ install_openclaw_from_git() {
     ensure_pnpm_binary_for_scripts
 
     if [[ ! -d "$repo_dir" ]]; then
+        mkdir -p "$(dirname "$repo_dir")"
         run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
     fi
 
@@ -2405,7 +2598,7 @@ install_openclaw_from_git() {
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-    CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
@@ -2585,10 +2778,12 @@ maybe_open_dashboard() {
 
 resolve_workspace_dir() {
     local profile="${OPENCLAW_PROFILE:-default}"
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
     if [[ "${profile}" != "default" ]]; then
-        echo "${HOME}/.openclaw/workspace-${profile}"
+        echo "${effective_home}/.openclaw/workspace-${profile}"
     else
-        echo "${HOME}/.openclaw/workspace"
+        echo "${effective_home}/.openclaw/workspace"
     fi
 }
 
@@ -2597,9 +2792,18 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
+    local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+    local legacy_config_path="${HOME}/.openclaw/openclaw.json"
+    local legacy_clawdbot_path="${HOME}/.clawdbot/clawdbot.json"
+    if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
         return
+    fi
+    if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && "${effective_home}" != "${HOME}" ]]; then
+        if [[ -f "$legacy_config_path" || -f "$legacy_clawdbot_path" ]]; then
+            return
+        fi
     fi
 
     local workspace
@@ -3033,8 +3237,10 @@ main() {
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
         else
-            local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
+            local effective_home
+            effective_home="$(resolve_openclaw_effective_home)"
+            local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+            if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true
@@ -3095,6 +3301,7 @@ main() {
 
 if [[ "${OPENCLAW_INSTALL_SH_NO_RUN:-0}" != "1" ]]; then
     parse_args "$@"
+    configure_install_stage_total
     configure_verbose
     main
 fi

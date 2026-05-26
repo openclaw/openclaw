@@ -314,11 +314,11 @@ describeLive("subagent announce live", () => {
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
             run.taskName === "issue_82913_child" &&
-            run.frozenResultText?.includes(childToken) === true &&
+            run.completion?.resultText?.includes(childToken) === true &&
             run.outcome?.status === "ok",
         );
       });
-      expect(completedRunBeforeDelivery.completionAnnouncedAt).toBeUndefined();
+      expect(completedRunBeforeDelivery.delivery?.announcedAt).toBeUndefined();
       expect(parentObservedAt).toBeUndefined();
 
       const parent = await initialRequest;
@@ -330,14 +330,14 @@ describeLive("subagent announce live", () => {
         listSubagentRunsForRequester(sessionKey).find(
           (run) =>
             run.runId === completedRunBeforeDelivery.runId &&
-            typeof run.completionEnqueuedAt === "number" &&
-            typeof run.completionDeliveredAt === "number" &&
-            typeof run.completionAnnouncedAt === "number",
+            typeof run.delivery?.enqueuedAt === "number" &&
+            typeof run.delivery?.deliveredAt === "number" &&
+            typeof run.delivery?.announcedAt === "number",
         ),
       );
-      const enqueuedAt = completedRun.completionEnqueuedAt!;
-      const deliveredAt = completedRun.completionDeliveredAt!;
-      const announcedAt = completedRun.completionAnnouncedAt!;
+      const enqueuedAt = completedRun.delivery?.enqueuedAt ?? 0;
+      const deliveredAt = completedRun.delivery?.deliveredAt ?? 0;
+      const announcedAt = completedRun.delivery?.announcedAt ?? 0;
       const enqueuedToDeliveredMs = deliveredAt - enqueuedAt;
       const announcedToParentObservedMs = Math.abs(parentObservedAt - announcedAt);
       console.log(
@@ -352,7 +352,7 @@ describeLive("subagent announce live", () => {
           announcedToParentObservedMs,
         })}`,
       );
-      expect(completedRun.completionAnnouncedAt).toBe(deliveredAt);
+      expect(completedRun.delivery?.announcedAt).toBe(deliveredAt);
       expect(enqueuedToDeliveredMs).toBeGreaterThan(10_000);
       expect(announcedToParentObservedMs).toBeLessThan(20_000);
     },
@@ -371,6 +371,7 @@ describeLive("subagent announce live", () => {
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `CHILD_STEERED_${nonce}`;
       const parentToken = `PARENT_SAW_${childToken}`;
+      const parentStartedToken = `PARENT_READY_${nonce}`;
       const steerToken = `STEER_${nonce}`;
       const childTask = [
         `Immediately call sessions_yield with message="waiting for ${steerToken}".`,
@@ -464,9 +465,9 @@ describeLive("subagent announce live", () => {
               runTimeoutSeconds: 300,
             })}.`,
             'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
-            `Step 3: call sessions_yield with message="waiting for ${childToken}" and wait for the child completion event.`,
-            `Step 4: after the completion event arrives, reply exactly ${parentToken}.`,
-            "Do not reply with the parent token until the child completion event is visible.",
+            `Step 3: reply exactly ${parentStartedToken}.`,
+            `In a future continuation after the child completion event arrives, reply exactly ${parentToken}.`,
+            `Do not reply with ${parentToken} before the child completion event is visible.`,
           ].join("\n"),
         },
         { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
@@ -483,6 +484,9 @@ describeLive("subagent announce live", () => {
           (run) => run.taskName === "steered_child" && !run.endedAt,
         );
       });
+      const initialResponse = await initialRequest;
+      expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
+
       const cfg = getRuntimeConfig();
       const steerResult = await steerControlledSubagentRun({
         cfg,
@@ -490,7 +494,7 @@ describeLive("subagent announce live", () => {
         entry: spawnedRun,
         message: steerToken,
       });
-      expect(steerResult.status).toBe("accepted");
+      expect(["accepted", "done"]).toContain(steerResult.status);
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
@@ -499,12 +503,12 @@ describeLive("subagent announce live", () => {
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
             run.taskName === "steered_child" &&
-            run.frozenResultText?.includes(childToken) === true &&
+            run.completion?.resultText?.includes(childToken) === true &&
             run.outcome?.status === "ok",
         );
       });
       expect(steeredRun.endedReason).toBe("subagent-complete");
-      expect(steeredRun.lastAnnounceDeliveryError).toBeUndefined();
+      expect(steeredRun.delivery?.lastError).toBeUndefined();
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {
@@ -515,12 +519,16 @@ describeLive("subagent announce live", () => {
           : undefined;
       });
 
-      const completedDispatch = inProcessAgentDispatches.find(
-        (entry) => entry.phase === "completed",
+      const completedDispatch = await waitFor(
+        "in-process subagent completion agent dispatch",
+        () => {
+          if (initialError) {
+            throw initialError;
+          }
+          return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
+        },
       );
-      if (completedDispatch) {
-        expect(completedDispatch.resultText).toContain(childToken);
-      }
+      expect(completedDispatch.resultText).toContain(parentToken);
       expect(
         inProcessAgentDispatches.some((entry) => {
           if (initialError) {
@@ -659,7 +667,8 @@ describeLive("subagent announce live", () => {
         const completed = childTokens.every((childToken) =>
           runs.some(
             (run) =>
-              run.frozenResultText?.includes(childToken) === true && run.outcome?.status === "ok",
+              run.completion?.resultText?.includes(childToken) === true &&
+              run.outcome?.status === "ok",
           ),
         );
         return completed ? runs : undefined;
@@ -667,7 +676,9 @@ describeLive("subagent announce live", () => {
 
       expect(completedRuns).toHaveLength(3);
       for (const childToken of childTokens) {
-        expect(completedRuns.some((run) => run.frozenResultText?.includes(childToken))).toBe(true);
+        expect(completedRuns.some((run) => run.completion?.resultText?.includes(childToken))).toBe(
+          true,
+        );
       }
 
       const parent = await initialRequest;

@@ -385,12 +385,14 @@ describe("runCodexAppServerSideQuestion", () => {
       "developerInstructions",
       "ephemeral",
       "model",
+      "personality",
       "sandbox",
       "threadId",
       "threadSource",
     ]);
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("gpt-5.5");
+    expect(forkParams?.personality).toBe("none");
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.ephemeral).toBe(true);
@@ -435,6 +437,7 @@ describe("runCodexAppServerSideQuestion", () => {
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
         cwd: "/tmp/workspace",
         model: "gpt-5.5",
+        personality: "none",
         effort: null,
         collaborationMode: {
           mode: "default",
@@ -505,6 +508,21 @@ describe("runCodexAppServerSideQuestion", () => {
       ),
     ).rejects.toThrow(
       "Codex-native /btw side-question mode is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects /btw before forking when exec host=node is active", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { exec: { host: "node", node: "worker-1" } } } as never,
+          sessionKey: "node-session",
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because OpenClaw exec host=node is active for this session.",
     );
 
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
@@ -661,6 +679,7 @@ describe("runCodexAppServerSideQuestion", () => {
       },
       threadId: "side-thread",
       turnId: "turn-1",
+      autoApprove: false,
       paramsForRun: {
         messageChannel: "discord",
         messageProvider: "discord-voice",

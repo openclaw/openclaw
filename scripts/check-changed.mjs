@@ -8,8 +8,10 @@ import {
   listStagedChangedPaths,
   normalizeChangedPath,
 } from "./changed-lanes.mjs";
+import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -78,9 +80,6 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
     return false;
   }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN)) {
-    return false;
-  }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
     return false;
   }
@@ -110,13 +109,6 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
-    "CI=1",
-    "NODE_OPTIONS=--max-old-space-size=4096",
-    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
-    "OPENCLAW_VITEST_MAX_WORKERS=1",
-    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
-    "OPENCLAW_TESTBOX=1",
-    "OPENCLAW_TESTBOX_REMOTE_RUN=1",
     "corepack",
     "pnpm",
     "check:changed",
@@ -126,6 +118,28 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
 
 export function shouldRunShrinkwrapGuard(paths) {
   return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
+}
+
+export function createShrinkwrapGuardCommand(paths) {
+  if (!shouldRunShrinkwrapGuard(paths)) {
+    return null;
+  }
+  const packageDirs = shrinkwrapPackageDirsForChangedPaths(paths);
+  if (packageDirs.length === 0) {
+    return null;
+  }
+  return {
+    name:
+      packageDirs.length === 1
+        ? "npm shrinkwrap guard"
+        : `npm shrinkwrap guard (${packageDirs.length} packages)`,
+    bin: "node",
+    args: [
+      "scripts/generate-npm-shrinkwrap.mjs",
+      "--check",
+      ...packageDirs.flatMap((packageDir) => ["--package-dir", packageDir]),
+    ],
+  };
 }
 
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
@@ -165,8 +179,14 @@ export function createChangedCheckPlan(result, options = {}) {
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
-  if (shouldRunShrinkwrapGuard(result.paths)) {
-    add("npm shrinkwrap guard", ["deps:shrinkwrap:check"]);
+  const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
+  if (shrinkwrapGuardCommand) {
+    addCommand(
+      shrinkwrapGuardCommand.name,
+      shrinkwrapGuardCommand.bin,
+      shrinkwrapGuardCommand.args,
+      baseEnv,
+    );
   }
   add("package patch guard", ["deps:patches:check"]);
 
@@ -285,7 +305,10 @@ export function createChangedCheckPlan(result, options = {}) {
 export async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
-  const plan = createChangedCheckPlan(result, { ...options, env: childEnv });
+  const plan = createChangedCheckPlan(result, {
+    ...options,
+    env: childEnv,
+  });
   const releaseLock = options.dryRun
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
@@ -345,11 +368,7 @@ async function runPlanCommand(command, timings) {
 
 export function createPnpmManagedCommand(command, env = process.env) {
   const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (
-    isTruthyEnvFlag(commandEnv.OPENCLAW_TESTBOX_REMOTE_RUN) ||
-    isTruthyEnvFlag(commandEnv.CI) ||
-    isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)
-  ) {
+  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,
@@ -375,7 +394,7 @@ function ensureCorepackPnpmShimDir() {
   }
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-corepack-pnpm-"));
   const pnpmPath = path.join(dir, "pnpm");
-  writeFileSync(pnpmPath, "#!/bin/sh\nexec corepack pnpm \"$@\"\n", "utf8");
+  writeFileSync(pnpmPath, '#!/bin/sh\nexec corepack pnpm "$@"\n', "utf8");
   chmodSync(pnpmPath, 0o755);
   writeFileSync(path.join(dir, "pnpm.cmd"), "@echo off\r\ncorepack pnpm %*\r\n", "utf8");
   corepackPnpmShimDir = dir;
@@ -440,8 +459,7 @@ function parseArgs(argv) {
 }
 
 function isDirectRun() {
-  const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 if (isDirectRun()) {

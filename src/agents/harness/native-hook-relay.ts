@@ -15,6 +15,8 @@ import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import { uniqueValues } from "../../shared/string-normalization.js";
+import { asBoolean } from "../../utils/boolean.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
@@ -334,7 +336,7 @@ export function registerNativeHookRelay(
       }),
     renew: (ttlMs) => {
       const current = relays.get(relayId);
-      if (!current) {
+      if (current !== registration) {
         return;
       }
       const expiresAtMs = Date.now() + normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
@@ -345,12 +347,18 @@ export function registerNativeHookRelay(
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
       }
     },
-    unregister: () => unregisterNativeHookRelay(relayId),
+    unregister: () => unregisterNativeHookRelay(relayId, registration),
   };
   return handle;
 }
 
-function unregisterNativeHookRelay(relayId: string): void {
+function unregisterNativeHookRelay(
+  relayId: string,
+  expectedRegistration?: NativeHookRelayRegistration,
+): void {
+  if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
+    return;
+  }
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
@@ -422,8 +430,7 @@ export async function invokeNativeHookRelay(
     throw new Error("native hook relay not found");
   }
   if (Date.now() > registration.expiresAtMs) {
-    relays.delete(relayId);
-    removeNativeHookRelayInvocations(relayId);
+    unregisterNativeHookRelay(relayId, registration);
     throw new Error("native hook relay expired");
   }
   if (registration.provider !== provider) {
@@ -551,9 +558,7 @@ function removeNativeHookRelayInvocations(relayId: string): void {
 function pruneExpiredNativeHookRelays(now = Date.now()): void {
   for (const [relayId, registration] of relays) {
     if (now > registration.expiresAtMs) {
-      relays.delete(relayId);
-      unregisterNativeHookRelayBridge(relayId);
-      removeNativeHookRelayInvocations(relayId);
+      unregisterNativeHookRelay(relayId, registration);
     }
   }
 }
@@ -1405,7 +1410,7 @@ function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvoc
   if (permissionMode) {
     metadata.permissionMode = permissionMode;
   }
-  const stopHookActive = readOptionalBoolean(payload.stop_hook_active);
+  const stopHookActive = asBoolean(payload.stop_hook_active);
   if (stopHookActive !== undefined) {
     metadata.stopHookActive = stopHookActive;
   }
@@ -1681,7 +1686,7 @@ function normalizeAllowedEvents(
   if (!events?.length) {
     return NATIVE_HOOK_RELAY_EVENTS;
   }
-  return [...new Set(events)];
+  return uniqueValues(events);
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -1732,10 +1737,6 @@ function readNonEmptyString(value: unknown, name: string): string {
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function isJsonValue(value: unknown): value is JsonValue {

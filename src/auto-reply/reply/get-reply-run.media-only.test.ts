@@ -217,7 +217,6 @@ function baseParams(
       onReplyStart: vi.fn().mockResolvedValue(undefined),
       cleanup: vi.fn(),
     } as never,
-    defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-1",
     timeoutMs: 30_000,
     isNewSession: true,
@@ -294,6 +293,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
@@ -879,7 +879,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current MediaPaths into queued followup images", async () => {
+  it("hydrates current image MediaPaths by extension when MediaTypes are missing", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -898,7 +898,6 @@ describe("runPreparedReply media-only handling", () => {
           RawBody: "describe this",
           CommandBody: "describe this",
           MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
           MediaWorkspaceDir: tmpDir,
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
@@ -912,7 +911,6 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingTo: "C123",
           ChatType: "group",
           MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
           MediaWorkspaceDir: tmpDir,
         },
       }),
@@ -930,6 +928,142 @@ describe("runPreparedReply media-only handling", () => {
     ]);
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+  });
+
+  it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(
+      secondImagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+            {
+              kind: "image.description",
+              attachmentIndex: 1,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "another tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toBeUndefined();
+    expect(call.followupRun.imageOrder).toBeUndefined();
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
+  });
+
+  it("rehydrates only current MediaPaths missing image understanding", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImageData = Buffer.from("second image bytes");
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(secondImagePath, secondImageData);
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toEqual([
+      {
+        type: "image",
+        data: secondImageData.toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
   });
 
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
@@ -1068,23 +1202,33 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+    const activeOperation = createReplyOperation({
+      sessionId: "session-active",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
 
-    const result = await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        isNewSession: true,
-        sessionId: "session-reset-new",
-      }),
-    );
+    try {
+      const result = await runPreparedReply(
+        baseParams({
+          resetTriggered: true,
+          isNewSession: true,
+          sessionId: "session-reset-new",
+        }),
+      );
 
-    expect(result).toEqual({ text: "ok" });
-    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = requireRunReplyAgentCall();
-    expect(call?.shouldSteer).toBe(false);
-    expect(call?.shouldFollowup).toBe(false);
-    expect(call?.resetTriggered).toBe(true);
+      expect(result).toEqual({ text: "ok" });
+      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+      expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+      expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+      const call = requireRunReplyAgentCall();
+      expect(call?.shouldSteer).toBe(false);
+      expect(call?.shouldFollowup).toBe(false);
+      expect(call?.resetTriggered).toBe(true);
+    } finally {
+      activeOperation.complete();
+    }
   });
   it("does not enable steering for active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -1274,153 +1418,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves image override auth profile without mutating stored session profile", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-auth",
-      sessionFile: "/tmp/session-image-auth.jsonl",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-1",
-        hasAppliedImageModelOverride: true,
-        isNewSession: false,
-        sessionId: "session-image-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
-  it("isolates image override auth profile when the override provider matches the default provider", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-default-provider-auth",
-      sessionFile: "/tmp/session-image-default-provider-auth.jsonl",
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-1",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        hasAppliedImageModelOverride: true,
-        isNewSession: false,
-        sessionId: "session-image-default-provider-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
-  it("isolates image override auth profile from the pre-override runtime provider", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-runtime-provider-auth",
-      sessionFile: "/tmp/session-image-runtime-provider-auth.jsonl",
-      modelProvider: "anthropic",
-      model: "claude-opus-4-1",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        hasAppliedImageModelOverride: true,
-        imageModelOverrideBaseProvider: "anthropic",
-        isNewSession: false,
-        sessionId: "session-image-runtime-provider-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1481,7 +1478,8 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
-  it("continues when the original owner clears before an unrelated run appears", async () => {
+  it("reports still shutting down when a new owner appears after waiting", async () => {
+    vi.useFakeTimers();
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -1509,8 +1507,12 @@ describe("runPreparedReply media-only handling", () => {
     });
     nextRun.setPhase("running");
 
-    await expect(runPromise).resolves.toEqual({ text: "ok" });
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const assertion = expect(runPromise).resolves.toEqual({
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
 
     nextRun.complete();
   });
@@ -1756,6 +1758,60 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call.followupRun.abortSignal).toBe(abortController.signal);
     expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
+  });
+
+  it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const activeLaneAbortController = new AbortController();
+    const sourceAbortController = new AbortController();
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          abortSignal: activeLaneAbortController.signal,
+          queuedFollowupAbortSignal: sourceAbortController.signal,
+        } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> & {
+          queuedFollowupAbortSignal?: AbortSignal;
+        },
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          MessageSid: "993",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.abortSignal).toBe(sourceAbortController.signal);
   });
 
   it("detaches queued user requests from superseded source abort signals", async () => {

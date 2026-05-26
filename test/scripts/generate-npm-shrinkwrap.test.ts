@@ -1,16 +1,45 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  createNpmShrinkwrapCommand,
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  shouldUseLegacyPeerDepsForShrinkwrap,
+  shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
 
 describe("generate-npm-shrinkwrap", () => {
+  function repoRelativePath(value: string): string {
+    return path.relative(process.cwd(), value).replaceAll("\\", "/");
+  }
+
+  it("runs npm shrinkwrap through cmd.exe for Windows npm shims", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    expect(
+      createNpmShrinkwrapCommand(["shrinkwrap", "--ignore-scripts"], {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        execPath,
+        existsSync: (candidate: string) => candidate === npmCmdPath,
+        platform: "win32",
+      }),
+    ).toEqual({
+      args: ["/d", "/s", "/c", `${npmCmdPath} shrinkwrap --ignore-scripts`],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("extracts exact versions from npm override specs", () => {
     expect(exactVersionFromOverrideSpec("8.4.0")).toBe("8.4.0");
     expect(exactVersionFromOverrideSpec("npm:@nolyfill/domexception@1.0.28")).toBe("1.0.28");
@@ -143,5 +172,85 @@ describe("generate-npm-shrinkwrap", () => {
         },
       },
     });
+  });
+
+  it("uses legacy peer resolution when package extensions mark dependency peers optional", () => {
+    expect(
+      shouldUseLegacyPeerDepsForShrinkwrap(
+        { dependencies: { baileys: "7.0.0-rc13" } },
+        { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseLegacyPeerDepsForShrinkwrap(
+        { dependencies: { "not-baileys": "1.0.0" } },
+        { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
+      ),
+    ).toBe(false);
+  });
+
+  it("applies package extension peer metadata to generated shrinkwrap packages", () => {
+    expect(
+      applyPackageExtensionPeerMetadata(
+        {
+          packages: {
+            "node_modules/baileys": {
+              version: "7.0.0-rc13",
+              peerDependencies: {
+                "audio-decode": "^2.1.3",
+                sharp: "*",
+              },
+              peerDependenciesMeta: {
+                "audio-decode": { optional: true },
+              },
+            },
+          },
+        },
+        { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
+      ),
+    ).toEqual({
+      packages: {
+        "node_modules/baileys": {
+          version: "7.0.0-rc13",
+          peerDependencies: {
+            "audio-decode": "^2.1.3",
+            sharp: "*",
+          },
+          peerDependenciesMeta: {
+            "audio-decode": { optional: true },
+            sharp: { optional: true },
+          },
+        },
+      },
+    });
+  });
+
+  it("targets changed publishable plugin shrinkwraps", () => {
+    expect(
+      shrinkwrapPackageDirsForChangedPaths([
+        "extensions/acpx/package.json",
+        "extensions/acpx/npm-shrinkwrap.json",
+      ]).map(repoRelativePath),
+    ).toEqual(["extensions/acpx"]);
+  });
+
+  it("falls back to every shrinkwrap when lockfile ownership is ambiguous", () => {
+    const packageDirs = shrinkwrapPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map(
+      repoRelativePath,
+    );
+
+    expect(packageDirs).toContain("");
+    expect(packageDirs).toContain("extensions/acpx");
+  });
+
+  it("falls back to every shrinkwrap when mixed lockfile changes do not map to packages", () => {
+    const packageDirs = shrinkwrapPackageDirsForChangedPaths([
+      "extensions/acpx/package.json",
+      "pnpm-lock.yaml",
+    ]).map(repoRelativePath);
+
+    expect(packageDirs).toContain("");
+    expect(packageDirs).toContain("extensions/acpx");
+    expect(packageDirs.length).toBeGreaterThan(1);
   });
 });

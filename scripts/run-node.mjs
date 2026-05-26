@@ -613,6 +613,7 @@ const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[s
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_CPU_PROF_MAX_FILES_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES";
 const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
@@ -645,6 +646,28 @@ const createRunNodeOutputTee = (deps) => {
   const outputLogPath = resolveRunNodeOutputLogPath(deps);
   if (!outputLogPath) {
     return null;
+  }
+  try {
+    const existing = deps.fs.statSync(outputLogPath);
+    if (existing.isDirectory()) {
+      return {
+        outputLogPath,
+        write() {},
+        async close() {
+          throw new Error(`output log path is a directory: ${outputLogPath}`);
+        },
+      };
+    }
+  } catch (error) {
+    if (error?.code && error.code !== "ENOENT") {
+      return {
+        outputLogPath,
+        write() {},
+        async close() {
+          throw error;
+        },
+      };
+    }
   }
   deps.fs.mkdirSync(path.dirname(outputLogPath), { recursive: true });
   const stream = deps.fs.createWriteStream(outputLogPath, {
@@ -774,6 +797,52 @@ const sanitizeCpuProfileNamePart = (value) => {
   return normalized || "command";
 };
 
+const parsePositiveInteger = (value) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const listRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
+  let entries = [];
+  try {
+    entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const prefix = `openclaw-${commandName}-`;
+  return entries
+    .filter(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".cpuprofile"),
+    )
+    .flatMap((entry) => {
+      const filePath = path.join(absoluteProfileDir, entry.name);
+      try {
+        const stat = deps.fs.statSync(filePath);
+        return [{ filePath, mtimeMs: stat.mtimeMs }];
+      } catch {
+        return [];
+      }
+    })
+    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
+};
+
+const pruneRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
+  const maxFiles = parsePositiveInteger(deps.env[RUN_NODE_CPU_PROF_MAX_FILES_ENV]);
+  if (!maxFiles) {
+    return;
+  }
+  const profiles = listRunNodeCpuProfiles(deps, absoluteProfileDir, commandName);
+  const deleteCount = Math.max(0, profiles.length - maxFiles + 1);
+  for (const profile of profiles.slice(0, deleteCount)) {
+    try {
+      deps.fs.rmSync(profile.filePath, { force: true });
+    } catch {
+      // Best-effort artifact rotation; profiling should not fail the command.
+    }
+  }
+};
+
 const resolveRunNodeCpuProfileArgs = (deps) => {
   const profileDir = deps.env[RUN_NODE_CPU_PROF_DIR_ENV]?.trim();
   if (!profileDir) {
@@ -785,6 +854,7 @@ const resolveRunNodeCpuProfileArgs = (deps) => {
   deps.env[RUN_NODE_CPU_PROF_DIR_ENV] = absoluteProfileDir;
 
   const commandName = sanitizeCpuProfileNamePart(deps.args[0]);
+  pruneRunNodeCpuProfiles(deps, absoluteProfileDir, commandName);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const pid = Number.isInteger(deps.process.pid) && deps.process.pid > 0 ? deps.process.pid : "pid";
   const profileName = `openclaw-${commandName}-${pid}-${timestamp}.cpuprofile`;
@@ -888,8 +958,9 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
-const pipeSpawnedOutput = (childProcess, deps) => {
-  if (!shouldPipeSpawnedOutput(deps)) {
+const pipeSpawnedOutput = (childProcess, deps, options = {}) => {
+  const stdoutTarget = options.stdoutTarget ?? "stdout";
+  if (!shouldPipeSpawnedOutput(deps) && stdoutTarget !== "stderr") {
     return;
   }
   const stderrFilter =
@@ -897,7 +968,8 @@ const pipeSpawnedOutput = (childProcess, deps) => {
       ? createSyncIoTraceStderrFilter(deps)
       : null;
   childProcess.stdout?.on("data", (chunk) => {
-    writeRunnerStream(deps, deps.stdout, chunk);
+    const target = stdoutTarget === "stderr" ? deps.stderr : deps.stdout;
+    writeRunnerStream(deps, target, chunk);
     deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
@@ -1341,9 +1413,9 @@ export async function runNodeMain(params = {}) {
           const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
             cwd: deps.cwd,
             env: deps.env,
-            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+            stdio: ["inherit", "pipe", "pipe"],
           });
-          pipeSpawnedOutput(assetBuild, deps);
+          pipeSpawnedOutput(assetBuild, deps, { stdoutTarget: "stderr" });
           const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
           const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
           if (assetBuildInterruptedExitCode !== null) {
@@ -1359,9 +1431,9 @@ export async function runNodeMain(params = {}) {
               ...deps.env,
               [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
             },
-            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+            stdio: ["inherit", "pipe", "pipe"],
           });
-          pipeSpawnedOutput(build, deps);
+          pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
 
           const buildRes = await waitForSpawnedProcess(build, deps);
           const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);

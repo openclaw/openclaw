@@ -1,5 +1,9 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -68,25 +72,12 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
 }
 
-function isAgentsBootstrapName(name: string): boolean {
-  return name.toLowerCase() === "agents.md";
+function isAgentsBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "agents.md";
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
-  if (!Array.isArray(signatures) || signatures.length === 0) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const signature of signatures) {
-    const value = normalizeOptionalString(signature) ?? "";
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    result.push(value);
-  }
-  return result;
+  return normalizeUniqueStringEntries(signatures);
 }
 
 function appendSeenSignature(signatures: string[], signature: string): string[] {
@@ -345,7 +336,7 @@ export function appendBootstrapPromptWarning(
     preserveExactPrompt?: string;
   },
 ): string {
-  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
+  const normalizedLines = normalizeStringEntries(warningLines);
   if (normalizedLines.length === 0) {
     return prompt;
   }

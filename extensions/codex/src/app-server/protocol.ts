@@ -80,6 +80,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: string;
@@ -95,6 +96,7 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: string;
@@ -150,6 +152,7 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  personality?: string | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: string;
@@ -268,10 +271,12 @@ export type CodexDynamicToolCallParams = {
 };
 
 export type CodexDynamicToolCallResponse = {
+  asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
   success: boolean;
+  terminate?: boolean;
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
@@ -528,7 +533,7 @@ type CodexAppServerRequestResultMap = {
   "turn/steer": JsonValue;
 };
 
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 

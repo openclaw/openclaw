@@ -17,7 +17,7 @@ import {
 } from "../context-engine/registry.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -37,6 +37,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -170,6 +175,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -352,6 +358,20 @@ function resolvePluginRegistrationCapabilities(
   };
 }
 
+function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+  return async (opts) => {
+    let responded = false;
+    const respond: RespondFn = (ok, payload, error, meta) => {
+      responded = true;
+      opts.respond(ok, payload, error, meta);
+    };
+    const result = (await handler({ ...opts, respond })) as unknown;
+    if (!responded && result !== undefined) {
+      respond(true, result);
+    }
+  };
+}
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethodNames = Array.from(
@@ -522,7 +542,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
@@ -610,8 +630,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     config: OpenClawPluginApi["config"],
     pluginConfig: unknown,
   ) => {
-    const eventList = Array.isArray(events) ? events : [events];
-    const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
+    const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
     const entry = opts?.entry ?? null;
     const hookName = requireRegistrationValue(
       entry?.hook.name ?? opts?.name?.trim(),
@@ -722,7 +741,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.gatewayHandlers[trimmed] = handler;
+    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
       pushDiagnostic({
@@ -736,7 +756,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       createPluginGatewayMethodDescriptor({
         pluginId: record.id,
         name: trimmed,
-        handler,
+        handler: wrappedHandler,
         scope: normalizedScope.scope,
       }),
     );
@@ -1267,6 +1287,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerTranscriptSourceProvider = (
+    record: PluginRecord,
+    provider: TranscriptSourceProvider,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "transcripts source provider",
+      registrations: registry.transcriptSourceProviders,
+      ownedIds: record.transcriptSourceProviderIds,
+    });
+  };
+
   const registerImageGenerationProvider = (
     record: PluginRecord,
     provider: ImageGenerationProviderPlugin,
@@ -1456,12 +1489,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ]);
 
   const registerReload = (record: PluginRecord, registration: OpenClawPluginReloadRegistration) => {
-    const normalize = (values?: string[]) =>
-      (values ?? []).map((value) => value.trim()).filter(Boolean);
     const normalized: OpenClawPluginReloadRegistration = {
-      restartPrefixes: normalize(registration.restartPrefixes),
-      hotPrefixes: normalize(registration.hotPrefixes),
-      noopPrefixes: normalize(registration.noopPrefixes),
+      restartPrefixes: normalizeStringEntries(registration.restartPrefixes),
+      hotPrefixes: normalizeStringEntries(registration.hotPrefixes),
+      noopPrefixes: normalizeStringEntries(registration.noopPrefixes),
     };
     if (
       (normalized.restartPrefixes?.length ?? 0) === 0 &&
@@ -1538,9 +1569,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     policy: OpenClawPluginNodeInvokePolicy,
     pluginConfig?: Record<string, unknown>,
   ) => {
-    const commands = Array.isArray(policy.commands)
-      ? policy.commands.map((command) => command.trim()).filter(Boolean)
-      : [];
+    const commands = normalizeUniqueStringEntries(
+      Array.isArray(policy.commands) ? policy.commands : [],
+    );
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -2608,6 +2639,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerRealtimeVoiceProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
+              registerTranscriptSourceProvider: (provider) =>
+                registerTranscriptSourceProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
@@ -3071,6 +3104,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
+    registerTranscriptSourceProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,

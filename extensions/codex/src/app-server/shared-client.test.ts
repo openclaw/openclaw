@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,
   ),
+  resolveCodexAppServerFallbackApiKeyCacheKey: vi.fn(() => undefined as string | undefined),
   resolveManagedCodexAppServerStartOptions: vi.fn(async (startOptions) => startOptions),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
   resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
@@ -21,6 +22,7 @@ vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.resolveCodexAppServerFallbackApiKeyCacheKey,
 }));
 
 vi.mock("./managed-binary.js", () => ({
@@ -129,6 +131,8 @@ describe("shared Codex app-server client", () => {
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockImplementation(
       (params?: { authProfileId?: string }) => params?.authProfileId,
     );
+    mocks.resolveCodexAppServerFallbackApiKeyCacheKey.mockClear();
+    mocks.resolveCodexAppServerFallbackApiKeyCacheKey.mockReturnValue(undefined);
     mocks.resolveManagedCodexAppServerStartOptions.mockClear();
     mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(
       async (startOptions) => startOptions,
@@ -406,6 +410,32 @@ describe("shared Codex app-server client", () => {
 
     expect(startSpy).toHaveBeenCalledTimes(2);
     expect(first.process.stdin.destroyed).toBe(false);
+  });
+
+  it("starts an independent shared client when fallback api-key auth changes", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+    mocks.resolveCodexAppServerFallbackApiKeyCacheKey
+      .mockReturnValueOnce("api-key:first")
+      .mockReturnValueOnce("api-key:second");
+
+    const firstList = listCodexAppServerModels({ timeoutMs: 1000 });
+    await sendInitializeResult(first, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(first);
+    await expect(firstList).resolves.toEqual({ models: [] });
+
+    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
+    await sendInitializeResult(second, "openclaw/0.125.0 (macOS; test)");
+    await sendEmptyModelList(second);
+    await expect(secondList).resolves.toEqual({ models: [] });
+
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(first.process.stdin.destroyed).toBe(false);
+    expect(second.process.stdin.destroyed).toBe(false);
   });
 
   it("does not let one shared-client failure tear down another keyed client", async () => {

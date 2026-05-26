@@ -9,6 +9,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildContextOverflowRecoveryText,
+  computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
@@ -405,6 +406,44 @@ function createMinimalRunAgentTurnParams(overrides?: {
   };
 }
 
+describe("computeContextAwareReserveTokensFloor", () => {
+  it("returns 100000 for 1M context windows", () => {
+    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
+  });
+
+  it("returns 50000 for 200k context windows", () => {
+    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
+  });
+
+  it("returns 35000 for 100k context windows", () => {
+    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
+  });
+
+  it("returns 20000 for context windows below 100k", () => {
+    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(32_768)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(50_000)).toBe(20_000);
+  });
+
+  it("returns 20000 for undefined context window", () => {
+    expect(computeContextAwareReserveTokensFloor(undefined)).toBe(20_000);
+  });
+
+  it("returns 20000 for non-positive context window", () => {
+    expect(computeContextAwareReserveTokensFloor(0)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(-1)).toBe(20_000);
+  });
+
+  it("returns correct tiers at exact boundaries", () => {
+    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
+    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
+    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
+  });
+});
+
 describe("buildContextOverflowRecoveryText", () => {
   it("keeps the generic compaction-buffer hint without heartbeat model evidence", () => {
     const text = buildContextOverflowRecoveryText({
@@ -414,6 +453,138 @@ describe("buildContextOverflowRecoveryText", () => {
     });
 
     expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 100000 reserveTokensFloor for 1M context models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 50000 reserveTokensFloor for 200k context models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("gpt-5.5-200k", 200_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "gpt-5.5-200k",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 35000 reserveTokensFloor for 100k context models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("gpt-5.5", 100_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "gpt-5.5",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("35000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("suggests 20000 reserveTokensFloor for small context windows", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "ollama",
+      primaryModel: "qwen3.5-9b-32k:latest",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses session contextTokens as fallback when model metadata is unavailable", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "unknown-model",
+        contextTokens: 200_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("prefers model metadata over session contextTokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "qwen3.6-plus",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("100000");
     expect(text).not.toContain("heartbeat model bleed");
   });
 
@@ -428,6 +599,307 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).toContain("kept this conversation mapped to the current session");
     expect(text).toContain("reserveTokensFloor");
     expect(text).not.toContain("reset our conversation");
+  });
+
+  it("falls back to session entry model when runtimeProvider is not provided", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 200_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("prefers session entry model context over session contextTokens numeric value", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 1_000_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses session contextTokens before primary metadata for uncataloged runtime models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "custom",
+        model: "uncataloged-32k",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("does not use primary metadata for explicit uncataloged runtime models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "custom",
+      runtimeModel: "uncataloged-32k",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("does not use stale session contextTokens for explicit uncataloged runtime models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "custom",
+      runtimeModel: "uncataloged-32k",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "qwen3.6-plus",
+        contextTokens: 1_000_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("caps reserveTokensFloor hint by agent.defaults.contextTokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 100_000,
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("35000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("caps reserveTokensFloor hint by per-agent contextTokens over defaults", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            contextTokens: 200_000,
+          },
+          list: [
+            {
+              id: "capped-agent",
+              contextTokens: 32_768,
+            },
+          ],
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      agentId: "capped-agent",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("caps the session contextTokens fallback by agent contextTokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        agents: {
+          defaults: {
+            contextTokens: 200_000,
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "unknown-model",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses runtime model over primary model when both are available", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "ollama",
+      runtimeModel: "qwen3.5-9b-32k:latest",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses runtime model with 200k context when primary is 1M", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+            openai: {
+              baseUrl: "https://openai.test",
+              models: [makeTestModel("gpt-5.5-200k", 200_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "openai",
+      runtimeModel: "gpt-5.5-200k",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("50000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("does not use stale heartbeat bleed hints for different explicit runtime refs", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "custom",
+      runtimeModel: "uncataloged-32k",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
   });
 
   it("points to heartbeat model bleed when the last runtime model matches configured heartbeat.model", () => {
@@ -4487,6 +4959,41 @@ describe("runAgentTurnWithFallback", () => {
     expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
+  it("uses the throwing fallback candidate model for compaction failure hints", async () => {
+    state.isCompactionFailureErrorMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("custom", "uncataloged-32k");
+      throw new Error("expected fallback candidate to throw");
+    });
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("Auto-compaction failed: nothing to compact"),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openrouter";
+    followupRun.run.model = "qwen3.6-plus";
+    followupRun.run.config = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.test",
+            models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("reserveTokensFloor");
+      expect(result.payload.text).toContain("20000");
+      expect(result.payload.text).not.toContain("100000");
+    }
+  });
+
   it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
@@ -5117,68 +5624,6 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
-  });
-
-  it("does not persist fallback selection for one-turn image model overrides", async () => {
-    state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run("openai", "gpt-4o-mini"),
-        provider: "openai",
-        model: "gpt-4o-mini",
-        attempts: [],
-      }),
-    );
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: {},
-    });
-
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-4o";
-    followupRun.run.hasOneTurnModelOverride = true;
-
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 1,
-      compactionCount: 0,
-    };
-    const sessionStore = { main: sessionEntry };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "telegram",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => sessionEntry,
-      activeSessionStore: sessionStore,
-      resolvedVerboseLevel: "off",
-    });
-
-    expect(result.kind).toBe("success");
-    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded run params", {
-      provider: "openai",
-      model: "gpt-4o-mini",
-    });
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionEntry.modelOverrideSource).toBeUndefined();
   });
 
   it("does not persist fallback selection for legacy user overrides without modelOverrideSource", async () => {

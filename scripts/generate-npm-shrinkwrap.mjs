@@ -5,19 +5,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 
 function usage() {
   return [
-    "Usage: node scripts/generate-npm-shrinkwrap.mjs [--check] [--all|--plugins|--package-dir <dir>]",
+    "Usage: node scripts/generate-npm-shrinkwrap.mjs [--check] [--all|--plugins|--changed|--package-dir <dir>] [--base <ref>] [--head <ref>] [--staged]",
     "  default: root package only",
   ].join("\n");
-}
-
-function npmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
 function normalizeOverrideValue(value) {
@@ -47,6 +45,13 @@ function readWorkspaceOverrides() {
   return normalizeOverrides(workspace?.overrides);
 }
 
+function readWorkspacePackageExtensions() {
+  const workspace = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-workspace.yaml"), "utf8"));
+  return workspace?.packageExtensions && typeof workspace.packageExtensions === "object"
+    ? workspace.packageExtensions
+    : {};
+}
+
 function parsePnpmPackageKey(packageKey) {
   if (typeof packageKey !== "string") {
     return null;
@@ -71,21 +76,24 @@ function readPnpmLockPackages() {
   if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
     throw new Error("pnpm-lock.yaml is missing package resolution data.");
   }
-  return new Set(
-    Object.keys(packages)
-      .map((packageKey) => {
-        const parsed = parsePnpmPackageKey(packageKey);
-        return parsed ? `${parsed.name}@${parsed.version}` : null;
-      })
-      .filter((packageKey) => packageKey !== null),
-  );
+  const lockPackages = new Set();
+  for (const [packageKey, metadata] of Object.entries(packages)) {
+    const parsed = parsePnpmPackageKey(packageKey);
+    if (!parsed) {
+      continue;
+    }
+    lockPackages.add(`${parsed.name}@${parsed.version}`);
+    if (metadata && typeof metadata === "object" && typeof metadata.version === "string") {
+      lockPackages.add(`${parsed.name}@${metadata.version}`);
+    }
+  }
+  return lockPackages;
 }
 
-function readPnpmLockSingleVersionOverrides() {
-  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+function collectPnpmLockPackageVersions(lockfile) {
   const packages = lockfile?.packages;
   if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
-    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+    return new Map();
   }
   const versionsByName = new Map();
   for (const packageKey of Object.keys(packages)) {
@@ -97,12 +105,26 @@ function readPnpmLockSingleVersionOverrides() {
     versions.add(parsed.version);
     versionsByName.set(parsed.name, versions);
   }
+  return versionsByName;
+}
+
+function readPnpmLockSingleVersionOverrides() {
+  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const versionsByName = collectPnpmLockPackageVersions(lockfile);
+  if (versionsByName.size === 0) {
+    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+  }
   return Object.fromEntries(
     [...versionsByName.entries()]
       .filter(([, versions]) => versions.size === 1)
       .map(([name, versions]) => [name, [...versions][0]])
+      .filter(([, version]) => exactVersionFromOverrideSpec(version) !== null)
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
+}
+
+function setKey(values) {
+  return [...values].toSorted((left, right) => left.localeCompare(right)).join("\0");
 }
 
 function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides) {
@@ -113,9 +135,7 @@ function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides)
   ]) {
     const current = merged[name];
     if (current !== undefined && JSON.stringify(current) !== JSON.stringify(spec)) {
-      throw new Error(
-        `package.json overrides.${name} conflicts with pnpm lock policy for ${name}`,
-      );
+      throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
     }
     merged[name] = spec;
   }
@@ -133,11 +153,108 @@ function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   return normalized;
 }
 
-function runNpm(args, cwd) {
-  execFileSync(npmCommand(), args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
+export function createNpmShrinkwrapCommand(args, options = {}) {
+  return resolveNpmRunner({
+    comSpec: options.comSpec,
+    env: options.env,
+    execPath: options.execPath,
+    existsSync: options.existsSync,
+    npmArgs: args,
+    platform: options.platform,
   });
+}
+
+function runNpm(args, cwd) {
+  const npm = createNpmShrinkwrapCommand(args);
+  execFileSync(npm.command, npm.args, {
+    cwd,
+    env: npm.env ?? process.env,
+    shell: npm.shell,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: npm.windowsVerbatimArguments,
+  });
+}
+
+function packageExtensionAppliesToDependency(selector, dependencyName) {
+  return selector === dependencyName || selector.startsWith(`${dependencyName}@`);
+}
+
+function packageExtensionMarksOptionalPeer(packageExtension) {
+  const peerDependenciesMeta = packageExtension?.peerDependenciesMeta;
+  if (
+    !peerDependenciesMeta ||
+    typeof peerDependenciesMeta !== "object" ||
+    Array.isArray(peerDependenciesMeta)
+  ) {
+    return false;
+  }
+  return Object.values(peerDependenciesMeta).some((meta) => meta?.optional === true);
+}
+
+function shouldUseLegacyPeerDepsForShrinkwrap(
+  packageJson,
+  packageExtensions = readWorkspacePackageExtensions(),
+) {
+  const dependencies = Object.keys(packageJson.dependencies ?? {});
+  if (dependencies.length === 0) {
+    return false;
+  }
+  for (const dependencyName of dependencies) {
+    for (const [selector, packageExtension] of Object.entries(packageExtensions)) {
+      if (
+        packageExtensionAppliesToDependency(selector, dependencyName) &&
+        packageExtensionMarksOptionalPeer(packageExtension)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function applyPackageExtensionPeerMetadata(
+  lockfile,
+  packageExtensions = readWorkspacePackageExtensions(),
+) {
+  const packages = lockfile?.packages;
+  if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
+    return lockfile;
+  }
+
+  for (const [lockPath, metadata] of Object.entries(packages)) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      continue;
+    }
+    const packageName = metadata.name ?? parseLockPackagePath(lockPath).at(-1)?.name;
+    if (!packageName || !metadata.peerDependencies) {
+      continue;
+    }
+    for (const [selector, packageExtension] of Object.entries(packageExtensions)) {
+      if (!packageExtensionAppliesToDependency(selector, packageName)) {
+        continue;
+      }
+      const peerDependenciesMeta = packageExtension?.peerDependenciesMeta;
+      if (
+        !peerDependenciesMeta ||
+        typeof peerDependenciesMeta !== "object" ||
+        Array.isArray(peerDependenciesMeta)
+      ) {
+        continue;
+      }
+      for (const [peerName, peerMeta] of Object.entries(peerDependenciesMeta)) {
+        if (metadata.peerDependencies[peerName] === undefined) {
+          continue;
+        }
+        metadata.peerDependenciesMeta ??= {};
+        const existingPeerMeta = metadata.peerDependenciesMeta[peerName];
+        metadata.peerDependenciesMeta[peerName] = existingPeerMeta
+          ? { ...existingPeerMeta, ...peerMeta }
+          : { ...peerMeta };
+      }
+    }
+  }
+
+  return lockfile;
 }
 
 function exactVersionFromOverrideSpec(spec) {
@@ -219,6 +336,7 @@ function disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules) {
   if (!packages || typeof packages !== "object") {
     return [];
   }
+  /** @type {Set<string>} */
   const disabled = new Set();
   for (const violation of collectOverrideViolations(lockfile, overrideRules)) {
     const ancestors = violation.packagePath.slice(0, -1).toReversed();
@@ -252,7 +370,7 @@ function describeOverrideViolations(violations) {
     .join("; ");
 }
 
-function normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides) {
+function normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs) {
   const shrinkwrapPath = path.join(tempDir, "npm-shrinkwrap.json");
   const overrideRules = exactOverrideRulesFromOverrides(shrinkwrapOverrides);
   if (Object.keys(overrideRules).length === 0) {
@@ -275,10 +393,7 @@ function normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides) {
   // shrinkwraps as inactive, drop their cached subtree, then ask npm to recalculate this
   // package's authoritative lock with registry integrity hashes.
   writeFileSync(shrinkwrapPath, `${JSON.stringify(shrinkwrap, null, 2)}\n`);
-  runNpm(
-    ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
-    tempDir,
-  );
+  runNpm(npmInstallArgs, tempDir);
 
   const normalized = JSON.parse(readFileSync(shrinkwrapPath, "utf8"));
   const remaining = collectOverrideViolations(normalized, overrideRules);
@@ -313,18 +428,25 @@ function generateShrinkwrap(packageDir) {
   try {
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
     const shrinkwrapOverrides = readShrinkwrapOverrides();
+    const npmInstallArgs = [
+      "install",
+      "--package-lock-only",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      ...(shouldUseLegacyPeerDepsForShrinkwrap(packageJson) ? ["--legacy-peer-deps"] : []),
+    ];
     writeFileSync(
       path.join(tempDir, "package.json"),
       `${JSON.stringify(packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides), null, 2)}\n`,
     );
-    runNpm(
-      ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
-      tempDir,
-    );
+    runNpm(npmInstallArgs, tempDir);
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
-    normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides);
+    normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
     const generated = normalizeNpmVersionDrift(
-      JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+      applyPackageExtensionPeerMetadata(
+        JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+      ),
     );
     assertShrinkwrapMatchesPnpmLock(generated);
     return `${JSON.stringify(generated, null, 2)}\n`;
@@ -382,7 +504,7 @@ function listPublishablePluginPackageDirs() {
   const extensionsDir = path.join(ROOT_DIR, "extensions");
   return readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join("extensions", entry.name))
+    .map((entry) => path.posix.join("extensions", entry.name))
     .filter((packageDir) => {
       const packageJsonPath = path.join(ROOT_DIR, packageDir, "package.json");
       if (!existsSync(packageJsonPath)) {
@@ -394,21 +516,86 @@ function listPublishablePluginPackageDirs() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
+  const packageDirs = new Set();
+  const publishablePluginPackageDirs = new Set(listPublishablePluginPackageDirs());
+  let hasAmbiguousDependencyPolicyChange = false;
+  let hasLockfileChange = false;
+
+  for (const rawPath of changedPaths) {
+    const changedPath = String(rawPath ?? "")
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\.\/+/u, "");
+    if (!changedPath) {
+      continue;
+    }
+    if (changedPath === "package.json" || changedPath === "npm-shrinkwrap.json") {
+      packageDirs.add(ROOT_DIR);
+      continue;
+    }
+    const extensionMatch = changedPath.match(
+      /^(extensions\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
+    );
+    if (extensionMatch && publishablePluginPackageDirs.has(extensionMatch[1])) {
+      packageDirs.add(path.resolve(ROOT_DIR, extensionMatch[1]));
+      continue;
+    }
+    if (changedPath === "pnpm-lock.yaml") {
+      hasLockfileChange = true;
+      continue;
+    }
+    if (
+      changedPath === "pnpm-workspace.yaml" ||
+      changedPath === "scripts/generate-npm-shrinkwrap.mjs"
+    ) {
+      hasAmbiguousDependencyPolicyChange = true;
+    }
+  }
+
+  if (hasAmbiguousDependencyPolicyChange) {
+    return [
+      ROOT_DIR,
+      ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+    ];
+  }
+
+  if (hasLockfileChange) {
+    return [
+      ROOT_DIR,
+      ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+    ];
+  }
+  return [...packageDirs].toSorted((left, right) =>
+    packageLabel(left).localeCompare(packageLabel(right)),
+  );
+}
+
 function resolvePackageDirs(args) {
   const packageDirs = [];
   const check = args.includes("--check");
   const all = args.includes("--all");
   const plugins = args.includes("--plugins");
+  const changed = args.includes("--changed");
+  const staged = args.includes("--staged");
   const packageDirIndex = args.indexOf("--package-dir");
-  if (packageDirIndex !== -1 && (all || plugins)) {
-    throw new Error("--package-dir cannot be combined with --all or --plugins.");
+  const baseIndex = args.indexOf("--base");
+  const headIndex = args.indexOf("--head");
+  if (packageDirIndex !== -1 && (all || plugins || changed)) {
+    throw new Error("--package-dir cannot be combined with --all, --plugins, or --changed.");
   }
-  if (all && plugins) {
-    throw new Error("--all cannot be combined with --plugins.");
+  if ([all, plugins, changed].filter(Boolean).length > 1) {
+    throw new Error("--all, --plugins, and --changed cannot be combined.");
   }
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--check" || arg === "--all" || arg === "--plugins") {
+    if (
+      arg === "--check" ||
+      arg === "--all" ||
+      arg === "--plugins" ||
+      arg === "--changed" ||
+      arg === "--staged"
+    ) {
       continue;
     }
     if (arg === "--package-dir") {
@@ -420,7 +607,19 @@ function resolvePackageDirs(args) {
       index += 1;
       continue;
     }
+    if (arg === "--base" || arg === "--head") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error(`${arg} requires a git ref.`);
+      }
+      index += 1;
+      continue;
+    }
     throw new Error(usage());
+  }
+
+  if (!changed && (baseIndex !== -1 || headIndex !== -1 || staged)) {
+    throw new Error("--base, --head, and --staged require --changed.");
   }
 
   if (all) {
@@ -436,6 +635,20 @@ function resolvePackageDirs(args) {
     return {
       check,
       packageDirs: listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+    };
+  }
+  if (changed) {
+    const base = baseIndex === -1 ? "origin/main" : args[baseIndex + 1];
+    const head = headIndex === -1 ? "HEAD" : args[headIndex + 1];
+    const changedPaths = staged
+      ? listStagedChangedPaths()
+      : listChangedPathsFromGit({
+          base,
+          head,
+        });
+    return {
+      check,
+      packageDirs: shrinkwrapPackageDirsForChangedPaths(changedPaths),
     };
   }
   return { check, packageDirs: packageDirs.length > 0 ? packageDirs : [ROOT_DIR] };
@@ -469,6 +682,10 @@ function updateOrCheckPackage(packageDir, check) {
 
 function main() {
   const { check, packageDirs } = resolvePackageDirs(process.argv.slice(2));
+  if (packageDirs.length === 0) {
+    process.stdout.write("No shrinkwrap-managed package changes detected.\n");
+    return;
+  }
   for (const packageDir of packageDirs) {
     updateOrCheckPackage(packageDir, check);
   }
@@ -489,7 +706,12 @@ export {
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
+  packageJsonForShrinkwrap,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  readShrinkwrapOverrides,
+  shouldUseLegacyPeerDepsForShrinkwrap,
+  shrinkwrapPackageDirsForChangedPaths,
 };

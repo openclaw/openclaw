@@ -8,8 +8,10 @@ import {
   resolveCommandsLightIncludePattern,
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
+import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
+import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
@@ -34,6 +36,7 @@ import {
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
+import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { resolveUnitFastTestIncludePattern } from "../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   isBoundaryTestFile,
@@ -44,9 +47,17 @@ import {
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
+import {
+  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  resolveVitestCliEntry,
+  resolveVitestNodeArgs,
+} from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
+const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
+const AGENTS_PI_EMBEDDED_VITEST_CONFIG = "test/vitest/vitest.agents-pi-embedded.config.ts";
+const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
+const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
 const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
@@ -71,8 +82,11 @@ const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.conf
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
+const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
+  "test/vitest/vitest.extension-active-memory.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
+const EXTENSION_CODEX_VITEST_CONFIG = "test/vitest/vitest.extension-codex.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -125,10 +139,11 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_CLIENT_VITEST_CONFIG, 178],
   [GATEWAY_METHODS_VITEST_CONFIG, 177],
   [COMMANDS_VITEST_CONFIG, 175],
-  ["test/vitest/vitest.agents-core.config.ts", 170],
-  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
-  ["test/vitest/vitest.agents-support.config.ts", 168],
-  ["test/vitest/vitest.agents-tools.config.ts", 167],
+  [AGENTS_CORE_VITEST_CONFIG, 170],
+  [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
+  [AGENTS_SUPPORT_VITEST_CONFIG, 168],
+  [AGENTS_TOOLS_VITEST_CONFIG, 167],
+  [EXTENSION_CODEX_VITEST_CONFIG, 168],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -178,6 +193,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [EXTENSION_SIGNAL_VITEST_CONFIG, 11],
   [EXTENSION_ACPX_VITEST_CONFIG, 10],
   [EXTENSION_DIFFS_VITEST_CONFIG, 8],
+  [EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG, 7],
   [EXTENSION_MEMORY_VITEST_CONFIG, 6],
   [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
 ]);
@@ -230,7 +246,15 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
+  agentCore: AGENTS_CORE_VITEST_CONFIG,
+  agentPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
+  agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentsCore: AGENTS_CORE_VITEST_CONFIG,
+  agentsPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentsSupport: AGENTS_SUPPORT_VITEST_CONFIG,
+  agentsTools: AGENTS_TOOLS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
   autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
   autoReplyTopLevel: AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG,
@@ -251,9 +275,11 @@ const VITEST_CONFIG_BY_KIND = {
   e2e: E2E_VITEST_CONFIG,
   extension: EXTENSIONS_VITEST_CONFIG,
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
+  extensionActiveMemory: EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
   extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
+  extensionCodex: EXTENSION_CODEX_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
   extensionDiscord: EXTENSION_DISCORD_VITEST_CONFIG,
   extensionFeishu: EXTENSION_FEISHU_VITEST_CONFIG,
@@ -551,14 +577,23 @@ const GENERATED_CHANGED_TEST_TARGET_PATTERNS = [
   /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
   /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
 ];
-const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "test"];
+const SOURCE_ROOTS_FOR_IMPORT_GRAPH = [
+  "src",
+  "extensions",
+  "packages",
+  "ui/src",
+  "ui/config",
+  "test",
+];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(
+  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+);
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
 const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
   "src/gateway/embeddings-http.test.ts",
@@ -747,6 +782,105 @@ function toScopedIncludePattern(arg, cwd) {
     return directory === "." ? "**/*.test.ts" : `${directory}/**/*.test.ts`;
   }
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
+}
+
+const EXPLICIT_TEST_TARGET_ROOTS = ["src", "test", "extensions", "ui", "packages", "apps"];
+let cachedExplicitTestTargetFiles = null;
+let cachedExplicitTestTargetFilesCwd = null;
+
+function listExplicitTestTargetFilesFromGit(cwd) {
+  const result = spawnSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...EXPLICIT_TEST_TARGET_ROOTS,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\0")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function listExplicitTestTargetFilesForCwd(cwd) {
+  if (cachedExplicitTestTargetFiles && cachedExplicitTestTargetFilesCwd === cwd) {
+    return cachedExplicitTestTargetFiles;
+  }
+
+  cachedExplicitTestTargetFiles =
+    listExplicitTestTargetFilesFromGit(cwd) ??
+    EXPLICIT_TEST_TARGET_ROOTS.flatMap((root) => listImportGraphFiles(cwd, root));
+  cachedExplicitTestTargetFilesCwd = cwd;
+  return cachedExplicitTestTargetFiles;
+}
+
+function includePatternMatchesAnyFile(pattern, files) {
+  return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
+}
+
+export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
+  const { targetArgs } = parseTestProjectsArgs(args, cwd);
+  if (targetArgs.length === 0) {
+    return [];
+  }
+
+  const candidateFiles = listExplicitTestTargetFilesForCwd(cwd);
+  const unmatched = [];
+  for (const targetArg of targetArgs) {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (resolveVitestConfigTargetKind(relative)) {
+      continue;
+    }
+    const kind = classifyTarget(targetArg, cwd);
+    if (shouldUseWholeConfigTarget(kind, targetArg, cwd)) {
+      continue;
+    }
+    if (isGlobTarget(relative)) {
+      if (!includePatternMatchesAnyFile(relative, candidateFiles)) {
+        unmatched.push({
+          target: targetArg,
+          reason: "glob-matched-no-files",
+        });
+      }
+      continue;
+    }
+
+    const absolute = path.resolve(cwd, targetArg);
+    if (!fs.existsSync(absolute)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "path-does-not-exist",
+      });
+      continue;
+    }
+
+    if (isTestFileTarget(relative)) {
+      continue;
+    }
+
+    const includePattern = toScopedIncludePattern(targetArg, cwd);
+    if (!includePatternMatchesAnyFile(includePattern, candidateFiles)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "target-matched-no-test-files",
+        includePattern,
+      });
+    }
+  }
+  return unmatched;
 }
 
 function isSkippedImportGraphDirectory(name) {
@@ -1019,23 +1153,6 @@ function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
 }
 
-function isUnitUiTestTarget(relative) {
-  if (!relative.endsWith(".test.ts")) {
-    return false;
-  }
-  return (
-    relative === "ui/src/ui/app-chat.test.ts" ||
-    relative.startsWith("ui/src/ui/chat/") ||
-    relative === "ui/src/ui/views/agents-utils.test.ts" ||
-    relative === "ui/src/ui/views/channels.test.ts" ||
-    relative === "ui/src/ui/views/chat.test.ts" ||
-    relative === "ui/src/ui/views/dreaming.test.ts" ||
-    relative === "ui/src/ui/views/usage-render-details.test.ts" ||
-    relative === "ui/src/ui/controllers/agents.test.ts" ||
-    relative === "ui/src/ui/controllers/chat.test.ts"
-  );
-}
-
 function isControlUiE2eTarget(relative) {
   return (
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
@@ -1194,7 +1311,7 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (siblingTest) {
     return [siblingTest];
   }
-  if (/^(?:src|test\/helpers|extensions|packages|ui\/src)\//u.test(changedPath)) {
+  if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd);
     if (affectedTests.length > 0) {
       return affectedTests;
@@ -1311,6 +1428,12 @@ function classifyTarget(arg, cwd) {
     }
     if (isAcpxExtensionRoot(extensionRoot)) {
       return "extensionAcpx";
+    }
+    if (isActiveMemoryExtensionRoot(extensionRoot)) {
+      return "extensionActiveMemory";
+    }
+    if (isCodexExtensionRoot(extensionRoot)) {
+      return "extensionCodex";
     }
     if (isDiffsExtensionRoot(extensionRoot)) {
       return "extensionDiffs";
@@ -1617,7 +1740,15 @@ export function buildVitestRunPlans(
     "autoReplyCore",
     "autoReplyReply",
     "autoReplyTopLevel",
+    "agentCore",
+    "agentPiEmbedded",
+    "agentSupport",
+    "agentTools",
     "agent",
+    "agentsCore",
+    "agentsPiEmbedded",
+    "agentsSupport",
+    "agentsTools",
     "plugin",
     "ui",
     "uiE2e",
