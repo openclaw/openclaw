@@ -1433,10 +1433,10 @@ export async function dispatchReplyFromConfig(
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
     (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
-    (!isInternalWebchatTurn &&
-      params.replyOptions?.sourceReplyDeliveryMode === undefined &&
+    (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
       !isExplicitSourceReplyCommand(ctx) &&
-      effectiveVisibleReplies === "message_tool");
+      (configuredVisibleReplies === "message_tool" ||
+        (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),

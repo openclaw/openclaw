@@ -482,11 +482,12 @@ export async function runPreparedReply(
   const isInternalPromptChannel =
     isInternalMessageChannel(promptSessionCtx.Provider) ||
     isInternalMessageChannel(promptSessionCtx.Surface);
-  const sourceReplyDeliveryMode = isInternalPromptChannel
-    ? "automatic"
-    : inboundEventKind === "room_event"
+  const sourceReplyDeliveryMode =
+    inboundEventKind === "room_event" && !isInternalPromptChannel
       ? "message_tool_only"
-      : opts?.sourceReplyDeliveryMode;
+      : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
+        ? "automatic"
+        : opts?.sourceReplyDeliveryMode;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,

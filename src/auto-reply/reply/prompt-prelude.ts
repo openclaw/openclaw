@@ -132,9 +132,11 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
 
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
   const roomEventBody = resolveRoomEventBody(params);
-  const visibleReplyContract = isInternalMessageChannel(params.sessionCtx.Provider)
-    ? undefined
-    : `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`;
+  const visibleReplyContract =
+    isInternalMessageChannel(params.sessionCtx.Provider) ||
+    isInternalMessageChannel(params.sessionCtx.Surface)
+      ? undefined
+      : `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`;
   return [
     "[OpenClaw room event]",
     "inbound_event_kind: room_event",

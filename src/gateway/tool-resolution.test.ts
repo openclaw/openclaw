@@ -38,7 +38,6 @@ describe("resolveGatewayScopedTools", () => {
     });
 
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
-    expect(result.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("keeps ordinary loopback turns under the configured profile", () => {

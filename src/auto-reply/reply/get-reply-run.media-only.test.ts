@@ -2039,9 +2039,9 @@ describe("runPreparedReply media-only handling", () => {
     ) as { sourceReplyDeliveryMode?: string };
     const inboundPrefixCall = vi.mocked(buildInboundUserContextPrefix).mock.calls.at(-1);
     const call = requireLastRunReplyAgentCall();
-    expect(directContextParams?.sourceReplyDeliveryMode).toBe("automatic");
-    expect(inboundPrefixCall?.[2]).toEqual({ sourceReplyDeliveryMode: "automatic" });
-    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
+    expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(inboundPrefixCall?.[2]).toEqual({ sourceReplyDeliveryMode: "message_tool_only" });
+    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {

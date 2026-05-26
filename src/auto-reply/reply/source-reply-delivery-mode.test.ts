@@ -100,7 +100,20 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("automatic");
   });
 
-  it("keeps internal WebChat direct turns automatic despite message-tool config", () => {
+  it("keeps implicit internal WebChat direct turns automatic", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "direct",
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+      }),
+    ).toBe("automatic");
+  });
+
+  it("preserves explicit internal WebChat message-tool opt-ins", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: globalToolOnlyReplyConfig,
@@ -110,10 +123,10 @@ describe("resolveSourceReplyDeliveryMode", () => {
           Surface: "webchat",
         },
       }),
-    ).toBe("automatic");
+    ).toBe("message_tool_only");
     expect(
       resolveSourceReplyDeliveryMode({
-        cfg: globalToolOnlyReplyConfig,
+        cfg: emptyConfig,
         ctx: {
           ChatType: "direct",
           Provider: "webchat",
@@ -121,7 +134,7 @@ describe("resolveSourceReplyDeliveryMode", () => {
         },
         requested: "message_tool_only",
       }),
-    ).toBe("automatic");
+    ).toBe("message_tool_only");
   });
 
   it("allows message-tool-only delivery for any source chat via global config", () => {

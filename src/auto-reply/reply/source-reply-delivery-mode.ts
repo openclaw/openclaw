@@ -56,9 +56,6 @@ export function resolveSourceReplyDeliveryMode(params: {
   if (params.strictMessageToolOnly === true) {
     return "message_tool_only";
   }
-  if (isInternalSourceReplyChannel(params.ctx)) {
-    return "automatic";
-  }
   if (params.ctx.InboundEventKind === "room_event" && !isInternalRoomEvent(params.ctx)) {
     return "message_tool_only";
   }
@@ -84,7 +81,9 @@ export function resolveSourceReplyDeliveryMode(params: {
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   } else {
-    const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
+    const configuredMode =
+      params.cfg.messages?.visibleReplies ??
+      (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies);
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
