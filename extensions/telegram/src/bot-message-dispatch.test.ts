@@ -2194,6 +2194,92 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("renders structured plan updates in a dedicated Telegram draft with active item bolded", async () => {
+    const answerDraftStream = createSequencedDraftStream(2001);
+    const planDraftStream = createSequencedDraftStream(3001);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => planDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "update_plan", phase: "start" });
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        plan: [
+          { step: "Inspect dashboard changes", status: "completed" },
+          { step: "Run brand-reviewer", status: "in_progress" },
+          { step: "Fix must-fix findings", status: "pending" },
+        ],
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("Update Plan"),
+    );
+    expect(planDraftStream.update).toHaveBeenCalledWith(
+      [
+        "Plan",
+        "",
+        "[x] Inspect dashboard changes",
+        "**[>] Run brand-reviewer**",
+        "[ ] Fix must-fix findings",
+      ].join("\n"),
+    );
+    const planDraftParams = mockCallArg(createTelegramDraftStream, 1) as {
+      renderText?: (text: string) => { text: string; parseMode?: string };
+    };
+    const rendered = planDraftParams.renderText?.(planDraftStream.update.mock.calls[0]?.[0] ?? "");
+    expect(rendered?.parseMode).toBe("HTML");
+    expect(rendered?.text).toContain("<b>[&gt;] Run brand-reviewer</b>");
+  });
+
+  it("finalizes a completed plan draft and starts a fresh draft for a later plan", async () => {
+    const answerDraftStream = createSequencedDraftStream(2001);
+    const firstPlanDraftStream = createSequencedDraftStream(3001);
+    const secondPlanDraftStream = createSequencedDraftStream(4001);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => firstPlanDraftStream)
+      .mockImplementationOnce(() => secondPlanDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        plan: [{ step: "Inspect dashboard changes", status: "completed" }],
+      });
+      await replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        plan: [{ step: "Start next task", status: "in_progress" }],
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expect(firstPlanDraftStream.update).toHaveBeenCalledWith(
+      ["Plan", "", "[x] Inspect dashboard changes"].join("\n"),
+    );
+    expect(firstPlanDraftStream.flush).toHaveBeenCalled();
+    expect(firstPlanDraftStream.stop).toHaveBeenCalled();
+    expect(firstPlanDraftStream.clear).not.toHaveBeenCalled();
+    expect(secondPlanDraftStream.update).toHaveBeenCalledWith(
+      ["Plan", "", "**[>] Start next task**"].join("\n"),
+    );
+  });
+
   it("keeps the progress draft label when tool progress lines are hidden", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

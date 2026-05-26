@@ -102,7 +102,7 @@ import {
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
-import { createTelegramDraftStream } from "./draft-stream.js";
+import { createTelegramDraftStream, type TelegramDraftStream } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -156,6 +156,66 @@ type DraftPartialTextUpdate = {
   delta?: string;
   replace?: true;
 };
+
+type TelegramPlanStepStatus = "pending" | "in_progress" | "completed";
+
+type TelegramPlanStep = {
+  step: string;
+  status: TelegramPlanStepStatus;
+};
+
+function isTelegramPlanStepStatus(status: unknown): status is TelegramPlanStepStatus {
+  return status === "pending" || status === "in_progress" || status === "completed";
+}
+
+function normalizeTelegramPlanSteps(params: {
+  plan?: Array<{ step: string; status: TelegramPlanStepStatus }>;
+  steps?: string[];
+}): TelegramPlanStep[] {
+  if (Array.isArray(params.plan) && params.plan.length > 0) {
+    return params.plan
+      .filter((entry) => entry.step.trim() && isTelegramPlanStepStatus(entry.status))
+      .map((entry) => ({ step: entry.step.trim(), status: entry.status }));
+  }
+  return (params.steps ?? []).flatMap((rawStep) => {
+    const step = rawStep.trim();
+    if (!step) {
+      return [];
+    }
+    const match = /^(.*) \((pending|in_progress|completed)\)$/u.exec(step);
+    if (!match) {
+      return [{ step, status: "pending" as const }];
+    }
+    return [{ step: match[1]?.trim() ?? step, status: match[2] as TelegramPlanStepStatus }];
+  });
+}
+
+function formatTelegramPlanDraftText(params: {
+  explanation?: string;
+  plan?: Array<{ step: string; status: TelegramPlanStepStatus }>;
+  steps?: string[];
+}): string {
+  const lines = ["Plan"];
+  const explanation = params.explanation?.trim();
+  if (explanation) {
+    lines.push("", explanation);
+  }
+  const plan = normalizeTelegramPlanSteps({ plan: params.plan, steps: params.steps });
+  if (plan.length > 0) {
+    lines.push("");
+    for (const item of plan) {
+      const marker =
+        item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[>]" : "[ ]";
+      const line = `${marker} ${item.step}`;
+      lines.push(item.status === "in_progress" ? `**${line}**` : line);
+    }
+  }
+  return lines.join("\n").trim();
+}
+
+function isTelegramPlanComplete(plan: Array<{ status: TelegramPlanStepStatus }>): boolean {
+  return plan.length > 0 && plan.every((entry) => entry.status === "completed");
+}
 
 function resolveDraftPartialText(
   previous: string,
@@ -899,6 +959,30 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  let planDraftStream: TelegramDraftStream | undefined;
+  let planDraftFinalized = false;
+  const createPlanDraftStream = () =>
+    (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
+      api: bot.api,
+      chatId,
+      maxChars: draftMaxChars,
+      thread: threadSpec,
+      replyToMessageId: draftReplyToMessageId,
+      minInitialChars: 0,
+      renderText: renderStreamText,
+      log: logVerbose,
+      warn: logVerbose,
+    });
+  const ensurePlanDraftStream = () => {
+    if (!canStreamAnswerDraft) {
+      return undefined;
+    }
+    if (!planDraftStream || planDraftFinalized) {
+      planDraftStream = createPlanDraftStream();
+      planDraftFinalized = false;
+    }
+    return planDraftStream;
+  };
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   const nativeToolProgressDraft =
@@ -1954,6 +2038,9 @@ export const dispatchTelegramMessage = async ({
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
+                    if (toolName === "update_plan" && canStreamAnswerDraft) {
+                      return;
+                    }
                     const progressPromise = pushStreamToolProgress(
                       formatChannelProgressDraftLineForEntry(
                         telegramCfg,
@@ -1990,6 +2077,24 @@ export const dispatchTelegramMessage = async ({
                   },
                   onPlanUpdate: async (payload) => {
                     if (payload.phase !== "update") {
+                      return;
+                    }
+                    const structuredPlan = normalizeTelegramPlanSteps({
+                      plan: payload.plan,
+                      steps: payload.steps,
+                    });
+                    const planDraftText = formatTelegramPlanDraftText({
+                      explanation: payload.explanation,
+                      plan: structuredPlan,
+                    });
+                    const stream = ensurePlanDraftStream();
+                    if (stream && planDraftText) {
+                      stream.update(planDraftText);
+                      if (isTelegramPlanComplete(structuredPlan)) {
+                        await stream.flush();
+                        await stream.stop();
+                        planDraftFinalized = true;
+                      }
                       return;
                     }
                     await pushStreamToolProgress(
@@ -2080,6 +2185,17 @@ export const dispatchTelegramMessage = async ({
       progressDraftGate.cancel();
       await draftLaneEventQueue;
       nativeToolProgressDraft?.stop();
+      if (planDraftStream) {
+        if (isDispatchSuperseded()) {
+          await (typeof planDraftStream.discard === "function"
+            ? planDraftStream.discard()
+            : planDraftStream.stop());
+        } else if (planDraftFinalized) {
+          await planDraftStream.stop();
+        } else {
+          await planDraftStream.clear();
+        }
+      }
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
         { laneName: "reasoning", lane: reasoningLane },

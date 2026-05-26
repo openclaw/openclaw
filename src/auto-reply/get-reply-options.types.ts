@@ -126,6 +126,7 @@ export type GetReplyOptions = {
     phase?: string;
     title?: string;
     explanation?: string;
+    plan?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     steps?: string[];
     source?: string;
   }) => Promise<void> | void;

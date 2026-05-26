@@ -3448,6 +3448,11 @@ describe("runAgentTurnWithFallback", () => {
           phase: "update",
           title: "Assistant proposed a plan",
           explanation: "Inspect code, patch it, run tests.",
+          plan: [
+            { step: "Inspect code", status: "completed" },
+            { step: "Patch code", status: "in_progress" },
+            { step: "Run tests", status: "pending" },
+          ],
           steps: ["Inspect code", "Patch code", "Run tests"],
         },
       });
@@ -3521,6 +3526,11 @@ describe("runAgentTurnWithFallback", () => {
       phase: "update",
       title: "Assistant proposed a plan",
       explanation: "Inspect code, patch it, run tests.",
+      plan: [
+        { step: "Inspect code", status: "completed" },
+        { step: "Patch code", status: "in_progress" },
+        { step: "Run tests", status: "pending" },
+      ],
       steps: ["Inspect code", "Patch code", "Run tests"],
       source: undefined,
     });

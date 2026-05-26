@@ -52,6 +52,13 @@ import {
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
+type CodexPlanStepStatus = "pending" | "in_progress" | "completed";
+
+type CodexPlanStep = {
+  step: string;
+  status: CodexPlanStepStatus;
+};
+
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
@@ -477,12 +484,13 @@ export class CodexAppServerEventProjector {
           if (!step) {
             return [];
           }
-          return status ? [`${step} (${status})`] : [step];
+          return [{ step, status: isCodexPlanStepStatus(status) ? status : "pending" }];
         })
       : undefined;
     this.emitPlanUpdate({
       explanation: readNullableString(params, "explanation"),
-      steps: plan,
+      plan,
+      steps: plan?.map((entry) => `${entry.step} (${entry.status})`),
     });
   }
 
@@ -829,8 +837,16 @@ export class CodexAppServerEventProjector {
     await this.params.onReasoningEnd?.();
   }
 
-  private emitPlanUpdate(params: { explanation?: string | null; steps?: string[] }): void {
-    if (!params.explanation && (!params.steps || params.steps.length === 0)) {
+  private emitPlanUpdate(params: {
+    explanation?: string | null;
+    plan?: CodexPlanStep[];
+    steps?: string[];
+  }): void {
+    if (
+      !params.explanation &&
+      (!params.plan || params.plan.length === 0) &&
+      (!params.steps || params.steps.length === 0)
+    ) {
       return;
     }
     this.emitAgentEvent({
@@ -840,6 +856,7 @@ export class CodexAppServerEventProjector {
         title: "Plan updated",
         source: "codex-app-server",
         ...(params.explanation ? { explanation: params.explanation } : {}),
+        ...(params.plan && params.plan.length > 0 ? { plan: params.plan } : {}),
         ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
       },
     });
@@ -1682,6 +1699,10 @@ function splitPlanText(text: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s+/, ""))
     .filter((line) => line.length > 0);
+}
+
+function isCodexPlanStepStatus(status: unknown): status is CodexPlanStepStatus {
+  return status === "pending" || status === "in_progress" || status === "completed";
 }
 
 function collectTextValues(map: Map<string, string>): string[] {

@@ -1121,7 +1121,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(
       forCurrentTurn("turn/plan/updated", {
         explanation: "next",
-        plan: [{ step: "patch", status: "in_progress" }],
+        plan: [{ step: "patch", status: "in_progress" }, { step: "verify" }],
       }),
     );
     await projector.handleNotification(
@@ -1152,9 +1152,15 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
+    const structuredPlanEvent = findPlanEventWithSteps(onAgentEvent, [
       "patch (in_progress)",
+      "verify (pending)",
     ]);
+    expect(structuredPlanEvent.plan).toEqual([
+      { step: "patch", status: "in_progress" },
+      { step: "verify", status: "pending" },
+    ]);
+    expect(structuredPlanEvent.steps).toEqual(["patch (in_progress)", "verify (pending)"]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
     );

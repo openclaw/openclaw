@@ -54,7 +54,11 @@ import {
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+  type AgentPlanStep,
+} from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
@@ -120,6 +124,25 @@ export const MAX_LIVE_SWITCH_RETRIES = 2;
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
+}
+
+function readAgentPlanSteps(value: unknown): AgentPlanStep[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const plan = value.flatMap((entry): AgentPlanStep[] => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    const step = readStringValue(record.step);
+    const status = record.status;
+    if (!step || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
+      return [];
+    }
+    return [{ step, status }];
+  });
+  return plan.length > 0 ? plan : undefined;
 }
 
 export type RuntimeFallbackAttempt = {
@@ -2144,6 +2167,7 @@ export async function runAgentTurnWithFallback(params: {
                       phase: readStringValue(evt.data.phase),
                       title: readStringValue(evt.data.title),
                       explanation: readStringValue(evt.data.explanation),
+                      plan: readAgentPlanSteps(evt.data.plan),
                       steps: Array.isArray(evt.data.steps)
                         ? evt.data.steps.filter((step): step is string => typeof step === "string")
                         : undefined,

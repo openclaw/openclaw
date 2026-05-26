@@ -46,10 +46,18 @@ export type AgentItemEventData = {
   approvalSlug?: string;
 };
 
+export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
+
+export type AgentPlanStep = {
+  step: string;
+  status: AgentPlanStepStatus;
+};
+
 export type AgentPlanEventData = {
   phase: "update";
   title: string;
   explanation?: string;
+  plan?: AgentPlanStep[];
   steps?: string[];
   source?: string;
 };
