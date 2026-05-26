@@ -2,6 +2,7 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -76,7 +77,10 @@ function resolveBundledProviderPolicyPluginId(
     return null;
   }
 
-  const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
+  const registry =
+    options.manifestRegistry ??
+    getCurrentPluginMetadataSnapshot({ allowWorkspaceScopedSnapshot: true })?.manifestRegistry ??
+    loadPluginManifestRegistry();
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {

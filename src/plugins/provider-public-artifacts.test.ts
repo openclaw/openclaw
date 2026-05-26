@@ -253,4 +253,66 @@ describe("provider public artifacts", () => {
       artifactBasename: "provider-policy-api.js",
     });
   });
+
+  it("uses current plugin metadata snapshot for provider policy aliases when available", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => {
+      throw new Error("unexpected manifest registry scan");
+    });
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "snapshot-owner") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+    const getCurrentPluginMetadataSnapshot = vi.fn(() => ({
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "snapshot-owner",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/snapshot-owner/openclaw.plugin.json",
+            providers: ["snapshot-alias"],
+            rootDir: "/tmp/snapshot-owner",
+            skills: [],
+            source: "/tmp/snapshot-owner/index.js",
+          },
+        ],
+      },
+    }));
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+    vi.doMock("./current-plugin-metadata-snapshot.js", () => ({
+      getCurrentPluginMetadataSnapshot,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-snapshot");
+
+    const surface = resolvePolicySurface("snapshot-alias");
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "snapshot-alias", modelId: "demo" }),
+    ).toEqual({
+      levels: [{ id: "snapshot-owner" }],
+    });
+    expect(getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      allowWorkspaceScopedSnapshot: true,
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
 });
