@@ -81,13 +81,14 @@ openclaw_resolve_node_download_version() {
   prefix="v${prefix}"
   [[ "$prefix" == *. ]] || prefix="${prefix}."
   curl -fsSL https://nodejs.org/dist/index.json |
-    OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
-prefix = os.environ["OPENCLAW_NODE_PREFIX"]
-for item in json.load(sys.stdin):
-    version = item.get("version", "")
-    if version.startswith(prefix):
-        print(version)
-        break
+    OPENCLAW_NODE_PREFIX="$prefix" node -e '
+const fs = require("node:fs");
+const prefix = process.env.OPENCLAW_NODE_PREFIX;
+const versions = JSON.parse(fs.readFileSync(0, "utf8"));
+const match = versions.find((item) => String(item.version || "").startsWith(prefix));
+if (match) {
+  process.stdout.write(match.version + "\n");
+}
 '
 }
 
@@ -100,6 +101,8 @@ openclaw_node_download_platform() {
     Linux:aarch64 | Linux:arm64) printf 'linux-arm64\n' ;;
     Darwin:x86_64) printf 'darwin-x64\n' ;;
     Darwin:arm64) printf 'darwin-arm64\n' ;;
+    MINGW*:x86_64 | MSYS*:x86_64 | CYGWIN*:x86_64) printf 'win-x64\n' ;;
+    MINGW*:aarch64 | MINGW*:arm64 | MSYS*:aarch64 | MSYS*:arm64 | CYGWIN*:aarch64 | CYGWIN*:arm64) printf 'win-arm64\n' ;;
     *)
       return 1
       ;;
@@ -108,15 +111,36 @@ openclaw_node_download_platform() {
 
 openclaw_download_node() {
   local requested_node="$1"
-  local version platform archive_url install_root
+  local version platform archive_url archive_path extracted_dir install_root win_archive win_install_root
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
   install_root="${RUNNER_TEMP:-/tmp}/openclaw-node-${version}-${platform}"
-  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
   mkdir -p "$install_root"
-  echo "Downloading Node ${version} from ${archive_url}"
-  curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
-  openclaw_prepend_node_bin "$install_root/bin"
+  case "$platform" in
+    win-*)
+      archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
+      archive_path="$install_root/node.zip"
+      echo "Downloading Node ${version} from ${archive_url}"
+      curl -fsSL "$archive_url" -o "$archive_path"
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$archive_path" -d "$install_root"
+      else
+        win_archive="$(cygpath -w "$archive_path")"
+        win_install_root="$(cygpath -w "$install_root")"
+        powershell.exe -NoProfile -NonInteractive -Command \
+          "Expand-Archive -LiteralPath '$win_archive' -DestinationPath '$win_install_root' -Force"
+      fi
+      extracted_dir="$install_root/node-${version}-${platform}"
+      [[ -x "$extracted_dir/node.exe" ]] || return 1
+      openclaw_prepend_node_bin "$extracted_dir"
+      ;;
+    *)
+      archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
+      echo "Downloading Node ${version} from ${archive_url}"
+      curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
+      openclaw_prepend_node_bin "$install_root/bin"
+      ;;
+  esac
 }
 
 openclaw_ensure_node() {

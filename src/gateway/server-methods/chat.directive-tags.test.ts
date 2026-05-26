@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { type AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  CURRENT_SESSION_VERSION,
+  SessionManager,
+  type SessionMessageEntry,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
@@ -257,13 +262,19 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
+    (
+      update:
+        | string
+        | {
+            sessionFile: string;
+            sessionKey?: string;
+            message?: unknown;
+            messageId?: string;
+          },
+    ) => {
+      mockState.emittedTranscriptUpdates.push(
+        typeof update === "string" ? { sessionFile: update } : update,
+      );
     },
   ),
 }));
@@ -331,10 +342,21 @@ vi.mock("../../media/store.js", async () => {
       }
       mockState.savedMediaCalls.push({ contentType, subdir, size: buffer.byteLength });
       const next = mockState.savedMediaResults.shift();
+      const savedPath =
+        next?.path ??
+        (subdir === "outgoing/originals"
+          ? path.join(
+              os.tmpdir(),
+              `openclaw-chat-outgoing-${process.pid}-${mockState.savedMediaCalls.length}.png`,
+            )
+          : `/tmp/${mockState.savedMediaCalls.length}.png`);
+      if (subdir === "outgoing/originals" && !next?.path) {
+        fs.rmSync(savedPath, { force: true });
+      }
       try {
         return {
           id: "saved-media",
-          path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
+          path: savedPath,
           size: buffer.byteLength,
           contentType: next?.contentType ?? contentType,
         };
@@ -1925,6 +1947,230 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(content[1]).toEqual({ type: "input_image", image_url: "data:image/png;base64,cG5n" });
     expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
+  });
+
+  it("does not append a duplicate media reply when the agent transcript already has a raw MEDIA reply", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-replace-");
+    const mediaUrl = path.join(transcriptDir, "reply.png");
+    fs.writeFileSync(
+      mediaUrl,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Here is the image.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    const sessionManager = SessionManager.open(mockState.transcriptPath);
+    sessionManager.appendMessage(rawAssistantMessage);
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = {
+      text: rawText,
+      // The live Codex path can preserve the raw MEDIA line as a plain path while
+      // the normalized reply payload carries an equivalent file URL. The bridge
+      // should still recognize and replace the raw directive turn.
+      mediaUrl: `file://${mediaUrl}`,
+      trustedLocalMedia: true,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-media-replace",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain("Here is the image.");
+    expect(JSON.stringify(assistantMessages[0]?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond: vi.fn(),
+      idempotencyKey: "idem-agent-media-replace",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branchAfterRetry = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessagesAfterRetry = branchAfterRetry.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessagesAfterRetry).toHaveLength(1);
+  });
+
+  it("does not replace older matching MEDIA transcript replies after a newer assistant turn", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-current-only-");
+    const mediaUrl = path.join(transcriptDir, "reply.png");
+    fs.writeFileSync(
+      mediaUrl,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Earlier image.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    const newerAssistantMessage: AssistantMessage = {
+      ...rawAssistantMessage,
+      content: [{ type: "text", text: "A newer assistant turn." }],
+      timestamp: Date.now() + 1,
+    };
+    const sessionManager = SessionManager.open(mockState.transcriptPath);
+    sessionManager.appendMessage(rawAssistantMessage);
+    sessionManager.appendMessage(newerAssistantMessage);
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = {
+      text: "Current image.",
+      mediaUrl: `file://${mediaUrl}`,
+      trustedLocalMedia: true,
+    };
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond,
+      idempotencyKey: "idem-agent-media-current-only",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(2);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain("Earlier image.");
+    expect(JSON.stringify(assistantMessages[1]?.message)).toContain("A newer assistant turn.");
+    expect(JSON.stringify(assistantMessages)).not.toContain(
+      "idem-agent-media-current-only:assistant-media",
+    );
+    expect(JSON.stringify(assistantMessages)).not.toContain("Current image.");
+  });
+
+  it("replaces raw final MEDIA transcript replies before appending normalized media", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-final-media-replace-");
+    const mediaUrl = path.join(transcriptDir, "reply.png");
+    fs.writeFileSync(
+      mediaUrl,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Here is the image.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    SessionManager.open(mockState.transcriptPath).appendMessage(rawAssistantMessage);
+    mockState.finalPayload = {
+      text: "Here is the image.",
+      mediaUrl,
+      trustedLocalMedia: true,
+    };
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey: "idem-final-media-replace",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    const assistant = assistantMessages[0];
+    expect((assistant?.message as { idempotencyKey?: unknown }).idempotencyKey).toBe(
+      "idem-final-media-replace:assistant-media",
+    );
+    expect(JSON.stringify(assistant?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(payload?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+    expect(
+      (assistant?.message as { content?: Array<{ type?: string }> }).content?.some(
+        (block) => block.type === "image",
+      ),
+    ).toBe(true);
   });
 
   it("suppresses reasoning payloads from webchat transcript replies", async () => {

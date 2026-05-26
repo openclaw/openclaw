@@ -4,8 +4,10 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -142,6 +144,7 @@ describe("handleControlUiHttpRequest", () => {
     url: string;
     method: "GET" | "HEAD";
     basePath?: string;
+    config?: NonNullable<Parameters<typeof handleControlUiAssistantMediaRequest>[2]>["config"];
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
     trustedProxies?: string[];
@@ -158,6 +161,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.config ? { config: params.config } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
@@ -345,6 +349,32 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  it("uses configured thumbnail sizing for assistant media previews", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-thumb-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "wide.png");
+        await fs.writeFile(filePath, createSolidPngBuffer(120, 40, { r: 24, g: 64, b: 128 }));
+
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&thumbnail=1&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          config: { gateway: { controlUi: { imageThumbnailMaxSide: 60 } } },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const thumbnail = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(thumbnail)).toBe(true);
+        await expect(getImageMetadata(thumbnail as Buffer)).resolves.toEqual({
+          width: 60,
+          height: 20,
+        });
       },
     });
   });

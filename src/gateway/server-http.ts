@@ -743,6 +743,7 @@ export function createGatewayHttpServer(opts: {
                 trustedProxies,
                 allowRealIpFallback,
                 rateLimiter,
+                thumbnailMaxSide: configSnapshot.gateway?.controlUi?.imageThumbnailMaxSide,
               },
             ),
         });
