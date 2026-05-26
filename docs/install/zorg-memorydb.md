@@ -6,6 +6,8 @@ Zorg MemoryDB extends OpenClaw with PostgreSQL-backed durable memory and the LAN
 
 The OpenClaw installer runs `zorg/install-zorg-memorydb.sh` when this package is installed. The script installs missing prerequisites, creates the OpenClaw workspace subdirectories for `zorg-memorydb` and `lan-chat`, applies the public-safe schema, seeds production rule records, imports packaged markdown rules into database tables, imports retired `memory/*.md` files into the database if they exist, and copies the LAN command chat source.
 
+If the target Linux user does not have root or passwordless sudo, the bootstrap does not abort the whole OpenClaw install. It copies the packaged Zorg MemoryDB and LAN command chat files, builds the LAN chat source when npm is available, and warns that system packages such as PostgreSQL client/server must be installed as root before rerunning `zorg/install-zorg-memorydb.sh` to apply the database schema.
+
 ## Database Rules
 
 The database package keeps rule tables, markdown import tables, source chunk tables, recall hint tables, entity and association tables, and the default LAN command chat message table. The public baseline does not ship private live memory rows, transcripts, credentials, uploaded files, contact data, or operator-only state.

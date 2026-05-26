@@ -503,6 +503,8 @@ clawtributors:hidden:end -->
 
 This fork packages Zorg MemoryDB and LAN command chat for OpenClaw installs. The installer includes a bootstrap that places the database structure, public-safe production rules, markdown-import tooling, and LAN command chat into the OpenClaw workspace without shipping private live memory rows.
 
+If the target Linux user lacks root or passwordless sudo, the bootstrap keeps the install moving by copying the packaged Zorg files and LAN command chat source, then warns that PostgreSQL system packages must be installed as root before rerunning the Zorg bootstrap to apply the schema.
+
 See [docs/install/zorg-memorydb.md](docs/install/zorg-memorydb.md).
 
 ### GitHub release install command
