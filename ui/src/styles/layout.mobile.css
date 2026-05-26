@@ -765,18 +765,18 @@
     max-height: 380px;
   }
 
-  .content.content:has(.card--fill-height) {
+  .content.content--logs {
     display: block;
     overflow-y: auto;
   }
 
-  .content.content:has(.card--fill-height) .settings-workspace {
+  .content.content--logs .settings-workspace {
     display: block;
     height: auto;
     flex: initial;
   }
 
-  .content.content:has(.card--fill-height) .settings-workspace__body {
+  .content.content--logs .settings-workspace__body {
     display: block;
     flex: initial;
   }
