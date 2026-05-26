@@ -432,30 +432,73 @@ export async function getReplyFromConfig(
       } else {
         const updatedAt = Date.now();
         const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-        sessionEntry.pendingFinalDeliveryLastError = null;
-        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
-        sessionEntry.pendingFinalDeliveryText = replayText;
-        sessionEntry.updatedAt = updatedAt;
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
-        if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({
-              pendingFinalDeliveryText: replayText,
-              pendingFinalDeliveryLastAttemptAt: updatedAt,
-              pendingFinalDeliveryAttemptCount: attemptCount,
-              pendingFinalDeliveryLastError: null,
-              updatedAt,
-            }),
-          });
-        }
-        return { text: replayText };
+
+        // Fail-safe: cap replay attempts and TTL to prevent orphan sessions from
+        // re-sending the same stale text on every heartbeat tick indefinitely.
+        // See #85743 — observed 189 attempts over 4 days in production.
+        const expiryCheck = checkPendingDeliveryExpiry({
+          attemptCount,
+          createdAt: sessionEntry.pendingFinalDeliveryCreatedAt,
+          nowMs: updatedAt,
+        });
+
+        if (expiryCheck.expired) {
+          console.warn(
+            `[pendingFinalDelivery] Clearing stale pending delivery for ${sessionKey}: ${expiryCheck.reason}`,
+          );
+          sessionEntry.pendingFinalDelivery = undefined;
+          sessionEntry.pendingFinalDeliveryText = undefined;
+          sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+          sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+          sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+          sessionEntry.pendingFinalDeliveryLastError = undefined;
+          sessionEntry.pendingFinalDeliveryContext = undefined;
+          if (sessionKey && sessionStore) {
+            sessionStore[sessionKey] = sessionEntry;
+          }
+          if (sessionKey && storePath) {
+            const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async () => ({
+                pendingFinalDelivery: undefined,
+                pendingFinalDeliveryText: undefined,
+                pendingFinalDeliveryCreatedAt: undefined,
+                pendingFinalDeliveryLastAttemptAt: undefined,
+                pendingFinalDeliveryAttemptCount: undefined,
+                pendingFinalDeliveryLastError: undefined,
+                pendingFinalDeliveryContext: undefined,
+              }),
+            });
+          }
+          // Fall through to normal reply — no pending delivery text to replay.
+        } else {
+          sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+          sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+          sessionEntry.pendingFinalDeliveryLastError = null;
+          const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+          sessionEntry.pendingFinalDeliveryText = replayText;
+          sessionEntry.updatedAt = updatedAt;
+          if (sessionKey && sessionStore) {
+            sessionStore[sessionKey] = sessionEntry;
+          }
+          if (sessionKey && storePath) {
+            const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async () => ({
+                pendingFinalDeliveryText: replayText,
+                pendingFinalDeliveryLastAttemptAt: updatedAt,
+                pendingFinalDeliveryAttemptCount: attemptCount,
+                pendingFinalDeliveryLastError: null,
+                updatedAt,
+              }),
+            });
+          }
+          return { text: replayText };
+        } // end expired-else (normal replay)
       }
     }
   }
@@ -931,4 +974,36 @@ export async function getReplyFromConfig(
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );
+}
+
+/**
+ * Check whether a pending final delivery entry has exceeded its retry/TTL bounds.
+ * Extracted for testability. See #85743.
+ */
+export const PENDING_FINAL_DELIVERY_MAX_ATTEMPTS = 10;
+export const PENDING_FINAL_DELIVERY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export function checkPendingDeliveryExpiry(params: {
+  attemptCount: number;
+  createdAt: number | null | undefined;
+  nowMs: number;
+}): { expired: boolean; reason?: string } {
+  const { attemptCount, createdAt, nowMs } = params;
+
+  if (attemptCount > PENDING_FINAL_DELIVERY_MAX_ATTEMPTS) {
+    return {
+      expired: true,
+      reason: `retry-limit (${attemptCount} > ${PENDING_FINAL_DELIVERY_MAX_ATTEMPTS})`,
+    };
+  }
+
+  if (createdAt != null && nowMs - createdAt > PENDING_FINAL_DELIVERY_TTL_MS) {
+    const ageHours = Math.round((nowMs - createdAt) / 3600000);
+    return {
+      expired: true,
+      reason: `expiry (${ageHours}h > 24h)`,
+    };
+  }
+
+  return { expired: false };
 }
