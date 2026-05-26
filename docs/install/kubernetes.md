@@ -105,6 +105,17 @@ Edit the `AGENTS.md` in `scripts/k8s/manifests/configmap.yaml` and redeploy:
 
 Edit `openclaw.json` in `scripts/k8s/manifests/configmap.yaml`. See [Gateway configuration](/gateway/configuration) for the full reference.
 
+### Persistent state and exec approvals
+
+The default manifests mount the PVC at `/home/node` and let the init container create `/home/node/.openclaw` as the same UID that runs the gateway. Keep that parent-mount shape if you customize storage:
+
+1. Mount the PVC at a parent directory, not directly at `/home/node/.openclaw`.
+2. Create `/home/node/.openclaw` as the gateway runtime UID before the gateway starts.
+3. Keep `HOME`, `OPENCLAW_CONFIG_DIR`, and `OPENCLAW_STATE_DIR` pointed at that state path.
+4. Add or edit `exec-approvals.json` inside that state directory only after the directory is owned and chmod-able by the gateway UID.
+
+This matters on clusters that use `fsGroup` for PVC writes. `fsGroup` can let the gateway write files while still preventing it from tightening permissions with `chmod` when the mounted directory is owned by another UID. Default no-prompt exec can run without an `exec-approvals.json` file, but persisted exec approvals require the state directory itself to be owned and chmod-able by the gateway process.
+
 ### Add providers
 
 Re-run with additional keys exported:
@@ -169,6 +180,8 @@ This deletes the namespace and all resources in it, including the PVC.
 ## Architecture notes
 
 - The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`
+- The PVC is mounted at `/home/node`; the init container creates `/home/node/.openclaw` inside it so OpenClaw owns the state directory it later hardens for persisted files such as `exec-approvals.json`
+- On upgrade from older manifests that mounted the PVC directly at `/home/node/.openclaw`, the init container moves root-level PVC state into `/home/node/.openclaw` before starting the gateway
 - No cluster-scoped resources — everything lives in a single namespace
 - Security: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000)
 - The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`

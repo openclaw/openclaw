@@ -29,6 +29,18 @@ spec:
             - sh
             - -c
             - |
+              set -eu
+              mkdir -p /home/node/.openclaw
+              if [ ! -e /home/node/.openclaw/openclaw.json ] && [ -e /home/node/openclaw.json ]; then
+                for path in /home/node/.[!.]* /home/node/..?* /home/node/*; do
+                  [ -e "$path" ] || continue
+                  case "$(basename "$path")" in
+                    .openclaw|lost+found|.snapshot) continue ;;
+                  esac
+                  mv "$path" /home/node/.openclaw/
+                done
+              fi
+              chmod 700 /home/node/.openclaw
               cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               mkdir -p /home/node/.openclaw/workspace
               cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
@@ -44,7 +56,7 @@ spec:
               cpu: 100m
           volumeMounts:
             - name: openclaw-home
-              mountPath: /home/node/.openclaw
+              mountPath: /home/node
             - name: config
               mountPath: /config
       containers:
@@ -64,6 +76,8 @@ spec:
             - name: HOME
               value: /home/node
             - name: OPENCLAW_CONFIG_DIR
+              value: /home/node/.openclaw
+            - name: OPENCLAW_STATE_DIR
               value: /home/node/.openclaw
             - name: NODE_ENV
               value: production
@@ -123,7 +137,7 @@ spec:
             timeoutSeconds: 5
           volumeMounts:
             - name: openclaw-home
-              mountPath: /home/node/.openclaw
+              mountPath: /home/node
             - name: tmp-volume
               mountPath: /tmp
           securityContext:
