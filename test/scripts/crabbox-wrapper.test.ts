@@ -28,7 +28,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
     "}",
-    "console.log(JSON.stringify({ args, cwd: process.cwd() }));",
+    "const scriptIndex = args.findIndex((arg) => arg === '--script' || arg === '-script');",
+    "const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : '';",
+    "const scriptContent = scriptPath ? require('node:fs').readFileSync(scriptPath, 'utf8') : '';",
+    "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
   ].join("\n");
   writeFileSync(crabboxPath, `${script}\n`, "utf8");
   writeFileSync(
@@ -74,6 +77,7 @@ function runWrapper(
   options: {
     extraPathEntries?: string[];
     gitResponses?: Record<string, { status?: number; stdout?: string; stderr?: string }>;
+    input?: string;
   } = {},
 ) {
   const binDir = makeFakeCrabbox(helpText);
@@ -81,6 +85,7 @@ function runWrapper(
   return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
+    input: options.input,
     env: {
       ...process.env,
       PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
@@ -96,8 +101,13 @@ function runWrapper(
 function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): {
   args: string[];
   cwd: string;
+  scriptContent?: string;
 } {
-  return JSON.parse(result.stdout.trim()) as { args: string[]; cwd: string };
+  return JSON.parse(result.stdout.trim()) as {
+    args: string[];
+    cwd: string;
+    scriptContent?: string;
+  };
 }
 
 function normalizeShellLineEndings(value: string): string {
@@ -269,6 +279,71 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(remoteCommand, shellScript);
+  });
+
+  it("bootstraps AWS macOS script-stdin runs before the uploaded script body", () => {
+    const script = ["set -euo pipefail", "node -v", "pnpm --version"].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).not.toContain("--script-stdin");
+    expect(output.args).toContain("--script");
+    expect(result.stderr).toContain(
+      "bootstrapping a pinned user-local Node toolchain before the command",
+    );
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain(`\n${script}`);
+  });
+
+  it("preserves AWS macOS script-stdin shebang payloads behind the bootstrap wrapper", () => {
+    const script = ["#!/usr/bin/env node", "console.log(process.version);"].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin", "--", "arg1"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).not.toContain("--script-stdin");
+    expect(output.args).toContain("--script");
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain("cat >\"$tmp_script\" <<'OPENCLAW_CRABBOX_SCRIPT_0'");
+    expect(output.scriptContent).toContain(`\n${script}\nOPENCLAW_CRABBOX_SCRIPT_0\n`);
+    expect(output.scriptContent).toContain('chmod 700 "$tmp_script" || exit $?');
+    expect(output.scriptContent).toContain('"$tmp_script" "$@"');
+    expect(output.args.at(-1)).toBe("arg1");
+  });
+
+  it("does not treat run option values as AWS macOS script-stdin flags", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--label",
+        "--script-stdin",
+        "--",
+        "echo ok",
+      ],
+      { input: "node -v\n" },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--label");
+    expect(output.args).toContain("--script-stdin");
+    expect(output.args).not.toContain("--script");
+    expect(output.scriptContent).toBe("");
   });
 
   it("bootstraps raw AWS macOS shell scripts with setup inside command substitutions", () => {
