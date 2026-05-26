@@ -6,9 +6,10 @@ import {
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
 import {
-  emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
+  type DiagnosticModelCallContent,
   type DiagnosticMemoryUsage,
+  emitTrustedDiagnosticEventWithPrivateData,
 } from "../../../infra/diagnostic-events.js";
 import type { DiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
@@ -71,6 +72,7 @@ type ModelCallObservationState = {
   requestPayloadBytes?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
+  modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   contentCapture?: DiagnosticModelContentCapturePolicy;
 };
@@ -113,11 +115,11 @@ function cloneDiagnosticContentValue(value: unknown): unknown {
 function streamContextModelContentFields(
   policy: DiagnosticModelContentCapturePolicy | undefined,
   streamContext: unknown,
-): Partial<ModelCallEventBase> {
+): DiagnosticModelCallContent | undefined {
   if (!policy?.anyModelContent || !isRecord(streamContext)) {
-    return {};
+    return undefined;
   }
-  return {
+  const content = {
     ...(policy.inputMessages && Array.isArray(streamContext.messages)
       ? { inputMessages: cloneDiagnosticContentValue(streamContext.messages) }
       : {}),
@@ -128,6 +130,7 @@ function streamContextModelContentFields(
       ? { toolDefinitions: cloneDiagnosticContentValue(streamContext.tools) }
       : {}),
   };
+  return Object.keys(content).length > 0 ? content : undefined;
 }
 
 function observeOutputMessageContent(state: ModelCallObservationState, chunk: unknown): void {
@@ -196,7 +199,6 @@ function baseModelCallEvent(
   ctx: ModelCallDiagnosticContext,
   callId: string,
   trace: DiagnosticTraceContext,
-  streamContext: unknown,
 ): ModelCallEventBase {
   return {
     runId: ctx.runId,
@@ -212,8 +214,21 @@ function baseModelCallEvent(
     ...(ctx.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
       : {}),
-    ...streamContextModelContentFields(ctx.contentCapture, streamContext),
     trace,
+  };
+}
+
+function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
+  return modelContent ? { modelContent } : undefined;
+}
+
+function modelCallCompletedContent(state: ModelCallObservationState) {
+  if (!state.modelContent && !state.outputMessages) {
+    return undefined;
+  }
+  return {
+    ...state.modelContent,
+    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
   };
 }
 
@@ -312,11 +327,17 @@ function dispatchModelCallEndedHook(
   );
 }
 
-function emitModelCallStarted(eventBase: ModelCallEventBase): void {
-  emitTrustedDiagnosticEvent({
-    type: "model.call.started",
-    ...eventBase,
-  });
+function emitModelCallStarted(
+  eventBase: ModelCallEventBase,
+  modelContent: DiagnosticModelCallContent | undefined,
+): void {
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.started",
+      ...eventBase,
+    },
+    modelContentPrivateData(modelContent),
+  );
   dispatchModelCallStartedHook(eventBase);
 }
 
@@ -327,13 +348,15 @@ function emitModelCallCompleted(
 ): void {
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitTrustedDiagnosticEvent({
-    type: "model.call.completed",
-    ...eventBase,
-    durationMs,
-    ...sizeTimingFields,
-    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.completed",
+      ...eventBase,
+      durationMs,
+      ...sizeTimingFields,
+    },
+    modelContentPrivateData(modelCallCompletedContent(state)),
+  );
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
     outcome: "completed",
@@ -349,14 +372,16 @@ function emitModelCallError(
 ): void {
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitTrustedDiagnosticEvent({
-    type: "model.call.error",
-    ...eventBase,
-    durationMs,
-    ...sizeTimingFields,
-    ...fields,
-    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.error",
+      ...eventBase,
+      durationMs,
+      ...sizeTimingFields,
+      ...fields,
+    },
+    modelContentPrivateData(modelCallCompletedContent(state)),
+  );
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
     outcome: "error",
@@ -531,12 +556,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   return ((model, streamContext, options) => {
     const callId = ctx.nextCallId();
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
-    const eventBase = baseModelCallEvent(ctx, callId, trace, streamContext);
-    emitModelCallStarted(eventBase);
+    const eventBase = baseModelCallEvent(ctx, callId, trace);
+    const modelContent = streamContextModelContentFields(ctx.contentCapture, streamContext);
+    emitModelCallStarted(eventBase, modelContent);
     ctx.onStarted?.();
     const startedAt = Date.now();
     const state: ModelCallObservationState = {
       responseStreamBytes: 0,
+      modelContent,
       contentCapture: ctx.contentCapture,
     };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);

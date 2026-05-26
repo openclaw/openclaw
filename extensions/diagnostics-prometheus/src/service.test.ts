@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter, testApi } from "./service.js";
 
@@ -666,7 +667,11 @@ describe("diagnostics-prometheus service", () => {
 
   it("subscribes to internal diagnostics and renders scrape text", () => {
     const listeners: Array<
-      (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void
+      (
+        event: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void
     > = [];
     const emitted: unknown[] = [];
     const exporter = createDiagnosticsPrometheusExporter();
@@ -700,6 +705,7 @@ describe("diagnostics-prometheus service", () => {
         usage: { input: 12, output: 3, total: 15 },
       },
       trusted,
+      {},
     );
 
     expect(emitted).toStrictEqual([

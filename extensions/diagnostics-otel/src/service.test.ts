@@ -156,6 +156,11 @@ import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  emitTrustedDiagnosticEventWithPrivateData,
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPrivateData,
+} from "../../../src/infra/diagnostic-events.js";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -217,8 +222,8 @@ function createOtelContext(
     logger: createLogger(),
     stateDir: OTEL_TEST_STATE_DIR,
     internalDiagnostics: {
-      emit: emitTrustedDiagnosticEvent,
-      onEvent: onInternalDiagnosticEvent,
+      emit: emitTrustedDiagnosticEventWithPrivateData,
+      onEvent: onTrustedInternalDiagnosticEvent,
     },
   };
 }
@@ -336,6 +341,22 @@ async function emitAndCaptureLog(
 
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function emitTrustedModelCallCompletedWithContent(
+  event: Omit<
+    Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "model.call.completed" }>,
+    "type"
+  >,
+  modelContent: NonNullable<DiagnosticEventPrivateData["modelContent"]>,
+) {
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.completed",
+      ...event,
+    },
+    { modelContent },
+  );
 }
 
 afterAll(() => {
@@ -1068,15 +1089,16 @@ describe("diagnostics-otel service", () => {
     delete (ctx.config.diagnostics as { enabled?: boolean }).enabled;
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: ["user prompt"],
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      { inputMessages: ["user prompt"] },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -3081,17 +3103,20 @@ describe("diagnostics-otel service", () => {
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: ["private user prompt"],
-      outputMessages: ["private model reply"],
-      systemPrompt: "private system prompt",
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: ["private user prompt"],
+        outputMessages: ["private model reply"],
+        systemPrompt: "private system prompt",
+      },
+    );
     emitDiagnosticEvent({
       type: "tool.execution.completed",
       runId: "run-1",
@@ -3139,17 +3164,20 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: ["use key sk-1234567890abcdef1234567890abcdef"], // pragma: allowlist secret
-      outputMessages: ["model reply"],
-      systemPrompt: "system prompt",
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: ["use key sk-1234567890abcdef1234567890abcdef"], // pragma: allowlist secret
+        outputMessages: ["model reply"],
+        systemPrompt: "system prompt",
+      },
+    );
     emitDiagnosticEvent({
       type: "tool.execution.completed",
       runId: "run-1",
@@ -3199,15 +3227,16 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: ["user prompt"],
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      { inputMessages: ["user prompt"] },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -3239,14 +3268,16 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: [
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
         { role: "user", content: "what changed?", timestamp: 1 },
         {
           role: "assistant",
@@ -3254,18 +3285,19 @@ describe("diagnostics-otel service", () => {
         },
         { role: "toolResult", toolCallId: "call-1", content: { rows: 1 } },
       ],
-      outputMessages: [
+        outputMessages: [
         {
           role: "assistant",
           content: [{ type: "text", text: "the trace changed" }],
           stopReason: "stop",
         },
       ],
-      systemPrompt: "be exact",
-      toolDefinitions: [
+        systemPrompt: "be exact",
+        toolDefinitions: [
         { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
       ],
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -3326,28 +3358,31 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_call",
-              id: "tc-1",
-              name: "search",
-              arguments: { q: "x" },
-              extraField: "leaked",
-            },
-          ],
-        },
-      ],
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_call",
+                id: "tc-1",
+                name: "search",
+                arguments: { q: "x" },
+                extraField: "leaked",
+              },
+            ],
+          },
+        ],
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -3384,15 +3419,16 @@ describe("diagnostics-otel service", () => {
       content: `message-${i}-${"x".repeat(1024)}`,
     }));
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: largeMessages,
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      { inputMessages: largeMessages },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -3427,35 +3463,38 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: [
-        {
-          role: "user",
-          content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
-        },
-      ],
-      toolDefinitions: [
-        {
-          name: "huge_schema",
-          description: "Huge schema",
-          parameters: {
-            type: "object",
-            properties: {
-              payload: {
-                type: "string",
-                description: "x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS),
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
+          {
+            role: "user",
+            content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
+          },
+        ],
+        toolDefinitions: [
+          {
+            name: "huge_schema",
+            description: "Huge schema",
+            parameters: {
+              type: "object",
+              properties: {
+                payload: {
+                  type: "string",
+                  description: "x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS),
+                },
               },
             },
           },
-        },
-      ],
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+        ],
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
@@ -3500,18 +3539,21 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: [{ role: "user", content: "do not export this prompt" }],
-      toolDefinitions: [
-        { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
-      ],
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [{ role: "user", content: "do not export this prompt" }],
+        toolDefinitions: [
+          { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
+        ],
+      },
+    );
     await flushDiagnosticEvents();
 
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(

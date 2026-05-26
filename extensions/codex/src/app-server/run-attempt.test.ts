@@ -21,6 +21,10 @@ import {
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPrivateData,
+} from "../../../../src/infra/diagnostic-events.js";
+import {
   clearInternalHooks,
   initializeGlobalHookRunner,
   registerInternalHook,
@@ -6746,6 +6750,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
     let diagnosticTypesAtLlmOutput: string[] = [];
     const llmOutput = vi.fn(() => {
       diagnosticTypesAtLlmOutput = diagnosticEvents.map((event) => event.type);
@@ -6753,9 +6758,10 @@ describe("runCodexAppServerAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
     );
-    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
       if (event.type.startsWith("model.call.")) {
         diagnosticEvents.push(event);
+        diagnosticContentByType.set(event.type, privateData);
       }
     });
     try {
@@ -6803,11 +6809,13 @@ describe("runCodexAppServerAttempt", () => {
       );
       expect(startedEvent?.callId).toBe("run-1:codex-model:1");
       expect(startedEvent?.trace?.traceId).toBeTypeOf("string");
-      expect(JSON.stringify(startedEvent?.inputMessages)).toContain("hello");
-      expect(startedEvent?.systemPrompt).toContain(
+      expect(JSON.stringify(startedEvent)).not.toContain("hello");
+      const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
+      expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
+      expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );
-      expect(startedEvent?.toolDefinitions).toContainEqual(
+      expect(startedContent?.toolDefinitions).toContainEqual(
         expect.objectContaining({
           name: "message",
           parameters: expect.objectContaining({
@@ -6817,7 +6825,10 @@ describe("runCodexAppServerAttempt", () => {
         }),
       );
       expect(completedEvent?.callId).toBe("run-1:codex-model:1");
-      expect(JSON.stringify(completedEvent?.outputMessages)).toContain("hello back");
+      expect(JSON.stringify(completedEvent)).not.toContain("hello back");
+      expect(
+        JSON.stringify(diagnosticContentByType.get("model.call.completed")?.modelContent),
+      ).toContain("hello back");
       expect(completedEvent?.requestPayloadBytes).toBeGreaterThan(0);
       expect(llmOutput).toHaveBeenCalledTimes(1);
       expect(diagnosticTypesAtLlmOutput).toContain("model.call.completed");

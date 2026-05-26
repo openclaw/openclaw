@@ -93,6 +93,13 @@ type OtelContentCapturePolicy = {
   logBodies: boolean;
 };
 
+type OtelModelCallContent = {
+  inputMessages?: unknown;
+  outputMessages?: unknown;
+  systemPrompt?: string;
+  toolDefinitions?: unknown;
+};
+
 type MessageDeliveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   {
@@ -817,15 +824,15 @@ function assignJsonAttribute(
 
 function assignGenAiModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  event: Record<string, unknown>,
+  content: OtelModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
-  if (policy.systemPrompt && typeof event.systemPrompt === "string") {
-    const systemInstructions = [textPart(event.systemPrompt)];
+  if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
+    const systemInstructions = [textPart(content.systemPrompt)];
     assignJsonAttribute(attributes, ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, systemInstructions);
   }
   if (policy.inputMessages) {
-    const inputMessages = normalizeGenAiMessages(event.inputMessages, "user");
+    const inputMessages = normalizeGenAiMessages(content?.inputMessages, "user");
     if (inputMessages.length > 0) {
       assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
       assignJsonAttribute(attributes, "input.value", inputMessages);
@@ -833,13 +840,13 @@ function assignGenAiModelContentAttributes(
     }
   }
   if (policy.toolDefinitions) {
-    const toolDefinitions = normalizeGenAiToolDefinitions(event.toolDefinitions);
+    const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
     if (toolDefinitions.length > 0) {
       assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
     }
   }
   if (policy.outputMessages) {
-    const outputMessages = normalizeGenAiMessages(event.outputMessages, "assistant");
+    const outputMessages = normalizeGenAiMessages(content?.outputMessages, "assistant");
     if (outputMessages.length > 0) {
       assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
       assignJsonAttribute(attributes, "output.value", outputMessages);
@@ -861,29 +868,37 @@ function assignOtelContentAttribute(
 
 function assignOtelModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  event: Record<string, unknown>,
+  content: OtelModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
-  assignGenAiModelContentAttributes(attributes, event, policy);
+  assignGenAiModelContentAttributes(attributes, content, policy);
   if (policy.inputMessages) {
-    assignOtelContentAttribute(attributes, "openclaw.content.input_messages", event.inputMessages);
+    assignOtelContentAttribute(
+      attributes,
+      "openclaw.content.input_messages",
+      content?.inputMessages,
+    );
   }
   if (policy.toolDefinitions) {
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.tool_definitions",
-      event.toolDefinitions,
+      content?.toolDefinitions,
     );
   }
   if (policy.outputMessages) {
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.output_messages",
-      event.outputMessages,
+      content?.outputMessages,
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", event.systemPrompt);
+    assignOtelContentAttribute(
+      attributes,
+      "openclaw.content.system_prompt",
+      content?.systemPrompt,
+    );
   }
 }
 
@@ -2600,6 +2615,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" }>,
         metadata: DiagnosticEventMetadata,
+        modelContent?: OtelModelCallContent,
       ) => {
         const metricAttrs = modelCallMetricAttrs(evt);
         modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
@@ -2623,11 +2639,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
-        assignOtelModelContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
@@ -2643,6 +2655,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallError = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.error" }>,
         metadata: DiagnosticEventMetadata,
+        modelContent?: OtelModelCallContent,
       ) => {
         const errorType = lowCardinalityAttr(evt.errorCategory, "other");
         const metricAttrs = {
@@ -2678,11 +2691,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
-        assignOtelModelContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
           spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
@@ -3039,7 +3048,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      unsubscribe = subscribe((evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
+      unsubscribe = subscribe((evt, metadata, privateData) => {
         try {
           switch (evt.type) {
             case "model.usage":
@@ -3141,10 +3150,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordModelCallStarted(evt, metadata);
               return;
             case "model.call.completed":
-              recordModelCallCompleted(evt, metadata);
+              recordModelCallCompleted(evt, metadata, privateData.modelContent);
               return;
             case "model.call.error":
-              recordModelCallError(evt, metadata);
+              recordModelCallError(evt, metadata, privateData.modelContent);
               return;
             case "tool.execution.started":
               recordToolExecutionStarted(evt, metadata);

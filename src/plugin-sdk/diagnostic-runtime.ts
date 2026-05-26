@@ -4,11 +4,14 @@ export { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 export type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
+  DiagnosticModelCallContent,
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,

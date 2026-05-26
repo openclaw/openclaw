@@ -50,10 +50,12 @@ import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sd
 import {
   createDiagnosticTraceContextFromActiveScope,
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
   freezeDiagnosticTraceContext,
   hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   resolveDiagnosticModelContentCapturePolicy,
+  type DiagnosticModelCallContent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
@@ -2720,40 +2722,59 @@ export async function runCodexAppServerAttempt(
   const codexDiagnosticToolDefinitions = codexModelContentCapture.toolDefinitions
     ? buildCodexDiagnosticToolDefinitions(tools)
     : undefined;
-  const buildCodexModelCallDiagnosticFields = () => ({
-    ...codexModelCallBaseFields,
-    ...(codexModelContentCapture.inputMessages
-      ? { inputMessages: buildTurnStartFailureMessages() }
-      : {}),
-    ...(codexModelContentCapture.systemPrompt
-      ? { systemPrompt: buildRenderedCodexDeveloperInstructions() }
-      : {}),
-    ...(codexDiagnosticToolDefinitions ? { toolDefinitions: codexDiagnosticToolDefinitions } : {}),
-  });
+  const codexModelContentPrivateData = (
+    modelContent: DiagnosticModelCallContent | undefined,
+  ) => (modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined);
+  const buildCodexModelCallDiagnosticContent = (): DiagnosticModelCallContent | undefined => {
+    const modelContent = {
+      ...(codexModelContentCapture.inputMessages
+        ? { inputMessages: buildTurnStartFailureMessages() }
+        : {}),
+      ...(codexModelContentCapture.systemPrompt
+        ? { systemPrompt: buildRenderedCodexDeveloperInstructions() }
+        : {}),
+      ...(codexDiagnosticToolDefinitions
+        ? { toolDefinitions: codexDiagnosticToolDefinitions }
+        : {}),
+    };
+    return Object.keys(modelContent).length > 0 ? modelContent : undefined;
+  };
   const emitCodexModelCallStarted = () => {
     codexModelCallStartedAt = Date.now();
     codexModelCallStarted = true;
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      ...buildCodexModelCallDiagnosticFields(),
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        ...codexModelCallBaseFields,
+      },
+      codexModelContentPrivateData(buildCodexModelCallDiagnosticContent()),
+    );
   };
   const emitCodexModelCallCompleted = (result: EmbeddedRunAttemptResult) => {
     if (!codexModelCallStarted || codexModelCallTerminalEmitted) {
       return;
     }
     codexModelCallTerminalEmitted = true;
-    emitTrustedDiagnosticEvent({
-      type: "model.call.completed",
-      ...buildCodexModelCallDiagnosticFields(),
-      durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
-      ...(codexModelCallRequestPayloadBytes !== undefined
-        ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
-        : {}),
-      ...(codexModelContentCapture.outputMessages
-        ? { outputMessages: result.lastAssistant ? [result.lastAssistant] : result.assistantTexts }
-        : {}),
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        ...codexModelCallBaseFields,
+        durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
+        ...(codexModelCallRequestPayloadBytes !== undefined
+          ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
+          : {}),
+      },
+      codexModelContentPrivateData({
+        ...buildCodexModelCallDiagnosticContent(),
+        ...(codexModelContentCapture.outputMessages
+          ? {
+              outputMessages: result.lastAssistant
+                ? [result.lastAssistant]
+                : result.assistantTexts,
+            }
+          : {}),
+      }),
+    );
   };
   const emitCodexModelCallError = (
     error: unknown,
@@ -2763,17 +2784,22 @@ export async function runCodexAppServerAttempt(
       return;
     }
     codexModelCallTerminalEmitted = true;
-    emitTrustedDiagnosticEvent({
-      type: "model.call.error",
-      ...buildCodexModelCallDiagnosticFields(),
-      durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
-      errorCategory: fields.failureKind ?? "error",
-      ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
-      ...(codexModelCallRequestPayloadBytes !== undefined
-        ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
-        : {}),
-      ...(codexModelContentCapture.outputMessages ? { outputMessages: [] } : {}),
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.error",
+        ...codexModelCallBaseFields,
+        durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
+        errorCategory: fields.failureKind ?? "error",
+        ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
+        ...(codexModelCallRequestPayloadBytes !== undefined
+          ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
+          : {}),
+      },
+      codexModelContentPrivateData({
+        ...buildCodexModelCallDiagnosticContent(),
+        ...(codexModelContentCapture.outputMessages ? { outputMessages: [] } : {}),
+      }),
+    );
     embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
       error: formatErrorMessage(error),
     });
