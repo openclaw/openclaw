@@ -594,6 +594,11 @@ export abstract class MemoryManagerSyncOps {
       );
       return false;
     }
+    // Forward-declared so the main watcher's error handler can also
+    // close the paired parent watcher when it dies — otherwise the
+    // parent could later reattach native coverage on top of an already-
+    // installed chokidar fallback (clawsweeper review [P3] 5df68c…).
+    let parentWatcherRef: fsSync.FSWatcher | null = null;
     mainWatcher.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`memory native watcher error on ${dir}: ${message}`);
@@ -604,6 +609,15 @@ export abstract class MemoryManagerSyncOps {
         // ignore close failures on already-broken watcher
       }
       this.removeNativeMemoryWatch(mainWatcher);
+      if (parentWatcherRef) {
+        try {
+          parentWatcherRef.close();
+        } catch {
+          // ignore
+        }
+        this.removeNativeMemoryParentWatch(parentWatcherRef);
+        parentWatcherRef = null;
+      }
       if (this.closed) {
         return;
       }
@@ -626,7 +640,12 @@ export abstract class MemoryManagerSyncOps {
         parentDir,
         { recursive: false },
         (_eventType, filename) => {
-          if (filename !== baseName) {
+          // Per Node docs `filename` can be null on some platforms even
+          // when the parent watcher is otherwise supported. Treat null
+          // as an unknown event and re-check the watched directory's
+          // inode (clawsweeper review [P2] 5df68c…); otherwise filter
+          // by basename so sibling events don't trigger reattach.
+          if (filename !== null && filename !== baseName) {
             return;
           }
           let currentInode: number | null;
@@ -653,6 +672,7 @@ export abstract class MemoryManagerSyncOps {
             // ignore
           }
           this.removeNativeMemoryParentWatch(parentWatcher);
+          parentWatcherRef = null;
           if (this.closed) {
             return;
           }
@@ -680,10 +700,14 @@ export abstract class MemoryManagerSyncOps {
           // ignore
         }
         this.removeNativeMemoryParentWatch(parentWatcher);
+        if (parentWatcherRef === parentWatcher) {
+          parentWatcherRef = null;
+        }
         // Main watcher still alive — root-replacement detection is lost
         // but normal events still flow. No fallback needed.
       });
       this.nativeMemoryParentWatchers.push(parentWatcher);
+      parentWatcherRef = parentWatcher;
     } catch (err) {
       // Parent watcher couldn't start (e.g. parentDir not accessible).
       // The main watcher still works for non-replacement events; just

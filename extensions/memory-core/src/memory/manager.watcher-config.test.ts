@@ -621,6 +621,72 @@ describe("memory watcher config", () => {
     expect(parentWatcher!.options.recursive).not.toBe(true);
   });
 
+  it("treats null parent-watcher filename as an unknown event and re-checks the inode", async () => {
+    // Node fs.watch can emit `filename: null` on some platforms even on
+    // otherwise-supported recursive backends; the parent watcher must
+    // not silently drop it — it must fall through to the inode check
+    // (clawsweeper [P2] on 5df68c…). With statSync returning the
+    // recorded inode (no real replacement), the no-action path is taken
+    // and no teardown/reattach happens.
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig({ extraPaths: [] });
+    await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    const mainWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir && w.recursive);
+    const parentWatcher = createdNativeWatchers.find((w) => w.dir === workspaceDir && !w.recursive);
+    expect(parentWatcher).toBeDefined();
+    expect(mainWatcher).toBeDefined();
+    const nativeCallsBefore = nativeWatchMock.mock.calls.length;
+    const mainCloseSpy = mainWatcher!.close;
+    const parentCloseSpy = parentWatcher!.close;
+
+    // Null filename — must not return silently.
+    parentWatcher!.emit("rename", null);
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The handler ran. Because the real inode matches the recorded
+    // inode (no actual replacement), no teardown/reattach happened
+    // and no broad dirty was scheduled.
+    expect(mainCloseSpy).not.toHaveBeenCalled();
+    expect(parentCloseSpy).not.toHaveBeenCalled();
+    expect(nativeWatchMock.mock.calls.length).toBe(nativeCallsBefore);
+    expect(syncSpy).not.toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("closes the paired parent watcher when the native main watcher errors", async () => {
+    // When the main native watcher dies and falls back to chokidar, the
+    // paired parent watcher must also be closed — otherwise a later
+    // root-replacement event would reattach native coverage on top of an
+    // already-installed chokidar fallback, creating duplicate handles
+    // and event paths (clawsweeper [P3] on 5df68c…).
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig({ extraPaths: [] });
+    await expectWatcherManager(cfg);
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    const mainWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir && w.recursive);
+    const parentWatcher = createdNativeWatchers.find((w) => w.dir === workspaceDir && !w.recursive);
+    expect(mainWatcher).toBeDefined();
+    expect(parentWatcher).toBeDefined();
+    const parentCloseSpy = parentWatcher!.close;
+
+    mainWatcher!.emitError(new Error("watcher error: ENOSPC"));
+
+    // The error handler should have closed and removed the paired
+    // parent watcher before installing the chokidar fallback.
+    expect(parentCloseSpy).toHaveBeenCalled();
+  });
+
   it("ignores parent-directory events for unrelated basenames", async () => {
     // When the parent-directory watcher fires for a sibling (not the
     // watched root's basename), no teardown or reattach should occur.
