@@ -9,10 +9,8 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  appendInlineUserTurnTranscriptMessage,
   appendUserTurnTranscriptMessage,
   buildPersistedUserTurnMediaInputsFromFields,
-  buildPersistedUserTurnMediaFields,
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
@@ -134,71 +132,6 @@ describe("user turn transcript persistence", () => {
     it("does not infer media from absent structured fields", () => {
       expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
       expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
-    });
-  });
-
-  describe("buildPersistedUserTurnMediaFields", () => {
-    it("omits media fields when there is no structured media", () => {
-      expect(buildPersistedUserTurnMediaFields(undefined)).toEqual({});
-      expect(buildPersistedUserTurnMediaFields([])).toEqual({});
-      expect(buildPersistedUserTurnMediaFields([{ path: "  ", contentType: "image/png" }])).toEqual(
-        {},
-      );
-    });
-
-    it("builds aligned transcript media fields from structured media facts", () => {
-      expect(
-        buildPersistedUserTurnMediaFields([
-          { path: "/tmp/a.png", contentType: "image/png" },
-          { path: "/tmp/b.jpg", contentType: "image/jpeg" },
-        ]),
-      ).toEqual({
-        MediaPath: "/tmp/a.png",
-        MediaPaths: ["/tmp/a.png", "/tmp/b.jpg"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png", "image/jpeg"],
-      });
-    });
-
-    it("uses url-backed media when no local path is available", () => {
-      expect(
-        buildPersistedUserTurnMediaFields([
-          { url: "media://inbound/photo.png", contentType: "image/png" },
-        ]),
-      ).toEqual({
-        MediaPath: "media://inbound/photo.png",
-        MediaPaths: ["media://inbound/photo.png"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
-      });
-    });
-
-    it("falls back to kind and then octet-stream for media types", () => {
-      expect(
-        buildPersistedUserTurnMediaFields([
-          { path: "/tmp/doc", kind: "document" },
-          { path: "/tmp/blob" },
-        ]),
-      ).toEqual({
-        MediaPath: "/tmp/doc",
-        MediaPaths: ["/tmp/doc", "/tmp/blob"],
-        MediaType: "document",
-        MediaTypes: ["document", "application/octet-stream"],
-      });
-    });
-
-    it("keeps media paths and types aligned when incomplete entries are skipped", () => {
-      expect(
-        buildPersistedUserTurnMediaFields([
-          { contentType: "image/png" },
-          { path: "/tmp/b.jpg", contentType: "image/jpeg" },
-        ]),
-      ).toEqual({
-        MediaPath: "/tmp/b.jpg",
-        MediaPaths: ["/tmp/b.jpg"],
-        MediaType: "image/jpeg",
-        MediaTypes: ["image/jpeg"],
-      });
     });
   });
 
@@ -419,11 +352,11 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("uses inline update mode through the convenience wrapper", async () => {
+    it("uses inline update mode by default", async () => {
       const dir = createTempDir("openclaw-user-turn-append-inline-");
       const transcriptPath = path.join(dir, "session.jsonl");
 
-      const appended = await appendInlineUserTurnTranscriptMessage({
+      const appended = await appendUserTurnTranscriptMessage({
         transcriptPath,
         sessionId: "session-1",
         sessionKey: "main",
@@ -509,14 +442,14 @@ describe("user turn transcript persistence", () => {
       const dir = createTempDir("openclaw-user-turn-redacted-idempotent-");
       const transcriptPath = path.join(dir, "session.jsonl");
 
-      await appendInlineUserTurnTranscriptMessage({
+      await appendUserTurnTranscriptMessage({
         transcriptPath,
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
         },
       });
-      await appendInlineUserTurnTranscriptMessage({
+      await appendUserTurnTranscriptMessage({
         transcriptPath,
         input: {
           text: "secret prompt",

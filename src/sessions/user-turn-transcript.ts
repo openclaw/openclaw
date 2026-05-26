@@ -9,14 +9,14 @@ import { logVerbose } from "../globals.js";
 import { mimeTypeFromFilePath } from "../media/mime.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
-export type PersistedUserTurnMediaInput = {
+type PersistedUserTurnMediaInput = {
   path?: string | null;
   url?: string | null;
   contentType?: string | null;
   kind?: string | null;
 };
 
-export type PersistedUserTurnMediaFields = {
+type PersistedUserTurnMediaFields = {
   MediaPath?: string;
   MediaPaths?: string[];
   MediaType?: string;
@@ -33,11 +33,9 @@ export type UserTurnInput = {
   mediaOnlyText?: string;
 };
 
-export type BuildPersistedUserTurnMessageParams = UserTurnInput;
+type UserTurnTranscriptUpdateMode = "inline" | "file-only" | "none";
 
-export type UserTurnTranscriptUpdateMode = "inline" | "file-only" | "none";
-
-export type AppendUserTurnTranscriptMessageParams = {
+type AppendUserTurnTranscriptMessageParams = {
   transcriptPath: string;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -49,12 +47,7 @@ export type AppendUserTurnTranscriptMessageParams = {
   updateMode?: UserTurnTranscriptUpdateMode;
 };
 
-export type AppendInlineUserTurnTranscriptMessageParams = Omit<
-  AppendUserTurnTranscriptMessageParams,
-  "updateMode"
->;
-
-export type PersistUserTurnTranscriptParams = {
+type PersistUserTurnTranscriptParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   sessionId: string;
@@ -69,12 +62,12 @@ export type PersistUserTurnTranscriptParams = {
   updateMode?: UserTurnTranscriptUpdateMode;
 };
 
-export type UserTurnTranscriptPersistenceTarget = Omit<
+type UserTurnTranscriptPersistenceTarget = Omit<
   PersistUserTurnTranscriptParams,
   "input" | "message" | "updateMode"
 >;
 
-export type UserTurnTranscriptFileTarget = {
+type UserTurnTranscriptFileTarget = {
   transcriptPath: string;
   sessionId?: string;
   agentId?: string;
@@ -83,18 +76,16 @@ export type UserTurnTranscriptFileTarget = {
   config?: OpenClawConfig;
 };
 
-export type UserTurnTranscriptTarget =
-  | UserTurnTranscriptPersistenceTarget
-  | UserTurnTranscriptFileTarget;
+type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget | UserTurnTranscriptFileTarget;
 
-export type UserTurnTranscriptPersistResult = {
+type UserTurnTranscriptPersistResult = {
   sessionFile: string;
   sessionEntry: SessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
 };
 
-export type UserTurnTranscriptTargetResolver =
+type UserTurnTranscriptTargetResolver =
   | UserTurnTranscriptTarget
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
@@ -117,7 +108,7 @@ export type UserTurnTranscriptRecorder = {
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };
 
-export type CreateUserTurnTranscriptRecorderParams = {
+type CreateUserTurnTranscriptRecorderParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   target: UserTurnTranscriptTargetResolver;
@@ -126,7 +117,7 @@ export type CreateUserTurnTranscriptRecorderParams = {
   onPersistenceError?: (error: unknown) => void;
 };
 
-export type PersistedUserTurnTextFieldSource = {
+type PersistedUserTurnTextFieldSource = {
   Transcript?: string | null;
   RawBody?: string | null;
   CommandBody?: string | null;
@@ -135,12 +126,12 @@ export type PersistedUserTurnTextFieldSource = {
   BodyStripped?: string | null;
 };
 
-export type ResolvePersistedUserTurnTextOptions = {
+type ResolvePersistedUserTurnTextOptions = {
   hasMedia?: boolean;
   fallback?: string | null;
 };
 
-export type PersistedUserTurnMediaFieldSource = {
+type PersistedUserTurnMediaFieldSource = {
   MediaPath?: string | null;
   MediaPaths?: readonly (string | null | undefined)[] | null;
   MediaUrl?: string | null;
@@ -285,7 +276,7 @@ export function buildPersistedUserTurnMediaInputsFromFields(
   return media;
 }
 
-export function buildPersistedUserTurnMediaFields(
+function buildPersistedUserTurnMediaFields(
   media: readonly PersistedUserTurnMediaInput[] | null | undefined,
 ): PersistedUserTurnMediaFields {
   const entries = Array.isArray(media) ? media : [];
@@ -305,9 +296,7 @@ export function buildPersistedUserTurnMediaFields(
   };
 }
 
-export function buildPersistedUserTurnMessage(
-  params: BuildPersistedUserTurnMessageParams,
-): PersistedUserTurnMessage {
+export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
@@ -438,15 +427,6 @@ export async function appendUserTurnTranscriptMessage(
     messageId: appended.messageId,
     message: appended.message,
   };
-}
-
-export async function appendInlineUserTurnTranscriptMessage(
-  params: AppendInlineUserTurnTranscriptMessageParams,
-): ReturnType<typeof appendUserTurnTranscriptMessage> {
-  return await appendUserTurnTranscriptMessage({
-    ...params,
-    updateMode: "inline",
-  });
 }
 
 export async function persistUserTurnTranscript(
