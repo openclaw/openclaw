@@ -693,27 +693,8 @@ export function createFollowupRunner(params: {
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
-            const notifyUserMessagePersisted = (
-              message: Parameters<NonNullable<GetReplyOptions["onUserMessagePersisted"]>>[0],
-            ) => {
+            const notifyUserMessagePersisted = () => {
               queuedUserMessagePersistedAcrossFallback = true;
-              try {
-                const notification = opts?.onUserMessagePersisted?.(message);
-                if (notification) {
-                  void Promise.resolve(notification).catch((error) => {
-                    logVerbose(
-                      `followup queue: user message persistence notification failed: ${formatErrorMessage(error)}`,
-                    );
-                  });
-                }
-              } catch (error) {
-                logVerbose(
-                  `followup queue: user message persistence notification failed: ${formatErrorMessage(error)}`,
-                );
-              }
-            };
-            const notifyUserMessagePersistencePending = (pending: Promise<void>) => {
-              opts?.onUserMessagePersistencePending?.(pending);
             };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
@@ -851,7 +832,6 @@ export function createFollowupRunner(params: {
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                 onUserMessagePersisted: notifyUserMessagePersisted,
-                onUserMessagePersistencePending: notifyUserMessagePersistencePending,
                 suppressTranscriptOnlyAssistantPersistence:
                   run.suppressTranscriptOnlyAssistantPersistence,
                 suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,

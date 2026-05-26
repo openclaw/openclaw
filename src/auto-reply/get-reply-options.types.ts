@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -58,12 +57,6 @@ export type GetReplyOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
-  /** Notifies when the runtime actually persists the current user turn. */
-  onUserMessagePersisted?: (
-    message: Extract<AgentMessage, { role: "user" }>,
-  ) => Promise<void> | void;
-  /** Notifies when runtime-owned user turn persistence is in flight. */
-  onUserMessagePersistencePending?: (pending: Promise<void>) => void;
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onReplyStart?: () => Promise<void> | void;

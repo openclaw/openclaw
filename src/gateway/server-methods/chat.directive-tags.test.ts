@@ -201,8 +201,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       };
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
-        onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
-        onUserMessagePersistencePending?: (pending: Promise<void>) => void;
+        userTurnTranscriptRecorder?: {
+          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+          markRuntimePersistencePending: (pending: Promise<void>) => void;
+        };
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
@@ -220,13 +222,13 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         mockState.onAfterAgentRunStart?.();
       }
       if (mockState.triggerUserMessagePersisted) {
-        params.replyOptions?.onUserMessagePersisted?.({
+        params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersisted({
           role: "user",
           content: "persisted by runtime",
         });
       }
       if (mockState.runtimeUserMessagePersistencePending) {
-        params.replyOptions?.onUserMessagePersistencePending?.(
+        params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
           mockState.runtimeUserMessagePersistencePending,
         );
       }
