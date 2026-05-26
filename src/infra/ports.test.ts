@@ -253,6 +253,46 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
+  it("deduplicates repeated lsof listener records for one process address", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p111\ncnode\nnTCP *:18789 (LISTEN)\nnTCP *:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout: "node /tmp/openclaw/dist/index.js gateway run\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners).toHaveLength(1);
+    expect(result.listeners[0]).toMatchObject({
+      pid: 111,
+      address: "TCP *:18789 (LISTEN)",
+    });
+  });
+
   it("reports multiple lsof socket records for one process", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];

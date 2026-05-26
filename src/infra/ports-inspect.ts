@@ -58,6 +58,18 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   return listeners;
 }
 
+function dedupePortListeners(listeners: PortListener[]): PortListener[] {
+  const seen = new Set<string>();
+  return listeners.filter((listener) => {
+    const key = `${listener.pid ?? ""}\0${listener.command ?? ""}\0${listener.address ?? ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function normalizeTcpHost(host: string): string {
   const normalized = host.toLowerCase();
   return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
@@ -378,7 +390,7 @@ async function readUnixListeners(
   const lsof = await resolveLsofCommand();
   const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
   if (res.code === 0) {
-    const listeners = parseLsofFieldOutput(res.stdout);
+    const listeners = dedupePortListeners(parseLsofFieldOutput(res.stdout));
     await enrichUnixListenerProcessInfo(listeners);
     return { listeners, detail: res.stdout.trim() || undefined, errors: [] };
   }
