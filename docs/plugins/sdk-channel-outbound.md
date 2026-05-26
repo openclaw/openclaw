@@ -105,10 +105,9 @@ Runtime send helpers also live on `channel-outbound`:
 Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed payloads.
 Do not infer hook cancellation from an empty legacy direct-delivery result.
 
-## Compatibility Dispatchers
+## Compatibility Dispatch
 
-Compatibility dispatchers that still need the buffered reply dispatcher should
-pair:
-
-- `createChannelMessageReplyPipeline(...)` from `channel-outbound`
-- `runPreparedInboundReply(...)` from `channel-inbound`
+Inbound reply dispatch should be assembled through
+`dispatchChannelInboundReply(...)` from `channel-inbound`. Keep platform
+delivery in the delivery adapter; use `channel-outbound` for message adapters,
+durable sends, receipts, live preview, and reply pipeline options.

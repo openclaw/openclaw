@@ -43,7 +43,6 @@ export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.
 export type { ChannelBotLoopProtectionFacts } from "../channels/turn/kernel.js";
 export { recordChannelBotPairLoopAndCheckSuppression } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelReplyPipeline } from "./channel-reply-core.js";
 import {
   normalizeOutboundReplyPayload,
   type OutboundReplyPayload,
@@ -240,60 +239,47 @@ export async function dispatchInboundReplyWithBase(
 export async function recordChannelMessageReplyDispatch(
   params: RecordChannelMessageReplyDispatchParams,
 ): Promise<void> {
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  await dispatchChannelInboundReplyCore({
     cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
     agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-  });
-  const deliver = async (payload: unknown, info: { kind: "tool" | "block" | "final" }) => {
-    const normalized =
-      payload && typeof payload === "object"
-        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
-        : {};
-    if (params.durable) {
-      const durable = await deliverInboundReplyWithMessageSendContext({
-        cfg: params.cfg,
-        channel: params.channel,
-        accountId: params.accountId,
-        agentId: params.agentId,
-        ctxPayload: params.ctxPayload,
-        payload: normalized as ReplyPayload,
-        info,
-        ...params.durable,
-      });
-      throwIfDurableInboundReplyDeliveryFailed(durable);
-      if (isDurableInboundReplyDeliveryHandled(durable)) {
-        return durable.delivery;
-      }
-    }
-    return await params.deliver(normalized);
-  };
-
-  await runPreparedInboundReply({
-    channel: params.channel,
-    accountId: params.accountId,
     routeSessionKey: params.routeSessionKey,
     storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      preparePayload: (payload) =>
+        (payload && typeof payload === "object"
+          ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+          : {}) as ReplyPayload,
+      deliver: async (payload, info) => {
+        if (params.durable) {
+          const durable = await deliverInboundReplyWithMessageSendContext({
+            cfg: params.cfg,
+            channel: params.channel,
+            accountId: params.accountId,
+            agentId: params.agentId,
+            ctxPayload: params.ctxPayload,
+            payload,
+            info,
+            ...params.durable,
+          });
+          throwIfDurableInboundReplyDeliveryFailed(durable);
+          if (isDurableInboundReplyDeliveryHandled(durable)) {
+            return durable.delivery;
+          }
+        }
+        return await params.deliver(payload as OutboundReplyPayload);
+      },
+      onError: params.onDispatchError,
+    },
+    replyPipeline: {},
+    replyOptions: params.replyOptions,
     record: {
       onRecordError: params.onRecordError,
     },
-    runDispatch: async () =>
-      await params.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: params.ctxPayload,
-        cfg: params.cfg,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver,
-          onError: params.onDispatchError,
-        },
-        replyOptions: {
-          ...params.replyOptions,
-          onModelSelected,
-        },
-      }),
   });
 }
 

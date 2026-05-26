@@ -708,6 +708,75 @@ vi.mock("../reply.runtime.js", () => ({
     replyOptions: {},
     markDispatchIdle: () => {},
   }),
+  dispatchReplyWithBufferedBlockDispatcher: async (params: {
+    dispatcherOptions: {
+      transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
+      beforeDeliver?: (
+        payload: TestReplyPayload,
+        info: { kind: TestReplyDispatchKind },
+      ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
+      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
+    };
+    replyOptions?: {
+      disableBlockStreaming?: boolean;
+      suppressDefaultToolProgressMessages?: boolean;
+      onItemEvent?: (payload: {
+        kind?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        meta?: string;
+      }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+    };
+  }) => {
+    capturedReplyOptions = params.replyOptions;
+    if (mockedReplyOptionEvents.length > 0) {
+      for (const entry of mockedReplyOptionEvents) {
+        if (entry.kind === "item") {
+          await params.replyOptions?.onItemEvent?.({
+            kind: entry.itemKind,
+            progressText: entry.progressText,
+            summary: entry.summary,
+            title: entry.title,
+            name: entry.name,
+            phase: entry.phase,
+            status: entry.status,
+            meta: entry.meta,
+          });
+        } else {
+          await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        }
+      }
+    } else {
+      for (const progressText of mockedProgressEvents) {
+        await params.replyOptions?.onItemEvent?.({ progressText });
+      }
+    }
+    for (const entry of mockedDispatchSequence) {
+      const transformed = params.dispatcherOptions.transformReplyPayload
+        ? params.dispatcherOptions.transformReplyPayload(entry.payload)
+        : entry.payload;
+      if (!transformed) {
+        continue;
+      }
+      const deliverPayload = params.dispatcherOptions.beforeDeliver
+        ? await params.dispatcherOptions.beforeDeliver(transformed, { kind: entry.kind })
+        : transformed;
+      if (!deliverPayload) {
+        continue;
+      }
+      mockedQueuedDispatchCounts[entry.kind] += 1;
+      await params.dispatcherOptions.deliver(deliverPayload, { kind: entry.kind });
+    }
+    return {
+      queuedFinal: false,
+      counts: { ...mockedQueuedDispatchCounts },
+    };
+  },
   dispatchInboundMessage: async (params: {
     replyOptions?: {
       disableBlockStreaming?: boolean;

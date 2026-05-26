@@ -1,3 +1,4 @@
+import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
@@ -114,9 +115,7 @@ type MatrixHandlerTestHarness = {
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
 
-type MatrixRunPreparedInput = Parameters<
-  MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["runPreparedReply"]
->[0];
+type MatrixRunPreparedInput = PreparedInboundReply<unknown>;
 type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
 type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
 
@@ -275,7 +274,6 @@ export function createMatrixHandlerTestHarness(
         },
         inbound: {
           run,
-          runPreparedReply: runPrepared,
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),

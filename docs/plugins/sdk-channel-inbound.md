@@ -24,7 +24,6 @@ send, receipt, durable delivery, and live preview behavior.
 import {
   buildChannelInboundEventContext,
   runChannelInboundEvent,
-  runPreparedInboundReply,
   dispatchChannelInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
 ```
@@ -33,8 +32,6 @@ import {
   the prompt/session context.
 - `runChannelInboundEvent(...)`: run ingest, classify, preflight, resolve,
   record, dispatch, and finalize for one inbound platform event.
-- `runPreparedInboundReply(...)`: record the inbound session, then run a
-  channel-owned dispatcher.
 - `dispatchChannelInboundReply(...)`: record and dispatch an already assembled
   inbound reply with a delivery adapter.
 
@@ -54,16 +51,15 @@ await runtime.channel.inbound.run({
 });
 ```
 
-Compatibility dispatchers that still need the buffered reply dispatcher should
-pair `createChannelMessageReplyPipeline(...)` with
-`runPreparedInboundReply(...)`. New channel send paths should prefer message
-adapters and durable message helpers instead of direct reply-dispatch bridges.
+Compatibility dispatchers should assemble `dispatchChannelInboundReply(...)`
+inputs and keep platform delivery in the delivery adapter. New send paths should
+prefer message adapters and durable message helpers.
 
 ## Migration
 
 - `runtime.channel.turn.run(...)` -> `runtime.channel.inbound.run(...)`
 - `runtime.channel.turn.runPrepared(...)` ->
-  `runtime.channel.inbound.runPreparedReply(...)`
+  `runtime.channel.inbound.dispatchReply(...)`
 - `runtime.channel.turn.runAssembled(...)` ->
   `runtime.channel.inbound.dispatchReply(...)`
 - `runtime.channel.turn.buildContext(...)` ->

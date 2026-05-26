@@ -180,6 +180,7 @@ export type PluginRuntimeChannel = {
   inbound: {
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
     run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
