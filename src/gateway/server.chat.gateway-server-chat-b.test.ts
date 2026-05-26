@@ -1424,6 +1424,60 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history messages mode ignores unsafeRawToolPayloads for admin callers", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const rawAssistantArgs = "RAW_ASSISTANT_TOOL_ARGS_FOR_MESSAGES_MODE";
+      const rawToolResult = "RAW_TOOL_RESULT_PAYLOAD_FOR_MESSAGES_MODE";
+      await writeMainSessionTranscript(sessionDir, [
+        transcriptMessageLine({
+          role: "user",
+          content: [{ type: "text", text: "please inspect" }],
+          timestamp: 1,
+        }),
+        transcriptMessageLine({
+          role: "assistant",
+          content: [
+            { type: "text", text: "checking with a tool" },
+            {
+              type: "toolCall",
+              id: "call-messages-mode",
+              name: "read",
+              arguments: { path: `/tmp/${rawAssistantArgs}.txt` },
+            },
+          ],
+          timestamp: 2,
+        }),
+        transcriptMessageLine({
+          role: "toolResult",
+          toolCallId: "call-messages-mode",
+          toolName: "read",
+          content: [{ type: "text", text: rawToolResult }],
+          timestamp: 3,
+        }),
+      ]);
+
+      const res = await rpcReq<{ mode?: string; messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 10,
+        maxChars: 10_000,
+        mode: "messages",
+        unsafeRawToolPayloads: true,
+      });
+      expect(res.ok).toBe(true);
+      // The documented contract is that unsafeRawToolPayloads only takes
+      // effect with mode === "raw-messages". An admin caller that sends
+      // mode === "messages" with the flag must still get the safe display
+      // projection so raw tool args/results are not silently leaked.
+      expect(res.payload?.mode).toBe("messages");
+      const serialized = JSON.stringify(res.payload?.messages ?? []);
+      expect(serialized).toContain("[chat.history tool payload omitted]");
+      expect(serialized).toContain('"toolPayloadOmitted":true');
+      expect(serialized).not.toContain(rawAssistantArgs);
+      expect(serialized).not.toContain(rawToolResult);
+    });
+  });
+
   test("chat.history raw-messages requires an admin or debug caller", async () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await connectOk(ws, { scopes: ["operator.read"] });
