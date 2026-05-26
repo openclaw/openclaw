@@ -1145,6 +1145,41 @@ describe("schema validator", () => {
       expectedValue: { mode: "auto" },
     });
 
+    expectValidationFailure({
+      cacheKey: "schema-validator.test.defaults.conditional-invalid-default",
+      schema: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+          },
+        },
+        if: {
+          not: {
+            required: ["mode"],
+          },
+        },
+        [jsonSchemaThenKeyword]: {
+          properties: {
+            mode: {
+              type: "number",
+              default: 1,
+            },
+          },
+        },
+        else: {
+          properties: {
+            explicit: {
+              type: "boolean",
+            },
+          },
+          required: ["explicit"],
+        },
+      },
+      value: {},
+      applyDefaults: true,
+    });
+
     expectSuccessfulValidationValue({
       input: {
         cacheKey: "schema-validator.test.defaults.conditional-hydrates-parent-property",

@@ -12,6 +12,7 @@ import { PluginLruCache } from "./plugin-cache-primitives.js";
 type TypeBoxValidationError = {
   keyword?: string;
   instancePath?: string;
+  schemaPath?: string;
   params?: Record<string, unknown>;
   message?: string;
 };
@@ -68,8 +69,20 @@ function isDefaultConditionalBranchFlip(
   originalValue: unknown,
   errors: TypeBoxValidationError[],
 ): boolean {
+  const hasOnlyBranchFlipErrors = errors.every((error) => {
+    if (error.keyword === "if") {
+      return true;
+    }
+    return (
+      error.keyword === "required" &&
+      typeof error.schemaPath === "string" &&
+      /^#\/(?:then|else)(?:\/|$)/.test(error.schemaPath)
+    );
+  });
   return (
-    errors.some((error) => error.keyword === "if") && checkSchema(validate, originalValue) === null
+    hasOnlyBranchFlipErrors &&
+    errors.some((error) => error.keyword === "if") &&
+    checkSchema(validate, originalValue) === null
   );
 }
 
