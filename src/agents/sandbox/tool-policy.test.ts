@@ -329,4 +329,18 @@ describe("sandbox/tool-policy", () => {
     expect(message).toContain("openclaw sandbox explain --agent main");
     expect(message).not.toContain("--session");
   });
+
+  it("includes message in the default sandbox allowlist without explicit alsoAllow", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+        list: [{ id: "test-agent" }],
+      },
+    };
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "test-agent");
+    expect(resolved.allow).toContain("message");
+  });
 });
