@@ -512,6 +512,24 @@ describe("schema validator", () => {
     });
   });
 
+  it("accepts percent-encoded local ref pointer segments", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.percent-encoded-ref",
+        schema: {
+          $defs: {
+            "foo bar": {
+              type: "string",
+            },
+          },
+          $ref: "#/$defs/foo%20bar",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+  });
+
   it("accepts local refs to anchors inside dependency schemas", () => {
     const schema = {
       type: "object",

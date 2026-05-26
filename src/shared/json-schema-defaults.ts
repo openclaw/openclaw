@@ -190,7 +190,13 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
 }
 
 function decodePointerSegment(segment: string): string {
-  return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+  let decodedSegment = segment;
+  try {
+    decodedSegment = decodeURIComponent(segment);
+  } catch {
+    decodedSegment = segment;
+  }
+  return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
 function resolveLocalAnchor(
