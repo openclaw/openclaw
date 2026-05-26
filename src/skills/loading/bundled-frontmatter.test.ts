@@ -6,9 +6,10 @@ import { parseFrontmatter } from "./frontmatter.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
-describe("bundled taskflow skill frontmatter", () => {
-  it("keeps the taskflow skills parseable from their shipped files", async () => {
+describe("bundled skill frontmatter", () => {
+  it("keeps selected bundled skills parseable from their shipped files", async () => {
     const skillPaths = [
+      "skills/hermes-agent/SKILL.md",
       "skills/taskflow/SKILL.md",
       "skills/taskflow-inbox-triage/SKILL.md",
     ] as const;
@@ -22,5 +23,14 @@ describe("bundled taskflow skill frontmatter", () => {
       expect(frontmatter.description, relativePath).toBeTypeOf("string");
       expect(frontmatter.description?.trim(), relativePath).not.toBe("");
     }
+  });
+
+  it("keeps the Hermes Agent skill scoped to official docs", async () => {
+    const raw = await fs.readFile(path.join(repoRoot, "skills/hermes-agent/SKILL.md"), "utf8");
+
+    expect(raw).toContain("https://hermes-agent.nousresearch.com/docs/llms.txt");
+    expect(raw).toContain("https://docs.openclaw.ai/install/migrating-hermes");
+    expect(raw).not.toContain("openclaw migrate apply");
+    expect(raw).not.toContain("--include-secrets");
   });
 });
