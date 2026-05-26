@@ -38,13 +38,19 @@ function extractSessionId(args: string[]): string {
 const DEBUG = process.env["OPENCLAW_INTERACTIVE_PROXY_DEBUG"] === "1";
 
 function claudeSessionFilePath(sessionId: string): string | null {
-  if (!sessionId) {return null;}
+  if (!sessionId) {
+    return null;
+  }
   const projectDir = process.cwd().replace(/[:\\/]/g, "-");
   return join(homedir(), ".claude", "projects", projectDir, `${sessionId}.jsonl`);
 }
 
 function getFileMtime(filePath: string): number {
-  try { return statSync(filePath).mtimeMs; } catch { return 0; }
+  try {
+    return statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 // Scan the tail of claude's session JSONL for the most recent error record.
@@ -66,7 +72,9 @@ function readSessionTailErrorMessage(sessionPath: string): string | null {
   const lines = raw.split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0 && i >= lines.length - 50; i--) {
     const line = lines[i]?.trim();
-    if (!line) {continue;}
+    if (!line) {
+      continue;
+    }
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(line) as Record<string, unknown>;
@@ -76,15 +84,23 @@ function readSessionTailErrorMessage(sessionPath: string): string | null {
     if (parsed.is_error === true) {
       const result = parsed.result;
       const message = parsed.message;
-      if (typeof result === "string" && result.trim()) {return result.trim();}
-      if (typeof message === "string" && message.trim()) {return message.trim();}
+      if (typeof result === "string" && result.trim()) {
+        return result.trim();
+      }
+      if (typeof message === "string" && message.trim()) {
+        return message.trim();
+      }
     }
     const subtype = typeof parsed.subtype === "string" ? parsed.subtype : "";
     if (subtype.startsWith("error")) {
       const message = parsed.message;
       const result = parsed.result;
-      if (typeof message === "string" && message.trim()) {return message.trim();}
-      if (typeof result === "string" && result.trim()) {return result.trim();}
+      if (typeof message === "string" && message.trim()) {
+        return message.trim();
+      }
+      if (typeof result === "string" && result.trim()) {
+        return result.trim();
+      }
     }
   }
   return null;
@@ -117,7 +133,9 @@ function extractApiErrorMessage(body: unknown, status: number): string {
 }
 
 function dbg(...args: unknown[]): void {
-  if (DEBUG) {process.stderr.write("[openclaw-proxy] " + args.join(" ") + "\n");}
+  if (DEBUG) {
+    process.stderr.write("[openclaw-proxy] " + args.join(" ") + "\n");
+  }
 }
 
 // Flags that consume the immediately-following argv as a value. Used by the
@@ -201,7 +219,9 @@ function claudeArgsContainPositional(args: readonly string[]): boolean {
       skipNext = true;
       continue;
     }
-    if (VALUELESS_CLAUDE_FLAGS.has(arg)) {continue;}
+    if (VALUELESS_CLAUDE_FLAGS.has(arg)) {
+      continue;
+    }
     return true;
   }
   return false;
@@ -243,10 +263,14 @@ let overflowPromptFilePath: string | null = null;
 let overflowPromptDirPath: string | null = null;
 process.on("exit", () => {
   if (overflowPromptFilePath) {
-    try { unlinkSync(overflowPromptFilePath); } catch {}
+    try {
+      unlinkSync(overflowPromptFilePath);
+    } catch {}
   }
   if (overflowPromptDirPath) {
-    try { rmdirSync(overflowPromptDirPath); } catch {}
+    try {
+      rmdirSync(overflowPromptDirPath);
+    } catch {}
   }
 });
 
@@ -273,12 +297,16 @@ async function main(): Promise<void> {
   // indexes the workspace.
   if (!claudeArgsContainPositional(claudeArgs)) {
     const cap = process.platform === "win32" ? 30000 : 200000;
-    dbg(`prompt spilled to stdin (exceeded ${cap}-char argv cap); recovering via tempdir overflow file`);
+    dbg(
+      `prompt spilled to stdin (exceeded ${cap}-char argv cap); recovering via tempdir overflow file`,
+    );
     let spilledPrompt: string;
     try {
       spilledPrompt = await readStdinToString();
     } catch (e) {
-      emitError(`failed to read spilled prompt from stdin: ${e instanceof Error ? e.message : String(e)}`);
+      emitError(
+        `failed to read spilled prompt from stdin: ${e instanceof Error ? e.message : String(e)}`,
+      );
       return;
     }
     if (!spilledPrompt) {
@@ -306,9 +334,7 @@ async function main(): Promise<void> {
       mkdirSync(parentDir, { recursive: true, mode: 0o700 });
       mkdirSync(perRunDir, { recursive: true, mode: 0o700 });
     } catch (e) {
-      emitError(
-        `failed to create overflow tempdir: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      emitError(`failed to create overflow tempdir: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
     overflowPromptDirPath = perRunDir;
@@ -340,18 +366,14 @@ async function main(): Promise<void> {
     // parser, so this is additive — does NOT broaden the surface for any
     // OTHER turn (overflow recovery is per-turn argv mutation, not a
     // backend-config change). Closes ClawSweeper P2 on PR #81851.
-    claudeArgs = [
-      ...claudeArgs,
-      "--allowedTools",
-      "Read",
-      "--add-dir",
-      perRunDir,
-      shortPositional,
-    ];
+    claudeArgs = [...claudeArgs, "--allowedTools", "Read", "--add-dir", perRunDir, shortPositional];
     dbg(
-      "spilled prompt recovered; chars:", spilledPrompt.length,
-      "overflow-file:", overflowPromptFilePath,
-      "add-dir:", perRunDir,
+      "spilled prompt recovered; chars:",
+      spilledPrompt.length,
+      "overflow-file:",
+      overflowPromptFilePath,
+      "add-dir:",
+      perRunDir,
     );
   }
 
@@ -380,7 +402,7 @@ async function main(): Promise<void> {
 
   process.stderr.write(
     `[openclaw-proxy] MITM proxy active on 127.0.0.1:${proxy.connectPort}` +
-    ` — Anthropic API traffic intercepted locally to capture thinking_delta events\n`,
+      ` — Anthropic API traffic intercepted locally to capture thinking_delta events\n`,
   );
 
   // Best-effort cleanup of the spill-recovery overflow file + its
@@ -390,11 +412,15 @@ async function main(): Promise<void> {
   // normal kill path runs.
   const cleanupOverflowFile = (): void => {
     if (overflowPromptFilePath) {
-      try { unlinkSync(overflowPromptFilePath); } catch {}
+      try {
+        unlinkSync(overflowPromptFilePath);
+      } catch {}
       overflowPromptFilePath = null;
     }
     if (overflowPromptDirPath) {
-      try { rmdirSync(overflowPromptDirPath); } catch {}
+      try {
+        rmdirSync(overflowPromptDirPath);
+      } catch {}
       overflowPromptDirPath = null;
     }
   };
@@ -414,8 +440,14 @@ async function main(): Promise<void> {
       heartbeatTimer = null;
     }
   };
-  process.on("SIGTERM", () => { stopProxy(); process.exit(0); });
-  process.on("SIGINT", () => { stopProxy(); process.exit(0); });
+  process.on("SIGTERM", () => {
+    stopProxy();
+    process.exit(0);
+  });
+  process.on("SIGINT", () => {
+    stopProxy();
+    process.exit(0);
+  });
 
   const sessionId = extractSessionId(claudeArgs);
 
@@ -517,10 +549,14 @@ async function main(): Promise<void> {
   claude.on("exit", (code, signal) => {
     stopProxy();
     dbg(
-      "claude exited, code:", code,
-      "signal:", signal,
-      "intentional:", intentionalKill,
-      "errorExit:", intentionalKillIsError,
+      "claude exited, code:",
+      code,
+      "signal:",
+      signal,
+      "intentional:",
+      intentionalKill,
+      "errorExit:",
+      intentionalKillIsError,
     );
     if (intentionalKill) {
       // Success path exits 0; synthetic-error path exits 1 so the
@@ -552,10 +588,15 @@ async function main(): Promise<void> {
 
     const doKill = (): void => {
       dbg("killing claude");
-      try { claude.kill(); } catch {}
+      try {
+        claude.kill();
+      } catch {}
     };
 
-    if (!sessionPath) { doKill(); return; }
+    if (!sessionPath) {
+      doKill();
+      return;
+    }
 
     const poll = setInterval(() => {
       if (getFileMtime(sessionPath) > baselineMtime) {
@@ -564,7 +605,10 @@ async function main(): Promise<void> {
         doKill();
       }
     }, 150);
-    setTimeout(() => { clearInterval(poll); doKill(); }, 15000);
+    setTimeout(() => {
+      clearInterval(poll);
+      doKill();
+    }, 15000);
   };
 
   proxy.onEvent((evt) => {
@@ -574,7 +618,9 @@ async function main(): Promise<void> {
     // carries no _reqId / _requestType tags — short-circuit
     // before the tag-extraction shape below.
     if (eventType === "api_error") {
-      if (resultEmitted || intentionalKill) {return;}
+      if (resultEmitted || intentionalKill) {
+        return;
+      }
       resultEmitted = true;
       turnActive = false;
       const status = typeof evt.status === "number" ? evt.status : 0;
@@ -593,13 +639,15 @@ async function main(): Promise<void> {
         is_error: true,
       };
       dbg(
-        "api_error event, status:", status,
-        "session-message:", sessionMessage ? "present" : "absent",
+        "api_error event, status:",
+        status,
+        "session-message:",
+        sessionMessage ? "present" : "absent",
         "exiting cleanly",
       );
       intentionalKill = true;
       intentionalKillIsError = true;
-      emitAndDrain(JSON.stringify(errorResult)).then(() => waitForSessionWriteThenKill());
+      void emitAndDrain(JSON.stringify(errorResult)).then(() => waitForSessionWriteThenKill());
       return;
     }
 
@@ -639,7 +687,9 @@ async function main(): Promise<void> {
       dbg("turn start reqId=", reqId, "type=", requestType);
       // Compaction streams: suppress message_start — downstream sees only
       // the rewritten thinking_delta content for this stream.
-      if (requestType === "compaction") {return;}
+      if (requestType === "compaction") {
+        return;
+      }
       emit(line);
       return;
     }
@@ -661,7 +711,7 @@ async function main(): Promise<void> {
             type: "stream_event",
             event: {
               type: "content_block_delta",
-              index: (evt as Record<string, unknown>).index ?? 0,
+              index: evt.index ?? 0,
               delta: { type: "thinking_delta", thinking: d.text },
             },
           };
@@ -682,7 +732,9 @@ async function main(): Promise<void> {
     // after processing tool results, and that response classifies as
     // tool_followup because the request body still has the tool_result
     // as the last message).
-    if (!turnActive) {return;}
+    if (!turnActive) {
+      return;
+    }
 
     if (eventType === "content_block_delta") {
       const d = evt.delta as Record<string, unknown> | undefined;
@@ -712,7 +764,9 @@ async function main(): Promise<void> {
         // follow-up classify into tool_followup on the next message_start.
         return;
       }
-      if (resultEmitted || intentionalKill) {return;}
+      if (resultEmitted || intentionalKill) {
+        return;
+      }
 
       // Belt-and-braces: if a compaction-shaped response somehow slipped
       // past the request-level classifier (unseen prompt wording,
@@ -721,10 +775,7 @@ async function main(): Promise<void> {
       // Pending-Tasks fingerprint. Discard it and wait for the real
       // user turn rather than emit it as the reply.
       if (isCompactionResponse(assistantText)) {
-        dbg(
-          "compaction signature in response (untagged); discarding, len:",
-          assistantText.length,
-        );
+        dbg("compaction signature in response (untagged); discarding, len:", assistantText.length);
         assistantText = "";
         return;
       }
@@ -736,11 +787,13 @@ async function main(): Promise<void> {
         is_error: false,
         stop_reason: currentStopReason,
       };
-      if (Object.keys(lastUsage).length > 0) {result.usage = lastUsage;}
+      if (Object.keys(lastUsage).length > 0) {
+        result.usage = lastUsage;
+      }
       dbg("emitting result, text len:", assistantText.length);
       assistantText = "";
       intentionalKill = true;
-      emitAndDrain(JSON.stringify(result)).then(() => waitForSessionWriteThenKill());
+      void emitAndDrain(JSON.stringify(result)).then(() => waitForSessionWriteThenKill());
     }
   });
 }

@@ -81,6 +81,12 @@ predicate allowedRawSocketClientCall(Expr call) {
   allowedOwnerScope(call, "extensions/qa-lab/src/lab-server-capture.ts", "probeTcpReachability")
   or
   allowedOwnerScope(call, "extensions/qa-lab/src/lab-server-ui.ts", "proxyUpgradeRequest")
+  or
+  // Local-only loopback CONNECT proxy for the claude-cli-interactive backend.
+  // Binds 127.0.0.1, rejects any non-Anthropic CONNECT target, and forwards
+  // only to the local TLS terminator (api.anthropic.com) or *.anthropic.com.
+  allowedOwnerScope(call, "extensions/anthropic/interactive-proxy/mitm-server.ts",
+    "handleConnectHeader")
 }
 
 from Expr call

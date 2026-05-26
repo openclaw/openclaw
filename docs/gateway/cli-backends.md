@@ -198,6 +198,39 @@ openclaw models auth login --provider anthropic --method cli --set-default
 Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
 binary is not already on `PATH`.
 
+## Interactive (subscription) Claude backend (experimental, opt-in)
+
+The Anthropic plugin also registers an experimental variant,
+`claude-cli-interactive`. It runs Claude **without `-p`** so the turn stays on
+the interactive subscription path instead of the metered headless path, and it
+streams `thinking_delta` and `text_delta` to OpenClaw in real time. It is
+**opt-in** — nothing uses it unless you reference it explicitly:
+
+```bash
+openclaw agent --message "hi" --model claude-cli-interactive/claude-opus-4-7
+```
+
+Or as a primary/fallback model ref under `agents.defaults.model`. It reuses your
+existing `agents.defaults.cliBackends.claude-cli` overrides (headless-only flags
+like `-p`/`--output-format` are stripped), so you do not need a second config
+block — set `agents.defaults.cliBackends.claude-cli-interactive` only to override
+the variant directly.
+
+Before enabling it, understand what it does on the host:
+
+- **Bun is required.** The backend launches a Bun wrapper (`command: "bun"`), so
+  Bun must be installed and on `PATH`.
+- **Local TLS interception.** The wrapper starts a loopback proxy that
+  terminates TLS for `api.anthropic.com` using a CA it generates and caches
+  under your OpenClaw state dir (`~/.openclaw`, or `OPENCLAW_STATE_DIR`). Claude
+  is pointed at it via `HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`. The proxy binds
+  `127.0.0.1`, rejects any non-Anthropic CONNECT target, and only tees the SSE
+  stream — it does not modify requests or responses.
+- **Same login as `claude-cli`.** Claude Code must already be logged in on the
+  host (see the `claude auth login` steps above).
+- **Experimental.** Treat it as a streaming-reasoning preview of the `claude-cli`
+  path; the stable, sanctioned default remains `claude-cli`.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or

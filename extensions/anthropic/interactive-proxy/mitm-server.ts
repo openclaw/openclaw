@@ -234,7 +234,10 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
 
       let textBuf = "";
 
-      (async () => {
+      // Fire-and-forget SSE pump: tees the upstream stream to the client while
+      // tapping each event. Explicitly voided — its lifecycle is owned by the
+      // returned Response body, not this handler.
+      void (async () => {
         try {
           while (true) {
             const { done, value } = await reader.read();
@@ -289,7 +292,12 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
     let headerBuf = Buffer.alloc(0);
     let tunneled = false;
 
-    const onData = (chunk: Buffer) => {
+    // Parses the CONNECT request header, enforces the Anthropic-host allowlist,
+    // then opens the upstream tunnel. A named function expression (not a hoisted
+    // declaration) so the raw-socket-callsite-classification CodeQL boundary
+    // query can scope its egress allowlist entry by name, while preserving the
+    // outer `tlsPort` number-narrowing at this point in control flow.
+    const handleConnectHeader = function handleConnectHeader(chunk: Buffer) {
       if (tunneled) {
         return;
       }
@@ -300,7 +308,7 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
         return;
       }
 
-      client.removeListener("data", onData);
+      client.removeListener("data", handleConnectHeader);
 
       const firstLine = str.split("\r\n")[0] ?? "";
       const target = firstLine.split(" ")[1] ?? "";
@@ -340,7 +348,7 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
       client.on("error", () => upstreamSocket.destroy());
     };
 
-    client.on("data", onData);
+    client.on("data", handleConnectHeader);
     client.on("error", () => {});
   });
 
