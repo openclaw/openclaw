@@ -1144,6 +1144,57 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it.each(["broker:slack", "broker:slack:", "channel-broker::C123"])(
+    "rejects malformed broker-prefixed outbound target %s",
+    (target) => {
+      const result = channelBrokerPlugin.outbound?.resolveTarget?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                },
+              },
+            },
+          },
+        },
+        accountId: "acme",
+        to: target,
+      } as never);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.objectContaining({
+          message: `Invalid channel broker target: ${target}`,
+        }),
+      });
+    },
+  );
+
+  it("uses the default platform for broker-prefixed targets without an explicit platform", () => {
+    const result = channelBrokerPlugin.outbound?.resolveTarget?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                defaultPlatform: "slack",
+              },
+            },
+          },
+        },
+      },
+      accountId: "acme",
+      to: "broker:C123",
+    } as never);
+
+    expect(result).toEqual({ ok: true, to: "broker:C123" });
+  });
+
   it("propagates direct outbound adapter send failures", async () => {
     await expect(
       channelBrokerPlugin.outbound?.sendText?.({

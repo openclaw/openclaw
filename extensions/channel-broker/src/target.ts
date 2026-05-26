@@ -234,21 +234,25 @@ export function parseChannelBrokerTarget(params: {
   const parsed = parseBrokerConversationTarget(params.rawTarget);
   const brokerPrefixed = parsed.platform === "broker" || parsed.platform === "channel-broker";
   const brokerPrefixSeparator = brokerPrefixed ? parsed.conversationId.indexOf(":") : -1;
-  if (brokerPrefixed && brokerPrefixSeparator <= 0 && !params.account.defaultPlatform) {
-    throw new Error("broker target must include a platform or configure defaultPlatform");
+  if (brokerPrefixed && brokerPrefixSeparator === 0) {
+    throw new Error(`Invalid channel broker target: ${params.rawTarget}`);
+  }
+  if (brokerPrefixed && brokerPrefixSeparator < 0 && !params.account.defaultPlatform) {
+    throw new Error(`Invalid channel broker target: ${params.rawTarget}`);
   }
   const rawPlatform =
     brokerPrefixed && brokerPrefixSeparator > 0
       ? parsed.conversationId.slice(0, brokerPrefixSeparator)
-      : brokerPrefixed && params.account.defaultPlatform
+      : brokerPrefixed
         ? params.account.defaultPlatform
         : parsed.platform;
   const rawConversationId =
     brokerPrefixed && brokerPrefixSeparator > 0
       ? parsed.conversationId.slice(brokerPrefixSeparator + 1)
-      : brokerPrefixed && params.account.defaultPlatform
-        ? parsed.conversationId
-        : parsed.conversationId;
+      : parsed.conversationId;
+  if (!rawPlatform || !rawConversationId.trim()) {
+    throw new Error(`Invalid channel broker target: ${params.rawTarget}`);
+  }
   const normalizedRawPlatform = normalizeBrokerPlatformId(rawPlatform);
   const platform =
     params.account.platformAliases[normalizedRawPlatform] ??
