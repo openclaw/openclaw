@@ -14,6 +14,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
+import { registerWhatsAppApprovalReactionTargetForOutboundMessage } from "./approval-reactions.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
@@ -236,6 +237,14 @@ export async function sendMessageWhatsApp(
     }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
+    if (messageId && messageId !== "unknown" && text) {
+      registerWhatsAppApprovalReactionTargetForOutboundMessage({
+        accountId: resolvedAccountId,
+        remoteJid: sentRemoteJid,
+        messageId,
+        text,
+      });
+    }
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
       `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,

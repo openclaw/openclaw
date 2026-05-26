@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildWhatsAppApprovalReactionHint,
   clearWhatsAppApprovalReactionTargetsForTest,
+  extractWhatsAppApprovalPromptBinding,
   maybeResolveWhatsAppApprovalReaction,
   registerWhatsAppApprovalReactionTarget,
+  registerWhatsAppApprovalReactionTargetForOutboundMessage,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 
@@ -84,6 +86,50 @@ describe("WhatsApp approval reactions", () => {
     ).resolves.toEqual({
       approvalId: "exec-1",
       decision: "deny",
+    });
+  });
+
+  it("extracts approval bindings only from canonical approval prompts", () => {
+    expect(
+      extractWhatsAppApprovalPromptBinding(
+        "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|allow-always|deny",
+      ),
+    ).toEqual({
+      approvalId: "plugin:abc",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
+    expect(
+      extractWhatsAppApprovalPromptBinding("Run /approve task-7 allow-once when you're ready."),
+    ).toBeNull();
+  });
+
+  it("registers outbound target-mode approval prompts for reactions", async () => {
+    expect(
+      registerWhatsAppApprovalReactionTargetForOutboundMessage({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "approval-message",
+        text:
+          "Plugin approval required\n" +
+          "ID: plugin:abc\n\n" +
+          "React with:\n\n" +
+          "👍 Allow Once\n" +
+          "♾️ Allow Always\n" +
+          "👎 Deny\n\n" +
+          "Reply with: /approve plugin:abc allow-once|allow-always|deny",
+      }),
+    ).toBe(true);
+
+    await expect(
+      resolveWhatsAppApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "approval-message",
+        reactionKey: "👍",
+      }),
+    ).resolves.toEqual({
+      approvalId: "plugin:abc",
+      decision: "allow-once",
     });
   });
 
