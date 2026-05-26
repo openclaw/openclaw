@@ -76,10 +76,28 @@ export async function claimDiscordInboundReplay(params: {
   if (!replayKey) {
     return true;
   }
-  const claim = await params.replayGuard.claim(replayKey, {
-    namespace: params.accountId,
-  });
-  return claim.kind === "claimed";
+
+  let releaseRetries = 0;
+  while (true) {
+    const claim = await params.replayGuard.claim(replayKey, {
+      namespace: params.accountId,
+    });
+    if (claim.kind === "claimed") {
+      return true;
+    }
+    if (claim.kind === "duplicate") {
+      return false;
+    }
+    try {
+      await claim.pending;
+      return false;
+    } catch {
+      releaseRetries += 1;
+      if (releaseRetries > 1) {
+        return false;
+      }
+    }
+  }
 }
 
 export async function commitDiscordInboundReplay(params: {

@@ -386,6 +386,40 @@ describe("createDiscordMessageHandler queue behavior", () => {
     ).toBe(true);
   });
 
+  it("retries an inflight duplicate after a retryable release", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    processDiscordMessageMock.mockImplementationOnce(async () => {
+      await firstRun.promise;
+      throw new DiscordRetryableInboundError("retry me");
+    });
+    processDiscordMessageMock.mockResolvedValueOnce(undefined);
+    const params = createDiscordHandlerParams();
+    const handler = createDiscordMessageHandler(params);
+    installDefaultDiscordPreflight();
+    const duplicate = createMessageData("m-inflight-retry");
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    const duplicateAttempt = handler(duplicate as never, {} as never);
+    await Promise.resolve();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    firstRun.resolve();
+    await firstRun.promise;
+    await expect(duplicateAttempt).resolves.toBeUndefined();
+    await flushQueueWork();
+
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
+  });
+
   it("retries duplicate deliveries after an explicit retryable worker failure", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
