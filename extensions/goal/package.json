@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/goal",
-  "version": "2026.5.22",
+  "version": "2026.5.26",
   "private": true,
   "description": "Session-scoped goal continuation plugin",
   "type": "module",

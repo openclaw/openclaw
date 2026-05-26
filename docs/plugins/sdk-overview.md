@@ -231,7 +231,7 @@ session and plugin-owned `leaseKey`, then schedules a single Cron-backed session
 turn with `deleteAfterRun: true`. `clearSessionContinuationLease(...)` removes
 that pending lease without scheduling a replacement. The request result reports
 whether a turn was scheduled and returns a reason such as `plugin_not_loaded`,
-`scheduler_unavailable`, or `invalid_session` when the host cannot commit it.
+`scheduler_unavailable`, or `invalid_request` when the host cannot commit it.
 Like `scheduleSessionTurn(...)`, continuation leases are bundled-only host hooks;
 workspace plugins receive a non-scheduled result rather than direct scheduler
 authority. Set `deliveryMode: "announce"` when the continuation should produce a
