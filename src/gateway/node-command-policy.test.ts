@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  DEFAULT_DANGEROUS_NODE_COMMANDS,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -101,6 +102,67 @@ describe("gateway/node-command-policy", () => {
 
     expect(allowlist.has("canvas.snapshot")).toBe(true);
     expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("allows declared macOS canvas UI commands from platform defaults", () => {
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "macOS 26.5.0",
+      deviceFamily: "Mac",
+      commands: [
+        "canvas.present",
+        "canvas.hide",
+        "canvas.navigate",
+        "canvas.snapshot",
+        "canvas.a2ui.push",
+        "canvas.a2ui.pushJSONL",
+        "canvas.a2ui.reset",
+      ],
+    });
+
+    for (const command of [
+      "canvas.present",
+      "canvas.hide",
+      "canvas.navigate",
+      "canvas.snapshot",
+      "canvas.a2ui.push",
+      "canvas.a2ui.pushJSONL",
+      "canvas.a2ui.reset",
+    ]) {
+      expect(allowlist.has(command)).toBe(true);
+      expect(
+        isNodeCommandAllowed({
+          command,
+          declaredCommands: [command],
+          allowlist,
+        }),
+      ).toEqual({ ok: true });
+    }
+  });
+
+  it("keeps macOS canvas eval opt-in as a dangerous command", () => {
+    const defaultAllowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "macOS 26.5.0",
+      deviceFamily: "Mac",
+      commands: ["canvas.eval"],
+    });
+    expect(defaultAllowlist.has("canvas.eval")).toBe(false);
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("canvas.eval");
+
+    const configuredAllowlist = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            allowCommands: ["canvas.eval"],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        platform: "macOS 26.5.0",
+        deviceFamily: "Mac",
+        commands: ["canvas.eval"],
+      },
+    );
+    expect(configuredAllowlist.has("canvas.eval")).toBe(true);
   });
 
   it("does not grant host command defaults for platform prefix aliases", () => {
