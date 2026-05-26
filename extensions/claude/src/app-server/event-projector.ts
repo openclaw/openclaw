@@ -100,6 +100,10 @@ export type ProjectorOutcome =
 export class ClaudeAppServerEventProjector {
   private readonly textParts: string[] = [];
   private readonly reasoningParts: string[] = [];
+  // Per-item delta accumulator for agentMessage blocks so item/completed can
+  // emit a preamble bullet with the block's text even when the completed
+  // item payload omits the text field.
+  private readonly textPartsByItemId = new Map<string, string[]>();
   private settled = false;
 
   constructor(
@@ -200,26 +204,38 @@ export class ClaudeAppServerEventProjector {
     if (method === "item/started") {
       if (isTool) {
         this.recordToolStart(item);
+        // Tools: emit the durable item event so codex/Discord renderers
+        // produce a stable per-tool channel line (matches codex's pattern).
+        emitItemEvent(this.params, "start", item);
       }
-      // Emit stream:"item" for ALL items including tools. Codex emits both
-      // stream:"tool" (transient progress-preview) AND stream:"item" with
-      // kind:"tool" (durable per-tool channel message); without the second
-      // emission, claude's tool announcements only live in the progress
-      // preview and get overwritten when the assistant text finalizes.
-      emitItemEvent(this.params, "start", item);
+      // Non-tool items (agentMessage, reasoning, SDK lifecycle blocks like
+      // session-status / mcp-session) are intentionally not emitted on
+      // start. AgentMessage emits a preamble at item/completed with the
+      // accumulated text; SDK lifecycle items aren't user-visible in codex
+      // and shouldn't be surfaced for claude either (they appeared as
+      // 🧩 / 📊 noise bullets when emitItemEvent fired generically).
       return;
     }
+    // item/completed
     if (isTool) {
       this.recordToolCompletion(item);
       emitToolEvent(this.params, "result", item);
-    } else if (item.type === "agentMessage") {
-      // Emit completed assistant text blocks as preamble-style item events
-      // so they render as bullet lines in the channel draft preview
-      // alongside the tool lines. Mirrors codex's emitCommentaryProgress
-      // pattern (extensions/codex/src/app-server/event-projector.ts).
-      const text = typeof item.text === "string" ? item.text.trim() : "";
+      emitItemEvent(this.params, "end", item);
+      return;
+    }
+    if (item.type === "agentMessage") {
+      const itemId = typeof item.id === "string" ? item.id : undefined;
+      // Prefer the completed item's text field when populated; fall back
+      // to the per-item delta accumulator from handleAgentMessageDelta.
+      const inlineText = typeof item.text === "string" ? item.text : "";
+      const accumulatedText = itemId
+        ? (this.textPartsByItemId.get(itemId)?.join("") ?? "")
+        : "";
+      const text = (inlineText || accumulatedText).trim();
+      if (itemId) {
+        this.textPartsByItemId.delete(itemId);
+      }
       if (text) {
-        const itemId = typeof item.id === "string" ? item.id : undefined;
         emitProjectedAgentEvent(this.params, {
           stream: "item",
           data: {
@@ -231,8 +247,9 @@ export class ClaudeAppServerEventProjector {
           },
         });
       }
+      return;
     }
-    emitItemEvent(this.params, "end", item);
+    // Other non-tool items (reasoning, SDK lifecycle): suppressed.
   }
 
   private recordToolStart(item: Record<string, unknown>): void {
@@ -301,17 +318,23 @@ export class ClaudeAppServerEventProjector {
       return;
     }
     this.textParts.push(p.delta);
-    // Codex (extensions/codex/src/app-server/event-projector.ts) never
-    // emits stream:"assistant". Channel renderers treat stream:"assistant"
-    // as the user-visible final reply and replace the accumulating tool/
-    // item draft preview with the running text, which would wipe out the
-    // 🛠️ tool lines and bullet preambles we want to preserve. Match
-    // codex: accumulate deltas internally for messagesSnapshot, but do
-    // not stream them to channel renderers. Each completed agentMessage
-    // item emits a preamble-style stream:"item" in handleItemLifecycle
-    // so intermediate text appears as a bullet in the draft preview
-    // alongside the tool lines; the final assistant text is delivered
-    // through messagesSnapshot at turn completion as a separate message.
+    // Also accumulate per-item so item/completed can emit a preamble
+    // bullet with this block's text even when the completed item payload
+    // doesn't carry the full text inline (matches codex's commentary
+    // bullet rendering).
+    const itemId = typeof p.itemId === "string" ? p.itemId : undefined;
+    if (itemId) {
+      let buf = this.textPartsByItemId.get(itemId);
+      if (!buf) {
+        buf = [];
+        this.textPartsByItemId.set(itemId, buf);
+      }
+      buf.push(p.delta);
+    }
+    // Intentionally no stream:"assistant" emission — see comment in
+    // handleItemLifecycle. Codex never emits this stream either; renderers
+    // treat it as a final-reply replace and overwrite the tool/preamble
+    // draft preview. Final text is delivered via messagesSnapshot.
   }
 
   private handleReasoningDelta(p: Record<string, unknown>): void {
