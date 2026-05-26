@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
-import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import {
+  defaultSlotIdForKey,
+  resolvePluginSlotOwner,
+  type PluginSlotKey,
+} from "../../../plugins/slots.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
@@ -160,7 +164,7 @@ function scanStalePluginConfigWithState(
   const slots = asObjectRecord(plugins?.slots);
   if (slots) {
     for (const slotKey of ["memory", "contextEngine"] as const satisfies readonly PluginSlotKey[]) {
-      const rawPluginId = slots[slotKey];
+      const rawPluginId = resolvePluginSlotOwner(slots[slotKey]);
       if (typeof rawPluginId !== "string") {
         continue;
       }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginSlotOwner } from "../plugins/slots.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import {
   lowercasePreservingWhitespace,
@@ -340,7 +341,7 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  const configuredSlot = resolvePluginSlotOwner(slots?.memory);
   if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }

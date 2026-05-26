@@ -17,7 +17,7 @@ import { ensureContextEnginesInitialized } from "../../../context-engine/init.js
 import { getContextEngineFactory, resolveContextEngine } from "../../../context-engine/registry.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
-import { defaultSlotIdForKey } from "../../../plugins/slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "../../../plugins/slots.js";
 import { uniqueStrings } from "../../../shared/string-normalization.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
@@ -233,10 +233,10 @@ export function collectConfiguredContextEngineAgentRunHosts(params: {
 }
 
 function selectedContextEngineSlotId(cfg: OpenClawConfig): string {
-  const slotValue = cfg.plugins?.slots?.contextEngine;
-  return typeof slotValue === "string" && slotValue.trim()
-    ? slotValue.trim()
-    : defaultSlotIdForKey("contextEngine");
+  return (
+    resolvePluginSlotOwner(cfg.plugins?.slots?.contextEngine) ??
+    defaultSlotIdForKey("contextEngine")
+  );
 }
 
 async function resolveSelectedContextEngineInfo(params: {

@@ -1,11 +1,7 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -53,17 +49,6 @@ function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): st
   return value
     .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
     .filter(Boolean);
-}
-
-function normalizeSlotValue(value: unknown): string | null | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (normalizeOptionalLowercaseString(trimmed) === "none") {
-    return null;
-  }
-  return trimmed;
 }
 
 function normalizeHookTimeoutMs(value: unknown): number | undefined {
@@ -224,7 +209,7 @@ export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
-  const memorySlot = normalizeSlotValue(config?.slots?.memory);
+  const memorySlot = resolvePluginSlotOwner(config?.slots?.memory);
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow, normalizePluginId),
@@ -232,7 +217,7 @@ export function normalizePluginsConfigWithResolver(
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
-      contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
+      contextEngine: resolvePluginSlotOwner(config?.slots?.contextEngine),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),
   };

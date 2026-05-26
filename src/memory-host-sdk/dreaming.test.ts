@@ -242,6 +242,21 @@ describe("memory dreaming host helpers", () => {
     ).toBe("memos-local-openclaw-plugin");
   });
 
+  it("resolves object-form memory-slot owners for dreaming", () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            memory: {
+              owner: "memos-local-openclaw-plugin",
+              claimed_by_version: "0.9.10",
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memos-local-openclaw-plugin");
+  });
+
   it("reads dreaming config from the configured memory-slot owner", () => {
     expect(
       resolveMemoryDreamingPluginConfig({

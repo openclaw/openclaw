@@ -12,7 +12,7 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import { hasKind } from "../plugins/slots.js";
+import { hasKind, resolvePluginSlotOwner } from "../plugins/slots.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
@@ -62,7 +62,8 @@ function isWorkspacePluginTrustedForProviderEnvVars(
     config,
     isImplicitlyAllowed: (pluginId) =>
       hasKind(plugin.kind, "context-engine") &&
-      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+      normalizePluginConfigId(resolvePluginSlotOwner(config?.plugins?.slots?.contextEngine)) ===
+        pluginId,
     plugin,
   });
 }

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import type {
@@ -882,11 +882,9 @@ export async function resolveContextEngine(
   config?: OpenClawConfig,
   options?: ResolveContextEngineOptions,
 ): Promise<ContextEngine> {
-  const slotValue = config?.plugins?.slots?.contextEngine;
   const engineId =
-    typeof slotValue === "string" && slotValue.trim()
-      ? slotValue.trim()
-      : defaultSlotIdForKey("contextEngine");
+    resolvePluginSlotOwner(config?.plugins?.slots?.contextEngine) ??
+    defaultSlotIdForKey("contextEngine");
 
   const defaultEngineId = defaultSlotIdForKey("contextEngine");
   const isDefaultEngine = engineId === defaultEngineId;

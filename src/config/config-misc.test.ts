@@ -350,6 +350,38 @@ describe("plugins.slots.contextEngine", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts object-form slot owner records with provenance metadata", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          memory: {
+            owner: "memory-lancedb",
+            claimed_at: "2026-04-23T21:14:00Z",
+            claimed_by_version: "0.9.10",
+          },
+          contextEngine: {
+            owner: "lossless-claw",
+            claimed_by_version: "1.2.3",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects object-form slot records without an owner", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          memory: {
+            claimed_at: "2026-04-23T21:14:00Z",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe("models.pricing", () => {

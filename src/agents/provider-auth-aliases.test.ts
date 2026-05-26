@@ -40,6 +40,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 
 import {
   resetProviderAuthAliasMapCacheForTest,
+  resolveProviderAuthAliasMap,
   resolveProviderIdForAuth,
 } from "./provider-auth-aliases.js";
 
@@ -110,5 +111,31 @@ describe("provider auth aliases", () => {
     expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(
       2,
     );
+  });
+
+  it("trusts workspace context-engine provider aliases selected by object-form slot owner", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-engine",
+          origin: "workspace",
+          providerAuthAliases: { "engine-plan": "engine-provider" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveProviderAuthAliasMap({
+        config: {
+          plugins: {
+            slots: {
+              contextEngine: { owner: "workspace-engine", claimed_by_version: "0.9.10" },
+            },
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual({ "engine-plan": "engine-provider" });
   });
 });

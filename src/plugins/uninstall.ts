@@ -17,7 +17,7 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resolvePluginSlotOwner } from "./slots.js";
 
 export type UninstallActions = {
   entry: boolean;
@@ -446,14 +446,14 @@ export function removePluginFromConfig(
 
   // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
-  if (slots?.memory === pluginId) {
+  if (resolvePluginSlotOwner(slots?.memory) === pluginId) {
     slots = {
       ...slots,
       memory: defaultSlotIdForKey("memory"),
     };
     actions.memorySlot = true;
   }
-  if (slots?.contextEngine === pluginId) {
+  if (resolvePluginSlotOwner(slots?.contextEngine) === pluginId) {
     slots = {
       ...slots,
       contextEngine: defaultSlotIdForKey("contextEngine"),

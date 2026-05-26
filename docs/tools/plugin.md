@@ -182,6 +182,10 @@ Key policy rules:
   for that slot by counting as explicit activation; it can load even when it
   would otherwise be opt-in. `plugins.deny` and
   `plugins.entries.<id>.enabled: false` still block it.
+- Slot values can be a plugin id string or an owner record such as
+  `{ owner: "memory-lancedb", claimed_at: "2026-04-23T21:14:00Z" }`.
+  OpenClaw reads both forms as the same selected owner. Current CLI install and
+  repair flows may still write the string form.
 - Bundled opt-in plugins can auto-activate when config names one of their owned
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
