@@ -62,6 +62,7 @@ describe("isTransientNetworkError", () => {
       "EPIPE",
       "EHOSTUNREACH",
       "ENETUNREACH",
+      "ENETDOWN",
       "EADDRNOTAVAIL",
       "EAI_AGAIN",
       "EPROTO",
@@ -381,6 +382,12 @@ describe("isTransientUnhandledRejectionError", () => {
     const rawHostUnreachable = new Error(
       "connect EHOSTUNREACH 149.154.167.220:443 - Local (10.0.10.40:50017)",
     );
+    const netDown = Object.assign(new Error("connect ENETDOWN"), {
+      code: "ENETDOWN",
+    });
+    const rawNetDown = new Error(
+      "connect ENETDOWN 149.154.167.220:443 - Local (10.0.10.40:50017)",
+    );
     const addressUnavailable = Object.assign(new Error("connect EADDRNOTAVAIL"), {
       code: "EADDRNOTAVAIL",
     });
@@ -400,6 +407,8 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(network)).toBe(false);
     expect(isBenignUncaughtExceptionError(hostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(netDown)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawNetDown)).toBe(true);
     expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawAddressUnavailable)).toBe(true);
     expect(isBenignUncaughtExceptionError(destroyedHttp2Session)).toBe(true);
