@@ -1121,6 +1121,44 @@ extension TestChatTransportState {
         #expect(await MainActor.run { vm.messages.isEmpty })
     }
 
+    @Test func appendsExternalSessionAssistantMessageWhileRunPending() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "ping")
+        try await waitUntil("local run pending") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "assistant",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "agent reply",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now + 1),
+                    messageId: "msg-assistant-1",
+                    messageSeq: 2)))
+
+        try await waitUntil("assistant transcript visible while pending") {
+            await MainActor.run {
+                vm.messages.contains(where: { msg in
+                    msg.role == "assistant" &&
+                        msg.content.first?.text == "agent reply"
+                })
+            }
+        }
+    }
+
     @Test func ignoresExternalSessionUserMessageForOtherSession() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])

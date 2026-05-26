@@ -1262,12 +1262,6 @@ public final class OpenClawChatViewModel {
         }
 
         guard let message = payload.message else { return }
-        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
-            return
-        }
-        if self.pendingRunCount > 0 {
-            return
-        }
 
         let sanitized = Self.stripInboundMetadata(from: message)
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
