@@ -186,6 +186,15 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
     lower.includes("prompt is too long")
   );
 });
+export const mockedIsOpenAIResponsesContinuationCorruptionErrorMessage = vi.fn((msg?: string) => {
+  const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
+  return (
+    lower.includes("thinking_signature_invalid") ||
+    lower.includes("invalid_encrypted_content") ||
+    (lower.includes("encrypted content") && lower.includes("verified")) ||
+    (lower.includes("item with id") && lower.includes("rs_") && lower.includes("not found"))
+  );
+});
 export const mockedParseImageSizeError = vi.fn(() => null);
 export const mockedParseImageDimensionError = vi.fn(() => null);
 export const mockedIsRateLimitAssistantError = vi.fn(() => false);
@@ -365,6 +374,16 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       lower.includes("prompt is too long")
     );
   });
+  mockedIsOpenAIResponsesContinuationCorruptionErrorMessage.mockReset();
+  mockedIsOpenAIResponsesContinuationCorruptionErrorMessage.mockImplementation((msg?: string) => {
+    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
+    return (
+      lower.includes("thinking_signature_invalid") ||
+      lower.includes("invalid_encrypted_content") ||
+      (lower.includes("encrypted content") && lower.includes("verified")) ||
+      (lower.includes("item with id") && lower.includes("rs_") && lower.includes("not found"))
+    );
+  });
   mockedParseImageSizeError.mockReset();
   mockedParseImageSizeError.mockReturnValue(null);
   mockedParseImageDimensionError.mockReset();
@@ -502,6 +521,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isBillingAssistantError: mockedIsBillingAssistantError,
     isCompactionFailureError: mockedIsCompactionFailureError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
+    isOpenAIResponsesContinuationCorruptionErrorMessage:
+      mockedIsOpenAIResponsesContinuationCorruptionErrorMessage,
     isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: mockedIsFailoverErrorMessage,
     parseImageSizeError: mockedParseImageSizeError,

@@ -229,6 +229,11 @@ export type RunEmbeddedPiAgentParams = {
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
+  /**
+   * Internal one-shot Responses recovery flag. When set, stale provider-owned
+   * reasoning/message/function item replay state is dropped for this attempt.
+   */
+  dropOpenAIResponsesReplayState?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,

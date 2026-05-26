@@ -3081,16 +3081,25 @@ export async function runEmbeddedAttempt(
           }
           // Strip orphaned reasoning blocks first, then fix function-call
           // pairing — matches the call order in google.ts.
-          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
+          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[], {
+            dropReplayableReasoning: params.dropOpenAIResponsesReplayState === true,
+          });
           const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
+          const nextOptions =
+            params.dropOpenAIResponsesReplayState === true
+              ? ({
+                  ...((options as Record<string, unknown> | undefined) ?? {}),
+                  dropOpenAIResponsesReplayState: true,
+                } as typeof options)
+              : options;
           if (sanitized === messages) {
-            return inner(model, context, options);
+            return inner(model, context, nextOptions);
           }
           const nextContext = {
             ...(context as unknown as Record<string, unknown>),
             messages: sanitized,
           } as unknown;
-          return inner(model, nextContext as typeof context, options);
+          return inner(model, nextContext as typeof context, nextOptions);
         };
       }
 
@@ -3237,6 +3246,7 @@ export async function runEmbeddedAttempt(
             sessionManager,
             sessionId: params.sessionId,
             policy: transcriptPolicy,
+            dropOpenAIResponsesReplayState: params.dropOpenAIResponsesReplayState === true,
           });
           cacheTrace?.recordStage("session:sanitized", { messages: prior });
           const validated = await validateReplayTurns({

@@ -127,6 +127,7 @@ type BaseStreamOptions = {
   frequencyPenalty?: number;
   presencePenalty?: number;
   seed?: number;
+  dropOpenAIResponsesReplayState?: boolean;
 };
 
 type ModelStreamCooperativeScheduler = {
@@ -2025,6 +2026,7 @@ export function buildOpenAIResponsesParams(
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
     typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
+  const dropReplayState = options?.dropOpenAIResponsesReplayState === true;
   const messages = convertResponsesMessages(
     model,
     context,
@@ -2032,8 +2034,8 @@ export function buildOpenAIResponsesParams(
     {
       includeSystemPrompt: !isCodexResponses,
       supportsDeveloperRole,
-      replayReasoningItems: true,
-      replayResponsesItemIds: !isNativeCodexResponses,
+      replayReasoningItems: !dropReplayState,
+      replayResponsesItemIds: !dropReplayState && !isNativeCodexResponses,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
     },

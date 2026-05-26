@@ -678,6 +678,7 @@ export async function sanitizeSessionHistory(params: {
   sessionId: string;
   policy?: TranscriptPolicy;
   preserveLatestAssistantThinking?: boolean;
+  dropOpenAIResponsesReplayState?: boolean;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -702,6 +703,8 @@ export async function sanitizeSessionHistory(params: {
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
     params.modelApi === "azure-openai-responses";
+  const dropOpenAIResponsesReplayState =
+    isOpenAIResponsesApi && params.dropOpenAIResponsesReplayState === true;
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot
@@ -763,7 +766,7 @@ export async function sanitizeSessionHistory(params: {
   const openAISafeToolCalls = isOpenAIResponsesApi
     ? downgradeOpenAIFunctionCallReasoningPairs(
         downgradeOpenAIReasoningBlocks(openAIRepairedToolCalls, {
-          dropReplayableReasoning: modelChanged,
+          dropReplayableReasoning: modelChanged || dropOpenAIResponsesReplayState,
         }),
       )
     : sanitizedToolCalls;

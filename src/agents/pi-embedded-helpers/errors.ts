@@ -353,6 +353,10 @@ const INTERRUPTED_NETWORK_ERROR_RE =
   /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
+const OPENAI_RESPONSES_CONTINUATION_CORRUPTION_RE =
+  /\bthinking_signature_invalid\b|\binvalid_encrypted_content\b|\bitem\s+with\s+id\s+['"]?rs_[A-Za-z0-9_-]+['"]?\s+not\s+found\b|\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\binput item id does not belong to this connection\b/i;
+const OPENAI_RESPONSES_ENCRYPTED_REASONING_INVALID_RE =
+  /\bencrypted\b.*\b(?:content|reasoning)\b.*\b(?:could not|cannot|can't|failed to|unable to)\b.*\b(?:decrypt|decrypted|decryption|parse|parsed|parsing|verify|verified|verification|validate|validated|validation)\b|\b(?:could not|cannot|can't|failed to|unable to)\b.*\b(?:decrypt|decrypted|decryption|parse|parsed|parsing|verify|verified|verification|validate|validated|validation)\b.*\bencrypted\b.*\b(?:content|reasoning)\b|\b(?:decryption|parsing|verification|validation)\s+failed\b.*\bencrypted\b.*\b(?:content|reasoning)\b|\bencrypted\b.*\b(?:content|reasoning)\b.*\b(?:decryption|parsing|verification|validation)\s+failed\b/i;
 const SANDBOX_BLOCKED_RE =
   /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b|\bexec denied\s*\(/i;
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -471,12 +475,24 @@ function isReplayInvalidErrorMessage(raw: string): boolean {
   return REPLAY_INVALID_RE.test(raw);
 }
 
+export function isOpenAIResponsesContinuationCorruptionErrorMessage(raw: string): boolean {
+  return (
+    OPENAI_RESPONSES_CONTINUATION_CORRUPTION_RE.test(raw) ||
+    OPENAI_RESPONSES_ENCRYPTED_REASONING_INVALID_RE.test(raw)
+  );
+}
+
 function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
 
 function isSchemaErrorMessage(raw: string): boolean {
-  if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
+  if (
+    !raw ||
+    isReplayInvalidErrorMessage(raw) ||
+    isOpenAIResponsesContinuationCorruptionErrorMessage(raw) ||
+    isContextOverflowError(raw)
+  ) {
     return false;
   }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
@@ -1016,7 +1032,11 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isSandboxBlockedErrorMessage(message)) {
     return "sandbox_blocked";
   }
-  if (message && isReplayInvalidErrorMessage(message)) {
+  if (
+    message &&
+    (isReplayInvalidErrorMessage(message) ||
+      isOpenAIResponsesContinuationCorruptionErrorMessage(message))
+  ) {
     return "replay_invalid";
   }
   if (message && isSchemaErrorMessage(message)) {

@@ -14,6 +14,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isOpenAIResponsesContinuationCorruptionErrorMessage,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
@@ -1559,6 +1560,26 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("classifies OpenAI Responses continuation corruption as replay invalid", () => {
+    const samples = [
+      "400 thinking_signature_invalid: invalid thinking signature",
+      "invalid_encrypted_content",
+      "The encrypted content for item rs_example could not be verified",
+      "verification failed for encrypted reasoning item",
+      "Item with id 'rs_example' not found",
+      "previous_response_id expired or not found",
+    ];
+
+    for (const sample of samples) {
+      expect(isOpenAIResponsesContinuationCorruptionErrorMessage(sample)).toBe(true);
+      expect(classifyProviderRuntimeFailureKind(sample)).toBe("replay_invalid");
+    }
+
+    expect(
+      isOpenAIResponsesContinuationCorruptionErrorMessage("tool_use.input: Field required"),
+    ).toBe(false);
   });
 
   it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {

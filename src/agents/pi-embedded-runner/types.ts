@@ -154,6 +154,7 @@ export type EmbeddedPiRunMeta = {
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
+      | "responses_continuation_corruption"
       | "retry_limit"
       | "hook_block";
     message: string;

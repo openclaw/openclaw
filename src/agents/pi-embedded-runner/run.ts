@@ -84,6 +84,7 @@ import {
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isLikelyContextOverflowError,
+  isOpenAIResponsesContinuationCorruptionErrorMessage,
   isRateLimitAssistantError,
   parseImageDimensionError,
   parseImageSizeError,
@@ -205,7 +206,19 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const RESPONSES_CONTINUATION_RECOVERY_PROMPT =
+  "The previous provider continuation state was invalid. Rebuild the model context from the visible transcript and answer the latest user request now. Do not repeat completed tools or side effects unless the transcript clearly requires them.";
+const RESPONSES_CONTINUATION_RECOVERY_BLOCKED_TEXT =
+  "OpenAI Responses continuation state is invalid. Please try again, or use /new to start a fresh session.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function isOpenAIResponsesFamilyApi(api?: string | null): boolean {
+  return (
+    api === "openai-responses" ||
+    api === "openai-codex-responses" ||
+    api === "azure-openai-responses"
+  );
+}
 
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
@@ -1079,6 +1092,9 @@ export async function runEmbeddedPiAgent(
       let emptyResponseRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
+      let responsesContinuationRecoveryAttempted = false;
+      let dropOpenAIResponsesReplayStateForNextAttempt =
+        params.dropOpenAIResponsesReplayState === true;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
         modelId,
@@ -1390,6 +1406,9 @@ export async function runEmbeddedPiAgent(
             startupStagesEmitted = true;
           }
 
+          const dropOpenAIResponsesReplayStateForAttempt =
+            dropOpenAIResponsesReplayStateForNextAttempt;
+          dropOpenAIResponsesReplayStateForNextAttempt = false;
           const attemptAbortController = new AbortController();
           postCompactionAbortController = attemptAbortController;
           const parentAbortSignal = params.abortSignal;
@@ -1533,6 +1552,7 @@ export async function runEmbeddedPiAgent(
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+            dropOpenAIResponsesReplayState: dropOpenAIResponsesReplayStateForAttempt,
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
@@ -1688,6 +1708,81 @@ export async function runEmbeddedPiAgent(
             sessionAssistantForCandidate?.stopReason === "error"
               ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const handleResponsesContinuationCorruption = (failure: {
+            source: "promptError" | "assistantError";
+            errorText?: string | null;
+          }): "retry" | EmbeddedPiRunResult | null => {
+            const errorText = failure.errorText?.trim();
+            if (
+              !errorText ||
+              !isOpenAIResponsesFamilyApi(effectiveModel.api) ||
+              !isOpenAIResponsesContinuationCorruptionErrorMessage(errorText)
+            ) {
+              return null;
+            }
+            const replayMetadata = resolveAttemptReplayMetadata(attempt);
+            log.warn(
+              `responses_continuation_corruption_detected provider=${sanitizeForLog(activeErrorContext.provider)} ` +
+                `model=${sanitizeForLog(activeErrorContext.model)} source=${failure.source} ` +
+                `replaySafe=${replayMetadata.replaySafe} alreadyRetried=${responsesContinuationRecoveryAttempted}`,
+            );
+            if (!responsesContinuationRecoveryAttempted && replayMetadata.replaySafe) {
+              responsesContinuationRecoveryAttempted = true;
+              suppressNextUserMessagePersistence = true;
+              nextAttemptPromptOverride = RESPONSES_CONTINUATION_RECOVERY_PROMPT;
+              dropOpenAIResponsesReplayStateForNextAttempt = true;
+              accumulatedReplayState = createEmbeddedRunReplayState();
+              log.warn(
+                `responses_continuation_recovery_retry provider=${sanitizeForLog(activeErrorContext.provider)} ` +
+                  `model=${sanitizeForLog(activeErrorContext.model)} source=${failure.source}`,
+              );
+              return "retry";
+            }
+
+            const blockedReason = responsesContinuationRecoveryAttempted
+              ? "already_retried"
+              : "replay_unsafe";
+            log.warn(
+              `responses_continuation_recovery_blocked provider=${sanitizeForLog(activeErrorContext.provider)} ` +
+                `model=${sanitizeForLog(activeErrorContext.model)} source=${failure.source} reason=${blockedReason}`,
+            );
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: true,
+              livenessState: "blocked",
+            });
+            return {
+              payloads: [
+                {
+                  text: RESPONSES_CONTINUATION_RECOVERY_BLOCKED_TEXT,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  sessionFile: activeSessionFile,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant: sessionLastAssistant,
+                  lastTurnTotal,
+                }),
+                systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText: RESPONSES_CONTINUATION_RECOVERY_BLOCKED_TEXT,
+                finalAssistantRawText: RESPONSES_CONTINUATION_RECOVERY_BLOCKED_TEXT,
+                finalPromptText: attempt.finalPromptText,
+                replayInvalid: true,
+                livenessState: "blocked",
+                error: {
+                  kind: "responses_continuation_corruption",
+                  message: "OpenAI Responses continuation state is invalid.",
+                },
+              },
+            };
+          };
           const canRestartForLiveSwitch =
             !hasOutboundDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
@@ -1727,6 +1822,30 @@ export async function runEmbeddedPiAgent(
               `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
+          }
+          if (!aborted && promptError && promptErrorSource === "prompt") {
+            const responsesRecovery = handleResponsesContinuationCorruption({
+              source: "promptError",
+              errorText: formatErrorMessage(promptError),
+            });
+            if (responsesRecovery === "retry") {
+              continue;
+            }
+            if (responsesRecovery) {
+              return responsesRecovery;
+            }
+          }
+          if (!aborted && !promptError && assistantErrorText) {
+            const responsesRecovery = handleResponsesContinuationCorruption({
+              source: "assistantError",
+              errorText: assistantErrorText,
+            });
+            if (responsesRecovery === "retry") {
+              continue;
+            }
+            if (responsesRecovery) {
+              return responsesRecovery;
+            }
           }
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
@@ -3260,6 +3379,12 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          if (responsesContinuationRecoveryAttempted) {
+            log.warn(
+              `responses_continuation_recovery_succeeded provider=${sanitizeForLog(activeErrorContext.provider)} ` +
+                `model=${sanitizeForLog(activeErrorContext.model)}`,
+            );
+          }
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
