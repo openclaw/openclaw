@@ -288,7 +288,7 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   return {
     role: "user",
     content,
-    ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
+    timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
   } as PersistedUserTurnMessage;
@@ -373,10 +373,7 @@ export async function appendUserTurnTranscriptMessage(
   | undefined
 > {
   const resolvedMessage = resolvePersistedUserTurnMessage(params);
-  const message = resolvedMessage
-    ? applyBeforeMessageWriteToUserTurn(resolvedMessage, params)
-    : undefined;
-  if (!message) {
+  if (!resolvedMessage) {
     return undefined;
   }
 
@@ -385,9 +382,14 @@ export async function appendUserTurnTranscriptMessage(
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.config ? { config: params.config } : {}),
-    message,
+    message: resolvedMessage,
     idempotencyLookup: "scan",
+    prepareMessageAfterIdempotencyCheck: (message) =>
+      applyBeforeMessageWriteToUserTurn(message, params),
   });
+  if (!appended) {
+    return undefined;
+  }
 
   switch (params.updateMode ?? "inline") {
     case "inline":

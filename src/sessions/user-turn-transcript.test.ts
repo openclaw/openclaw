@@ -261,18 +261,19 @@ describe("user turn transcript persistence", () => {
         cwd: dir,
         input: {
           text: "hello from runtime",
-          timestamp: 123,
         },
       });
 
       expect(appended?.message).toMatchObject({
         role: "user",
         content: "hello from runtime",
+        timestamp: expect.any(Number),
       });
       expect(readTranscriptMessages(transcriptPath)).toEqual([
         expect.objectContaining({
           role: "user",
           content: "hello from runtime",
+          timestamp: expect.any(Number),
         }),
       ]);
     });
@@ -324,16 +325,20 @@ describe("user turn transcript persistence", () => {
     });
 
     it("preserves idempotency keys when before_message_write replaces a user turn", async () => {
+      let hookCalls = 0;
       initializeGlobalHookRunner(
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: () => ({
-              message: castAgentMessage({
-                role: "user",
-                content: "[redacted by hook]",
-              }),
-            }),
+            handler: () => {
+              hookCalls += 1;
+              return {
+                message: castAgentMessage({
+                  role: "user",
+                  content: "[redacted by hook]",
+                }),
+              };
+            },
           },
         ]),
       );
@@ -364,6 +369,7 @@ describe("user turn transcript persistence", () => {
           idempotencyKey: "chat-run-1:user",
         }),
       ]);
+      expect(hookCalls).toBe(1);
     });
   });
 

@@ -243,6 +243,8 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   useRawWhenLinear?: boolean;
   /** Opt into transcript idempotency lookup; default append stays O(1) for fresh keyed messages. */
   idempotencyLookup?: "scan" | "caller-checked";
+  /** Runs under the transcript write lock after idempotency replay checks and before append. */
+  prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   config?: OpenClawConfig;
 };
 
@@ -262,8 +264,16 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
 }
 
 export async function appendSessionTranscriptMessage<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage> & {
+    prepareMessageAfterIdempotencyCheck: (message: TMessage) => TMessage | undefined;
+  },
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
+export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<AppendSessionTranscriptMessageResult<TMessage>> {
+): Promise<AppendSessionTranscriptMessageResult<TMessage>>;
+export async function appendSessionTranscriptMessage<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
     sessionFile: params.transcriptPath,
   });
@@ -300,7 +310,7 @@ async function withSessionTranscriptWriteLock<T>(
 
 async function appendSessionTranscriptMessageLocked<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<AppendSessionTranscriptMessageResult<TMessage>> {
+): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   const now = params.now ?? Date.now();
   await ensureTranscriptHeader(params.transcriptPath, {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -313,6 +323,13 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
       : undefined;
   if (existing) {
     return { ...existing, message: existing.message as TMessage, appended: false };
+  }
+
+  const message = params.prepareMessageAfterIdempotencyCheck
+    ? params.prepareMessageAfterIdempotencyCheck(params.message)
+    : params.message;
+  if (message === undefined) {
+    return undefined;
   }
 
   const messageId = randomUUID();
@@ -336,9 +353,9 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     };
   }
   const finalMessage = (
-    isTranscriptAgentMessage(params.message)
-      ? redactTranscriptMessage(params.message, params.config)
-      : redactSecrets(params.message)
+    isTranscriptAgentMessage(message)
+      ? redactTranscriptMessage(message, params.config)
+      : redactSecrets(message)
   ) as TMessage;
   const entry = {
     type: "message",
