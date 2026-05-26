@@ -386,6 +386,40 @@ install_lan_chat_service() {
   fi
   local service_path
   service_path="$(dirname "$npm_bin"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  if [[ "$(id -u)" == "0" ]]; then
+    local service_user
+    service_user="$(stat -c '%U' "$OPENCLAW_WORKSPACE" 2>/dev/null || true)"
+    if [[ -z "$service_user" || "$service_user" == "UNKNOWN" || "$service_user" == "root" ]]; then
+      service_user="${SUDO_USER:-root}"
+    fi
+    if [[ "$service_user" == "root" ]]; then
+      warn "Running as root and no non-root OpenClaw workspace owner was found; LAN chat source is installed but no service was created."
+      return 0
+    fi
+    cat > /etc/systemd/system/lan-chat.service <<SERVICE
+[Unit]
+Description=Zorg LAN command chat
+After=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=$service_user
+WorkingDirectory=$LAN_CHAT_DIR
+Environment=PATH=$service_path
+Environment=PORT=$LAN_CHAT_PORT
+Environment=HOSTNAME=$LAN_CHAT_HOST
+ExecStart=$npm_bin run start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+    systemctl daemon-reload || true
+    systemctl enable lan-chat.service || true
+    systemctl restart lan-chat.service || warn "LAN chat service restart failed; run: systemctl status lan-chat.service"
+    return 0
+  fi
   mkdir -p "$HOME/.config/systemd/user"
   cat > "$HOME/.config/systemd/user/lan-chat.service" <<SERVICE
 [Unit]
