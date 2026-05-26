@@ -916,6 +916,18 @@
     "target": "自动化"
   },
   {
+    "source": "Automation and tasks",
+    "target": "自动化与任务"
+  },
+  {
+    "source": "Command queue",
+    "target": "命令队列"
+  },
+  {
+    "source": "Slash commands",
+    "target": "斜杠命令"
+  },
+  {
     "source": "Tools, skills, and plugins",
     "target": "工具、技能和插件"
   },

@@ -173,21 +173,22 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                               | Contract it owns                                                                                                                  |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
-| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                                 | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
-| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
-| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
-| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
-| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
-| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
-| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
-| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
-| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
-| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                    |
+| Method                                                                                             | Contract it owns                                                                                                                  |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                                  | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                               | Durable exactly-once context injected into the next agent turn for one session                                                    |
+| `api.registerTrustedToolPolicy(...)`                                                               | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerToolMetadata(...)`                                                                    | Tool catalog display metadata without changing the tool implementation                                                            |
+| `api.registerCommand(...)`                                                                         | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                                            | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
+| `api.agent.events.registerAgentEventSubscription(...)`                                             | Sanitized event subscriptions for workflow state and monitors                                                                     |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`                | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                                            | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
+| `api.session.workflow.sendSessionAttachment(...)`                                                  | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)`               | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
+| `api.session.workflow.requestSessionContinuationLease(...)` / `clearSessionContinuationLease(...)` | Bundled-only Cron-backed replacement lease for one bounded same-session continuation turn                                         |
+| `api.session.controls.registerSessionAction(...)`                                                  | Typed session actions clients can dispatch through the Gateway                                                                    |
 
 Use the grouped namespaces for new plugin code:
 
@@ -196,6 +197,8 @@ Use the grouped namespaces for new plugin code:
 - `api.session.workflow.registerSessionSchedulerJob(...)`
 - `api.session.workflow.sendSessionAttachment(...)`
 - `api.session.workflow.scheduleSessionTurn(...)`
+- `api.session.workflow.requestSessionContinuationLease(...)`
+- `api.session.workflow.clearSessionContinuationLease(...)`
 - `api.session.workflow.unscheduleSessionTurnsByTag(...)`
 - `api.session.controls.registerSessionAction(...)`
 - `api.session.controls.registerControlUiDescriptor(...)`
@@ -211,7 +214,8 @@ aliases for existing plugins. Do not add new plugin code that calls
 `api.registerAgentEventSubscription`, `api.emitAgentEvent`,
 `api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
 `api.registerSessionSchedulerJob`, `api.registerSessionAction`,
-`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
+`api.sendSessionAttachment`, `api.scheduleSessionTurn`,
+`api.requestSessionContinuationLease`, `api.clearSessionContinuationLease`, or
 `api.unscheduleSessionTurnsByTag` directly.
 
 `scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
@@ -219,6 +223,19 @@ Cron scheduler. Cron owns timing and creates the background task record when the
 turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
+
+`requestSessionContinuationLease(...)` is for bundled plugins that need at most
+one pending same-session follow-up, such as command workflows that should
+continue after a short delay. The host clears any existing job for the same
+session and plugin-owned `leaseKey`, then schedules a single Cron-backed session
+turn with `deleteAfterRun: true`. `clearSessionContinuationLease(...)` removes
+that pending lease without scheduling a replacement. The request result reports
+whether a turn was scheduled and returns a reason such as `plugin_not_loaded`,
+`scheduler_unavailable`, or `invalid_session` when the host cannot commit it.
+Like `scheduleSessionTurn(...)`, continuation leases are bundled-only host hooks;
+workspace plugins receive a non-scheduled result rather than direct scheduler
+authority. Set `deliveryMode: "announce"` when the continuation should produce a
+visible transport reply, or omit it/choose `none` for silent same-session work.
 
 The contracts intentionally split authority:
 
