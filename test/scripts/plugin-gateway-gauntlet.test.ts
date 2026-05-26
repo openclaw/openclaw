@@ -71,6 +71,7 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(matrix[0]).toEqual({
       activation: {},
       authMethods: ["oauth"],
+      buildId: "alpha",
       channels: [],
       cliCommandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       commandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
@@ -89,6 +90,23 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(matrix[1].runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
+    expect(matrix[1].buildId).toBe("beta");
+  });
+
+  it("keeps manifest ids separate from bounded build entry ids", async () => {
+    await writeManifest("kimi-coding", "openclaw.plugin.json", JSON.stringify({ id: "kimi" }));
+
+    const matrix = discoverBundledPluginManifests(repoRoot);
+
+    expect(matrix).toEqual([
+      expect.objectContaining({
+        buildId: "kimi-coding",
+        id: "kimi",
+      }),
+    ]);
+    expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
+    });
   });
 
   it("skips source-only plugin dirs that are excluded from the built runtime", async () => {
@@ -263,10 +281,28 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true })).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
+  });
+
+  it("prebuilds only selected plugin dist entries for bounded gauntlet runs", () => {
+    expect(
+      buildGauntletPrebuildEnv(
+        { EXISTING: "1" },
+        {
+          includePrivateQa: true,
+          buildIds: ["active-memory", "acpx"],
+        },
+      ),
+    ).toEqual({
+      EXISTING: "1",
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    });
   });
 
   it("prebuilds only the CLI startup runtime needed by the gauntlet", () => {
@@ -378,5 +414,52 @@ describe("plugin gateway gauntlet helpers", () => {
     );
     expect(summary.isolatedRunRootPreserved).toBe(false);
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("carries bounded build ids into QA run-node chunks", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        'fs.writeFileSync(path.join(outputDir, "env.txt"), process.env.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS ?? "", "utf8");',
+        'fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), JSON.stringify({ metrics: { wallMs: 1, gatewayCpuCoreRatio: 0 } }), "utf8");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    await expect(
+      fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "env.txt"), "utf8"),
+    ).resolves.toBe("alpha,qa-channel,qa-lab,qa-matrix");
   });
 });

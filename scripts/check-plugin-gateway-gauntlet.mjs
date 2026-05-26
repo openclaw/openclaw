@@ -688,14 +688,17 @@ async function main() {
       limit: options.limit,
     });
     const rows = [];
+    const commandEnv = buildGauntletPrebuildEnv(env, {
+      includePrivateQa: !options.skipQa,
+      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+    });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
-      const prebuildEnv = buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa });
       const prebuildCommand = createGauntletPrebuildCommand(repoRoot);
       rows.push(
         await runMeasuredCommandLive({
           cwd: repoRoot,
-          env: prebuildEnv,
+          env: commandEnv,
           logDir: path.join(options.outputDir, "logs", "prebuild"),
           command: prebuildCommand.command,
           args: prebuildCommand.args,
@@ -712,7 +715,7 @@ async function main() {
       runPluginLifecycle({
         repoRoot,
         outputDir: options.outputDir,
-        env,
+        env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -722,7 +725,7 @@ async function main() {
       runSlashHelpProbes({
         repoRoot,
         outputDir: options.outputDir,
-        env,
+        env: commandEnv,
         plugins: selectedPlugins,
         rows,
         commandTimeoutMs: options.commandTimeoutMs,
@@ -734,7 +737,7 @@ async function main() {
         : runQaChunks({
             repoRoot,
             outputDir: options.outputDir,
-            env,
+            env: commandEnv,
             plugins: selectedPlugins,
             qaBaseline: options.qaBaseline,
             rows,
