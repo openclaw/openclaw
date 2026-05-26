@@ -90,6 +90,24 @@ describe("dropThinkingBlocks", () => {
     expect(assistant.content).toEqual([{ type: "thinking", thinking: "internal-only" }]);
   });
 
+  it("can strip thinking blocks from the latest assistant turn", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest" },
+          { type: "text", text: "latest text" },
+        ],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages, { preserveLatestAssistant: false });
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(assistant.content).toEqual([{ type: "text", text: "latest text" }]);
+  });
+
   it("preserves thinking blocks in the latest assistant message", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),

@@ -183,12 +183,18 @@ export function stripInvalidThinkingSignatures(
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
  */
-export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function dropThinkingBlocks(
+  messages: AgentMessage[],
+  options: { preserveLatestAssistant?: boolean } = {},
+): AgentMessage[] {
+  const preserveLatestAssistant = options.preserveLatestAssistant ?? true;
   let latestAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (isAssistantMessageWithContent(messages[i])) {
-      latestAssistantIndex = i;
-      break;
+  if (preserveLatestAssistant) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (isAssistantMessageWithContent(messages[i])) {
+        latestAssistantIndex = i;
+        break;
+      }
     }
   }
 

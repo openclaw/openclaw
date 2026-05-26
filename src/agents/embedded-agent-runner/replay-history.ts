@@ -25,6 +25,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { normalizeProviderId } from "../provider-id.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -745,7 +746,9 @@ export async function sanitizeSessionHistory(params: {
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;
   const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(droppedReasoning)
+    ? dropThinkingBlocks(droppedReasoning, {
+        preserveLatestAssistant: normalizeProviderId(params.provider ?? "") !== "github-copilot",
+      })
     : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
