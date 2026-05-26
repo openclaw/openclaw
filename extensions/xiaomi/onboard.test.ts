@@ -56,7 +56,7 @@ describe("xiaomi onboard", () => {
     });
     expect(provider?.models.map((m) => m.id)).toEqual(["mimo-v2.5-pro", "mimo-v2.5"]);
     expect(cfg.agents?.defaults?.models?.["xiaomi-token-plan/mimo-v2.5-pro"]).toEqual({
-      alias: "Xiaomi Token Plan",
+      alias: "Xiaomi MiMo V2.5 Pro",
     });
     expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi-token-plan/mimo-v2.5-pro" });
     expectProviderOnboardPrimaryModel({
