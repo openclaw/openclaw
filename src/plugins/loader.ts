@@ -2337,7 +2337,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               continue;
             }
           }
-          api.registerChannel(mergedSetupPlugin);
+          try {
+            api.registerChannel(mergedSetupPlugin);
+          } catch (err) {
+            recordPluginError({
+              logger,
+              registry,
+              record,
+              seenIds,
+              pluginId,
+              origin: candidate.origin,
+              phase: "load",
+              error: err,
+              logPrefix: `[plugins] ${record.id} failed to register setup channel from ${record.source}: `,
+              diagnosticMessagePrefix: "failed to register setup channel: ",
+            });
+            continue;
+          }
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);
           continue;
