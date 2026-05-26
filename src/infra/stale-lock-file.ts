@@ -24,12 +24,14 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
   isPidDefinitelyDead?: (pid: number) => boolean;
 }): boolean {
   const payload = readLockFileOwnerPayload(params.payload);
-  if (payload?.pid) {
-    return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid);
-  }
   if (payload?.createdAt) {
     const createdAt = Date.parse(payload.createdAt);
-    return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
+    if (!Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs) {
+      return true;
+    }
+  }
+  if (payload?.pid) {
+    return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid);
   }
   return false;
 }

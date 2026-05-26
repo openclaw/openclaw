@@ -117,8 +117,8 @@ describe("acquireFileLock", () => {
     await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
   });
 
-  it("keeps a reported stale lock when its owner pid is alive", async () => {
-    const filePath = path.join(tempDir, "live-owner");
+  it("removes an expired lock before trusting a reused live pid", async () => {
+    const filePath = path.join(tempDir, "reused-owner");
     const lockPath = `${filePath}.lock`;
     const options = {
       retries: {
@@ -136,21 +136,13 @@ describe("acquireFileLock", () => {
       "utf8",
     );
 
-    let caught: { lockPath?: string } | undefined;
-    await expect(
-      (async () => {
-        try {
-          await acquireFileLock(filePath, options);
-        } catch (err) {
-          caught = err as { lockPath?: string };
-          throw err;
-        }
-      })(),
-    ).rejects.toMatchObject({
-      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-    });
-    await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
-    await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
+    const lock = await acquireFileLock(filePath, options);
+    try {
+      await expect(fs.realpath(lock.lockPath)).resolves.toBe(await fs.realpath(lockPath));
+      await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid"`);
+    } finally {
+      await lock.release();
+    }
   });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {
