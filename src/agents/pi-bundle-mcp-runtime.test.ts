@@ -320,6 +320,15 @@ describe("session MCP runtime", () => {
       },
       {
         $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "string",
+        nullable: "yes",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        nullable: true,
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
         $defs: {
           Other: {
             $id: "other",

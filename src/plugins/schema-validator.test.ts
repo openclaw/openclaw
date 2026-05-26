@@ -326,6 +326,19 @@ describe("schema validator", () => {
         },
       ],
       [
+        "schema-validator.test.invalid-nullable-type",
+        {
+          type: "string",
+          nullable: "yes",
+        },
+      ],
+      [
+        "schema-validator.test.invalid-nullable-without-type",
+        {
+          nullable: true,
+        },
+      ],
+      [
         "schema-validator.test.invalid-anchor-ref",
         {
           $defs: {

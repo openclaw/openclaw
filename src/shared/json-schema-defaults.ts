@@ -576,6 +576,14 @@ function findJsonSchemaNodeError(
       return typeError;
     }
   }
+  if (schema.nullable !== undefined) {
+    if (typeof schema.nullable !== "boolean") {
+      return `${path}.nullable: expected boolean`;
+    }
+    if (!Object.prototype.hasOwnProperty.call(schema, "type")) {
+      return `${path}.nullable: expected type`;
+    }
+  }
   const keywordError = validateSchemaKeywordShapes(schema, path);
   if (keywordError) {
     return keywordError;
