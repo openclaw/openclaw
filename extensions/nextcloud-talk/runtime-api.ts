@@ -3,7 +3,7 @@
 
 export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 export type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
-export { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";
+export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export type {
   BlockStreamingCoalesceConfig,

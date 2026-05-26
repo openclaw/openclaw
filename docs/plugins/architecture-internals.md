@@ -680,10 +680,10 @@ instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
 `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
-`openclaw/plugin-sdk/outbound-runtime`, `openclaw/plugin-sdk/outbound-send-deps`,
-`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
-are deprecated compatibility shims for older plugins. New code should import
-narrower generic primitives instead.
+small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
+`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
+and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
+older plugins. New code should import narrower generic primitives instead.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):

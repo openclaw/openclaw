@@ -107,7 +107,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { mergeAllowlist, resolveAllowlistMatchSimple, summarizeMapping } from "openclaw/plugin-sdk/allow-from";',
     'export type { BaseProbeResult, ChannelDirectoryEntry, ChannelGroupContext, ChannelMessageActionName, ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";',
     'export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";',
-    'export { logTypingFailure } from "openclaw/plugin-sdk/channel-logging";',
+    'export { logTypingFailure } from "openclaw/plugin-sdk/channel-outbound";',
     'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
     'export { resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";',
     'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";',
@@ -161,7 +161,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   })]: [
     'export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";',
     'export type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";',
-    'export { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";',
+    'export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";',
     'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
     'export type { BlockStreamingCoalesceConfig, DmConfig, DmPolicy, GroupPolicy, GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',

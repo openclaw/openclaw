@@ -13,8 +13,8 @@ Channel plugins should model receive paths with inbound and message nouns:
 platform event -> inbound facts/context -> agent reply -> message delivery
 ```
 
-Use `openclaw/plugin-sdk/channel-inbound` for inbound event normalization and
-shared receive-path orchestration. Use
+Use `openclaw/plugin-sdk/channel-inbound` for inbound event normalization,
+formatting, roots, and orchestration. Use
 `openclaw/plugin-sdk/channel-outbound` for native
 send, receipt, durable delivery, and live preview behavior.
 

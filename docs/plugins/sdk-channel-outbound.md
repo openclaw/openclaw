@@ -124,11 +124,3 @@ pair:
 - `runPreparedInboundReply(...)` from `channel-inbound`
 
 New channel code should prefer `message` adapters and durable send helpers.
-
-## Deprecated Imports
-
-These imports remain available for older third-party plugins only:
-`channel-message`, `channel-message-runtime`, `inbound-reply-dispatch`,
-`channel-reply-pipeline`, `channel-lifecycle`, `outbound-runtime`, and
-`outbound-send-deps`. Use `channel-outbound` for outbound/message lifecycle
-helpers and `channel-inbound` for inbound receive/dispatch helpers.
