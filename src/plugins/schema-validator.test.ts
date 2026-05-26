@@ -703,6 +703,46 @@ describe("schema validator", () => {
       },
       expectedValue: { mode: "auto" },
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.relative-resource-ref",
+        schema: {
+          $id: "https://example.com/root/",
+          type: "object",
+          properties: {
+            settings: {
+              $ref: "./settings",
+            },
+          },
+          required: ["settings"],
+          additionalProperties: false,
+          $defs: {
+            Settings: {
+              $id: "settings",
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+              required: ["mode"],
+              additionalProperties: false,
+            },
+          },
+        },
+        value: {
+          settings: {},
+        },
+        applyDefaults: true,
+      },
+      expectedValue: {
+        settings: {
+          mode: "auto",
+        },
+      },
+    });
   });
 
   it("accepts draft-07 tuple item schemas", () => {
