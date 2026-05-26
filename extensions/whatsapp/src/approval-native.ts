@@ -8,7 +8,9 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/ap
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalForwardingFallbackSuppressor,
   doesApprovalRequestMatchChannelAccount,
+  nativeApprovalTargetsMatch,
   resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
@@ -17,7 +19,6 @@ import type {
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import { channelRouteTargetsMatchExact } from "openclaw/plugin-sdk/channel-route";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
@@ -144,26 +145,6 @@ function normalizeWhatsAppForwardTarget(
   };
 }
 
-function nativeApprovalTargetsMatch(params: {
-  left: WhatsAppApprovalTarget;
-  right: WhatsAppApprovalTarget;
-}): boolean {
-  return channelRouteTargetsMatchExact({
-    left: {
-      channel: "whatsapp",
-      to: params.left.to,
-      accountId: params.left.accountId,
-      threadId: params.left.threadId,
-    },
-    right: {
-      channel: "whatsapp",
-      to: params.right.to,
-      accountId: params.right.accountId,
-      threadId: params.right.threadId,
-    },
-  });
-}
-
 function hasMatchingWhatsAppTarget(params: {
   cfg: OpenClawConfig;
   config: ApprovalForwardingConfig;
@@ -188,7 +169,11 @@ function hasMatchingWhatsAppTarget(params: {
     if (!candidateTarget) {
       return true;
     }
-    return nativeApprovalTargetsMatch({ left: configuredTarget, right: candidateTarget });
+    return nativeApprovalTargetsMatch({
+      channel: "whatsapp",
+      left: configuredTarget,
+      right: candidateTarget,
+    });
   });
 }
 
@@ -410,6 +395,22 @@ const resolveWhatsAppApproverDmTargets = createChannelApproverDmTargetResolver({
   },
 });
 
+const shouldSuppressWhatsAppForwardingFallback =
+  createNativeApprovalForwardingFallbackSuppressor<WhatsAppApprovalTarget>({
+    channel: "whatsapp",
+    normalizeForwardTarget: normalizeWhatsAppForwardTarget,
+    resolveAccountId: ({ forwardingTarget, request }) =>
+      forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
+    resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
+      ...forwardingTarget,
+      accountId,
+    }),
+    isSessionRouteEligible: isWhatsAppSessionApprovalEligible,
+    isExplicitTargetEligible: isWhatsAppExplicitTargetEligible,
+    resolveOriginTarget: resolveWhatsAppOriginTarget,
+    resolveApproverDmTargets: resolveWhatsAppApproverDmTargets,
+  });
+
 function buildWhatsAppExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
   return buildApprovalReactionPromptPayloadForRequest(params);
 }
@@ -457,58 +458,7 @@ export const whatsappApprovalCapability: ChannelApprovalCapability =
           }
           return getWhatsAppApprovalApprovers({ cfg, accountId }).length > 0;
         }),
-      shouldSuppressForwardingFallback: ({ cfg, approvalKind, target, request }) => {
-        const forwardingTarget = normalizeWhatsAppForwardTarget(target);
-        if (!forwardingTarget) {
-          return false;
-        }
-        const accountId =
-          forwardingTarget.accountId ??
-          normalizeOptionalString(request.request.turnSourceAccountId);
-        const forwardingTargetForMatch = {
-          ...forwardingTarget,
-          accountId,
-        };
-        const kind = resolveApprovalKind(request, approvalKind);
-        const eligible =
-          target.source === "target"
-            ? isWhatsAppExplicitTargetEligible({
-                cfg,
-                accountId,
-                approvalKind: kind,
-                request,
-                target,
-              })
-            : isWhatsAppSessionApprovalEligible({
-                cfg,
-                accountId,
-                approvalKind: kind,
-                request,
-              });
-        if (!eligible) {
-          return false;
-        }
-        const originTarget = resolveWhatsAppOriginTarget({
-          cfg,
-          accountId,
-          approvalKind: kind,
-          request,
-        });
-        if (
-          originTarget &&
-          nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: originTarget })
-        ) {
-          return true;
-        }
-        return resolveWhatsAppApproverDmTargets({
-          cfg,
-          accountId,
-          approvalKind: kind,
-          request,
-        }).some((approverTarget) =>
-          nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: approverTarget }),
-        );
-      },
+      shouldSuppressForwardingFallback: shouldSuppressWhatsAppForwardingFallback,
     },
     render: {
       exec: {

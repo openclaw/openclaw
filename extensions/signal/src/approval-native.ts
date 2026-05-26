@@ -8,7 +8,9 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/ap
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalForwardingFallbackSuppressor,
   doesApprovalRequestMatchChannelAccount,
+  nativeApprovalTargetsMatch,
   resolveApprovalRequestSessionTarget,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -21,7 +23,6 @@ import type {
   ChannelApprovalCapability,
   ChannelOutboundPayloadHint,
 } from "openclaw/plugin-sdk/channel-contract";
-import { channelRouteTargetsMatchExact } from "openclaw/plugin-sdk/channel-route";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -149,26 +150,6 @@ function normalizeSignalForwardTarget(
   };
 }
 
-function nativeApprovalTargetsMatch(params: {
-  left: SignalApprovalTarget;
-  right: SignalApprovalTarget;
-}): boolean {
-  return channelRouteTargetsMatchExact({
-    left: {
-      channel: "signal",
-      to: params.left.to,
-      accountId: params.left.accountId,
-      threadId: params.left.threadId,
-    },
-    right: {
-      channel: "signal",
-      to: params.right.to,
-      accountId: params.right.accountId,
-      threadId: params.right.threadId,
-    },
-  });
-}
-
 function hasMatchingSignalTarget(params: {
   cfg: OpenClawConfig;
   config: ApprovalForwardingConfig;
@@ -193,7 +174,11 @@ function hasMatchingSignalTarget(params: {
     if (!candidateTarget) {
       return true;
     }
-    return nativeApprovalTargetsMatch({ left: configuredTarget, right: candidateTarget });
+    return nativeApprovalTargetsMatch({
+      channel: "signal",
+      left: configuredTarget,
+      right: candidateTarget,
+    });
   });
 }
 
@@ -314,35 +299,6 @@ function isSignalSessionApprovalEligible(params: {
   });
 }
 
-function isSignalExplicitTargetEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  request: ApprovalRequest;
-  target: ChannelApprovalForwardTarget;
-}): boolean {
-  if (!isSignalApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (!approvalModeIncludesTargets(mode)) {
-    return false;
-  }
-  if (!matchesForwardingFilters({ config, request: params.request })) {
-    return false;
-  }
-  return hasMatchingSignalTarget({
-    cfg: params.cfg,
-    config,
-    accountId: params.accountId,
-    target: params.target,
-  });
-}
-
 function resolveTurnSourceSignalOriginTarget(
   request: ApprovalRequest,
 ): SignalApprovalTarget | null {
@@ -457,6 +413,21 @@ const resolveSignalApproverDmTargets = createChannelApproverDmTargetResolver({
   },
 });
 
+const shouldSuppressSignalForwardingFallback =
+  createNativeApprovalForwardingFallbackSuppressor<SignalApprovalTarget>({
+    channel: "signal",
+    normalizeForwardTarget: normalizeSignalForwardTarget,
+    resolveAccountId: ({ forwardingTarget, request }) =>
+      forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId),
+    resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
+      ...forwardingTarget,
+      accountId,
+    }),
+    isSessionRouteEligible: isSignalSessionApprovalEligible,
+    resolveOriginTarget: resolveSignalOriginTarget,
+    resolveApproverDmTargets: resolveSignalApproverDmTargets,
+  });
+
 function buildSignalExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
   return buildApprovalReactionPendingContentForRequest(params).manualFallbackPayload;
 }
@@ -503,60 +474,7 @@ export const signalApprovalCapability: ChannelApprovalCapability = createChannel
         }
         return getSignalApprovalApprovers({ cfg, accountId }).length > 0;
       }),
-    shouldSuppressForwardingFallback: ({ cfg, approvalKind, target, request }) => {
-      const forwardingTarget = normalizeSignalForwardTarget(target);
-      if (!forwardingTarget) {
-        return false;
-      }
-      const accountId =
-        forwardingTarget.accountId ?? normalizeOptionalString(request.request.turnSourceAccountId);
-      const forwardingTargetForMatch = {
-        ...forwardingTarget,
-        accountId: target.source === "target" ? forwardingTarget.accountId : accountId,
-      };
-      const kind = resolveApprovalKind(request, approvalKind);
-      const eligible =
-        target.source === "target"
-          ? isSignalExplicitTargetEligible({
-              cfg,
-              accountId,
-              approvalKind: kind,
-              request,
-              target,
-            })
-          : isSignalSessionApprovalEligible({
-              cfg,
-              accountId,
-              approvalKind: kind,
-              request,
-            });
-      if (!eligible) {
-        return false;
-      }
-      if (target.source === "target") {
-        return false;
-      }
-      const originTarget = resolveSignalOriginTarget({
-        cfg,
-        accountId,
-        approvalKind: kind,
-        request,
-      });
-      if (
-        originTarget &&
-        nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: originTarget })
-      ) {
-        return true;
-      }
-      return resolveSignalApproverDmTargets({
-        cfg,
-        accountId,
-        approvalKind: kind,
-        request,
-      }).some((approverTarget) =>
-        nativeApprovalTargetsMatch({ left: forwardingTargetForMatch, right: approverTarget }),
-      );
-    },
+    shouldSuppressForwardingFallback: shouldSuppressSignalForwardingFallback,
   },
   render: {
     exec: {

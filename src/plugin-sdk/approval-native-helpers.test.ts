@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalForwardingFallbackSuppressor,
   type NativeApprovalTarget,
   nativeApprovalTargetsMatch,
   shouldSuppressLocalNativeExecApprovalPrompt,
@@ -270,6 +271,91 @@ describe("createChannelApproverDmTargetResolver", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+});
+
+describe("createNativeApprovalForwardingFallbackSuppressor", () => {
+  const execRequest = {
+    id: "req-1",
+    request: {
+      command: "echo hi",
+      turnSourceChannel: "matrix",
+      turnSourceTo: "room-1",
+      turnSourceAccountId: "default",
+    },
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  };
+
+  function createSuppressor(
+    overrides: Partial<Parameters<typeof createNativeApprovalForwardingFallbackSuppressor>[0]> = {},
+  ) {
+    return createNativeApprovalForwardingFallbackSuppressor({
+      channel: "matrix",
+      normalizeForwardTarget: (target) =>
+        target.channel === "matrix"
+          ? { to: target.to, accountId: target.accountId ?? undefined }
+          : null,
+      resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
+        ...forwardingTarget,
+        accountId,
+      }),
+      isSessionRouteEligible: ({ approvalKind }) => approvalKind === "exec",
+      resolveOriginTarget: () => ({ to: "room-1", accountId: "default" }),
+      resolveApproverDmTargets: () => [{ to: "user-1", accountId: "default" }],
+      ...overrides,
+    });
+  }
+
+  it("suppresses session forwarding only when a native origin or approver DM matches", () => {
+    const shouldSuppress = createSuppressor();
+
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "session" },
+        request: execRequest,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "user-1", source: "session" },
+        request: execRequest,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "other-room", source: "session" },
+        request: execRequest,
+      }),
+    ).toBe(false);
+  });
+
+  it("requires explicit-target eligibility before suppressing target forwarding", () => {
+    expect(
+      createSuppressor()({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "target" },
+        request: execRequest,
+      }),
+    ).toBe(false);
+
+    expect(
+      createSuppressor({
+        isExplicitTargetEligible: () => true,
+      })({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "target" },
+        request: execRequest,
+      }),
+    ).toBe(true);
   });
 });
 
