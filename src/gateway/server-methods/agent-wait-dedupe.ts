@@ -113,30 +113,39 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
   const rawAgentMeta = asRecord(payload?.agentMeta);
-  const agentMeta: AgentWaitTerminalSnapshot["agentMeta"] = rawAgentMeta
-    ? {
-        usage: (() => {
-          const u = asRecord(rawAgentMeta.usage);
-          if (!u) {
-            return undefined;
-          }
-          const inputTokens = asFiniteNumber(u.inputTokens);
-          const outputTokens = asFiniteNumber(u.outputTokens);
-          const cachedInputTokens = asFiniteNumber(u.cachedInputTokens);
-          if (
-            inputTokens === undefined &&
-            outputTokens === undefined &&
-            cachedInputTokens === undefined
-          ) {
-            return undefined;
-          }
-          return { inputTokens, outputTokens, cachedInputTokens };
-        })(),
-        costUsd: asFiniteNumber(rawAgentMeta.costUsd),
-        provider: asString(rawAgentMeta.provider),
-        model: asString(rawAgentMeta.model),
-      }
-    : undefined;
+  const usage = (() => {
+    const u = asRecord(rawAgentMeta?.usage);
+    if (!u) {
+      return undefined;
+    }
+    const inputTokens = asFiniteNumber(u.inputTokens);
+    const outputTokens = asFiniteNumber(u.outputTokens);
+    const cachedInputTokens = asFiniteNumber(u.cachedInputTokens);
+    if (
+      inputTokens === undefined &&
+      outputTokens === undefined &&
+      cachedInputTokens === undefined
+    ) {
+      return undefined;
+    }
+    return { inputTokens, outputTokens, cachedInputTokens };
+  })();
+  const costUsd = asFiniteNumber(rawAgentMeta?.costUsd);
+  const provider = asString(rawAgentMeta?.provider);
+  const model = asString(rawAgentMeta?.model);
+
+  const agentMeta: AgentWaitTerminalSnapshot["agentMeta"] =
+    usage !== undefined ||
+    costUsd !== undefined ||
+    provider !== undefined ||
+    model !== undefined
+      ? {
+          usage,
+          costUsd,
+          provider,
+          model,
+        }
+      : undefined;
   const resultMeta = asOptionalRecord(asOptionalRecord(payload?.result)?.meta);
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
