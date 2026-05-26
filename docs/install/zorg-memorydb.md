@@ -25,3 +25,17 @@ Use the HTTPS git install form. The npm `github:` shorthand can resolve through 
 ```bash
 sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
+
+## Zorg MemoryDB first-run installer
+
+Use the installer first on a fresh system. It follows the OpenClaw install pattern and upgrades/install prerequisites such as Node before installing Zorg MemoryDB and LAN command chat.
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
+```
+
+Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
+
+```bash
+sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+```
