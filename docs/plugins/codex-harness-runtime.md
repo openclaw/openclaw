@@ -244,15 +244,15 @@ similar in logs, but they have different fixes.
 | OpenClaw assembly precheck        | OpenClaw         | OpenClaw's rendered turn prompt, developer instructions, context-engine projection, media, and reserves are too large before the turn is submitted to app-server.        |
 | Native-thread reuse rotation      | OpenClaw + Codex | OpenClaw has a saved Codex thread binding, but the persisted/native transcript is over the configured warm-thread reuse guard or the binding identity no longer matches. |
 
-The native-thread reuse guard is not the model context window. The default
-active-token guard is `70000` when transcript truncation after compaction is
-enabled. It is a proactive threshold for deciding whether an existing native
-Codex thread is still a good warm resume candidate. A legacy binding with an
-86000 token native rollout and a `70000` guard rotates every turn; raising
-`maxActiveTranscriptTokens` to `120k` preserves that binding, while setting it
-to `50k` rotates a 60000 token binding. Setting the token guard to `0` disables
-only proactive token rotation; byte guards and semantic binding checks can
-still rotate.
+The native-thread reuse guard is not the model context window. When unset,
+OpenClaw uses Codex's reported model context window, with a 300000-token
+fallback recovery fuse when Codex has not reported one. It is a proactive
+threshold for deciding whether an existing native Codex thread is still a good
+warm resume candidate. Setting `maxActiveTranscriptTokens` to `120k` preserves
+an 86000 token native rollout on models with smaller reported windows, while
+setting it to `50k` rotates a 60000 token binding. Setting the token guard to
+`0` disables only proactive token rotation; byte guards and semantic binding
+checks can still rotate.
 
 For context-engine `thread_bootstrap`, the efficient path is a matching
 context-engine id, policy fingerprint, projection epoch, projection

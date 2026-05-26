@@ -1810,7 +1810,7 @@ export async function runCodexAppServerAttempt(
       PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     );
     if (!compacted) {
-      throw new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+      return;
     }
     await rebuildPromptAfterContextEngineCompaction();
     const afterCompactionPrecheck = buildCodexProviderBoundaryPrecheck();
@@ -1828,7 +1828,6 @@ export async function runCodexAppServerAttempt(
         overflowTokens: afterCompactionPrecheck.overflowTokens,
       },
     );
-    throw new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
   };
   await maybeCompactContextEngineForProviderBoundaryPrecheck();
   const systemPromptReport = buildCodexSystemPromptReport({
@@ -3601,9 +3600,10 @@ export async function runCodexAppServerAttempt(
   }
   turnId = turn.turn.id;
   const activeTurnId = turn.turn.id;
+  const activeRunAttemptParams = buildActiveRunAttemptParams();
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridge = createCodexUserInputBridge({
-    paramsForRun: params,
+    paramsForRun: activeRunAttemptParams,
     threadId: thread.threadId,
     turnId: activeTurnId,
     signal: runAbortController.signal,
@@ -3614,12 +3614,17 @@ export async function runCodexAppServerAttempt(
     prompt: codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
-    nativePostToolUseRelayEnabled:
-      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
-      nativeHookRelay.shouldRelayEvent("post_tool_use"),
-    trajectoryRecorder,
-  });
+  projector = new CodexAppServerEventProjector(
+    activeRunAttemptParams,
+    thread.threadId,
+    activeTurnId,
+    {
+      nativePostToolUseRelayEnabled:
+        nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+        nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      trajectoryRecorder,
+    },
+  );
   if (
     isTerminalTurnStatus(turn.turn.status) ||
     pendingNotifications.some((notification) =>
@@ -3693,7 +3698,7 @@ export async function runCodexAppServerAttempt(
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
   void mirrorPromptAtTurnStartBestEffort({
-    params,
+    params: activeRunAttemptParams,
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
     sessionKey: sandboxSessionKey,

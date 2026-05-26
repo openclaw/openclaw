@@ -424,12 +424,11 @@ it exists and is non-empty. `BOOTSTRAP.md` and `MEMORY.md` when present are
 forwarded as OpenClaw turn input reference context.
 
 These bootstrap bytes are not the same thing as the native reuse guard. The
-default `70000` active-token guard is a warm-thread reuse threshold over the
-persisted/native Codex transcript and mirrored session totals; it is not the
-model context limit and it is not simply "bootstrap size". The model may have a
-larger context window, but OpenClaw can still decide that a legacy native thread
-is too expensive to resume when the saved rollout or session total is already
-over the configured guard.
+active-token guard is a warm-thread reuse threshold over the persisted/native
+Codex transcript and mirrored session totals; it is not simply "bootstrap size".
+When unset, OpenClaw uses Codex's reported model context window with a
+300000-token fallback recovery fuse. Operators can set `maxActiveTranscriptTokens`
+to a lower threshold when legacy native threads should rotate earlier.
 
 The token-efficient context-engine path is `thread_bootstrap`. When the saved
 Codex binding still matches the active context-engine id, policy fingerprint,
