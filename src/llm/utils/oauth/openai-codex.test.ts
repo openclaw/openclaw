@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./openai-codex.js";
+import { refreshOpenAICodexToken, testing } from "./openai-codex.js";
+
+function createJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
+}
 
 function stubTokenResponse(body: Record<string, unknown>): void {
   vi.stubGlobal(
@@ -49,5 +55,23 @@ describe("OpenAI Codex OAuth token responses", () => {
       expect(result.message).not.toContain("access_token");
       expect(result.message).not.toContain("refresh_token");
     }
+  });
+
+  it("extracts the account id from URL-safe base64 JWT payloads", async () => {
+    const accessToken = createJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "w_ébé_1fzcswWN6Pi5zL",
+      },
+    });
+    expect(accessToken.split(".")[1]).toContain("_");
+    stubTokenResponse({
+      access_token: accessToken,
+      refresh_token: "new-secret-refresh-token",
+      expires_in: 3600,
+    });
+
+    await expect(refreshOpenAICodexToken("old-refresh-token")).resolves.toMatchObject({
+      accountId: "w_ébé_1fzcswWN6Pi5zL",
+    });
   });
 });
