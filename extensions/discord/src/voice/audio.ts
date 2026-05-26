@@ -4,8 +4,8 @@ import {
   Application,
   createDecoder as createLibopusDecoder,
   createEncoder as createLibopusEncoder,
-  type OpusDecoder as LibopusDecoder,
-  type OpusEncoder as LibopusEncoder,
+  type OpusDecoderHandle as LibopusDecoder,
+  type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -80,7 +80,12 @@ async function createOpusDecoder(params: {
   return {
     name: "libopus-wasm",
     decoder: {
-      decode: (buffer) => pcmInt16ToBuffer(decoder.decodeFrame(buffer, DISCORD_OPUS_FRAME_SIZE)),
+      decode: (buffer) =>
+        pcmInt16ToBuffer(
+          decoder.decode(buffer, {
+            maxFrameSize: DISCORD_OPUS_FRAME_SIZE,
+          }),
+        ),
       free: () => decoder.free(),
     },
   };
@@ -141,7 +146,13 @@ class DiscordOpusEncodeStream extends Transform {
       while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
         const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
         this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
-        this.push(Buffer.from(encoder.encodePcm16(frame, DISCORD_OPUS_FRAME_SIZE)));
+        this.push(
+          Buffer.from(
+            encoder.encode(frame, {
+              frameSize: DISCORD_OPUS_FRAME_SIZE,
+            }),
+          ),
+        );
       }
       done();
     } catch (err) {
@@ -156,7 +167,13 @@ class DiscordOpusEncodeStream extends Transform {
         const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
         this.#buffer.copy(frame);
         this.#buffer = Buffer.alloc(0);
-        this.push(Buffer.from(encoder.encodePcm16(frame, DISCORD_OPUS_FRAME_SIZE)));
+        this.push(
+          Buffer.from(
+            encoder.encode(frame, {
+              frameSize: DISCORD_OPUS_FRAME_SIZE,
+            }),
+          ),
+        );
       }
       this.#freeEncoder();
       done();
