@@ -10,7 +10,10 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
+import {
+  buildPersistedUserTurnMessage,
+  createUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -866,6 +869,77 @@ describe("runCliAgent reliability", () => {
         }),
       );
       expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an existing user-turn recorder for approved CLI persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "recorder display prompt",
+        timestamp: 123,
+        idempotencyKey: "cli-recorder:user",
+      },
+      target: {
+        transcriptPath: sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: dir,
+      },
+      updateMode: "none",
+    });
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-recorder",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscript: { text: "legacy display prompt" },
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.hasPersisted()).toBe(true);
+
+      const messages = fs
+        .readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { message?: unknown })
+        .map((entry) => entry.message)
+        .filter(Boolean);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "recorder display prompt",
+          timestamp: 123,
+          idempotencyKey: "cli-recorder:user",
+        }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain("legacy display prompt");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
