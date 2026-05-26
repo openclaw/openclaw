@@ -10,6 +10,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
@@ -23,7 +24,7 @@ import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import {
@@ -44,10 +45,6 @@ type GenerationProviderContractKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
@@ -938,10 +935,11 @@ export function loadGatewayStartupPluginPlan(params: {
       index: params.index,
     })
       ? params.metadataSnapshot
-      : loadPluginMetadataSnapshot({
+      : resolvePluginMetadataSnapshot({
           config: snapshotConfig,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
         });
   return resolveGatewayStartupPluginPlanFromRegistry({

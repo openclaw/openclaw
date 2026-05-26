@@ -26,6 +26,11 @@ CLICKCLACK_STATE="/tmp/openclaw-release-upgrade-user-journey-clickclack.json"
 BASELINE_SPEC="${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
 
+candidate_version="$(
+  tar -xOf "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" package/package.json |
+    node -e 'let raw = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { raw += chunk; }); process.stdin.on("end", () => { process.stdout.write(JSON.parse(raw).version); });'
+)"
+
 mock_pid=""
 clickclack_pid=""
 gateway_pid=""
@@ -64,7 +69,10 @@ start_gateway() {
 }
 
 echo "Installing published baseline $BASELINE_SPEC..."
-npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1; then
+  cat /tmp/openclaw-release-upgrade-baseline-install.log >&2 || true
+  exit 1
+fi
 command -v openclaw >/dev/null
 baseline_root="$(openclaw_e2e_package_root)"
 baseline_entry="$(openclaw_e2e_package_entrypoint "$baseline_root")"
@@ -117,6 +125,7 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "h
 openclaw_e2e_install_package /tmp/openclaw-release-upgrade-candidate-install.log "candidate OpenClaw package"
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$candidate_version" candidate
 
 openclaw agent --local \
   --agent main \

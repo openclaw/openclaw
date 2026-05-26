@@ -279,6 +279,7 @@ const TalkRealtimeSchema = z
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+    consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
   .strict()
   .superRefine((realtime, ctx) => {
@@ -482,6 +483,7 @@ export const OpenClawSchema = z
                     toolInputs: z.boolean().optional(),
                     toolOutputs: z.boolean().optional(),
                     systemPrompt: z.boolean().optional(),
+                    toolDefinitions: z.boolean().optional(),
                   })
                   .strict(),
               ])
@@ -814,6 +816,28 @@ export const OpenClawSchema = z
           }
         }
       })
+      .optional(),
+    transcripts: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxUtterances: z.number().int().min(1).max(10_000).optional(),
+        autoStart: z
+          .array(
+            z
+              .object({
+                providerId: z.string().min(1),
+                sessionId: z.string().min(1).optional(),
+                title: z.string().min(1).optional(),
+                accountId: z.string().min(1).optional(),
+                guildId: z.string().min(1).optional(),
+                channelId: z.string().min(1).optional(),
+                meetingUrl: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
       .optional(),
     commitments: CommitmentsSchema,
     hooks: z

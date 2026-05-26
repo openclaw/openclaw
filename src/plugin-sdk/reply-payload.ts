@@ -3,6 +3,7 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
@@ -51,7 +52,7 @@ type SendPayloadAdapter = Pick<
   "sendMedia" | "sendText" | "chunker" | "textChunkLimit"
 >;
 
-const REASONING_PREFIX = "reasoning:";
+const REASONING_PREFIX_RE = /^(?:reasoning:|thinking\.{0,3}(?=\s*(?:>\s*)?_))/u;
 
 function readObjectValue(value: unknown): object | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -74,12 +75,11 @@ export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean
     return false;
   }
   const normalized = normalizeLowercaseStringOrEmpty(text.trimStart());
-  if (normalized.startsWith(REASONING_PREFIX)) {
+  if (REASONING_PREFIX_RE.test(normalized)) {
     return true;
   }
-  return normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text)).startsWith(
-    REASONING_PREFIX,
-  );
+  const unquoted = normalizeLowercaseStringOrEmpty(trimLeadingMarkdownQuoteMarkers(text));
+  return REASONING_PREFIX_RE.test(unquoted);
 }
 
 /** Extract the supported outbound reply fields from loose tool or agent payload objects. */
@@ -182,9 +182,7 @@ export function resolveSendableOutboundReplyParts(
 ): SendableOutboundReplyParts {
   const text = options?.text ?? payload.text ?? "";
   const trimmedText = text.trim();
-  const mediaUrls = resolveOutboundMediaUrls(payload)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const mediaUrls = normalizeStringEntries(resolveOutboundMediaUrls(payload));
   const mediaCount = mediaUrls.length;
   const hasText = Boolean(trimmedText);
   const hasMedia = mediaCount > 0;

@@ -19,7 +19,12 @@ import {
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  shouldAutoApproveCodexAppServerApprovals,
+  type CodexAppServerRuntimeOptions,
+} from "./config.js";
 import {
   emitDynamicToolErrorDiagnostic,
   emitDynamicToolStartedDiagnostic,
@@ -36,12 +41,16 @@ import {
   buildCodexNativeHookRelayDisabledConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import {
+  readCodexNotificationThreadId,
+  readCodexNotificationTurnId,
+} from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
-  readCodexTurnCompletedNotification,
+  readCodexTurn,
 } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -55,10 +64,12 @@ import {
 } from "./protocol.js";
 import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
 import { getSharedCodexAppServerClient } from "./shared-client.js";
 import {
   buildCodexRuntimeThreadConfig,
+  CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerModelProvider,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
@@ -66,6 +77,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
@@ -120,6 +132,15 @@ export async function runCodexAppServerSideQuestion(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
     );
   }
+  const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    surface: "/btw side-question mode",
+  });
+  if (nativeExecutionBlock) {
+    throw new Error(nativeExecutionBlock);
+  }
 
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
@@ -151,6 +172,8 @@ export async function runCodexAppServerSideQuestion(
   try {
     const cwd = binding.cwd || params.workspaceDir || process.cwd();
     const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId });
+    const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
+    const sandbox = binding.sandbox ?? appServer.sandbox;
     const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.cfg,
@@ -197,6 +220,7 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
+          autoApprove: shouldAutoApproveCodexAppServerApprovals({ approvalPolicy, sandbox }),
           signal: runAbortController.signal,
         });
       }
@@ -244,8 +268,6 @@ export async function runCodexAppServerSideQuestion(
       }
     });
 
-    const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
-    const sandbox = binding.sandbox ?? appServer.sandbox;
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
     const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
@@ -302,6 +324,7 @@ export async function runCodexAppServerSideQuestion(
           threadId: binding.threadId,
           model: params.model,
           ...(modelProvider ? { modelProvider } : {}),
+          personality: CODEX_NATIVE_PERSONALITY_NONE,
           cwd,
           approvalPolicy,
           approvalsReviewer: appServer.approvalsReviewer,
@@ -335,6 +358,7 @@ export async function runCodexAppServerSideQuestion(
           input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
           cwd,
           model: params.model,
+          personality: CODEX_NATIVE_PERSONALITY_NONE,
           ...(serviceTier ? { serviceTier } : {}),
           effort,
           collaborationMode: {
@@ -386,7 +410,7 @@ export async function runCodexAppServerSideQuestion(
 
 function resolveCodexSideNativeHookRelayEvents(params: {
   configuredEvents?: readonly NativeHookRelayEvent[];
-  approvalPolicy: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["approvalPolicy"];
+  approvalPolicy: CodexAppServerRuntimeOptions["approvalPolicy"];
 }): readonly NativeHookRelayEvent[] {
   if (params.configuredEvents?.length) {
     return params.configuredEvents;
@@ -671,7 +695,8 @@ function resolveSideDynamicToolCallTimeoutMs(params: {
   const configured =
     readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
     (params.call.tool === "image_generate"
-      ? readSideImageGenerationModelTimeoutMs(params.config)
+      ? (readSideImageGenerationModelTimeoutMs(params.config) ??
+        CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS)
       : undefined) ??
     (params.call.tool === "image"
       ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
@@ -911,8 +936,7 @@ class CodexSideQuestionCollector {
   }
 
   private completeFromTurn(params: JsonObject): void {
-    const notification = readCodexTurnCompletedNotification(params);
-    const turn = notification?.turn;
+    const turn = readCodexTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -961,16 +985,13 @@ function collectAssistantText(turn: CodexTurn): string {
 }
 
 function isNotificationForTurn(params: JsonObject, threadId: string, turnId: string): boolean {
-  return readString(params, "threadId") === threadId && readNotificationTurnId(params) === turnId;
+  return (
+    readCodexNotificationThreadId(params) === threadId && readNotificationTurnId(params) === turnId
+  );
 }
 
 function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readString(record, "turnId") ?? readNestedTurnId(record);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
+  return readCodexNotificationTurnId(record);
 }
 
 function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {

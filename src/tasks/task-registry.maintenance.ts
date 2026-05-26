@@ -57,14 +57,19 @@ import {
   listTaskAuditFindings,
   summarizeTaskAuditFindings,
 } from "./task-registry.audit.js";
-import type { TaskAuditSummary } from "./task-registry.audit.js";
+import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import {
+  resolveEffectiveTaskCleanupAfter,
+  resolveTaskCleanupAfter,
+  resolveTaskRetentionMs,
+} from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
-const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
@@ -160,6 +165,28 @@ export type TaskRegistryMaintenanceSummary = {
   recovered: number;
   cleanupStamped: number;
   pruned: number;
+};
+
+export type TaskRegistryMaintenanceTaskDiagnostic = {
+  taskId: string;
+  runtime: TaskRecord["runtime"];
+  status: TaskRecord["status"];
+  decision: "retained" | "would_reconcile";
+  reason:
+    | "active_cli_run"
+    | "backing_session_missing"
+    | "backing_session_present"
+    | "cron_runtime_not_authoritative"
+    | "lost_grace_pending"
+    | "subagent_recovery_wedged";
+  detail?: string;
+  ageMs: number;
+  childSessionKey?: string;
+  runId?: string;
+};
+
+export type TaskRegistryMaintenanceDiagnostics = {
+  staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[];
 };
 
 type CronExecutionId = {
@@ -547,10 +574,10 @@ function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
     return false;
   }
   if (typeof task.cleanupAfter === "number") {
-    return now >= task.cleanupAfter;
+    return now >= resolveEffectiveTaskCleanupAfter(task);
   }
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return now - terminalAt >= TASK_RETENTION_MS;
+  return now - terminalAt >= resolveTaskRetentionMs(task.status);
 }
 
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
@@ -558,8 +585,11 @@ function shouldStampCleanupAfter(task: TaskRecord): boolean {
 }
 
 function resolveCleanupAfter(task: TaskRecord): number {
-  const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return terminalAt + TASK_RETENTION_MS;
+  return resolveTaskCleanupAfter(task);
+}
+
+function taskReferenceAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.startedAt ?? task.createdAt;
 }
 
 function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined {
@@ -742,12 +772,16 @@ function markTaskLost(
   now: number,
   context?: BackingSessionLookupContext,
 ): TaskRecord {
-  const cleanupAfter =
-    task.cleanupAfter ?? resolveCleanupAfter({ ...task, endedAt: task.endedAt ?? now });
+  const lostAt = task.endedAt ?? now;
+  const cleanupAfter = resolveEffectiveTaskCleanupAfter({
+    ...task,
+    status: "lost",
+    endedAt: lostAt,
+  });
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
-      endedAt: task.endedAt ?? now,
+      endedAt: lostAt,
       lastEventAt: now,
       error: task.error ?? resolveTaskLostError(task, context),
       cleanupAfter,
@@ -910,8 +944,12 @@ export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
 }
 
 export function getInspectableTaskAuditSummary(): TaskAuditSummary {
+  return summarizeTaskAuditFindings(getInspectableTaskAuditFindings());
+}
+
+export function getInspectableTaskAuditFindings(): TaskAuditFinding[] {
   const tasks = reconcileInspectableTasks();
-  return summarizeTaskAuditFindings(listTaskAuditFindings({ tasks }));
+  return listTaskAuditFindings({ tasks });
 }
 
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {
@@ -950,6 +988,72 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
     }
   }
   return { reconciled, recovered, cleanupStamped, pruned };
+}
+
+function explainActiveTaskRetention(params: {
+  task: TaskRecord;
+  now: number;
+  context: BackingSessionLookupContext;
+}): Pick<TaskRegistryMaintenanceTaskDiagnostic, "decision" | "reason" | "detail"> {
+  if (!hasLostGraceExpired(params.task, params.now)) {
+    return { decision: "retained", reason: "lost_grace_pending" };
+  }
+  if (params.task.runtime === "subagent") {
+    const entry = findTaskSessionEntry(params.task, params.context);
+    if (entry && isSubagentRecoveryWedgedEntry(entry)) {
+      return {
+        decision: "would_reconcile",
+        reason: "subagent_recovery_wedged",
+        detail: formatSubagentRecoveryWedgedReason(entry),
+      };
+    }
+  }
+  if (!hasBackingSession(params.task, params.context)) {
+    return { decision: "would_reconcile", reason: "backing_session_missing" };
+  }
+  if (
+    params.task.runtime === "cron" &&
+    !taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()
+  ) {
+    return { decision: "retained", reason: "cron_runtime_not_authoritative" };
+  }
+  if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
+    return { decision: "retained", reason: "active_cli_run" };
+  }
+  return { decision: "retained", reason: "backing_session_present" };
+}
+
+export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenanceDiagnostics {
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  const now = Date.now();
+  const cronRecoveryContext = createCronRecoveryContext();
+  const backingSessionContext = createBackingSessionLookupContext();
+  const staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[] = [];
+  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+    if (task.status !== "running") {
+      continue;
+    }
+    const ageMs = Math.max(0, now - taskReferenceAt(task));
+    if (ageMs < TASK_STALE_RUNNING_MS) {
+      continue;
+    }
+    if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
+      continue;
+    }
+    const decision = explainActiveTaskRetention({ task, now, context: backingSessionContext });
+    staleRunningTasks.push({
+      taskId: task.taskId,
+      runtime: task.runtime,
+      status: task.status,
+      decision: decision.decision,
+      reason: decision.reason,
+      ageMs,
+      ...(decision.detail ? { detail: decision.detail } : {}),
+      ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
+      ...(task.runId ? { runId: task.runId } : {}),
+    });
+  }
+  return { staleRunningTasks };
 }
 
 /**

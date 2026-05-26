@@ -20,8 +20,10 @@ import {
   mockedEvaluateContextWindowGuard,
   mockedEnsureAuthProfileStore,
   mockedEnsureAuthProfileStoreWithoutExternalProfiles,
+  mockedExtractObservedOverflowTokenCount,
   mockedGlobalHookRunner,
   mockedGetApiKeyForModel,
+  mockedIsLikelyContextOverflowError,
   mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
@@ -48,7 +50,6 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     runId: "forward-attempt-params",
     params: {
       toolsAllow: ["exec", "read"],
-      ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -58,7 +59,6 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     },
     expected: {
       toolsAllow: ["exec", "read"],
-      ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -1513,6 +1513,70 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("passes minimally over-budget count when overflow text is confirmed but unparseable", async () => {
+    mockedExtractObservedOverflowTokenCount.mockReturnValueOnce(undefined);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          lastAssistant: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "Context window exceeded for this request.",
+            usage: { totalTokens: 0 },
+          } as never,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-9",
+        tokensBefore: 200001,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expectMockCallFields(mockedCompactDirect, {
+      currentTokenCount: 200001,
+    });
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("surfaces a visible blocked payload for Codex promptError overflow without assistant text", async () => {
+    const promptError = new Error(
+      "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+    );
+    const terminalLifecycleMeta: Array<Record<string, unknown>> = [];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError,
+        promptErrorSource: "prompt",
+        assistantTexts: [],
+        attemptUsage: { input: 0, output: 0, total: 0 },
+        setTerminalLifecycleMeta: (meta) => {
+          terminalLifecycleMeta.push(meta);
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedIsLikelyContextOverflowError).toHaveBeenCalledWith(promptError.message);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Context overflow"),
+    });
+    expect(result.payloads?.[0]?.text).toContain("/reset");
+    expect(result.payloads?.[0]?.text).toContain("/new");
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.finalAssistantVisibleText).toBe(result.payloads?.[0]?.text);
+    expect(terminalLifecycleMeta.at(-1)).toMatchObject({ livenessState: "blocked" });
+  });
+
   it("does not reset compaction attempt budget after successful tool-result truncation", async () => {
     const overflowError = queueOverflowAttemptWithOversizedToolOutput(
       mockedRunEmbeddedAttempt,
@@ -1676,6 +1740,26 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedGlobalHookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("threads a composed run abort signal into engine-owned overflow compaction", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    const abortController = new AbortController();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "engine-owned compaction", tokensAfter: 50 }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      abortSignal: abortController.signal,
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    const compactArg = mockCallArg(mockedCompactDirect) as { abortSignal?: AbortSignal };
+    expect(compactArg.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   it("returns retry_limit when repeated retries never converge", async () => {

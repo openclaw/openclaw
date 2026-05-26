@@ -1,4 +1,7 @@
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -11,7 +14,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -27,6 +30,7 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNestedAgentLane } from "../lanes.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
@@ -67,11 +71,51 @@ export type AgentCommandDeliveryStatus = {
 export type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
   meta: EmbeddedPiRunMeta & AgentCommandResultMetaOverrides;
+  didSendViaMessagingTool?: boolean;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: MessagingToolSend[];
   deliverySucceeded?: boolean;
   deliveryStatus?: AgentCommandDeliveryStatus;
 };
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
+
+type FreshSessionEntryForDeliveryResolver = () => Promise<SessionEntry | undefined>;
+
+type FreshSessionDeliveryRefreshParams =
+  | {
+      expectedSessionIdForFreshDelivery: string;
+      resolveFreshSessionEntryForDelivery: FreshSessionEntryForDeliveryResolver;
+    }
+  | {
+      expectedSessionIdForFreshDelivery?: string;
+      resolveFreshSessionEntryForDelivery?: undefined;
+    };
+
+type DeliverAgentCommandResultParams = {
+  cfg: OpenClawConfig;
+  deps: CliDeps;
+  runtime: RuntimeEnv;
+  opts: AgentCommandOpts;
+  outboundSession: OutboundSessionContext | undefined;
+  sessionEntry: SessionEntry | undefined;
+  result: RunResult;
+  payloads: RunResult["payloads"];
+} & FreshSessionDeliveryRefreshParams;
+
+function normalizeDeliverySessionId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function isFreshDeliverySessionMatch(
+  freshSessionEntry: SessionEntry,
+  expectedSessionId: string | undefined,
+): boolean {
+  const normalizedExpected = normalizeDeliverySessionId(expectedSessionId);
+  return Boolean(normalizedExpected && freshSessionEntry.sessionId === normalizedExpected);
+}
 
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
@@ -120,6 +164,45 @@ function mergeResultMetaOverrides(
   return {
     ...meta,
     ...overrides,
+  };
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.some(hasNonEmptyString);
+}
+
+function hasNonEmptyArray<T>(value: T[] | undefined): value is T[] {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function buildDeliveryResult(params: {
+  payloads: AgentCommandDeliveryResult["payloads"];
+  meta: AgentCommandDeliveryResult["meta"];
+  result: RunResult;
+  deliverySucceeded?: boolean;
+  deliveryStatus?: AgentCommandDeliveryStatus;
+}): AgentCommandDeliveryResult {
+  return {
+    payloads: params.payloads,
+    meta: params.meta,
+    ...(params.result.didSendViaMessagingTool === true ? { didSendViaMessagingTool: true } : {}),
+    ...(hasNonEmptyStringArray(params.result.messagingToolSentTexts)
+      ? { messagingToolSentTexts: params.result.messagingToolSentTexts }
+      : {}),
+    ...(hasNonEmptyStringArray(params.result.messagingToolSentMediaUrls)
+      ? { messagingToolSentMediaUrls: params.result.messagingToolSentMediaUrls }
+      : {}),
+    ...(hasNonEmptyArray(params.result.messagingToolSentTargets)
+      ? { messagingToolSentTargets: params.result.messagingToolSentTargets }
+      : {}),
+    ...(params.deliverySucceeded !== undefined
+      ? { deliverySucceeded: params.deliverySucceeded }
+      : {}),
+    ...(params.deliveryStatus ? { deliveryStatus: params.deliveryStatus } : {}),
   };
 }
 
@@ -331,19 +414,18 @@ export function normalizeAgentCommandReplyPayloads(params: {
   return normalizedPayloads;
 }
 
-export async function deliverAgentCommandResult(params: {
-  cfg: OpenClawConfig;
-  deps: CliDeps;
-  runtime: RuntimeEnv;
-  opts: AgentCommandOpts;
-  outboundSession: OutboundSessionContext | undefined;
-  sessionEntry: SessionEntry | undefined;
-  resolveFreshSessionEntryForDelivery?: () => Promise<SessionEntry | undefined>;
-  result: RunResult;
-  payloads: RunResult["payloads"];
-}): Promise<AgentCommandDeliveryResult> {
+export async function deliverAgentCommandResult(
+  params: DeliverAgentCommandResultParams,
+): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
+  const deliveryAgentId =
+    outboundSession?.agentId ??
+    resolveSessionAgentId({
+      sessionKey: effectiveSessionKey,
+      config: cfg,
+    }) ??
+    resolveDefaultAgentId(cfg);
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
@@ -352,7 +434,10 @@ export async function deliverAgentCommandResult(params: {
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
   const resolveDeliveryRouting = async (candidateSessionEntry: SessionEntry | undefined) => {
-    const deliveryPlan = resolveAgentDeliveryPlan({
+    const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg,
+      agentId: deliveryAgentId,
+      currentSessionKey: effectiveSessionKey,
       sessionEntry: candidateSessionEntry,
       requestedChannel: opts.replyChannel ?? opts.channel,
       explicitTo: opts.replyTo ?? opts.to,
@@ -467,7 +552,13 @@ export async function deliverAgentCommandResult(params: {
   let deliveryRouting = await resolveDeliveryRouting(sessionEntry);
   if (isRetryableFreshSessionRoutingFailure(deliveryRouting)) {
     const freshSessionEntry = await params.resolveFreshSessionEntryForDelivery?.();
-    if (freshSessionEntry && freshSessionEntry !== sessionEntry) {
+    const expectedFreshSessionId =
+      params.expectedSessionIdForFreshDelivery ?? sessionEntry?.sessionId;
+    if (
+      freshSessionEntry &&
+      freshSessionEntry !== sessionEntry &&
+      isFreshDeliverySessionMatch(freshSessionEntry, expectedFreshSessionId)
+    ) {
       const freshRouting = await resolveDeliveryRouting(freshSessionEntry);
       if (!deliveryRoutingFailureReason(freshRouting)) {
         if (!opts.json) {
@@ -577,12 +668,13 @@ export async function deliverAgentCommandResult(params: {
     deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
     const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
     emitJsonEnvelope(deliveryStatus);
-    return {
+    return buildDeliveryResult({
       payloads: normalizedPayloads,
       meta: resultMeta,
-      ...(deliverySucceeded !== undefined ? { deliverySucceeded } : {}),
-      ...(deliveryStatus ? { deliveryStatus } : {}),
-    };
+      result,
+      deliverySucceeded,
+      deliveryStatus,
+    });
   }
 
   let deliverySucceeded = false;
@@ -605,7 +697,7 @@ export async function deliverAgentCommandResult(params: {
       logPayload(payload);
     }
     emitJsonEnvelope();
-    return { payloads: normalizedPayloads, meta: resultMeta };
+    return buildDeliveryResult({ payloads: normalizedPayloads, meta: resultMeta, result });
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget && !deliveryStatus) {
@@ -648,5 +740,11 @@ export async function deliverAgentCommandResult(params: {
   }
 
   emitJsonEnvelope(deliveryStatus);
-  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded, deliveryStatus };
+  return buildDeliveryResult({
+    payloads: normalizedPayloads,
+    meta: resultMeta,
+    result,
+    deliverySucceeded,
+    deliveryStatus,
+  });
 }

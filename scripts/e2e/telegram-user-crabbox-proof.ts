@@ -847,38 +847,46 @@ async function startLocalSutDaemon(params: {
   const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
   const mockLog = path.join(params.outputDir, "mock-openai.log");
   const gatewayLog = path.join(params.outputDir, "gateway.log");
-  const mockPid = spawnDaemon({
-    command: "node",
-    args: ["scripts/e2e/mock-openai-server.mjs"],
-    cwd: params.repoRoot,
-    env: mockServerEnv({ ...params, requestLog }),
-    logPath: mockLog,
-  });
-  if (!mockPid) {
-    throw new Error("mock-openai did not start.");
-  }
-  await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
+  let mockPid: number | undefined;
+  let gatewayPid: number | undefined;
+  try {
+    mockPid = spawnDaemon({
+      command: "node",
+      args: ["scripts/e2e/mock-openai-server.mjs"],
+      cwd: params.repoRoot,
+      env: mockServerEnv({ ...params, requestLog }),
+      logPath: mockLog,
+    });
+    if (!mockPid) {
+      throw new Error("mock-openai did not start.");
+    }
+    await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
-  const gatewayPid = spawnDaemon({
-    command: "pnpm",
-    args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-    cwd: params.repoRoot,
-    env: gatewayEnv({ ...config, sutToken: params.sutToken }),
-    logPath: gatewayLog,
-  });
-  if (!gatewayPid) {
-    throw new Error("gateway did not start.");
+    gatewayPid = spawnDaemon({
+      command: "pnpm",
+      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+      cwd: params.repoRoot,
+      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      logPath: gatewayLog,
+    });
+    if (!gatewayPid) {
+      throw new Error("gateway did not start.");
+    }
+    await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
+    return {
+      ...config,
+      drained,
+      gatewayLog,
+      gatewayPid,
+      mockLog,
+      mockPid,
+      requestLog,
+    };
+  } catch (error) {
+    killPidTree(gatewayPid);
+    killPidTree(mockPid);
+    throw error;
   }
-  await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
-  return {
-    ...config,
-    drained,
-    gatewayLog,
-    gatewayPid,
-    mockLog,
-    mockPid,
-    requestLog,
-  };
 }
 
 function extractLeaseId(output: string) {
@@ -1119,23 +1127,50 @@ set -euo pipefail
 root=${REMOTE_ROOT}
 tdlib_sha256=${tdlibSha256}
 tdlib_url=${tdlibUrl}
+setup_step_timeout_kill_after="\${OPENCLAW_TELEGRAM_USER_SETUP_KILL_AFTER_SECONDS:-30}s"
+apt_timeout="\${OPENCLAW_TELEGRAM_USER_APT_TIMEOUT_SECONDS:-900}s"
+download_timeout="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_TIMEOUT_SECONDS:-600}"
+download_connect_timeout="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}"
+download_retries="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_RETRIES:-3}"
+download_retry_delay="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_RETRY_DELAY_SECONDS:-5}"
+tdlib_clone_timeout="\${OPENCLAW_TELEGRAM_USER_TDLIB_CLONE_TIMEOUT_SECONDS:-600}s"
+tdlib_build_timeout="\${OPENCLAW_TELEGRAM_USER_TDLIB_BUILD_TIMEOUT_SECONDS:-1800}s"
+run_setup_step() {
+  local label="$1"
+  local timeout_value="$2"
+  shift 2
+  echo "==> $label" >&2
+  timeout --kill-after="$setup_step_timeout_kill_after" "$timeout_value" "$@"
+}
+download_file() {
+  local url="$1"
+  local output="$2"
+  curl -fL \
+    --connect-timeout "$download_connect_timeout" \
+    --max-time "$download_timeout" \
+    --retry "$download_retries" \
+    --retry-delay "$download_retry_delay" \
+    --retry-all-errors \
+    -o "$output" \
+    "$url"
+}
 mkdir -p "$root"
 tar -xzf "$root/state.tgz" -C "$root"
-sudo apt-get update -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
+run_setup_step "apt-get update" "$apt_timeout" sudo apt-get update -y
+run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
   exit 127
 fi
 if [ ! -x "$root/Telegram/Telegram" ]; then
-  curl -fL https://telegram.org/dl/desktop/linux -o "$root/telegram.tar.xz"
+  download_file https://telegram.org/dl/desktop/linux "$root/telegram.tar.xz"
   tar -xJf "$root/telegram.tar.xz" -C "$root"
 fi
 if ! ldconfig -p | grep -q libtdjson.so; then
   if [ -n "$tdlib_url" ]; then
-    curl -fL "$tdlib_url" -o "$root/tdlib-linux.tgz"
+    download_file "$tdlib_url" "$root/tdlib-linux.tgz"
     if [ -z "$tdlib_sha256" ]; then
-      curl -fL "$tdlib_url.sha256" -o "$root/tdlib-linux.tgz.sha256"
+      download_file "$tdlib_url.sha256" "$root/tdlib-linux.tgz.sha256"
       tdlib_sha256="$(awk '{print $1; exit}' "$root/tdlib-linux.tgz.sha256")"
     fi
     printf '%s  %s\\n' "$tdlib_sha256" "$root/tdlib-linux.tgz" | sha256sum -c -
@@ -1146,10 +1181,10 @@ if ! ldconfig -p | grep -q libtdjson.so; then
     sudo install -m 0755 "$lib" /usr/local/lib/libtdjson.so
   else
     rm -rf "$root/td" "$root/td-build"
-    git clone --depth 1 --branch v1.8.0 https://github.com/tdlib/td.git "$root/td"
-    cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=OFF
-    cmake --build "$root/td-build" --target tdjson -j "$(nproc)"
-    sudo cmake --install "$root/td-build"
+    run_setup_step "tdlib clone" "$tdlib_clone_timeout" git clone --depth 1 --branch v1.8.0 https://github.com/tdlib/td.git "$root/td"
+    run_setup_step "tdlib configure" "$tdlib_build_timeout" cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=OFF
+    run_setup_step "tdlib build" "$tdlib_build_timeout" cmake --build "$root/td-build" --target tdjson -j "$(nproc)"
+    run_setup_step "tdlib install" "$apt_timeout" sudo cmake --install "$root/td-build"
   fi
   sudo ldconfig
 fi
@@ -1633,20 +1668,21 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   }
 
   requireUserDriverScript(opts);
-  const credential = await leaseCredential({ localRoot, opts, root });
-  const sut = opts.sutUsername
-    ? { id: "", username: opts.sutUsername }
-    : await sutIdentity(credential.sutToken);
-  const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+  let credential: Awaited<ReturnType<typeof leaseCredential>> | undefined;
   let leaseId = opts.leaseId;
   let createdLease = false;
-  if (!leaseId) {
-    leaseId = await warmupCrabbox(opts, root);
-    createdLease = true;
-  }
-  const inspect = await inspectCrabbox(opts, root, leaseId);
   let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
   try {
+    credential = await leaseCredential({ localRoot, opts, root });
+    const sut = opts.sutUsername
+      ? { id: "", username: opts.sutUsername }
+      : await sutIdentity(credential.sutToken);
+    const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+    if (!leaseId) {
+      leaseId = await warmupCrabbox(opts, root);
+      createdLease = true;
+    }
+    const inspect = await inspectCrabbox(opts, root, leaseId);
     await writeRemoteSessionScripts({
       inspect,
       localRoot,
@@ -1712,7 +1748,9 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   } catch (error) {
     killPidTree(localSut?.gatewayPid);
     killPidTree(localSut?.mockPid);
-    await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    if (credential) {
+      await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    }
     if (leaseId && createdLease) {
       await stopCrabbox(root, opts, leaseId).catch(() => {});
     }

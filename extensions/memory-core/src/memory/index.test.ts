@@ -12,7 +12,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import { EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
+import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
+import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 import {
   DEFAULT_LOCAL_MODEL,
   registerBuiltInMemoryEmbeddingProviders,
@@ -28,8 +29,19 @@ afterAll(() => {
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
+let providerCloseCalls = 0;
+let providerCloseFailuresRemaining = 0;
+let providerCloseGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+
+function createLocalWorkerExitError(): Error {
+  return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
+    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    reason: "exit",
+    exitCode: 134,
+  });
+}
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -41,6 +53,10 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, image, audio];
   };
   return {
+    resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
+      providerId === "gemini" || providerId === "fallback-provider"
+        ? `${providerId}-embed`
+        : fallbackSourceModel,
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;
@@ -58,19 +74,30 @@ vi.mock("./embeddings.js", () => {
           providerUnavailableReason: "No API key found for provider",
         };
       }
-      const providerId = options.provider === "gemini" ? "gemini" : "mock";
+      const providerId =
+        options.provider === "gemini" || options.provider === "fallback-provider"
+          ? options.provider
+          : "mock";
       const model = options.model ?? "mock-embed";
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
           id: providerId,
           model,
+          close: async () => {
+            providerCloseCalls += 1;
+            await providerCloseGate;
+            if (providerCloseFailuresRemaining > 0) {
+              providerCloseFailuresRemaining -= 1;
+              throw new Error("provider close failed");
+            }
+          },
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
             return texts.map(embedText);
           },
-          ...(providerId === "gemini"
+          ...(providerId === "gemini" || providerId === "fallback-provider"
             ? {
                 embedBatchInputs: async (
                   inputs: Array<{
@@ -101,12 +128,12 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "gemini"
+        ...(providerId === "gemini" || providerId === "fallback-provider"
           ? {
               runtime: {
-                id: "gemini",
+                id: providerId,
                 cacheKeyData: {
-                  provider: "gemini",
+                  provider: providerId,
                   baseUrl: "https://generativelanguage.googleapis.com/v1beta",
                   model,
                   outputDimensionality: options.outputDimensionality,
@@ -188,6 +215,9 @@ describe("memory index", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
+    providerCloseCalls = 0;
+    providerCloseFailuresRemaining = 0;
+    providerCloseGate = null;
     providerCalls = [];
     forceNoProvider = false;
 
@@ -228,7 +258,8 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
-    provider?: "openai" | "gemini";
+    provider?: "openai" | "gemini" | "fallback-provider";
+    fallback?: "none" | "gemini" | "fallback-provider";
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -249,6 +280,7 @@ describe("memory index", () => {
           memorySearch: {
             provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
+            fallback: params.fallback,
             outputDimensionality: params.outputDimensionality,
             store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
@@ -352,6 +384,96 @@ describe("memory index", () => {
     } finally {
       await manager.close?.();
     }
+  });
+
+  it("closes embedding providers when memory index managers close", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+
+    await manager.probeEmbeddingAvailability();
+    expect(providerCloseCalls).toBe(0);
+
+    await manager.close();
+    await manager.close();
+
+    expect(providerCloseCalls).toBe(1);
+  });
+
+  it("closes embedding providers before waiting for pending sync to settle", async () => {
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+    await manager.probeEmbeddingAvailability();
+    let resolveSync: () => void = () => {};
+    (manager as unknown as { syncing: Promise<void> }).syncing = new Promise<void>((resolve) => {
+      resolveSync = resolve;
+    });
+
+    const closePromise = manager.close();
+    await vi.waitFor(() => {
+      expect(providerCloseCalls).toBe(1);
+    });
+    let closeSettled = false;
+    void closePromise.then(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(closeSettled).toBe(false);
+    resolveSync();
+    await closePromise;
+  });
+
+  it("evicts scoped memory index managers before close settles", async () => {
+    let releaseProviderClose: () => void = () => {};
+    providerCloseGate = new Promise<void>((resolve) => {
+      releaseProviderClose = resolve;
+    });
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const first = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(first);
+    await first.probeEmbeddingAvailability();
+    const closePromise = closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
+    let second: MemoryIndexManager | null = null;
+    try {
+      await vi.waitFor(() => {
+        expect(providerCloseCalls).toBe(1);
+      });
+
+      second = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+      managersForCleanup.add(second);
+      expect(second).not.toBe(first);
+    } finally {
+      releaseProviderClose();
+      providerCloseGate = null;
+    }
+    await closePromise;
+
+    const third = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    managersForCleanup.add(third);
+    expect(third).toBe(second);
+  });
+
+  it("retries embedding provider close before releasing the manager", async () => {
+    providerCloseFailuresRemaining = 1;
+    const cfg = createCfg({
+      storePath: indexMainPath,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getFreshManager(cfg);
+
+    await manager.probeEmbeddingAvailability();
+    await manager.close();
+
+    expect(providerCloseCalls).toBe(2);
   });
 
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
@@ -471,6 +593,144 @@ describe("memory index", () => {
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
       EMBEDDING_PROBE_CACHE_TTL_MS,
     );
+  });
+
+  it("clears cached embedding probe readiness when local embeddings degrade", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-degraded.sqlite") });
+    const manager = await getPersistentManager(cfg);
+
+    await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(manager.getCachedEmbeddingAvailability()?.ok).toBe(true);
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: (text: string) => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "local",
+      model: "local-model",
+      embedQuery: async () => [1, 0],
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0]),
+      close: async () => {},
+    };
+
+    (
+      manager as unknown as {
+        markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      }
+    ).markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+
+    expect(manager.getCachedEmbeddingAvailability()).toBeNull();
+    await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Local embeddings degraded"),
+    });
+  });
+
+  it("activates configured fallback when local embeddings degrade during search", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-search-degraded-fallback.sqlite"),
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test" });
+    const callsBeforeSearch = providerCalls.length;
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: () => Promise<number[]>;
+          embedBatch: (texts: string[]) => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "local",
+      model: "mock-embed",
+      embedQuery: async () => {
+        throw createLocalWorkerExitError();
+      },
+      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+
+    const results = await manager.search("alpha");
+
+    expect(results.length).toBeGreaterThan(0);
+    const resultKeys = results.map(
+      (result) => `${result.source}:${result.path}:${result.startLine}:${result.endLine}`,
+    );
+    expect(new Set(resultKeys).size).toBe(resultKeys.length);
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
+      "fallback-provider",
+    );
+    expect(
+      (
+        manager as unknown as {
+          provider: { id: string } | null;
+        }
+      ).provider?.id,
+    ).toBe("fallback-provider");
+  });
+
+  it("activates configured fallback after probe-time local degradation", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-probe-degraded-fallback.sqlite"),
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test" });
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: () => Promise<number[]>;
+          embedBatch: () => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "local",
+      model: "mock-embed",
+      embedQuery: async () => {
+        throw createLocalWorkerExitError();
+      },
+      embedBatch: async () => {
+        throw createLocalWorkerExitError();
+      },
+      close: async () => {},
+    };
+    const callsBeforeSearch = providerCalls.length;
+
+    await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Local embedding worker exited"),
+    });
+
+    const results = await manager.search("alpha");
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
+      "fallback-provider",
+    );
+    expect(
+      (
+        manager as unknown as {
+          provider: { id: string } | null;
+        }
+      ).provider?.id,
+    ).toBe("fallback-provider");
   });
 
   it("streams embedding cache rows during safe reindex", async () => {

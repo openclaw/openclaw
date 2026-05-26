@@ -42,6 +42,7 @@ export type MemoryEmbeddingProvider = {
     inputs: EmbeddingInput[],
     options?: MemoryEmbeddingProviderCallOptions,
   ) => Promise<number[][]>;
+  close?: () => Promise<void> | void;
 };
 
 export type MemoryEmbeddingProviderCreateOptions = {
@@ -61,6 +62,7 @@ export type MemoryEmbeddingProviderCreateOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    contextSize?: number | "auto";
   };
   outputDimensionality?: number;
   taskType?:

@@ -40,6 +40,12 @@ export type AgentRuntimeConfig =
 
 export type AgentBindingMatch = {
   channel: string;
+  /**
+   * Channel account to match.
+   * - Omitted/empty: matches only the channel default account.
+   * - "*": matches every account on the channel.
+   * - Any other string: matches that specific account id.
+   */
   accountId?: string;
   peer?: { kind: ChatType; id: string };
   guildId?: string;
@@ -110,6 +116,8 @@ export type AgentConfig = {
   bootstrapMaxChars?: AgentDefaultsConfig["bootstrapMaxChars"];
   /** Optional per-agent max total chars across injected bootstrap files. */
   bootstrapTotalMaxChars?: AgentDefaultsConfig["bootstrapTotalMaxChars"];
+  /** Optional per-agent experimental flags. Omitted fields inherit agents.defaults.experimental. */
+  experimental?: AgentDefaultsConfig["experimental"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
@@ -129,7 +137,7 @@ export type AgentConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;
-    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
+    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;

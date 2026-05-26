@@ -174,6 +174,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect allowlist/catalog issues for hooks.gmail.model as config findings.",
   },
   {
+    contributionId: "doctor:tool-result-cap",
+    conversion: "detect-only",
+    target: ["core/doctor/tool-result-cap"],
+    rule: "Detect explicit live tool-result cap overrides that are stale or ineffective; preserve deep-mode effective cap output as finding metadata.",
+  },
+  {
     contributionId: "doctor:systemd-linger",
     conversion: "interactive-maintenance",
     target: ["core/doctor/systemd-linger"],

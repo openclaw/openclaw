@@ -377,6 +377,72 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
+  it("sends announce fallback when source delivery is not satisfied", async () => {
+    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Fallback cron summary." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("skips announce fallback after verified message-tool source delivery", async () => {
+    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: { tool: "message", provider: "telegram", to: "123456" },
+          verifiedTarget: true,
+        },
+      ],
+      verifiedMessageToolDelivery: true,
+      satisfiesSourceDelivery: true,
+      unverifiedMessageToolDelivery: false,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("keeps announce fallback when message-tool delivery is not verified for the target", async () => {
+    const params = makeBaseParams({ synthesizedText: "Fallback cron summary." });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: { tool: "message", provider: "telegram", to: "999999" },
+          verifiedTarget: false,
+        },
+      ],
+      verifiedMessageToolDelivery: false,
+      satisfiesSourceDelivery: false,
+      unverifiedMessageToolDelivery: true,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Fallback cron summary." }],
+      skipQueue: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
   it("bestEffort delivery skips expected subagent follow-up waits", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
@@ -643,8 +709,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -680,8 +744,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -710,8 +772,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });
@@ -745,8 +805,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("main-chart.png", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -837,8 +895,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Custom main session briefing complete.", {
       sessionKey: "agent:main:work",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -886,8 +942,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:work",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });

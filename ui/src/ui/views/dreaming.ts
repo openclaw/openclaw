@@ -5,6 +5,7 @@ import type {
   DreamingEntry,
   WikiImportInsights,
   WikiMemoryPalace,
+  WikiMemoryPalaceItem,
 } from "../controllers/dreaming.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 
@@ -494,6 +495,61 @@ function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "
   return kind;
 }
 
+function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+const MEMORY_PALACE_PAGE_COUNT_ORDER: Array<keyof WikiMemoryPalace["pageCounts"]> = [
+  "source",
+  "synthesis",
+  "report",
+  "entity",
+  "concept",
+];
+
+function formatMemoryPalacePageCountLabel(kind: keyof WikiMemoryPalace["pageCounts"]): string {
+  switch (kind) {
+    case "source":
+      return "Sources";
+    case "synthesis":
+      return "Syntheses";
+    case "report":
+      return "Reports";
+    case "entity":
+      return "Entities";
+    case "concept":
+      return "Concepts";
+  }
+  return kind;
+}
+
+function formatMemoryPalacePageBreakdown(pageCounts: WikiMemoryPalace["pageCounts"]): string {
+  const parts = MEMORY_PALACE_PAGE_COUNT_ORDER.map((kind) => {
+    const count = pageCounts[kind];
+    return count > 0
+      ? `${formatMemoryPalacePageCountLabel(kind)} · ${formatCount(count, "page")}`
+      : null;
+  }).filter((entry): entry is string => entry !== null);
+  return parts.length > 0 ? parts.join("; ") : "No pages yet";
+}
+
+function formatMemoryPalaceClusterSummary(cluster: WikiMemoryPalace["clusters"][number]): string {
+  const parts = [`${cluster.label}: ${formatCount(cluster.itemCount, "page")}`];
+  if (cluster.claimCount > 0) {
+    parts.push(formatCount(cluster.claimCount, "claim row"));
+  }
+  if (cluster.questionCount > 0) {
+    const questionPageCount = cluster.items.filter((item) => item.questionCount > 0).length;
+    const questionPageSuffix =
+      questionPageCount > 0 ? ` on ${formatCount(questionPageCount, "page")}` : "";
+    parts.push(`${formatCount(cluster.questionCount, "open question")}${questionPageSuffix}`);
+  }
+  if (cluster.contradictionCount > 0) {
+    parts.push(formatCount(cluster.contradictionCount, "contradiction"));
+  }
+  return parts.join(" · ");
+}
+
 function formatImportBadge(item: {
   digestStatus: "available" | "withheld";
   riskLevel: "low" | "medium" | "high" | "unknown";
@@ -521,6 +577,14 @@ function toggleExpandedCard(bucket: Set<string>, key: string, requestUpdate?: ()
     bucket.add(key);
   }
   requestUpdate?.();
+}
+
+function handleMemoryPalaceCardClick(item: WikiMemoryPalaceItem, props: DreamingProps): void {
+  if (item.kind === "report") {
+    void openWikiPreview(item.pagePath, props);
+    return;
+  }
+  toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate);
 }
 
 async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
@@ -1137,6 +1201,14 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   diaryEntryCount = clusters.length;
   const clusterIndex = Math.max(0, Math.min(diaryPage, clusters.length - 1));
   const cluster = clusters[clusterIndex];
+  const totalPages = palace?.totalPages ?? palace?.totalItems ?? 0;
+  const totalClaims = palace?.totalClaims ?? 0;
+  const totalQuestions = palace?.totalQuestions ?? 0;
+  const totalContradictions = palace?.totalContradictions ?? 0;
+  const pageBreakdown = palace
+    ? formatMemoryPalacePageBreakdown(palace.pageCounts)
+    : "No pages yet";
+  const clusterSummary = formatMemoryPalaceClusterSummary(cluster);
 
   return html`
     <div class="dreams-diary__daychips">
@@ -1160,16 +1232,17 @@ function renderMemoryPalaceSection(props: DreamingProps) {
     <article class="dreams-diary__entry" key="palace-${cluster.key}">
       <div class="dreams-diary__accent"></div>
       <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} pages
-        ${cluster.claimCount > 0 ? html`· ${cluster.claimCount} claims` : nothing}
-        ${cluster.questionCount > 0 ? html`· ${cluster.questionCount} questions` : nothing}
-        ${cluster.contradictionCount > 0
-          ? html`· ${cluster.contradictionCount} contradictions`
+        Vault · ${formatCount(totalPages, "page")}
+        ${totalClaims > 0 ? html`· ${formatCount(totalClaims, "claim row")}` : nothing}
+        ${totalQuestions > 0 ? html`· ${formatCount(totalQuestions, "open question")}` : nothing}
+        ${totalContradictions > 0
+          ? html`· ${formatCount(totalContradictions, "contradiction")}`
           : nothing}
       </div>
       <div class="dreams-diary__prose">
+        <p class="dreams-diary__para">Full vault breakdown: ${pageBreakdown}.</p>
         <p class="dreams-diary__para">
-          Compiled wiki pages currently grouped under ${cluster.label.toLowerCase()}.
+          Selected section: ${clusterSummary}.
           ${cluster.updatedAt ? ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.` : ""}
         </p>
       </div>
@@ -1180,8 +1253,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
             <article
               class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
               data-palace-page=${item.pagePath}
-              @click=${() =>
-                toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate)}
+              @click=${() => handleMemoryPalaceCardClick(item, props)}
             >
               <div class="dreams-diary__insight-topline">
                 <div class="dreams-diary__insight-title">${item.title}</div>

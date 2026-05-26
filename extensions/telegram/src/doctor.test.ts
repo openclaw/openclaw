@@ -381,7 +381,7 @@ describe("telegram doctor", () => {
 
     const warnings = collectTelegramSelectedQuoteToolProgressWarnings({ hits });
     expect(warnings[0]).toContain("selected quote replies");
-    expect(warnings[0]).toContain('"Working..." tool-progress preview');
+    expect(warnings[0]).toContain('"Working" tool-progress preview');
     expect(warnings[0]).toContain("Current-message replies without selected quote text");
     expect(warnings[1]).toContain("streaming.preview.toolProgress: false");
     const collectedWarnings = await telegramDoctor.collectPreviewWarnings?.({

@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString as readOptionalString } from "../shared/string-coerce.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -54,14 +56,6 @@ type ManagedNpmRootLogger = {
 type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readDependencyRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
@@ -388,6 +382,10 @@ function readLockPackageName(location: string, value: unknown): string | undefin
   return undefined;
 }
 
+function isTopLevelLockPackageLocation(location: string): boolean {
+  return location.split("/").filter((part) => part === "node_modules").length === 1;
+}
+
 function findLockPackageVersion(params: {
   lockfile: ManagedNpmRootLockfile;
   packageName: string;
@@ -441,6 +439,9 @@ function collectNpmLockPeerDependencyPins(params: {
       }
       const version = findLockPackageVersion({ lockfile: params.lockfile, packageName: peerName });
       if (!version && isOptionalPeerDependency(value, peerName)) {
+        continue;
+      }
+      if (!version && !isTopLevelLockPackageLocation(location)) {
         continue;
       }
       pins.set(peerName, version ?? peerRange);

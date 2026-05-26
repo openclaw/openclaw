@@ -26,6 +26,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -1190,14 +1191,10 @@ function rejectUnsafeControlShellCommand(command: string): void {
   const analysis = analyzeShellCommand({ command: rawCommand });
   const candidates = analysis.ok
     ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : rawCommand
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .flatMap((line) => {
-          const argv = splitShellArgs(line);
-          return argv ? buildCommandPayloadCandidates(argv) : [line];
-        });
+    : normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+        const argv = splitShellArgs(line);
+        return argv ? buildCommandPayloadCandidates(argv) : [line];
+      });
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {
       throw new Error(
@@ -1560,6 +1557,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
+          pathPrepend: defaultPathPrepend,
           requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
@@ -1592,6 +1590,9 @@ export function createExecTool(
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
         }
+        if (gatewayResult.deniedResult) {
+          return gatewayResult.deniedResult;
+        }
         execCommandOverride = gatewayResult.execCommandOverride;
         if (gatewayResult.allowWithoutEnforcedCommand) {
           execCommandOverride = undefined;
@@ -1614,6 +1615,7 @@ export function createExecTool(
         execCommand: execCommandOverride,
         workdir,
         env,
+        pathPrepend: defaultPathPrepend,
         sandbox,
         containerWorkdir,
         usePty,
@@ -1626,6 +1628,7 @@ export function createExecTool(
         sessionKey: notifySessionKey,
         mainKey: defaults?.mainKey,
         sessionScope: defaults?.sessionScope,
+        eventRouting: defaults?.eventRouting,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,

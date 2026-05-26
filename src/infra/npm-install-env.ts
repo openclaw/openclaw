@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export type NpmProjectInstallEnvOptions = {
   cacheDir?: string;
@@ -110,8 +111,16 @@ function readNpmGlobalConfigPath(
 }
 
 function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | null {
-  const cwd = scope.npmConfigCwd?.trim() || process.cwd();
-  return cwd ? path.join(cwd, ".npmrc") : null;
+  const scopedCwd = scope.npmConfigCwd?.trim();
+  if (scopedCwd) {
+    return path.join(scopedCwd, ".npmrc");
+  }
+  try {
+    const cwd = process.cwd();
+    return cwd ? path.join(cwd, ".npmrc") : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveScopedGlobalNpmrc(scope: NpmFreshnessConfigScope): string | null {
@@ -130,7 +139,7 @@ function resolveNpmConfigFiles(
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),
   ];
-  return [...new Set(files.filter((file): file is string => Boolean(file)))];
+  return uniqueStrings(files.filter((file): file is string => Boolean(file)));
 }
 
 function hasNpmrcConfigKey(filePath: string, key: string): boolean {
@@ -156,6 +165,9 @@ function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
   scope: NpmFreshnessConfigScope,
 ): NpmFreshnessBypassMode {
+  if (process.platform === "win32") {
+    return "before";
+  }
   if (hasRawNpmConfigKey(env, "min-release-age", scope)) {
     return "min-release-age";
   }
@@ -180,6 +192,10 @@ export function applyNpmFreshnessBypassEnv(
 ): void {
   const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
+    if (process.platform === "win32" && key.includes("-")) {
+      delete env[key];
+      continue;
+    }
     env[key] = "";
   }
   if (arg?.startsWith("--before=")) {

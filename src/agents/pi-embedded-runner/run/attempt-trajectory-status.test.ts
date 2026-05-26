@@ -50,6 +50,22 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("keeps accepted session spawns as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          acceptedSessionSpawns: [
+            {
+              runId: "run-child",
+              childSessionKey: "agent:claude:subagent:child",
+            },
+          ],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
   it("does not treat an uncommitted messaging tool attempt as delivery", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
@@ -155,6 +171,17 @@ describe("attempt trajectory status", () => {
           assistantTexts: ["I sent the reply."],
           didSendViaMessagingTool: true,
           messagingToolSentTexts: ["sent"],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
+  it("keeps async-started media tool-use attempts as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
           lastAssistantStopReason: "toolUse",
         }),
       ),
