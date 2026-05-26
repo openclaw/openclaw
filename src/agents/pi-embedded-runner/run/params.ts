@@ -236,7 +236,6 @@ export type RunEmbeddedPiAgentParams = {
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  onUserMessagePersistencePending?: (pending: Promise<void>) => void;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,

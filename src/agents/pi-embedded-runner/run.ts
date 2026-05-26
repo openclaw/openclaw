@@ -1112,11 +1112,6 @@ export async function runEmbeddedPiAgent(
         params.userTurnTranscriptRecorder?.markRuntimePersisted(message);
         params.onUserMessagePersisted?.(message);
       };
-      const onUserMessagePersistencePending: RunEmbeddedPiAgentParams["onUserMessagePersistencePending"] =
-        (pending) => {
-          params.userTurnTranscriptRecorder?.markRuntimePersistencePending(pending);
-          params.onUserMessagePersistencePending?.(pending);
-        };
       const continueFromCurrentTranscript = () => {
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
@@ -1545,7 +1540,6 @@ export async function runEmbeddedPiAgent(
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
-            onUserMessagePersistencePending,
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
