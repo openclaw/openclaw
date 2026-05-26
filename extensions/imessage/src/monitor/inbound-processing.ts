@@ -38,6 +38,7 @@ import {
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
 } from "../targets.js";
+import type { IMessageDmHistoryContext } from "./dm-history.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -808,6 +809,7 @@ export function buildIMessageInboundContext(params: {
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  dmHistory?: IMessageDmHistoryContext;
 }): {
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
   fromLabel: string;
@@ -867,6 +869,9 @@ export function buildIMessageInboundContext(params: {
   });
 
   let combinedBody = body;
+  if (!decision.isGroup && params.dmHistory?.body) {
+    combinedBody = `${params.dmHistory.body}\n\n${combinedBody}`;
+  }
   if (decision.isGroup && decision.historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -888,12 +893,14 @@ export function buildIMessageInboundContext(params: {
 
   const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
-    decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
-          historyKey: decision.historyKey,
-          limit: params.historyLimit,
-        })
-      : undefined;
+    !decision.isGroup && params.dmHistory?.inboundHistory
+      ? params.dmHistory.inboundHistory
+      : decision.isGroup && decision.historyKey && params.historyLimit > 0
+        ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
+            historyKey: decision.historyKey,
+            limit: params.historyLimit,
+          })
+        : undefined;
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,

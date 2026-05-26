@@ -442,6 +442,13 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
 
   </Accordion>
+
+  <Accordion title="Direct-message history">
+    Set `channels.imessage.dmHistoryLimit` to seed new direct-message sessions with recent decoded `imsg` history for that conversation. Use `channels.imessage.dms["<sender>"].historyLimit` for per-sender overrides, including `0` to disable history for a sender.
+
+    iMessage DM history is fetched on demand from `imsg`; leaving `dmHistoryLimit` unset disables DM history seeding.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Media, chunking, and delivery targets
