@@ -98,6 +98,20 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("resolves broker thread session suffixes against the base conversation", () => {
+    expect(
+      channelBrokerPlugin.messaging?.resolveSessionConversation?.({
+        kind: "channel",
+        rawId: "slack:C123:thread:1716500000.000001",
+      }),
+    ).toEqual({
+      id: "C123",
+      threadId: "1716500000.000001",
+      baseConversationId: "C123",
+      parentConversationCandidates: ["C123"],
+    });
+  });
+
   it("delivers text through the configured provider and maps the provider receipt", async () => {
     const controller = new AbortController();
     const sendOutboundRequest = vi.fn(async () =>

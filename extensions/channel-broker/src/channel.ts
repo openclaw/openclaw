@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
+import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
   listChannelBrokerProviderIds,
@@ -58,13 +59,16 @@ const BROKER_PLATFORM_TARGET_PREFIXES = [
 
 function resolveBrokerSessionConversation(rawId: string) {
   try {
-    const parsed = parseBrokerConversationTarget(rawId);
+    const thread = parseThreadSessionSuffix(rawId);
+    const rawTarget = thread.baseSessionKey ?? rawId;
+    const parsed = parseBrokerConversationTarget(rawTarget);
     if (parsed.conversationType === "direct") {
       return null;
     }
+    const threadId = thread.threadId ?? parsed.threadId;
     return {
       id: parsed.conversationId,
-      threadId: parsed.threadId,
+      ...(threadId ? { threadId } : {}),
       baseConversationId: parsed.conversationId,
       parentConversationCandidates: [parsed.conversationId],
     };
