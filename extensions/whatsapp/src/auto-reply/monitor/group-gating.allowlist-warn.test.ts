@@ -90,7 +90,9 @@ describe("applyGroupGating allowlist drop warning", () => {
 
     expect(result).toEqual({ shouldProcess: false });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(params.logVerbose).not.toHaveBeenCalled();
+    expect(params.logVerbose).toHaveBeenCalledWith(
+      'Dropping message from unregistered WhatsApp group unregistered@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
+    );
     const [context, message] = warn.mock.calls[0] ?? [];
     expect(context).toMatchObject({
       conversationId: "unregistered@g.us",
@@ -153,14 +155,21 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(message).toContain("channels.whatsapp.groups");
   });
 
-  it("only warns once per conversation across repeated messages", async () => {
+  it("warns once but keeps verbose diagnostics per dropped message", async () => {
     const warn = vi.fn<WarnLogger>();
+    const first = makeParams(makeUnregisteredGroupMsg("loud@g.us"), warn);
+    const second = makeParams(makeUnregisteredGroupMsg("loud@g.us"), warn);
+    const third = makeParams(makeUnregisteredGroupMsg("loud@g.us"), warn);
 
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("loud@g.us"), warn));
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("loud@g.us"), warn));
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("loud@g.us"), warn));
+    await applyGroupGating(first);
+    await applyGroupGating(second);
+    await applyGroupGating(third);
 
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[1]).toContain("loud@g.us");
+    expect(first.logVerbose).toHaveBeenCalledTimes(1);
+    expect(second.logVerbose).toHaveBeenCalledTimes(1);
+    expect(third.logVerbose).toHaveBeenCalledTimes(1);
   });
 
   it("warns separately for distinct conversations", async () => {

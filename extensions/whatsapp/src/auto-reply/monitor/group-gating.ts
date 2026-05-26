@@ -149,6 +149,9 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
         `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
       );
     }
+    params.logVerbose(
+      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
+    );
     return { shouldProcess: false };
   }
 
