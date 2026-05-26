@@ -287,23 +287,6 @@ describe("schema validator", () => {
         },
       ],
       [
-        "schema-validator.test.invalid-out-of-scope-relative-id-ref",
-        {
-          $defs: {
-            Folder: {
-              $id: "folder/",
-              $defs: {
-                Value: {
-                  $id: "value",
-                  type: "string",
-                },
-              },
-            },
-          },
-          $ref: "value",
-        },
-      ],
-      [
         "schema-validator.test.invalid-dependencies-value",
         {
           type: "object",
@@ -396,6 +379,40 @@ describe("schema validator", () => {
             },
           },
           $ref: "https://example.com/schema#/$defs/Value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.embedded-absolute-id-ref",
+        schema: {
+          $defs: {
+            Value: {
+              $id: "https://example.com/value",
+              type: "string",
+            },
+          },
+          $ref: "https://example.com/value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.embedded-relative-id-ref",
+        schema: {
+          $defs: {
+            Value: {
+              $id: "value",
+              type: "string",
+            },
+          },
+          $ref: "value",
         },
         value: "ok",
       },

@@ -277,6 +277,16 @@ function resolveLocalRef(resourceRoot: JsonSchemaValue, ref: string): LocalRefRe
   return { found: false };
 }
 
+function shouldPreflightLocalRef(resourceRoot: JsonSchemaValue, ref: string): boolean {
+  return (
+    ref.startsWith("#") ||
+    (isRecord(resourceRoot) &&
+      typeof resourceRoot.$id === "string" &&
+      resourceRoot.$id !== "" &&
+      (ref === resourceRoot.$id || ref.startsWith(`${resourceRoot.$id}#`)))
+  );
+}
+
 export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
   return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
 }
@@ -381,7 +391,10 @@ function findJsonSchemaNodeError(
   }
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   if (typeof schema.$ref === "string") {
-    if (!resolveLocalRef(currentResourceRoot, schema.$ref).found) {
+    if (
+      shouldPreflightLocalRef(currentResourceRoot, schema.$ref) &&
+      !resolveLocalRef(currentResourceRoot, schema.$ref).found
+    ) {
       return `${path}.$ref: unresolved local ref`;
     }
   }
