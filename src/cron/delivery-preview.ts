@@ -67,12 +67,15 @@ export async function resolveCronDeliveryPreview(params: {
   if (!resolved.ok) {
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
-      detail: formatDeliveryDetail({
-        requestedChannel,
-        resolved: false,
-        sessionKey: deliverySessionKey,
-        error: resolved.error.message,
-      }),
+      detail:
+        plan.mode === "none"
+          ? `message tool target unresolved: ${resolved.error.message}`
+          : formatDeliveryDetail({
+              requestedChannel,
+              resolved: false,
+              sessionKey: deliverySessionKey,
+              error: resolved.error.message,
+            }),
     };
   }
   return {

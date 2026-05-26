@@ -102,4 +102,42 @@ describe("resolveCronDeliveryPreview", () => {
       detail: "explicit",
     });
   });
+
+  it("does not describe unresolved no-delivery message-tool targets as fail-closed", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      mode: "implicit",
+      error: new Error("no route"),
+    });
+    const job = makeCronJob({
+      agentId: "avery",
+      delivery: {
+        mode: "none",
+        threadId: 0,
+      },
+      sessionTarget: "isolated",
+    });
+
+    const preview = await resolveCronDeliveryPreview({
+      cfg: {} as never,
+      job,
+    });
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+      {},
+      "avery",
+      {
+        channel: "last",
+        to: undefined,
+        threadId: 0,
+        accountId: undefined,
+        sessionKey: undefined,
+      },
+      { dryRun: true },
+    );
+    expect(preview).toEqual({
+      label: "none -> last",
+      detail: "message tool target unresolved: no route",
+    });
+  });
 });
