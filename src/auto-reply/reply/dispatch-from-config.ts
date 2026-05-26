@@ -2032,6 +2032,7 @@ export async function dispatchReplyFromConfig(
       return (
         !suppressAutomaticSourceDelivery ||
         (allowSuppressedSourceProgressCallbacks &&
+          !sendPolicyDenied &&
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
     };
