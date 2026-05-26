@@ -19,6 +19,8 @@
   "config-runtime",
   "config-schema",
   "config-types",
+  "direct-dm",
+  "direct-dm-access",
   "discord",
   "group-access",
   "inbound-reply-dispatch",

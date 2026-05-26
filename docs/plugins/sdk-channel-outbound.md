@@ -61,17 +61,6 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 });
 ```
 
-Attach it to the channel plugin:
-
-```ts
-export const demoPlugin = createChatChannelPlugin({
-  base: {
-    id: "demo",
-    message: demoMessageAdapter,
-  },
-});
-```
-
 Only declare capabilities the native transport actually preserves. Cover each
 declared send, receipt, live-preview, and receive-ack capability with the
 contract helpers exported from this subpath.
@@ -123,6 +112,3 @@ pair:
 
 - `createChannelMessageReplyPipeline(...)` from `channel-outbound`
 - `runPreparedInboundReply(...)` from `channel-inbound`
-
-New channel code should prefer `message` adapters, durable send helpers, and the
-streaming/progress helpers exported here.

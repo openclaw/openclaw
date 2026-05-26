@@ -20,10 +20,15 @@ export {
 } from "../auto-reply/inbound-debounce.js";
 export {
   createDirectDmPreCryptoGuardPolicy,
+  createPreCryptoDirectDmAuthorizer,
   dispatchInboundDirectDmWithRuntime,
+  resolveInboundDirectDmAccessWithRuntime,
+  type AccessGroupMembershipResolver,
+  type DirectDmCommandAuthorizationRuntime,
   type DirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
-} from "./direct-dm.js";
+  type ResolvedInboundDirectDmAccess,
+} from "../channels/direct-dm.js";
 export {
   formatInboundEnvelope,
   formatInboundFromLabel,
