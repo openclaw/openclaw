@@ -243,6 +243,15 @@ const CHROME_MCP_CONNECTION_FLAGS = new Set([
   "--isolated",
   "-w",
 ]);
+const CHROME_MCP_LAUNCH_SUPPRESSING_CONNECTION_FLAGS = new Set([
+  "--autoConnect",
+  "--auto-connect",
+  "--browserUrl",
+  "--browser-url",
+  "--wsEndpoint",
+  "--ws-endpoint",
+  "-w",
+]);
 const CHROME_MCP_USER_DATA_DIR_FLAGS = new Set(["--userDataDir", "--user-data-dir"]);
 const CHROME_MCP_EXECUTABLE_PATH_FLAGS = new Set(["--executablePath", "--executable-path", "-e"]);
 const CHROME_MCP_HEADLESS_FLAGS = new Set(["--headless", "--no-headless"]);
@@ -691,7 +700,10 @@ function isChromeMcpSelectedPageLookupUnavailable(error: unknown): boolean {
 }
 
 function shouldLaunchChromeMcpBrowser(options: NormalizedChromeMcpProfileOptions): boolean {
-  if (options.browserUrl || hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
+  if (
+    options.browserUrl ||
+    hasFlag(options.extraArgs, CHROME_MCP_LAUNCH_SUPPRESSING_CONNECTION_FLAGS)
+  ) {
     return false;
   }
   return Boolean(
@@ -737,7 +749,10 @@ function hasChromeArgValue(args: string[], value: string): boolean {
 }
 
 function buildChromeMcpLaunchArgs(options: NormalizedChromeMcpProfileOptions): string[] {
-  if (options.browserUrl || hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
+  if (
+    options.browserUrl ||
+    hasFlag(options.extraArgs, CHROME_MCP_LAUNCH_SUPPRESSING_CONNECTION_FLAGS)
+  ) {
     return [];
   }
   const args: string[] = [];

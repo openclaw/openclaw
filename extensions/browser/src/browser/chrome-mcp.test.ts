@@ -1484,6 +1484,30 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("preserves explicit launch options for isolated Chrome MCP launch mode", () => {
+    expect(
+      buildChromeMcpArgs({
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        noSandbox: true,
+        userDataDir: "/tmp/openclaw-proof-profile",
+        mcpArgs: ["--isolated", "--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--experimentalVision",
+      "--executablePath",
+      "/usr/bin/google-chrome",
+      "--headless",
+      "--chrome-arg=--no-sandbox",
+      "--isolated",
+      "--no-usage-statistics",
+    ]);
+  });
+
   it("does not duplicate an explicit Chrome MCP usage-statistics opt-out", () => {
     expect(
       buildChromeMcpArgs({
