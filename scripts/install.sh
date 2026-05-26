@@ -2692,41 +2692,16 @@ resolve_package_install_spec() {
 }
 
 install_openclaw() {
-    local package_name="openclaw"
-    if [[ "$USE_BETA" == "1" ]]; then
-        local beta_version=""
-        beta_version="$(resolve_beta_version || true)"
-        if [[ -n "$beta_version" ]]; then
-            OPENCLAW_VERSION="$beta_version"
-            ui_info "Beta tag detected (${beta_version})"
-            package_name="openclaw"
-        else
-            OPENCLAW_VERSION="latest"
-            ui_info "No beta tag found; using latest"
-        fi
+    local install_spec="${ZORG_MEMORYDB_NPM_SPEC:-git+https://github.com/StefRush2099/Zorg_MemoryDB.git}"
+    if [[ -n "${OPENCLAW_VERSION:-}" && "${OPENCLAW_VERSION}" != "latest" ]]; then
+        case "${OPENCLAW_VERSION}" in
+            zorg-memorydb-v*|v20*|20*)
+                install_spec="git+https://github.com/StefRush2099/Zorg_MemoryDB.git#${OPENCLAW_VERSION}"
+                ;;
+        esac
     fi
 
-    if [[ -z "${OPENCLAW_VERSION}" ]]; then
-        OPENCLAW_VERSION="latest"
-    fi
-
-    if is_openclaw_source_package_install_spec "${OPENCLAW_VERSION}"; then
-        ui_error "npm installs do not support OpenClaw GitHub source targets like '${OPENCLAW_VERSION}'."
-        ui_info "Use --install-method git --version main for the moving main checkout, or use latest, beta, an exact version, or a built .tgz package."
-        return 1
-    fi
-
-    local resolved_version=""
-    if can_resolve_registry_package_version "${OPENCLAW_VERSION}"; then
-        resolved_version="$(npm view "${package_name}@${OPENCLAW_VERSION}" version 2>/dev/null || true)"
-    fi
-    if [[ -n "$resolved_version" ]]; then
-        ui_info "Installing OpenClaw v${resolved_version}"
-    else
-        ui_info "Installing OpenClaw (${OPENCLAW_VERSION})"
-    fi
-    local install_spec=""
-    install_spec="$(resolve_package_install_spec "${package_name}" "${OPENCLAW_VERSION}")"
+    ui_info "Installing Zorg MemoryDB OpenClaw package (${install_spec})"
 
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
@@ -2734,17 +2709,9 @@ install_openclaw() {
         install_openclaw_npm "${install_spec}"
     fi
 
-    if [[ "${OPENCLAW_VERSION}" == "latest" && "${package_name}" == "openclaw" ]]; then
-        if ! resolve_openclaw_bin &> /dev/null; then
-            ui_warn "npm install openclaw@latest failed; retrying openclaw@next"
-            cleanup_npm_openclaw_paths
-            install_openclaw_npm "openclaw@next"
-        fi
-    fi
-
     ensure_openclaw_bin_link || true
 
-    ui_success "OpenClaw installed"
+    ui_success "Zorg MemoryDB OpenClaw package installed"
 }
 
 # Run doctor for migrations (safe, non-interactive)
