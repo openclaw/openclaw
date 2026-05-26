@@ -633,6 +633,12 @@ describe("saveAuthProfileStore", () => {
       expect(snapshotAfterRuntimeBackedSave?.usageStats?.[externalProfileId]?.lastUsed).toBe(789);
 
       saveAuthProfileStore(runtimeWithoutExternal, agentDir);
+      const persistedAfterDiskBackedSave = JSON.parse(
+        await fs.readFile(resolveAuthStorePath(agentDir), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(persistedAfterDiskBackedSave.profiles[externalProfileId]).toBeUndefined();
       const snapshotAfterDiskBackedSave = getRuntimeAuthProfileStoreSnapshot(agentDir);
       expect(snapshotAfterDiskBackedSave?.runtimeExternalProfileIds).toEqual([externalProfileId]);
       expect(snapshotAfterDiskBackedSave?.runtimeExternalProfileIdsAuthoritative).toBe(true);
