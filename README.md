@@ -101,7 +101,7 @@ Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 ```bash
 npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
-# or: pnpm add -g github:StefRush2099/Zorg_MemoryDB
+# or: pnpm add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 
 openclaw onboard --install-daemon
 ```
