@@ -1,3 +1,4 @@
+import { existsSync, renameSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
@@ -427,6 +428,36 @@ function ensureTaskRegistryPermissions(pathname: string) {
   });
 }
 
+function isSqliteCorruptionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const msg = error.message?.toLowerCase() ?? "";
+  const code = (error as NodeJS.ErrnoException).code ?? "";
+  return (
+    code === "SQLITE_CORRUPT" ||
+    msg.includes("malformed") ||
+    msg.includes("corrupt") ||
+    msg.includes("database disk image") ||
+    msg.includes("file is not a database")
+  );
+}
+
+function quarantineCorruptedDatabase(pathname: string): void {
+  const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
+  try {
+    renameSync(pathname, quarantinePath);
+    for (const suffix of ["-shm", "-wal"]) {
+      const sidecar = `${pathname}${suffix}`;
+      if (existsSync(sidecar)) {
+        renameSync(sidecar, `${quarantinePath}${suffix}`);
+      }
+    }
+  } catch {
+    // best-effort rename; if it fails, the fresh open will overwrite
+  }
+}
+
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const pathname = resolveTaskRegistrySqlitePath(process.env);
   if (cachedDatabase && cachedDatabase.path === pathname) {
@@ -439,11 +470,25 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
   }
   ensureTaskRegistryPermissions(pathname);
   const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(pathname);
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(pathname);
+    db.exec(`PRAGMA synchronous = NORMAL;`);
+    db.exec(`PRAGMA busy_timeout = 5000;`);
+    ensureSchema(db);
+  } catch (error) {
+    if (!isSqliteCorruptionError(error) || !existsSync(pathname)) {
+      throw error;
+    }
+    db?.close?.();
+    quarantineCorruptedDatabase(pathname);
+    ensureTaskRegistryPermissions(pathname);
+    db = new DatabaseSync(pathname);
+    db.exec(`PRAGMA synchronous = NORMAL;`);
+    db.exec(`PRAGMA busy_timeout = 5000;`);
+    ensureSchema(db);
+  }
   const walMaintenance = configureSqliteWalMaintenance(db);
-  db.exec(`PRAGMA synchronous = NORMAL;`);
-  db.exec(`PRAGMA busy_timeout = 5000;`);
-  ensureSchema(db);
   ensureTaskRegistryPermissions(pathname);
   cachedDatabase = {
     db,
