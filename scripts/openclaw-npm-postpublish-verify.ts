@@ -71,6 +71,9 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // lazy chunks from the plugin build even though dist/extensions/feishu is
   // externalized from the root package scan.
   "@larksuiteoapi/node-sdk",
+  // Discord remains an official external plugin. The root package can retain
+  // orphaned lazy chunks from the plugin build, but the plugin owns prism-media.
+  "prism-media",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
   "matrix-js-sdk",

@@ -6808,6 +6808,7 @@ describe("runCodexAppServerAttempt", () => {
       } as never;
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
+      await new Promise<void>((resolve) => setImmediate(resolve));
       await harness.notify({
         method: "item/agentMessage/delta",
         params: {
