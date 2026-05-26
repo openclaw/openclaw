@@ -633,6 +633,16 @@ struct SettingsTab: View {
                     }
                 }
             }
+            LabeledContent("Voice Mode") {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                    if let subtitle = self.appModel.talkMode.gatewayTalkVoiceModeSubtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
             LabeledContent(
                 "Active Provider",
                 value: self.appModel.talkMode.gatewayTalkProviderLabel)
