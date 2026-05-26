@@ -449,7 +449,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
       }),
     },
   });
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValueOnce({
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
     ok: true,
     compacted: false,
     result: {
