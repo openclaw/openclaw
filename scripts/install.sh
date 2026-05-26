@@ -3100,12 +3100,12 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Homebrew (macOS only)
-    install_homebrew
-
-    # Step 2: Node.js
+    # Step 1: Node.js — check before installing Homebrew so users with
+    # an adequate Node skip the brew dependency entirely (#83232).
     load_nvm_for_node_detection
     if ! check_node; then
+        # Homebrew is only needed on macOS to install Node.
+        install_homebrew
         install_node
     fi
     activate_supported_node_on_path || true
