@@ -446,7 +446,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
   <Accordion title="Direct-message history">
     Set `channels.imessage.dmHistoryLimit` to seed new direct-message sessions with recent decoded `imsg` history for that conversation. Use `channels.imessage.dms["<sender>"].historyLimit` for per-sender overrides, including `0` to disable history for a sender.
 
-    iMessage DM history is fetched on demand from `imsg`; leaving `dmHistoryLimit` unset disables DM history seeding.
+    iMessage DM history is fetched on demand from `imsg`. Leaving `dmHistoryLimit` unset disables global DM history seeding, but a positive per-sender `channels.imessage.dms["<sender>"].historyLimit` still enables seeding for that sender.
 
   </Accordion>
 </AccordionGroup>
