@@ -345,6 +345,7 @@ type PluginRegistrySnapshot = {
     tools: PluginRegistry["tools"];
     hooks: PluginRegistry["hooks"];
     typedHooks: PluginRegistry["typedHooks"];
+    reflexGates: PluginRegistry["reflexGates"];
     channels: PluginRegistry["channels"];
     channelSetups: PluginRegistry["channelSetups"];
     providers: PluginRegistry["providers"];
@@ -388,6 +389,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       tools: [...registry.tools],
       hooks: [...registry.hooks],
       typedHooks: [...registry.typedHooks],
+      reflexGates: [...registry.reflexGates],
       channels: [...registry.channels],
       channelSetups: [...registry.channelSetups],
       providers: [...registry.providers],
@@ -430,6 +432,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.tools = snapshot.arrays.tools;
   registry.hooks = snapshot.arrays.hooks;
   registry.typedHooks = snapshot.arrays.typedHooks;
+  registry.reflexGates = snapshot.arrays.reflexGates;
   registry.channels = snapshot.arrays.channels;
   registry.channelSetups = snapshot.arrays.channelSetups;
   registry.providers = snapshot.arrays.providers;

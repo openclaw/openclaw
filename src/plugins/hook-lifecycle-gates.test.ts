@@ -2,11 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import type { PluginHookRegistration, PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
+import type { ReflexGateRegistration } from "./reflex-gates.js";
 
-function makeRegistry(hooks: PluginHookRegistration[] = []): GlobalHookRunnerRegistry {
+function makeRegistry(
+  hooks: PluginHookRegistration[] = [],
+  reflexGates: ReflexGateRegistration[] = [],
+): GlobalHookRunnerRegistry {
   return {
     hooks: [],
     typedHooks: hooks,
+    reflexGates,
     plugins: [],
   };
 }
@@ -416,6 +421,163 @@ describe("queue_before_enqueue hook", () => {
     expect(result?.block).toBe(true);
     expect(result?.blockReason).toBe("queue policy");
     expect(lowerPriority).not.toHaveBeenCalled();
+  });
+});
+
+describe("hard reflex gates", () => {
+  it("blocks before_tool_call before ordinary hook handlers run", async () => {
+    const lowerPriority = vi.fn(async () => ({ params: { command: "pwd" } }));
+    const registry = makeRegistry(
+      [
+        {
+          pluginId: "ordinary",
+          hookName: "before_tool_call",
+          handler: lowerPriority,
+          source: "test",
+        },
+      ],
+      [
+        {
+          pluginId: "opencoat",
+          hook: "before_tool_call",
+          joinpoint: "tool.before_call",
+          mediate: (gateCtx) => ({
+            weave_id: gateCtx.state.turn_id,
+            hook: "before_tool_call",
+            joinpoint: "tool.before_call",
+            verdict: { kind: "deny", reason: "hard stop" },
+            enforcement: "hard",
+            by: ["opencoat"],
+            fail_mode: "deny",
+          }),
+          source: "test",
+        },
+      ],
+    );
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolCall(
+      { toolName: "shell.exec", params: { command: "rm -rf /tmp/x" } },
+      { toolName: "shell.exec", runId: "run-1", sessionKey: "session-1" },
+    );
+
+    expect(result).toEqual({ block: true, blockReason: "hard stop" });
+    expect(lowerPriority).not.toHaveBeenCalled();
+  });
+
+  it("rewrites before_tool_call params before ordinary hooks observe them", async () => {
+    const ordinary = vi.fn(async (event) => ({ params: event.params }));
+    const registry = makeRegistry(
+      [
+        {
+          pluginId: "ordinary",
+          hookName: "before_tool_call",
+          handler: ordinary,
+          source: "test",
+        },
+      ],
+      [
+        {
+          pluginId: "opencoat",
+          hook: "before_tool_call",
+          joinpoint: "tool.before_call",
+          mediate: (gateCtx) => ({
+            weave_id: gateCtx.state.turn_id,
+            hook: "before_tool_call",
+            joinpoint: "tool.before_call",
+            verdict: {
+              kind: "rewrite",
+              reason: "hard rewrite",
+              action: {
+                ...gateCtx.action,
+                args: { command: "pwd" },
+              },
+            },
+            enforcement: "hard",
+            by: ["opencoat"],
+            fail_mode: "deny",
+          }),
+          source: "test",
+        },
+      ],
+    );
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolCall(
+      { toolName: "shell.exec", params: { command: "rm -rf /tmp/x" } },
+      { toolName: "shell.exec", runId: "run-1", sessionKey: "session-1" },
+    );
+
+    expect(result?.params).toEqual({ command: "pwd" });
+    expect(ordinary).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { command: "pwd" } }),
+      expect.any(Object),
+    );
+  });
+
+  it("applies hard before_tool_call rewrite when no ordinary hooks are registered", async () => {
+    const registry = makeRegistry(
+      [],
+      [
+        {
+          pluginId: "opencoat",
+          hook: "before_tool_call",
+          joinpoint: "tool.before_call",
+          mediate: (gateCtx) => ({
+            weave_id: gateCtx.state.turn_id,
+            hook: "before_tool_call",
+            joinpoint: "tool.before_call",
+            verdict: {
+              kind: "rewrite",
+              reason: "hard rewrite",
+              action: {
+                ...gateCtx.action,
+                args: { command: "pwd" },
+              },
+            },
+            enforcement: "hard",
+            by: ["opencoat"],
+            fail_mode: "deny",
+          }),
+          source: "test",
+        },
+      ],
+    );
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolCall(
+      { toolName: "shell.exec", params: { command: "rm -rf /tmp/x" } },
+      { toolName: "shell.exec", runId: "run-1", sessionKey: "session-1" },
+    );
+
+    expect(result?.params).toEqual({ command: "pwd" });
+  });
+
+  it("runs sync before_message_write gates without accepting promises", () => {
+    const registry = makeRegistry(
+      [],
+      [
+        {
+          pluginId: "opencoat",
+          hook: "before_message_write",
+          joinpoint: "memory.before_write",
+          mediate: (gateCtx) => ({
+            weave_id: gateCtx.state.turn_id,
+            hook: "before_message_write",
+            joinpoint: "memory.before_write",
+            verdict: { kind: "deny", reason: "do not persist" },
+            enforcement: "hard",
+            by: ["opencoat"],
+            fail_mode: "deny",
+          }),
+          source: "test",
+        },
+      ],
+    );
+    const runner = createHookRunner(registry);
+    const result = runner.runBeforeMessageWrite(
+      { message: { role: "user", content: "secret" } as never },
+      { sessionKey: "session-1" },
+    );
+
+    expect(result).toEqual({ block: true });
   });
 });
 

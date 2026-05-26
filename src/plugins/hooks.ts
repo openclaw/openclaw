@@ -89,6 +89,13 @@ import type {
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
 } from "./hook-types.js";
+import type {
+  ReflexGateAction,
+  ReflexGateContext,
+  ReflexGateDecision,
+  ReflexGateRegistration,
+} from "./reflex-gates.js";
+import { isReflexGateDecision } from "./reflex-gates.js";
 
 // Re-export types for consumers
 export type {
@@ -560,6 +567,147 @@ export function createHookRunner(
         clearTimeout(timer);
       }
     }
+  };
+
+  const getReflexGatesForName = (hookName: PluginHookName): ReflexGateRegistration[] =>
+    [...(registry.reflexGates ?? [])]
+      .filter((gate) => gate.hook === hookName)
+      .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+
+  const buildGateState = (
+    ctx: Record<string, unknown>,
+    event: Record<string, unknown>,
+  ): ReflexGateContext["state"] => {
+    const sessionId =
+      typeof ctx.sessionId === "string"
+        ? ctx.sessionId
+        : typeof event.sessionId === "string"
+          ? event.sessionId
+          : typeof ctx.sessionKey === "string"
+            ? ctx.sessionKey
+            : typeof event.sessionKey === "string"
+              ? event.sessionKey
+              : "default";
+    const turnId =
+      typeof ctx.runId === "string"
+        ? ctx.runId
+        : typeof event.runId === "string"
+          ? event.runId
+          : typeof ctx.sessionKey === "string"
+            ? ctx.sessionKey
+            : "default";
+    return {
+      session_id: sessionId,
+      turn_id: turnId,
+      features: {
+        agent_id: ctx.agentId,
+        session_key: ctx.sessionKey ?? event.sessionKey,
+        channel_id: ctx.channelId,
+      },
+    };
+  };
+
+  const asRecord = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  const applyMessageContent = <T>(message: T, content: string): T => {
+    if (!message || typeof message !== "object") return message;
+    const record = message as Record<string, unknown>;
+    if (typeof record.content === "string") {
+      return { ...record, content } as T;
+    }
+    if (Array.isArray(record.content)) {
+      let replaced = false;
+      const next = record.content.map((part) => {
+        if (!part || typeof part !== "object") return part;
+        const partRecord = part as Record<string, unknown>;
+        if (typeof partRecord.text !== "string") return part;
+        if (replaced) return { ...partRecord, text: "" };
+        replaced = true;
+        return { ...partRecord, text: content };
+      });
+      return {
+        ...record,
+        content: replaced ? next : [{ type: "text", text: content }, ...record.content],
+      } as T;
+    }
+    return { ...record, content } as T;
+  };
+
+  const runHardReflexGates = async (
+    hookName: PluginHookName,
+    action: ReflexGateAction,
+    event: Record<string, unknown>,
+    ctx: Record<string, unknown>,
+    failMode: "deny" | "allow" = "deny",
+  ): Promise<ReflexGateDecision | undefined> => {
+    const gates = getReflexGatesForName(hookName);
+    if (gates.length === 0) return undefined;
+
+    let rewrittenAction = action;
+    for (const gate of gates) {
+      try {
+        const timeoutMs =
+          normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]) ?? 15_000;
+        const gateCtx: ReflexGateContext = {
+          hook: hookName,
+          action: rewrittenAction,
+          state: buildGateState(ctx, event),
+          joinpoint: gate.joinpoint,
+          failMode,
+        };
+        const out = gate.mediate(gateCtx, timeoutMs);
+        const decision = isPromiseLike(out)
+          ? await withHookTimeout(Promise.resolve(out), timeoutMs)
+          : out;
+        if (!isReflexGateDecision(decision)) {
+          throw new Error(`reflex gate returned invalid decision for ${hookName}`);
+        }
+        if (decision.verdict.kind === "deny") {
+          return decision;
+        }
+        if (decision.verdict.kind === "rewrite") {
+          rewrittenAction = decision.verdict.action;
+        }
+      } catch (err) {
+        if (failMode === "allow") {
+          logger?.warn?.(
+            `[hooks] reflex gate for ${hookName} from ${gate.pluginId} failed open: ${sanitizeHookError(err)}`,
+          );
+          continue;
+        }
+        return {
+          weave_id: buildGateState(ctx, event).turn_id,
+          hook: hookName,
+          joinpoint: gate.joinpoint,
+          verdict: {
+            kind: "deny",
+            reason: `OpenClaw reflex gate fail-closed: ${sanitizeHookError(err)}`,
+          },
+          enforcement: "hard",
+          by: [gate.pluginId],
+          fail_mode: "deny",
+          degraded: true,
+        };
+      }
+    }
+
+    if (rewrittenAction !== action) {
+      return {
+        weave_id: buildGateState(ctx, event).turn_id,
+        hook: hookName,
+        joinpoint: gates.at(-1)?.joinpoint ?? hookName,
+        verdict: {
+          kind: "rewrite",
+          action: rewrittenAction,
+          reason: "rewritten by OpenClaw reflex gate",
+        },
+        enforcement: "hard",
+        by: gates.map((gate) => gate.pluginId),
+        fail_mode: failMode,
+      };
+    }
+    return undefined;
   };
 
   const runSyncHookHandler = <K extends SyncHookName>(
@@ -1076,9 +1224,34 @@ export function createHookRunner(
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,
   ): Promise<PluginHookMessageSendingResult | undefined> {
+    const gate = await runHardReflexGates(
+      "message_sending",
+      {
+        kind: "message_out",
+        name: "message_out",
+        args: { content: event.content, ...event },
+        raw: event,
+      },
+      asRecord(event),
+      asRecord(ctx),
+      "allow",
+    );
+    if (gate?.verdict.kind === "deny") {
+      return { cancel: true, cancelReason: gate.verdict.reason };
+    }
+    const gatedEvent =
+      gate?.verdict.kind === "rewrite" && typeof gate.verdict.action.args.content === "string"
+        ? { ...event, content: gate.verdict.action.args.content }
+        : event;
+    if (
+      gatedEvent !== event &&
+      !registry.typedHooks.some((h) => h.hookName === "message_sending")
+    ) {
+      return { content: gatedEvent.content };
+    }
     return runModifyingHook<"message_sending", PluginHookMessageSendingResult>(
       "message_sending",
-      event,
+      gatedEvent,
       ctx,
       {
         mergeResults: (acc, next) => {
@@ -1172,9 +1345,32 @@ export function createHookRunner(
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
+    const gate = await runHardReflexGates(
+      "before_tool_call",
+      {
+        kind: "tool_call",
+        name: event.toolName,
+        args: { ...event.params },
+        raw: event,
+      },
+      asRecord(event),
+      asRecord(ctx),
+      "deny",
+    );
+    if (gate?.verdict.kind === "deny") {
+      return { block: true, blockReason: gate.verdict.reason };
+    }
+    const gatedEvent =
+      gate?.verdict.kind === "rewrite" ? { ...event, params: gate.verdict.action.args } : event;
+    if (
+      gatedEvent !== event &&
+      !registry.typedHooks.some((h) => h.hookName === "before_tool_call")
+    ) {
+      return { params: gatedEvent.params };
+    }
     return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
       "before_tool_call",
-      event,
+      gatedEvent,
       ctx,
       {
         mergeResults: (acc, next, reg) => {
@@ -1222,9 +1418,45 @@ export function createHookRunner(
     event: PluginHookQueueBeforeEnqueueEvent,
     ctx: PluginHookQueueContext,
   ): Promise<PluginHookQueueBeforeEnqueueResult | undefined> {
+    const gate = await runHardReflexGates(
+      "queue_before_enqueue",
+      {
+        kind: "queue_enqueue",
+        name: event.queueMode,
+        args: { ...event },
+        raw: event,
+      },
+      asRecord(event),
+      asRecord(ctx),
+      "allow",
+    );
+    if (gate?.verdict.kind === "deny") {
+      return { block: true, blockReason: gate.verdict.reason };
+    }
+    const gatedEvent =
+      gate?.verdict.kind === "rewrite"
+        ? {
+            ...event,
+            ...(typeof gate.verdict.action.args.prompt === "string"
+              ? { prompt: gate.verdict.action.args.prompt }
+              : {}),
+            ...(typeof gate.verdict.action.args.summaryLine === "string"
+              ? { summaryLine: gate.verdict.action.args.summaryLine }
+              : {}),
+          }
+        : event;
+    if (
+      gatedEvent !== event &&
+      !registry.typedHooks.some((h) => h.hookName === "queue_before_enqueue")
+    ) {
+      return {
+        prompt: gatedEvent.prompt,
+        summaryLine: gatedEvent.summaryLine,
+      };
+    }
     return runModifyingHook<"queue_before_enqueue", PluginHookQueueBeforeEnqueueResult>(
       "queue_before_enqueue",
-      event,
+      gatedEvent,
       ctx,
       {
         mergeResults: mergeQueueBeforeEnqueueResult,
@@ -1259,12 +1491,69 @@ export function createHookRunner(
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
   ): PluginHookToolResultPersistResult | undefined {
+    const gates = getReflexGatesForName("tool_result_persist");
+    let gatedEvent = event;
+    for (const gate of gates) {
+      try {
+        const decision = gate.mediate(
+          {
+            hook: "tool_result_persist",
+            action: {
+              kind: "tool_result_persist",
+              name: event.toolName ?? ctx.toolName ?? "tool",
+              args: {
+                toolName: event.toolName ?? ctx.toolName,
+                toolCallId: event.toolCallId ?? ctx.toolCallId,
+                message: gatedEvent.message,
+                content: JSON.stringify(gatedEvent.message),
+              },
+              raw: gatedEvent,
+            },
+            state: buildGateState(asRecord(ctx), asRecord(gatedEvent)),
+            joinpoint: gate.joinpoint,
+            failMode: "deny",
+          },
+          0,
+        );
+        if (isPromiseLike(decision)) {
+          throw new Error("reflex gate returned a Promise for sync hook");
+        }
+        if (!isReflexGateDecision(decision)) {
+          throw new Error("reflex gate returned invalid decision for tool_result_persist");
+        }
+        if (decision.verdict.kind === "deny") {
+          return { message: gatedEvent.message };
+        }
+        if (decision.verdict.kind === "rewrite") {
+          const next = decision.verdict.action.args.message;
+          const content = decision.verdict.action.args.content;
+          if (next) {
+            gatedEvent = {
+              ...gatedEvent,
+              message: next as PluginHookToolResultPersistEvent["message"],
+            };
+          } else if (typeof content === "string") {
+            gatedEvent = {
+              ...gatedEvent,
+              message: applyMessageContent(gatedEvent.message, content),
+            };
+          }
+        }
+      } catch (err) {
+        const msg = `[hooks] reflex gate for tool_result_persist from ${gate.pluginId} failed: ${String(err)}`;
+        if (shouldCatchHookErrors("tool_result_persist")) {
+          logger?.error(msg);
+          continue;
+        }
+        throw new Error(msg, { cause: err });
+      }
+    }
     const hooks = getHooksForName(registry, "tool_result_persist");
     if (hooks.length === 0) {
-      return undefined;
+      return gatedEvent !== event ? { message: gatedEvent.message } : undefined;
     }
 
-    let current = event.message;
+    let current = gatedEvent.message;
 
     for (const hook of hooks) {
       try {
@@ -1319,12 +1608,67 @@ export function createHookRunner(
     event: PluginHookBeforeMessageWriteEvent,
     ctx: { agentId?: string; sessionKey?: string },
   ): PluginHookBeforeMessageWriteResult | undefined {
+    const gates = getReflexGatesForName("before_message_write");
+    let gatedEvent = event;
+    for (const gate of gates) {
+      try {
+        const decision = gate.mediate(
+          {
+            hook: "before_message_write",
+            action: {
+              kind: "memory_write",
+              name:
+                typeof (gatedEvent.message as { role?: unknown }).role === "string"
+                  ? (gatedEvent.message as { role: string }).role
+                  : "message",
+              args: { message: gatedEvent.message, content: JSON.stringify(gatedEvent.message) },
+              raw: gatedEvent,
+            },
+            state: buildGateState(asRecord(ctx), asRecord(gatedEvent)),
+            joinpoint: gate.joinpoint,
+            failMode: "deny",
+          },
+          0,
+        );
+        if (isPromiseLike(decision)) {
+          throw new Error("reflex gate returned a Promise for sync hook");
+        }
+        if (!isReflexGateDecision(decision)) {
+          throw new Error("reflex gate returned invalid decision for before_message_write");
+        }
+        if (decision.verdict.kind === "deny") {
+          return { block: true };
+        }
+        if (decision.verdict.kind === "rewrite") {
+          const next = decision.verdict.action.args.message;
+          const content = decision.verdict.action.args.content;
+          if (next) {
+            gatedEvent = {
+              ...gatedEvent,
+              message: next as PluginHookBeforeMessageWriteEvent["message"],
+            };
+          } else if (typeof content === "string") {
+            gatedEvent = {
+              ...gatedEvent,
+              message: applyMessageContent(gatedEvent.message, content),
+            };
+          }
+        }
+      } catch (err) {
+        const msg = `[hooks] reflex gate for before_message_write from ${gate.pluginId} failed: ${String(err)}`;
+        if (shouldCatchHookErrors("before_message_write")) {
+          logger?.error(msg);
+          continue;
+        }
+        throw new Error(msg, { cause: err });
+      }
+    }
     const hooks = getHooksForName(registry, "before_message_write");
     if (hooks.length === 0) {
-      return undefined;
+      return gatedEvent !== event ? { message: gatedEvent.message } : undefined;
     }
 
-    let current = event.message;
+    let current = gatedEvent.message;
 
     for (const hook of hooks) {
       try {
@@ -1405,6 +1749,21 @@ export function createHookRunner(
     event: PluginHookSubagentSpawningEvent,
     ctx: PluginHookSubagentContext,
   ): Promise<PluginHookSubagentSpawningResult | undefined> {
+    const gate = await runHardReflexGates(
+      "subagent_spawning",
+      {
+        kind: "spawn",
+        name: event.agentId,
+        args: { ...event },
+        raw: event,
+      },
+      asRecord(event),
+      asRecord(ctx),
+      "deny",
+    );
+    if (gate?.verdict.kind === "deny") {
+      return { status: "error", error: gate.verdict.reason };
+    }
     return runModifyingHook<"subagent_spawning", PluginHookSubagentSpawningResult>(
       "subagent_spawning",
       event,
@@ -1537,14 +1896,20 @@ export function createHookRunner(
   // =========================================================================
 
   function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+    return (
+      registry.typedHooks.some((h) => h.hookName === hookName) ||
+      getReflexGatesForName(hookName).length > 0
+    );
   }
 
   /**
    * Get count of registered hooks for a given hook name.
    */
   function getHookCount(hookName: PluginHookName): number {
-    return registry.typedHooks.filter((h) => h.hookName === hookName).length;
+    return (
+      registry.typedHooks.filter((h) => h.hookName === hookName).length +
+      getReflexGatesForName(hookName).length
+    );
   }
 
   return {

@@ -139,6 +139,7 @@ import type {
   ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
+import type { ReflexGate } from "./reflex-gates.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   OpenClawPluginHookOptions,
@@ -2599,6 +2600,11 @@ export type OpenClawPluginApi = {
     handler: InternalHookHandler,
     opts?: OpenClawPluginHookOptions,
   ) => void;
+  /**
+   * Register hard, synchronous mediation gates for fork-owned effect
+   * boundaries. Core awaits these gates before executing the guarded action.
+   */
+  registerReflexGates: (gates: ReflexGate[], opts?: { priority?: number }) => void;
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a plugin-owned resolver for browser-style hosted media URLs. */
   registerHostedMediaResolver: (resolver: OpenClawPluginHostedMediaResolver) => void;

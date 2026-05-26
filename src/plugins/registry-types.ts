@@ -30,6 +30,7 @@ import type {
 import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { ReflexGateRegistration } from "./reflex-gates.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { PluginDependencyStatus } from "./status-dependencies.js";
 import type {
@@ -423,6 +424,7 @@ export type PluginRegistry = {
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
+  reflexGates: ReflexGateRegistration[];
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];

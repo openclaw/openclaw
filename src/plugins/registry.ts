@@ -109,6 +109,7 @@ import {
 } from "./memory-state.js";
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
+import type { ReflexGate } from "./reflex-gates.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
@@ -2374,6 +2375,40 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     } as TypedPluginHookRegistration);
   };
 
+  const registerReflexGates = (
+    record: PluginRecord,
+    gates: ReflexGate[],
+    opts?: { priority?: number },
+  ) => {
+    for (const gate of gates) {
+      if (!isPluginHookName(gate.hook)) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `unknown reflex gate hook "${String(gate.hook)}" ignored`,
+        });
+        continue;
+      }
+      if (typeof gate.mediate !== "function") {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `reflex gate for "${gate.hook}" missing mediate function`,
+        });
+        continue;
+      }
+      record.hookCount += 1;
+      registry.reflexGates.push({
+        ...gate,
+        pluginId: record.id,
+        priority: opts?.priority,
+        source: record.source,
+      });
+    }
+  };
+
   const registerConversationBindingResolvedHandler = (
     record: PluginRecord,
     handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
@@ -2514,6 +2549,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
+              registerReflexGates: (gates, opts) => registerReflexGates(record, gates, opts),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerHostedMediaResolver: (resolver) =>
                 registerHostedMediaResolver(record, resolver),
