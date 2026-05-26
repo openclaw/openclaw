@@ -155,6 +155,21 @@ describe("goal plugin", () => {
     });
   });
 
+  it("keeps a goal active when stop cleanup fails", async () => {
+    const { api, store, clearSessionContinuationLease } = createApi();
+    clearSessionContinuationLease.mockResolvedValueOnce({ removed: 0, failed: 1 });
+    await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });
+
+    const result = await handleGoalCommand(api, commandCtx("done fixed with tests"), { store });
+
+    expect(result.text).toContain("Status: continue");
+    expect(result.text).toContain("Could not clear the pending goal continuation");
+    expect(store.states.get("agent:main:main")).toMatchObject({
+      status: "continue",
+      lastNote: expect.stringContaining("Could not clear the pending goal continuation"),
+    });
+  });
+
   it("clears the visible goal state and continuation lease", async () => {
     const { api, store, clearSessionContinuationLease } = createApi();
     await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });
@@ -166,6 +181,20 @@ describe("goal plugin", () => {
     expect(clearSessionContinuationLease).toHaveBeenCalledWith({
       session: expect.objectContaining({ sessionKey: "agent:main:main" }),
       leaseKey: "active-goal",
+    });
+  });
+
+  it("keeps visible goal state when clear cleanup fails", async () => {
+    const { api, store, clearSessionContinuationLease } = createApi();
+    await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });
+    clearSessionContinuationLease.mockResolvedValueOnce({ removed: 0, failed: 1 });
+
+    const result = await handleGoalCommand(api, commandCtx("clear no longer needed"), { store });
+
+    expect(result.text).toContain("Could not clear the pending goal continuation");
+    expect(store.states.get("agent:main:main")).toMatchObject({
+      objective: "inspect the stuck session",
+      status: "continue",
     });
   });
 
@@ -247,5 +276,40 @@ describe("goal plugin", () => {
     const result = await handleGoalCommand(api, commandCtx("resume"), { store });
     expect(result.text).toContain("start a new goal");
     expect(requestSessionContinuationLease).not.toHaveBeenCalled();
+  });
+
+  it("keeps a capped goal active when cleanup fails", async () => {
+    const { api, store, requestSessionContinuationLease, clearSessionContinuationLease } =
+      createApi();
+    await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });
+    const current = store.states.get("agent:main:main");
+    expect(current).toBeTruthy();
+    store.states.set("agent:main:main", {
+      ...(current as GoalState),
+      continuationCount: GOAL_MAX_CONTINUATIONS,
+    });
+    requestSessionContinuationLease.mockClear();
+    clearSessionContinuationLease.mockResolvedValueOnce({ removed: 0, failed: 1 });
+
+    const tool = createGoalStatusTool(
+      api,
+      { sessionKey: "agent:main:main" } as Parameters<typeof createGoalStatusTool>[1],
+      { store },
+    );
+    await expect(
+      tool?.execute("call-cap-failed-cleanup", { status: "continue" }),
+    ).resolves.toMatchObject({
+      content: [
+        expect.objectContaining({
+          text: expect.stringContaining("Could not clear the pending goal continuation"),
+        }),
+      ],
+    });
+
+    expect(requestSessionContinuationLease).not.toHaveBeenCalled();
+    expect(store.states.get("agent:main:main")).toMatchObject({
+      status: "continue",
+      lastNote: expect.stringContaining("Could not clear the pending goal continuation"),
+    });
   });
 });

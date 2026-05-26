@@ -266,7 +266,7 @@ describe("plugin scheduled turns", () => {
       schedule: {
         tag: "nudge",
         name: "custom-nudge-name",
-        deliveryMode: "announce",
+        deliveryMode: "none",
       },
     });
 
@@ -280,7 +280,7 @@ describe("plugin scheduled turns", () => {
     expect(job.name).toBe("plugin:workflow-plugin:tag:nudge:agent:main:main:custom-nudge-name");
     expect(job.sessionTarget).toBe("session:agent:main:main");
     expect(job.deleteAfterRun).toBe(true);
-    expect(job.delivery).toEqual({ mode: "announce", channel: "last" });
+    expect(job.delivery).toEqual({ mode: "none" });
     expect(job.payload).toEqual({ kind: "agentTurn", message: "wake" });
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(1);
   });
@@ -438,7 +438,7 @@ describe("plugin scheduled turns", () => {
     ]);
   });
 
-  it("does not pin Discord-shaped targets for non-Discord session keys", async () => {
+  it("pins non-Discord announced turns to their originating session key target", async () => {
     workflowMocks.cronAdd
       .mockResolvedValueOnce(makeCronJob({ id: "whatsapp-group-job" }))
       .mockResolvedValueOnce(makeCronJob({ id: "telegram-account-job" }));
@@ -461,11 +461,14 @@ describe("plugin scheduled turns", () => {
     ).toEqual([
       {
         mode: "announce",
-        channel: "last",
+        channel: "whatsapp",
+        to: "group:120363400867505404@g.us",
       },
       {
         mode: "announce",
-        channel: "last",
+        channel: "telegram",
+        accountId: "work",
+        to: "owner",
       },
     ]);
   });
@@ -1358,6 +1361,7 @@ describe("plugin scheduled turns", () => {
       sessionKey: "agent:main:main",
       message: "wake",
       delayMs: 10,
+      deliveryMode: "none",
     });
     expectSessionTurnHandle(liveHandle, "job-live", "scheduler-plugin");
     await expect(
@@ -1373,6 +1377,7 @@ describe("plugin scheduled turns", () => {
         sessionKey: "agent:main:main",
         message: "wake",
         delayMs: 10,
+        deliveryMode: "none",
       }),
     ).resolves.toBeUndefined();
     await expect(
@@ -1434,6 +1439,79 @@ describe("plugin scheduled turns", () => {
       },
       deleteAfterRun: true,
     });
+  });
+
+  it("pins non-Discord announced continuation delivery to the originating chat", async () => {
+    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "telegram-job" }));
+    const { config, registry } = createPluginRegistryFixture({}, { hostServices: { cron } });
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "scheduler-plugin",
+        name: "Scheduler Plugin",
+        origin: "bundled",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await expect(
+      capturedApi?.session.workflow.requestSessionContinuationLease({
+        session: { sessionKey: "agent:main:telegram:default:direct:6101296751" },
+        leaseKey: "active-goal",
+        message: "continue the active goal",
+        delayMs: 10,
+        deliveryMode: "announce",
+      }),
+    ).resolves.toMatchObject({ scheduled: true });
+
+    expect(getCronAddBody()).toMatchObject({
+      sessionTarget: "session:agent:main:telegram:default:direct:6101296751",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        accountId: "default",
+        to: "6101296751",
+      },
+    });
+  });
+
+  it("fails closed instead of using last-channel delivery for unpinnable announce turns", async () => {
+    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "job-live" }));
+    const { config, registry } = createPluginRegistryFixture({}, { hostServices: { cron } });
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "scheduler-plugin",
+        name: "Scheduler Plugin",
+        origin: "bundled",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await expect(
+      capturedApi?.session.workflow.requestSessionContinuationLease({
+        session: { sessionKey: "agent:main:main" },
+        leaseKey: "active-goal",
+        message: "continue the active goal",
+        delayMs: 10,
+        deliveryMode: "announce",
+      }),
+    ).resolves.toMatchObject({
+      scheduled: false,
+      reason: "scheduler_unavailable",
+    });
+
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
   });
 
   it("resolves live cron service for captured plugin scheduled-turn APIs", async () => {

@@ -152,10 +152,17 @@ export async function handleGoalCommand(
   }
 
   if (action === "clear") {
-    await api.session.workflow.clearSessionContinuationLease({
+    const cleanup = await api.session.workflow.clearSessionContinuationLease({
       session: ctx,
       leaseKey: GOAL_LEASE_KEY,
     });
+    if (cleanup.failed > 0) {
+      return {
+        text:
+          "Could not clear the pending goal continuation; keeping the goal active. " +
+          `Goal still active: ${current.objective}`,
+      };
+    }
     await store.delete(sessionKey);
     return { text: `Goal cleared: ${current.objective}` };
   }

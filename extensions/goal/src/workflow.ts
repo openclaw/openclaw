@@ -26,6 +26,21 @@ export function buildGoalContinuationMessage(state: GoalState): string {
   ].join("\n");
 }
 
+function cleanupFailedMessage(note?: string): string {
+  const prefix = "Could not clear the pending goal continuation; keeping the goal active.";
+  return note ? `${prefix} Latest note: ${note}` : prefix;
+}
+
+async function clearGoalContinuationLease(params: {
+  workflow: GoalWorkflowDeps;
+  session: { sessionKey?: string };
+}) {
+  return await params.workflow.clearSessionContinuationLease({
+    session: params.session,
+    leaseKey: GOAL_LEASE_KEY,
+  });
+}
+
 export async function applyGoalStatus(params: {
   store: GoalStore;
   workflow: GoalWorkflowDeps;
@@ -35,10 +50,15 @@ export async function applyGoalStatus(params: {
   note?: string;
 }): Promise<GoalState> {
   if (isStopStatus(params.status)) {
-    await params.workflow.clearSessionContinuationLease({
-      session: params.session,
-      leaseKey: GOAL_LEASE_KEY,
-    });
+    const cleanup = await clearGoalContinuationLease(params);
+    if (cleanup.failed > 0) {
+      const next = updateGoalState(params.state, {
+        status: "continue",
+        note: cleanupFailedMessage(params.note),
+      });
+      await params.store.write(next);
+      return next;
+    }
     const next = updateGoalState(params.state, {
       status: params.status,
       note: params.note,
@@ -49,10 +69,15 @@ export async function applyGoalStatus(params: {
   }
 
   if (params.state.continuationCount >= GOAL_MAX_CONTINUATIONS) {
-    await params.workflow.clearSessionContinuationLease({
-      session: params.session,
-      leaseKey: GOAL_LEASE_KEY,
-    });
+    const cleanup = await clearGoalContinuationLease(params);
+    if (cleanup.failed > 0) {
+      const next = updateGoalState(params.state, {
+        status: "continue",
+        note: cleanupFailedMessage(params.note),
+      });
+      await params.store.write(next);
+      return next;
+    }
     const next = updateGoalState(params.state, {
       status: "waiting_approval",
       note:

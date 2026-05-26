@@ -85,20 +85,17 @@ function resolveSessionEventDeliveryMode(deliveryMode: unknown): "none" | "annou
 function resolveSessionDeliveryTarget(
   sessionKey: string,
 ): { channel: string; to: string; accountId?: string; threadId?: string } | undefined {
-  const threadMarker = ":thread:";
-  const threadIndex = sessionKey.toLowerCase().lastIndexOf(threadMarker);
-  const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
-  const threadId =
-    threadIndex === -1
-      ? undefined
-      : normalizeOptionalString(sessionKey.slice(threadIndex + threadMarker.length));
+  const suffixMatch = /:(?:thread|topic):([^:]+)$/u.exec(sessionKey);
+  const baseSessionKey =
+    suffixMatch?.index === undefined ? sessionKey : sessionKey.slice(0, suffixMatch.index);
+  const threadId = normalizeOptionalString(suffixMatch?.[1]);
   const match = /^agent:[^:]+:(.+)$/u.exec(baseSessionKey);
   if (!match?.[1]) {
     return undefined;
   }
   const parts = match[1].split(":");
   const channel = normalizeOptionalString(parts[0]);
-  if (channel !== "discord") {
+  if (!channel) {
     return undefined;
   }
 
@@ -119,6 +116,9 @@ function resolveSessionDeliveryTarget(
         return { index, kind: "direct", id: normalizeOptionalString(legacyDiscordDirect[1]) };
       }
     }
+    if (channel !== "discord" && parts.length > 1) {
+      return { index: 1, kind: "direct", id: normalizeOptionalString(parts.slice(1).join(":")) };
+    }
     return undefined;
   };
 
@@ -136,9 +136,15 @@ function resolveSessionDeliveryTarget(
         ? normalizeOptionalString(parts[1])
         : undefined;
   const outboundKind = directKinds.has(target.kind) ? "user" : "channel";
+  const to =
+    channel === "discord"
+      ? `${outboundKind}:${target.id}`
+      : channelKinds.has(target.kind)
+        ? `${target.kind}:${target.id}`
+        : target.id;
   return {
     channel,
-    to: `${outboundKind}:${target.id}`,
+    to,
     ...(accountId ? { accountId } : {}),
     ...(threadId ? { threadId } : {}),
   };
@@ -359,6 +365,16 @@ export async function schedulePluginSessionTurn(params: {
   });
   const deliveryTarget =
     cronDeliveryMode === "announce" ? resolveSessionDeliveryTarget(sessionKey) : undefined;
+  if (rawDeliveryMode === "announce" && !deliveryTarget) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): announce delivery target unavailable`,
+    );
+    return undefined;
+  }
   const toolsAllow = resolvePluginSessionTurnToolsAllow({
     pluginId: params.pluginId,
     ownerRegistry: params.ownerRegistry,
