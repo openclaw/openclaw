@@ -46,6 +46,10 @@ export type ZaloInboundMessage = {
   wasExplicitlyMentioned?: boolean;
   canResolveExplicitMention?: boolean;
   implicitMention?: boolean;
+  // === Reply-quote fields (custom patch 2026-05-26): từ data.quote của Zalo ===
+  quotedGlobalMsgId?: string; // = data.quote.globalMsgId — match messageId tin bị quote
+  quotedOwnerId?: string; // = data.quote.ownerId — ai sở hữu tin gốc
+  quotedBody?: string; // = data.quote.msg — body tin gốc bị quote
   eventMessage?: ZaloEventMessage;
   raw: unknown;
 };

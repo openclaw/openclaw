@@ -666,6 +666,10 @@ async function processMessage(
       GroupMembers: isGroup ? groupMembers : undefined,
       WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
+      // === Reply-quote (custom patch 2026-05-26): surface vào prompt agent qua inbound-meta ===
+      ReplyToId: message.quotedGlobalMsgId || undefined,
+      ReplyToBody: message.quotedBody || undefined,
+      ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,
     },
   });
 
