@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSignalApprovalReactionHintToText,
+  appendSignalApprovalReactionHintForOutboundMessage,
   buildSignalApprovalReactionHint,
   clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
+  registerSignalApprovalReactionTargetForOutboundMessage,
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
@@ -73,6 +75,87 @@ describe("Signal approval reactions", () => {
         allowedDecisions: ["allow-once", "deny"],
       }),
     ).toBe(prompt);
+  });
+
+  it("registers target-mode outbound approval prompts for reactions", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    };
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
+    const textWithHint = appendSignalApprovalReactionHintForOutboundMessage({
+      cfg,
+      accountId: "default",
+      to: "+15551230000",
+      text,
+      targetAuthor: "+15550009999",
+    });
+
+    expect(textWithHint).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(
+      registerSignalApprovalReactionTargetForOutboundMessage({
+        cfg,
+        accountId: "default",
+        to: "+15551230000",
+        messageId: "1700000000009",
+        text: textWithHint,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(true);
+
+    const handled = await maybeResolveSignalApprovalReaction({
+      cfg,
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000009",
+      reactionKey: "👍",
+      actorId: "+15551230000",
+      targetAuthor: "+15550009999",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "plugin:abc",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
+  it("keeps target-mode outbound prompts manual when the target route is disabled", () => {
+    const text =
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny";
+
+    expect(
+      appendSignalApprovalReactionHintForOutboundMessage({
+        cfg: {
+          channels: { signal: { allowFrom: ["+15551230000"] } },
+          approvals: {
+            plugin: {
+              enabled: false,
+              mode: "targets",
+              targets: [{ channel: "signal", to: "+15551230000" }],
+            },
+          },
+        },
+        accountId: "default",
+        to: "+15551230000",
+        text,
+        targetAuthor: "+15550009999",
+      }),
+    ).toBe(text);
   });
 
   it("registers reaction state when only allow-always is available", async () => {
