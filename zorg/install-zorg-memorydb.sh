@@ -191,6 +191,14 @@ install_lan_chat_service() {
     warn "systemd is unavailable; LAN chat source is installed but no service was created."
     return 0
   fi
+  local npm_bin
+  npm_bin="$(command -v npm || true)"
+  if [[ -z "$npm_bin" ]]; then
+    warn "npm is unavailable; LAN chat source is installed but no service was created."
+    return 0
+  fi
+  local service_path
+  service_path="$(dirname "$npm_bin"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   mkdir -p "$HOME/.config/systemd/user"
   cat > "$HOME/.config/systemd/user/lan-chat.service" <<SERVICE
 [Unit]
@@ -200,9 +208,10 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$LAN_CHAT_DIR
+Environment=PATH=$service_path
 Environment=PORT=$LAN_CHAT_PORT
 Environment=HOSTNAME=$LAN_CHAT_HOST
-ExecStart=/usr/bin/env npm run start
+ExecStart=$npm_bin run start
 Restart=always
 RestartSec=5
 
