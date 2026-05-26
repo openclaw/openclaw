@@ -168,6 +168,36 @@ function quotaIdentity(entry: QuotaWindowSummary): string {
   return [entry.displayName, entry.label].filter(Boolean).join(" · ");
 }
 
+function quotaWindowDurationMinutes(label: string): number {
+  const normalized = label.trim().toLowerCase();
+  const explicitDuration = /^(\d+(?:\.\d+)?)\s*([hmwd])\b/.exec(normalized);
+  if (explicitDuration) {
+    const amount = Number(explicitDuration[1]);
+    const unit = explicitDuration[2];
+    const multiplier =
+      unit === "h" ? 60 : unit === "d" ? 24 * 60 : unit === "w" ? 7 * 24 * 60 : 1;
+    return Number.isFinite(amount) ? amount * multiplier : Number.POSITIVE_INFINITY;
+  }
+  if (/\bweekly?\b|\bweek\b/.test(normalized)) {
+    return 7 * 24 * 60;
+  }
+  if (/\bmonthly?\b|\bmonth\b/.test(normalized)) {
+    return 30 * 24 * 60;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function compareQuotaStatDisplayOrder(
+  a: QuotaWindowSummary,
+  b: QuotaWindowSummary,
+): number {
+  const durationDelta = quotaWindowDurationMinutes(a.label) - quotaWindowDurationMinutes(b.label);
+  if (durationDelta !== 0) {
+    return durationDelta;
+  }
+  return (a.resetAt ?? Number.POSITIVE_INFINITY) - (b.resetAt ?? Number.POSITIVE_INFINITY);
+}
+
 function summarizeLogLines(lines: string[]) {
   const visible = lines.slice(-200);
   const errors = visible.filter((line) => /\b(error|fatal|exception|failed)\b/i.test(line)).length;
@@ -444,13 +474,9 @@ export function renderOverview(props: OverviewProps) {
   const hasMultipleQuotaWindows = quotaCardWindows.length > 1;
   const primaryQuotaReset = primaryQuota ? formatQuotaReset(primaryQuota.resetAt) : null;
   const secondaryQuotaStat = sameProviderSecondaryQuota ?? null;
-  const secondaryQuotaStatReset = secondaryQuotaStat
-    ? formatQuotaReset(secondaryQuotaStat.resetAt)
-    : null;
   const primaryQuotaLabel = primaryQuota
     ? quotaLimitLabel(primaryQuota)
     : t("overview.operator.quota");
-  const secondaryQuotaStatLabel = secondaryQuotaStat ? quotaLimitLabel(secondaryQuotaStat) : null;
   const secondaryQuotaHint = secondaryQuota
     ? `${quotaIdentity(secondaryQuota)} ${formatQuotaRemaining(secondaryQuota)}`
     : null;
@@ -479,6 +505,12 @@ export function renderOverview(props: OverviewProps) {
         : t("overview.operator.usageQuotaNotConfigured");
   const showSecondaryQuotaStat =
     Boolean(primaryQuota && secondaryQuotaStat && hasMultipleQuotaWindows) && totalCost === "$0.00";
+  const visibleQuotaStats =
+    showSecondaryQuotaStat && primaryQuota && secondaryQuotaStat
+      ? [primaryQuota, secondaryQuotaStat].toSorted(compareQuotaStatDisplayOrder)
+      : primaryQuota
+        ? [primaryQuota]
+        : [];
   const logSummary = summarizeLogLines(props.overviewLogLines);
   const hasOperationalData =
     props.usageResult != null ||
@@ -913,26 +945,25 @@ export function renderOverview(props: OverviewProps) {
               <div class="card-title">${t("overview.operator.providerUsageTitle")}</div>
               <div class="card-sub">${t("overview.operator.providerUsageSubtitle")}</div>
               <div class="ov-usage-metrics">
-                ${renderUsageStat({
-                  label: primaryQuotaLabel,
-                  value: primaryQuota ? formatQuotaRemaining(primaryQuota) : t("common.na"),
-                  detail: primaryQuotaReset
-                    ? t("overview.operator.quotaResetShort", { time: primaryQuotaReset })
-                    : null,
-                  tone:
-                    primaryQuota?.remaining != null && primaryQuota.remaining <= 25
-                      ? "warn"
-                      : "ok",
-                })}
-                ${showSecondaryQuotaStat && secondaryQuotaStat && secondaryQuotaStatLabel
-                  ? renderUsageStat({
-                      label: secondaryQuotaStatLabel,
-                      value: formatQuotaRemaining(secondaryQuotaStat),
-                      detail: secondaryQuotaStatReset
-                        ? t("overview.operator.quotaResetShort", { time: secondaryQuotaStatReset })
-                        : null,
-                      tone: secondaryQuotaStat.remaining <= 25 ? "warn" : "ok",
+                ${visibleQuotaStats.length > 0
+                  ? visibleQuotaStats.map((entry) => {
+                      const reset = formatQuotaReset(entry.resetAt);
+                      return renderUsageStat({
+                        label: quotaLimitLabel(entry),
+                        value: formatQuotaRemaining(entry),
+                        detail: reset
+                          ? t("overview.operator.quotaResetShort", { time: reset })
+                          : null,
+                        tone: entry.remaining <= 25 ? "warn" : "ok",
+                      });
                     })
+                  : renderUsageStat({
+                      label: primaryQuotaLabel,
+                      value: t("common.na"),
+                      tone: "ok",
+                    })}
+                ${showSecondaryQuotaStat
+                  ? nothing
                   : renderUsageStat({
                       label: t("overview.cards.cost"),
                       value: totalCost,
