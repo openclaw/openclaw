@@ -742,6 +742,40 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("memoizes readOwnerProcessArgs across locks with the same pid in one sweep (#86509)", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const nowMs = Date.now();
+    const lockCount = 5;
+    try {
+      for (let i = 0; i < lockCount; i++) {
+        await fs.writeFile(
+          path.join(sessionsDir, `same-pid-${i}.jsonl.lock`),
+          JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs).toISOString() }),
+          "utf8",
+        );
+      }
+      const readArgsCalls: number[] = [];
+      const readOwnerProcessArgs = (pid: number) => {
+        readArgsCalls.push(pid);
+        return ["node", "/srv/app/dist/index.js"];
+      };
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs,
+      });
+      expect(result.cleaned).toHaveLength(lockCount);
+      // Without memo this would be `lockCount`; the per-pid cache collapses it to a single call.
+      expect(readArgsCalls).toEqual([process.pid]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fresh live .jsonl lock files with OpenClaw or unknown owners", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const sessionsDir = path.join(root, "sessions");
