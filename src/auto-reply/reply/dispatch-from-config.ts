@@ -1139,9 +1139,13 @@ export async function dispatchReplyFromConfig(
     isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
   });
   const routeReplyTo = replyRoute.to;
-  const inboundPolicyPeers = [ctx.From, ctx.SenderId, ctx.OriginatingTo].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
-  );
+  const inboundPolicyPeers = [
+    ctx.From,
+    ctx.SenderId,
+    ctx.SenderUsername,
+    ctx.SenderE164,
+    ctx.OriginatingTo,
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
   let normalizeReplyMediaPaths:
     | ReturnType<

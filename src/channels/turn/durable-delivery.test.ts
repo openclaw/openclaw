@@ -221,6 +221,91 @@ describe("durable inbound reply delivery", () => {
     ]);
   });
 
+  it("delivers same-peer durable final replies through username and E.164 aliases", async () => {
+    mocks.sendDurableMessageBatch.mockImplementationOnce(async (request) => {
+      const typedRequest = request as SendDurableMessageBatchRequest;
+      const decision = resolveSendPolicyDetailed({
+        cfg: typedRequest.cfg as never,
+        channel: typedRequest.channel,
+        chatType: typedRequest.session?.conversationType,
+        inboundPeer: typedRequest.session?.inboundPeer,
+        outboundPeer: typedRequest.to,
+      });
+      if (decision.decision === "deny") {
+        return {
+          status: "suppressed",
+          reason: "denied_by_send_policy",
+          receipt: {
+            platformMessageIds: [],
+            parts: [],
+            sentAt: 1,
+          },
+          payloadOutcomes: [
+            {
+              index: 0,
+              status: "suppressed",
+              reason: "denied_by_send_policy",
+              hookEffect: decision.cancelReason
+                ? {
+                    cancelReason: decision.cancelReason.code,
+                    metadata: decision.cancelReason,
+                  }
+                : undefined,
+            },
+          ],
+        };
+      }
+      return {
+        status: "sent",
+        receipt: {
+          primaryPlatformMessageId: "m1",
+          platformMessageIds: ["m1"],
+          parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
+          sentAt: 1,
+        },
+      };
+    });
+
+    const result = await deliverInboundReplyWithMessageSendContext({
+      cfg: {
+        session: {
+          sendPolicy: {
+            default: "allow",
+            rules: [
+              {
+                action: "deny",
+                match: {
+                  allOf: [{ chatType: "direct" }, { peerEquals: "inboundPeer", invert: true }],
+                },
+              },
+            ],
+          },
+        },
+      },
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "same peer" },
+      to: "origin_user",
+      ctxPayload: ctxPayload({
+        From: "origin-peer",
+        SenderId: "origin-peer",
+        SenderUsername: "origin_user",
+        SenderE164: "+15551234567",
+        OriginatingTo: "origin-peer",
+        ChatType: "direct",
+      }),
+    });
+
+    expect(result.status).toBe("handled_visible");
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    expect(latestSendDurableMessageBatchRequest().session?.inboundPeer).toEqual([
+      "origin-peer",
+      "origin_user",
+      "+15551234567",
+    ]);
+  });
+
   it("suppresses wrong-peer durable final replies through session sendPolicy", async () => {
     mocks.sendDurableMessageBatch.mockImplementationOnce(async (request) => {
       const typedRequest = request as SendDurableMessageBatchRequest;
@@ -290,6 +375,8 @@ describe("durable inbound reply delivery", () => {
       ctxPayload: ctxPayload({
         From: "origin-peer",
         SenderId: "origin-peer",
+        SenderUsername: "origin_user",
+        SenderE164: "+15551234567",
         OriginatingTo: "origin-peer",
         ChatType: "direct",
       }),
@@ -297,7 +384,11 @@ describe("durable inbound reply delivery", () => {
 
     expect(result.status).toBe("handled_no_send");
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
-    expect(latestSendDurableMessageBatchRequest().session?.inboundPeer).toEqual(["origin-peer"]);
+    expect(latestSendDurableMessageBatchRequest().session?.inboundPeer).toEqual([
+      "origin-peer",
+      "origin_user",
+      "+15551234567",
+    ]);
   });
 
   it("reports durable partial send failures as failed delivery", async () => {

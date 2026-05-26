@@ -1142,6 +1142,53 @@ describe("dispatchReplyFromConfig", () => {
     expect(routeCall?.groupId).toBe("telegram:999");
   });
 
+  it("routes with the full inbound peer alias set when sender username and E.164 are present", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      AccountId: "acc-1",
+      MessageThreadId: 123,
+      GroupChannel: "ops-room",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SenderId: "origin-peer",
+      SenderUsername: "origin_user",
+      SenderE164: "+15551234567",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    const routeCall = firstRouteReplyCall() as
+      | {
+          accountId?: unknown;
+          channel?: unknown;
+          groupId?: unknown;
+          inboundPeer?: unknown;
+          isGroup?: unknown;
+          threadId?: unknown;
+          to?: unknown;
+        }
+      | undefined;
+    expect(routeCall?.channel).toBe("telegram");
+    expect(routeCall?.to).toBe("telegram:999");
+    expect(routeCall?.accountId).toBe("acc-1");
+    expect(routeCall?.threadId).toBe(123);
+    expect(routeCall?.isGroup).toBe(true);
+    expect(routeCall?.groupId).toBe("telegram:999");
+    expect(routeCall?.inboundPeer).toEqual(
+      expect.arrayContaining(["origin-peer", "origin_user", "+15551234567", "telegram:999"]),
+    );
+  });
+
   it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
