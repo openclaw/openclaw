@@ -1573,6 +1573,72 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("allows long isolated cron jobs more setup time for cold runner startup", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-05-10T09:02:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "isolated-cold-runner-setup",
+        name: "cold runner setup",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1080 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let settled = false;
+      let abortObserved = false;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          started.resolve();
+          abortSignal?.addEventListener(
+            "abort",
+            () => {
+              abortObserved = true;
+            },
+            { once: true },
+          );
+          return await new Promise<never>(() => {});
+        }),
+      });
+
+      const timerPromise = onTimer(state).finally(() => {
+        settled = true;
+      });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      expect(settled).toBe(false);
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(240_000);
+      now += 240_000;
+      await timerPromise;
+
+      const job = requireJob(state, "isolated-cold-runner-setup");
+      expect(abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("setup timed out before runner start");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
     vi.useFakeTimers();
     try {
