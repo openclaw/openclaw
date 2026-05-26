@@ -933,7 +933,11 @@ export function resolveExecApprovals(
       socketPath: resolveExecApprovalsSocketPath(),
       token: "",
     });
-    if (resolved.agent.security === "full" && resolved.agent.ask === "off") {
+    if (
+      resolved.agent.security === "full" &&
+      resolved.agent.ask === "off" &&
+      !file.socket?.token?.trim()
+    ) {
       return resolved;
     }
   }

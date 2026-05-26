@@ -222,6 +222,36 @@ describe("exec approvals store helpers", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "hardens existing token-bearing approvals files before resolving default no-prompt policy",
+    () => {
+      const dir = createHomeDir();
+      const approvalsPath = approvalsFilePath(dir);
+      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+      fs.writeFileSync(
+        approvalsPath,
+        JSON.stringify({
+          version: 1,
+          socket: { path: resolveExecApprovalsSocketPath(), token: "existing-token" },
+          defaults: { security: "full", ask: "off" },
+          agents: {},
+        }),
+        { mode: 0o644 },
+      );
+      fs.chmodSync(approvalsPath, 0o644);
+
+      const resolved = resolveExecApprovals("main", {
+        security: "full",
+        ask: "off",
+      });
+
+      expect(resolved.agent.security).toBe("full");
+      expect(resolved.agent.ask).toBe("off");
+      expect(resolved.token).toBe("existing-token");
+      expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects symlinked approvals files before resolving the default no-prompt policy",
     () => {
       const dir = createHomeDir();
