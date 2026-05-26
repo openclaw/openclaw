@@ -88,6 +88,38 @@ describe("DefaultPackageManager", () => {
     );
   });
 
+  it("keeps auto-discovered project skills inside their skill root", async () => {
+    const root = await makeTempDir("openclaw-package-manager-");
+    const agentsSkillsRoot = join(root, ".agents", "skills");
+    const insideSkill = join(agentsSkillsRoot, "inside", "SKILL.md");
+    const outsideRoot = join(root, "outside");
+    await mkdir(join(root, ".git"));
+    await mkdir(join(agentsSkillsRoot, "inside"), { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    await writeFile(insideSkill, "# Inside\n", "utf-8");
+    await writeFile(join(outsideRoot, "SKILL.md"), "# Outside\n", "utf-8");
+
+    try {
+      await symlink(outsideRoot, join(agentsSkillsRoot, "linked"), "dir");
+    } catch {
+      // Some filesystems disallow directory symlinks; the inside assertion still proves discovery.
+    }
+
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({}),
+    });
+
+    const resolved = await manager.resolve();
+    const skillPaths = resolved.skills.map((skill) => skill.path);
+
+    expect(skillPaths).toContain(insideSkill);
+    expect(skillPaths.some((skillPath) => skillPath.includes(join("skills", "linked")))).toBe(
+      false,
+    );
+  });
+
   it("does not auto-install missing npm package resources", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const manager = new DefaultPackageManager({

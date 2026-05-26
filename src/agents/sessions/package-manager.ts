@@ -291,6 +291,9 @@ function collectSkillEntries(
       }
 
       const fullPath = join(dir, entry.name);
+      if (!isRealPathWithinRoot(root, fullPath)) {
+        continue;
+      }
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         try {
@@ -316,6 +319,9 @@ function collectSkillEntries(
       }
 
       const fullPath = join(dir, entry.name);
+      if (!isRealPathWithinRoot(root, fullPath)) {
+        continue;
+      }
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
 
@@ -613,6 +619,10 @@ function resolveRealPathIfPossible(path: string): string {
 function isPathWithinRoot(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isRealPathWithinRoot(root: string, candidate: string): boolean {
+  return isPathWithinRoot(resolveRealPathIfPossible(resolve(root)), resolveRealPathIfPossible(candidate));
 }
 
 function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
