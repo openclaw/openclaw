@@ -179,7 +179,7 @@ openclaw_node_download_platform() {
 openclaw_download_node() {
   local requested_node="$1"
   local version platform archive_url install_root temp_root
-  version="$(openclaw_resolve_node_download_version "$requested_node")"
+  version="$(openclaw_resolve_node_download_version "$requested_node")" || return 1
   platform="$(openclaw_node_download_platform)" || return 1
   temp_root="$(openclaw_shell_path "${RUNNER_TEMP:-/tmp}")"
   install_root="${temp_root}/openclaw-node-${version}-${platform}"

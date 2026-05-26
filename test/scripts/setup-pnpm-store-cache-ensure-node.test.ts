@@ -238,18 +238,42 @@ esac
     }
   });
 
+  it("fails wildcard download resolution without producing an empty version", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.22.3");
+      const helperBin = join(root, "helpers");
+      mkdirSync(helperBin, { recursive: true });
+      writeExecutable(
+        join(helperBin, "curl"),
+        `#!/usr/bin/env bash
+exit 22
+`,
+      );
+      const result = runEnsureNode(root, "24.x", {
+        PATH: `${helperBin}:${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("::error::Expected Node '24.x'");
+      expect(result.stdout).not.toContain("node--");
+      expect(result.stdout).not.toContain("node-v-win");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("downloads and activates a Windows Node zip when no matching toolcache node exists", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
       const activeBin = join(root, "active", "bin");
       writeFakeNode(activeBin, "22.22.3");
       const helperBin = join(root, "helpers");
-      const runnerTemp = join(root, "runner-temp");
-      const extractedBin = join(
-        runnerTemp,
-        "openclaw-node-v24.15.0-win-x64",
-        "node-v24.15.0-win-x64",
-      );
+      const runnerTemp = join(root, "runner-temp's");
+      const installRoot = join(runnerTemp, "openclaw-node-v24.15.0-win-x64");
+      const extractedBin = join(installRoot, "node-v24.15.0-win-x64");
       mkdirSync(helperBin, { recursive: true });
       mkdirSync(runnerTemp, { recursive: true });
       writeExecutable(
@@ -279,13 +303,17 @@ done
         `#!/usr/bin/env bash
 if [[ "$1" == "-u" ]]; then
   case "$2" in
-    "C:\\\\runner\\\\_temp") echo "${runnerTemp}" ;;
+    "C:\\\\runner's\\\\_temp") echo "${runnerTemp}" ;;
     *) echo "$2" ;;
   esac
   exit 0
 fi
 if [[ "$1" == "-w" ]]; then
-  echo "$2"
+  case "$2" in
+    "${runnerTemp}/openclaw-node-v24.15.0-win-x64.zip") echo "C:\\\\runner's\\\\_temp\\\\openclaw-node-v24.15.0-win-x64.zip" ;;
+    "${installRoot}") echo "C:\\\\runner's\\\\_temp\\\\openclaw-node-v24.15.0-win-x64" ;;
+    *) echo "$2" ;;
+  esac
   exit 0
 fi
 exit 1
@@ -294,11 +322,28 @@ exit 1
       writeExecutable(
         join(helperBin, "pwsh"),
         `#!/usr/bin/env bash
+if [[ "$*" != *'OPENCLAW_NODE_ARCHIVE'* ]]; then
+  echo "missing env archive reference"
+  exit 20
+fi
+if [[ "\${OPENCLAW_NODE_ARCHIVE:-}" != *"runner's"* ]]; then
+  echo "archive env was not propagated"
+  exit 21
+fi
+if [[ "\${OPENCLAW_NODE_INSTALL_ROOT:-}" != *"runner's"* ]]; then
+  echo "install env was not propagated"
+  exit 22
+fi
 mkdir -p "${extractedBin}"
-cat > "${join(extractedBin, "node")}" <<'NODEEOF'
+cat > "${join(extractedBin, "node.exe")}" <<'NODEEOF'
 #!/usr/bin/env bash
 if [[ "$1" == "-p" ]]; then echo "24.15.0"; exit 0; fi
 exit 0
+NODEEOF
+chmod +x "${join(extractedBin, "node.exe")}"
+cat > "${join(extractedBin, "node")}" <<'NODEEOF'
+#!/usr/bin/env bash
+exec "$(dirname "$0")/node.exe" "$@"
 NODEEOF
 chmod +x "${join(extractedBin, "node")}"
 `,
@@ -306,7 +351,7 @@ chmod +x "${join(extractedBin, "node")}"
       const result = runEnsureNode(root, "24.15.0", {
         GITHUB_PATH: join(root, "github-path"),
         PATH: `${helperBin}:${activeBin}:${process.env.PATH ?? ""}`,
-        RUNNER_TEMP: "C:\\runner\\_temp",
+        RUNNER_TEMP: "C:\\runner's\\_temp",
         RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
       });
 
