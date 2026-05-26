@@ -246,6 +246,7 @@ export {
 } from "../agents/harness/hook-helpers.js";
 export {
   awaitAgentHarnessAgentEndHook,
+  getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
