@@ -46,12 +46,12 @@ describe("imessageApprovalNativeRuntime", () => {
       } as never,
     });
 
-    expect(payload.reactionPayload.text).toContain("👍 Allow Once");
-    expect(payload.reactionPayload.text).toContain("👎 Deny");
-    expect(payload.reactionPayload.text).not.toContain("1️⃣ Allow Once");
-    expect(payload.reactionPayload.text).not.toContain("2️⃣ Allow Always");
-    expect(payload.reactionPayload.text).not.toContain("3️⃣ Deny");
-    expect(payload.reactionPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(payload.text).toContain("👍 Allow Once");
+    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).not.toContain("1️⃣ Allow Once");
+    expect(payload.text).not.toContain("2️⃣ Allow Always");
+    expect(payload.text).not.toContain("3️⃣ Deny");
+    expect(payload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
   it("renders allowed thumbs-only reactions in pending plugin approvals", async () => {
@@ -102,18 +102,12 @@ describe("imessageApprovalNativeRuntime", () => {
       } as never,
     });
 
-    expect(payload.reactionPayload.text).toContain("Plugin approval required");
-    expect(payload.reactionPayload.text).toContain(
-      "Reply with: /approve plugin:abc allow-once|allow-always|deny",
-    );
-    expect(payload.reactionPayload.text).toContain("👍 Allow Once");
-    expect(payload.reactionPayload.text).toContain("👎 Deny");
-    expect(payload.reactionPayload.text).not.toContain("/approve <id>");
-    expect(payload.reactionPayload.allowedDecisions).toEqual([
-      "allow-once",
-      "allow-always",
-      "deny",
-    ]);
+    expect(payload.text).toContain("Plugin approval required");
+    expect(payload.text).toContain("Reply with: /approve plugin:abc allow-once|allow-always|deny");
+    expect(payload.text).toContain("👍 Allow Once");
+    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).not.toContain("/approve <id>");
+    expect(payload.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
   });
 
   it("normalizes iMessage handle targets and carries account ids into prepared delivery", async () => {
@@ -143,12 +137,8 @@ describe("imessageApprovalNativeRuntime", () => {
           actions: [],
         } as never,
         pendingPayload: {
-          manualFallbackPayload: { text: "pending" },
-          reactionPayload: {
-            text: "pending",
-            allowedDecisions: ["allow-once"],
-            reactionBindings: [],
-          },
+          text: "pending",
+          allowedDecisions: ["allow-once"],
         },
       }),
     ).resolves.toEqual({
@@ -189,14 +179,8 @@ describe("imessageApprovalNativeRuntime", () => {
         actions: [],
       } as never,
       pendingPayload: {
-        manualFallbackPayload: {
-          text: "Reply with: /approve exec-1 allow-once",
-        },
-        reactionPayload: {
-          text: "React with:\n\n👍 Allow Once\n\nReply with: /approve exec-1 allow-once",
-          allowedDecisions: ["allow-once" as const],
-          reactionBindings: [],
-        },
+        text: "Reply with: /approve exec-1 allow-once",
+        allowedDecisions: ["allow-once" as const],
       },
     };
 
@@ -274,12 +258,8 @@ describe("imessageApprovalNativeRuntime", () => {
           actions: [],
         } as never,
         pendingPayload: {
-          manualFallbackPayload: { text: "pending" },
-          reactionPayload: {
-            text: "pending",
-            allowedDecisions: ["allow-once"],
-            reactionBindings: [],
-          },
+          text: "pending",
+          allowedDecisions: ["allow-once"],
         },
       }),
     ).resolves.toEqual({

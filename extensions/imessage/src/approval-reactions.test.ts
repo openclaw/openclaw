@@ -70,13 +70,13 @@ describe("iMessage approval reactions", () => {
     expect(appendIMessageApprovalReactionHintForOutboundMessage(prompt)).toBe(prompt);
   });
 
-  it("exposes allow-always as a reaction choice when allowed", () => {
+  it("does not expose allow-always as a reaction choice", () => {
     expect(buildIMessageApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
+      "React with:\n\n👍 Allow Once\n👎 Deny",
     );
   });
 
-  it("registers reaction state when only allow-always is available", async () => {
+  it("does not register reaction state when only allow-always is available", () => {
     expect(
       registerIMessageApprovalReactionTarget({
         accountId: "default",
@@ -85,22 +85,7 @@ describe("iMessage approval reactions", () => {
         approvalId: "exec-allow-always",
         allowedDecisions: ["allow-always"],
       }),
-    ).toEqual({
-      approvalId: "exec-allow-always",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-always"],
-    });
-    await expect(
-      resolveIMessageApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversation: { handle: "+15551230000" },
-        messageId: "msg-allow-always",
-        reactionKey: "♾",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-allow-always",
-      decision: "allow-always",
-    });
+    ).toBeNull();
   });
 
   it("resolves a registered reaction target keyed by handle", async () => {
@@ -217,8 +202,10 @@ describe("iMessage approval reactions", () => {
   });
 
   it("escapes `$` sequences in approvalId when interpolating into outbound text", () => {
-    // Prompt interpolation must not let String.prototype.replace interpret
-    // `$1`/`$&`/`$$` in the replacement string.
+    // The shared replaceApprovalIdPlaceholder helper guards against
+    // String.prototype.replace interpreting `$1`/`$&`/`$$` in the
+    // replacement string. Verified indirectly via the binding extractor:
+    // a prompt rendered for approvalId "exec-$1abc" must keep the id intact.
     const text = [
       "Exec approval required",
       "ID: exec-1abc",
