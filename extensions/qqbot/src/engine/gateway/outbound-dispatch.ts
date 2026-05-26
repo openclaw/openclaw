@@ -256,12 +256,16 @@ export async function dispatchOutbound(
         ctxPayload,
         recordInboundSession: runtime.channel.session.recordInboundSession,
         record: {
-          updateLastRoute: {
-            sessionKey: inbound.route.sessionKey,
-            channel: "qqbot",
-            to: qualifiedTarget,
-            accountId: inbound.route.accountId,
-          },
+          ...(inbound.isGroupChat
+            ? {
+                updateLastRoute: {
+                  sessionKey: inbound.route.sessionKey,
+                  channel: "qqbot" as const,
+                  to: qualifiedTarget,
+                  accountId: inbound.route.accountId,
+                },
+              }
+            : {}),
           onRecordError: (err: unknown) => {
             log?.error(
               `Session metadata update failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -332,4 +332,32 @@ describe("dispatchOutbound", () => {
       accountId: "qq-main",
     });
   });
+
+  it("does not persist a direct C2C target as the main session last route", async () => {
+    const runtime = makeRuntime({});
+    const inbound = makeInbound({
+      route: {
+        sessionKey: "agent:main:main",
+        accountId: "qq-main",
+      },
+      qualifiedTarget: "qqbot:c2c:user-openid",
+      fromAddress: "qqbot:c2c:user-openid",
+    });
+
+    await dispatchOutbound(inbound, { runtime, cfg: {}, account });
+
+    const turnRun = runtime.channel.turn.run as unknown as { mock: { calls: unknown[][] } };
+    const runParams = turnRun.mock.calls[0]?.[0] as
+      | {
+          adapter: {
+            resolveTurn: () => {
+              record?: { updateLastRoute?: unknown };
+            };
+          };
+        }
+      | undefined;
+    const turn = runParams?.adapter.resolveTurn();
+
+    expect(turn?.record?.updateLastRoute).toBeUndefined();
+  });
 });
