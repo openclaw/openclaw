@@ -51,11 +51,11 @@ runs:
       with:
         package_json_file: ${{ inputs.package-manager-file }}
         run_install: false
-        cache: ${{ inputs.use-actions-cache }}
+        cache: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
         cache_dependency_path: ${{ inputs.lockfile-path }}
 
     - name: Ensure pnpm store cache directory exists
-      if: ${{ inputs.use-actions-cache == 'true' }}
+      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
       shell: bash
       run: |
         set -euo pipefail
