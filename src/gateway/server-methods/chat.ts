@@ -2939,7 +2939,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
             } as unknown as AgentMessage;
             if (!ttsSupplementMarker) {
-              delete (replacementMessage as Record<string, unknown>).openclawTtsSupplement;
+              delete (replacementMessage as unknown as Record<string, unknown>).openclawTtsSupplement;
             }
             const rewriteResult = await rewriteTranscriptEntriesInSessionFile({
               sessionFile: resolvedTranscriptPath,
