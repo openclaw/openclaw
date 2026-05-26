@@ -1528,6 +1528,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
+    const finalUpdate = String(draftStream.update.mock.calls.at(-1)?.[0] ?? "");
+    expect(finalUpdate).toContain("No matches found");
+    expect(finalUpdate).toContain("done");
     const renderedUpdates = draftStream.update.mock.calls.flat().join("\n");
 
     expect(renderedUpdates).toContain("No matches found");
