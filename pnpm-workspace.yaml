@@ -65,8 +65,8 @@ overrides:
   "@anthropic-ai/sdk": 0.98.0
   hono: 4.12.18
   "@hono/node-server": 1.19.14
-  "@aws-sdk/client-bedrock-runtime": 3.1053.0
   "@aws-sdk/core": 3.974.13
+  "@aws-sdk/client-bedrock-runtime": 3.1053.0
   "@aws-sdk/credential-provider-env": 3.972.39
   "@aws-sdk/credential-provider-http": 3.972.41
   "@aws-sdk/credential-provider-ini": 3.972.43
