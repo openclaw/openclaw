@@ -1,3 +1,4 @@
+import { normalizeChannelId } from "../channels/registry.js";
 import {
   resolveLegacyOutboundSendDepKeys,
   type OutboundSendDeps,
@@ -17,8 +18,6 @@ export type CliOutboundSendSource = {
   [channelId: string]: unknown;
   [CLI_OUTBOUND_SEND_FACTORY]?: CliOutboundSendFactory;
 };
-
-const NON_CHANNEL_OUTBOUND_KEYS = new Set(["discordVoice", "discordvoice", "sendDiscordVoice"]);
 
 function normalizeLegacyChannelStem(raw: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(
@@ -46,6 +45,10 @@ function resolveChannelIdFromLegacyOutboundKey(key: string): string | undefined 
   }
   const normalizedStem = normalizeLegacyChannelStem(match[1] ?? "");
   return normalizedStem || undefined;
+}
+
+function resolveKnownChannelId(raw: string): string | undefined {
+  return normalizeChannelId(raw) ?? undefined;
 }
 
 /**
@@ -84,15 +87,10 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
   }
 
   const resolveFactoryValue = (key: string): unknown => {
-    if (NON_CHANNEL_OUTBOUND_KEYS.has(key)) {
-      return undefined;
-    }
-    const channelId =
+    const candidate =
       outbound[key] === undefined ? (resolveChannelIdFromLegacyOutboundKey(key) ?? key) : key;
+    const channelId = resolveKnownChannelId(candidate);
     if (!channelId || channelId === "then" || channelId === "toJSON") {
-      return undefined;
-    }
-    if (NON_CHANNEL_OUTBOUND_KEYS.has(channelId)) {
       return undefined;
     }
     const value = sendFactory(channelId);
