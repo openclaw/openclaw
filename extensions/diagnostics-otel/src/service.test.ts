@@ -894,6 +894,43 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("records oversized payload metrics without raw identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true, traces: false });
+
+    await service.start(ctx);
+    emitTrustedDiagnosticEvent({
+      type: "payload.large",
+      surface: "gateway.frame",
+      action: "rejected",
+      bytes: 2048,
+      limitBytes: 1024,
+      channel: "web",
+      pluginId: "agent:qa:otel-trace-smoke",
+      reason: "body-too-large",
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.payload.large")?.add).toHaveBeenCalledWith(1, {
+      "openclaw.payload.action": "rejected",
+      "openclaw.payload.surface": "gateway.frame",
+      "openclaw.channel": "web",
+      "openclaw.plugin": "none",
+      "openclaw.reason": "body-too-large",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.payload.large_bytes")?.record,
+    ).toHaveBeenCalledWith(2048, {
+      "openclaw.payload.action": "rejected",
+      "openclaw.payload.surface": "gateway.frame",
+      "openclaw.channel": "web",
+      "openclaw.plugin": "none",
+      "openclaw.reason": "body-too-large",
+    });
+
+    await service.stop?.(ctx);
+  });
+
   test("reports log exporter emit failures without exporting raw error text", async () => {
     const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
@@ -1062,6 +1099,26 @@ describe("diagnostics-otel service", () => {
 
     const options = firstExporterOptions(traceExporterCtor);
     expect(options.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
+    await service.stop?.(ctx);
+  });
+
+  test("inserts signal path before shared endpoint query params", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext("https://collector.example.com/otlp?timeout=30s");
+    await service.start(ctx);
+
+    const options = firstExporterOptions(traceExporterCtor);
+    expect(options.url).toBe("https://collector.example.com/otlp/v1/traces?timeout=30s");
+    await service.stop?.(ctx);
+  });
+
+  test("inserts signal path before shared endpoint fragments", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext("https://collector.example.com/otlp#tenant-a");
+    await service.start(ctx);
+
+    const options = firstExporterOptions(traceExporterCtor);
+    expect(options.url).toBe("https://collector.example.com/otlp/v1/traces#tenant-a");
     await service.stop?.(ctx);
   });
 
@@ -1874,6 +1931,55 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(failoverOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(failoverOptions?.startTime).toBeTypeOf("number");
     expect(firstSpanEndTime("openclaw.model.failover")).toBeTypeOf("number");
+    expect(firstCounterAddCall("openclaw.model.failover")).toStrictEqual([
+      1,
+      {
+        "openclaw.failover.reason": "overloaded",
+        "openclaw.failover.suspended": "true",
+        "openclaw.lane": "main",
+        "openclaw.model": "claude-opus-4-6",
+        "openclaw.provider": "anthropic",
+        "openclaw.failover.to_model": "gpt-5.4",
+        "openclaw.failover.to_provider": "openai",
+      },
+    ]);
+    await service.stop?.(ctx);
+  });
+
+  test("records blocked tool metrics even when traces are disabled", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true, traces: false });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.blocked",
+      runId: "run-should-not-export",
+      toolName: "browser",
+      toolSource: "mcp",
+      toolOwner: "browser-tools",
+      deniedReason: "tools.deny",
+      reason: "matched browser",
+      paramsSummary: { kind: "object" },
+    });
+    await flushDiagnosticEvents();
+
+    expect(firstCounterAddCall("openclaw.tool.execution.blocked")).toStrictEqual([
+      1,
+      {
+        "openclaw.toolName": "browser",
+        "openclaw.tool.source": "mcp",
+        "gen_ai.tool.name": "browser",
+        "openclaw.tool.owner": "browser-tools",
+        "openclaw.tool.params.kind": "object",
+        "openclaw.deniedReason": "tools.deny",
+      },
+    ]);
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalledWith(
+      "openclaw.tool.execution",
+      expect.anything(),
+      expect.anything(),
+    );
+
     await service.stop?.(ctx);
   });
 

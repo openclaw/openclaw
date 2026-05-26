@@ -132,6 +132,16 @@ function resolveOtelUrl(endpoint: string | undefined, path: string): string | un
   if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
     return endpoint;
   }
+  if (/[?#]/u.test(endpoint)) {
+    try {
+      const url = new URL(endpoint);
+      const basePath = url.pathname.replace(/\/+$/u, "");
+      url.pathname = `${basePath}/${path}`;
+      return url.toString();
+    } catch {
+      // Fall back to the historical concatenation path for non-URL test doubles.
+    }
+  }
   return `${endpoint}/${path}`;
 }
 
@@ -1037,11 +1047,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Elapsed time before the first streamed model response event",
         },
       );
+      const modelFailoverCounter = meter.createCounter("openclaw.model.failover", {
+        unit: "1",
+        description: "Model failovers by source, destination, lane, and reason",
+      });
       const toolExecutionDurationHistogram = meter.createHistogram(
         "openclaw.tool.execution.duration_ms",
         {
           unit: "ms",
           description: "Tool execution duration",
+        },
+      );
+      const toolExecutionBlockedCounter = meter.createCounter(
+        "openclaw.tool.execution.blocked",
+        {
+          unit: "1",
+          description: "Tool executions blocked by policy or sandbox diagnostics",
         },
       );
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
@@ -1082,6 +1103,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Async diagnostic queue drops by dropped event class",
         },
       );
+      const payloadLargeCounter = meter.createCounter("openclaw.payload.large", {
+        unit: "1",
+        description: "Oversized payload diagnostics by surface and action",
+      });
+      const payloadLargeBytesHistogram = meter.createHistogram("openclaw.payload.large_bytes", {
+        unit: "By",
+        description: "Oversized payload byte sizes by surface and action",
+      });
       const livenessWarningCounter = meter.createCounter("openclaw.liveness.warning", {
         unit: "1",
         description: "Diagnostic liveness warning events",
@@ -2069,6 +2098,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: ModelFailoverDiagnosticEvent,
         metadata: DiagnosticEventMetadata,
       ) => {
+        const metricAttrs: Record<string, string> = {
+          "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+          "openclaw.failover.suspended":
+            evt.suspended === undefined ? "unknown" : String(evt.suspended),
+          "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane, "unknown"),
+          "openclaw.model": lowCardinalityAttr(evt.fromModel),
+          "openclaw.provider": lowCardinalityAttr(evt.fromProvider),
+          "openclaw.failover.to_model": lowCardinalityAttr(evt.toModel),
+          "openclaw.failover.to_provider": lowCardinalityAttr(evt.toProvider),
+        };
+        modelFailoverCounter.add(1, metricAttrs);
         if (!tracesEnabled) {
           return;
         }
@@ -2403,6 +2443,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
+        toolExecutionBlockedCounter.add(1, {
+          ...toolExecutionBaseAttrs(evt),
+          "openclaw.deniedReason": lowCardinalityAttr(evt.deniedReason, "other"),
+        });
         if (!tracesEnabled) {
           return;
         }
@@ -2418,6 +2462,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         });
         setSpanAttrs(span, spanAttrs);
         span.end(evt.ts);
+      };
+
+      const recordPayloadLarge = (
+        evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>,
+      ) => {
+        const attrs = {
+          "openclaw.payload.action": evt.action,
+          "openclaw.payload.surface": lowCardinalityAttr(evt.surface, "unknown"),
+          "openclaw.channel": lowCardinalityAttr(evt.channel, "none"),
+          "openclaw.plugin": lowCardinalityAttr(evt.pluginId, "none"),
+          "openclaw.reason": lowCardinalityAttr(evt.reason, "none"),
+        };
+        payloadLargeCounter.add(1, attrs);
+        const bytes = positiveFiniteNumber(evt.bytes);
+        if (bytes !== undefined) {
+          payloadLargeBytesHistogram.record(bytes, attrs);
+        }
       };
 
       const recordExecProcessCompleted = (
@@ -2727,6 +2788,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordTelemetryExporter(evt, metadata);
               return;
             case "payload.large":
+              recordPayloadLarge(evt);
               return;
             case "model.failover":
               recordModelFailover(evt, metadata);
