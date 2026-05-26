@@ -80,4 +80,32 @@ describe("channel-broker config schema", () => {
     expect(result.success).toBe(false);
     expect(issuePaths(result)).toContain("accounts.acme.capabilities.matrix");
   });
+
+  it("does not resolve secrets for disabled broker accounts", () => {
+    const account = resolveChannelBrokerAccount({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: false,
+                baseUrl: "https://broker.example.test",
+                outboundToken: { source: "env", provider: "default", id: "BROKER_TOKEN" },
+                signingSecret: {
+                  source: "env",
+                  provider: "default",
+                  id: "BROKER_SIGNING_SECRET",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "acme",
+    });
+
+    expect(account.enabled).toBe(false);
+    expect(account.outboundToken).toBeNull();
+    expect(account.signingSecret).toBeNull();
+  });
 });

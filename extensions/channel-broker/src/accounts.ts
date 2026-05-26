@@ -160,24 +160,28 @@ export function resolveChannelBrokerAccount(params: {
     configured: Boolean(baseUrl),
     name: normalizeOptionalString(merged.name),
     baseUrl,
-    outboundToken: normalizeRuntimeSecretInput({
-      cfg: params.cfg,
-      value: merged.outboundToken,
-      path: resolveSecretInputPath({
-        config: channelConfig,
-        accountId: normalizedAccountId,
-        field: "outboundToken",
-      }),
-    }),
-    signingSecret: normalizeRuntimeSecretInput({
-      cfg: params.cfg,
-      value: merged.signingSecret,
-      path: resolveSecretInputPath({
-        config: channelConfig,
-        accountId: normalizedAccountId,
-        field: "signingSecret",
-      }),
-    }),
+    outboundToken: enabled
+      ? normalizeRuntimeSecretInput({
+          cfg: params.cfg,
+          value: merged.outboundToken,
+          path: resolveSecretInputPath({
+            config: channelConfig,
+            accountId: normalizedAccountId,
+            field: "outboundToken",
+          }),
+        })
+      : null,
+    signingSecret: enabled
+      ? normalizeRuntimeSecretInput({
+          cfg: params.cfg,
+          value: merged.signingSecret,
+          path: resolveSecretInputPath({
+            config: channelConfig,
+            accountId: normalizedAccountId,
+            field: "signingSecret",
+          }),
+        })
+      : null,
     platforms: normalizePlatformList(merged.platforms),
     platformAliases: normalizePlatformAliasMap(merged.platformAliases),
     defaultPlatform,
