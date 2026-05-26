@@ -6,7 +6,10 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
-import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
+import {
+  mergePreparedUserTurnMessageForRuntime,
+  type PersistedUserTurnMessage,
+} from "../sessions/user-turn-transcript.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
@@ -17,16 +20,6 @@ type GuardedSessionManager = SessionManager & {
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
 };
-
-function isUserMessage(message: AgentMessage): message is Extract<AgentMessage, { role: "user" }> {
-  return (message as { role?: unknown }).role === "user";
-}
-
-function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
-  const marker = (message as { __openclaw?: { beforeAgentRunBlocked?: unknown } })["__openclaw"]
-    ?.beforeAgentRunBlocked;
-  return marker !== undefined;
-}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -115,20 +108,15 @@ export function guardSessionManager(
     sessionKey: opts?.sessionKey,
     transformMessageForPersistence: (message) => {
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
-      if (
-        !pendingUserMessageForPersistence ||
-        !isUserMessage(withProvenance) ||
-        isBeforeAgentRunBlockedMessage(withProvenance)
-      ) {
-        return withProvenance;
-      }
-
       const prepared = pendingUserMessageForPersistence;
-      pendingUserMessageForPersistence = undefined;
-      return {
-        ...(withProvenance as unknown as Record<string, unknown>),
-        ...(prepared as unknown as Record<string, unknown>),
-      } as unknown as AgentMessage;
+      const merged = mergePreparedUserTurnMessageForRuntime({
+        runtimeMessage: withProvenance,
+        ...(prepared ? { preparedMessage: prepared } : {}),
+      });
+      if (merged !== withProvenance) {
+        pendingUserMessageForPersistence = undefined;
+      }
+      return merged;
     },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,

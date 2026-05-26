@@ -331,6 +331,33 @@ function resolvePersistedUserTurnMessage(
   return buildPersistedUserTurnMessage(params.input);
 }
 
+function isUserMessage(message: AgentMessage): message is PersistedUserTurnMessage {
+  return (message as { role?: unknown }).role === "user";
+}
+
+function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
+  const marker = (message as { __openclaw?: { beforeAgentRunBlocked?: unknown } })["__openclaw"]
+    ?.beforeAgentRunBlocked;
+  return marker !== undefined;
+}
+
+export function mergePreparedUserTurnMessageForRuntime(params: {
+  runtimeMessage: AgentMessage;
+  preparedMessage?: PersistedUserTurnMessage;
+}): AgentMessage {
+  if (
+    !params.preparedMessage ||
+    !isUserMessage(params.runtimeMessage) ||
+    isBeforeAgentRunBlockedMessage(params.runtimeMessage)
+  ) {
+    return params.runtimeMessage;
+  }
+  return {
+    ...(params.runtimeMessage as unknown as Record<string, unknown>),
+    ...(params.preparedMessage as unknown as Record<string, unknown>),
+  } as unknown as AgentMessage;
+}
+
 function applyBeforeMessageWriteToUserTurn(
   message: PersistedUserTurnMessage,
   params: Pick<AppendUserTurnTranscriptMessageParams, "agentId" | "sessionKey">,

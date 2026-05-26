@@ -15,6 +15,7 @@ import {
   buildPersistedUserTurnMediaFields,
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
+  mergePreparedUserTurnMessageForRuntime,
   persistUserTurnTranscript,
   resolvePersistedUserTurnText,
 } from "./user-turn-transcript.js";
@@ -278,6 +279,62 @@ describe("user turn transcript persistence", () => {
         MediaType: "image/png",
         MediaTypes: ["image/png"],
       });
+    });
+  });
+
+  describe("mergePreparedUserTurnMessageForRuntime", () => {
+    it("adds prepared transcript metadata to runtime user messages", () => {
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: "runtime prompt",
+            provenance: { sourceChannel: "telegram" },
+          }),
+          preparedMessage: buildPersistedUserTurnMessage({
+            text: "display prompt",
+            media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+            timestamp: 123,
+          }),
+        }),
+      ).toMatchObject({
+        role: "user",
+        content: "display prompt",
+        provenance: { sourceChannel: "telegram" },
+        timestamp: 123,
+        MediaPath: "/tmp/image.png",
+        MediaType: "image/png",
+      });
+    });
+
+    it("does not replace blocked before_agent_run user markers", () => {
+      const blocked = castAgentMessage({
+        role: "user",
+        content: "[blocked]",
+        __openclaw: { beforeAgentRunBlocked: true },
+      });
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: blocked,
+          preparedMessage: buildPersistedUserTurnMessage({
+            text: "raw prompt",
+          }),
+        }),
+      ).toBe(blocked);
+    });
+
+    it("does not apply prepared user metadata to assistant messages", () => {
+      const assistant = castAgentMessage({ role: "assistant", content: "hello" });
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: assistant,
+          preparedMessage: buildPersistedUserTurnMessage({
+            text: "display prompt",
+          }),
+        }),
+      ).toBe(assistant);
     });
   });
 
