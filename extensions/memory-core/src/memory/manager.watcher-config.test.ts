@@ -458,6 +458,41 @@ describe("memory watcher config", () => {
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
 
+  it("routes directories through chokidar on non-macOS/non-Windows platforms", async () => {
+    // On Linux (and other non-darwin/non-win32 platforms), Node's
+    // `fs.watch({ recursive: true })` falls back to walking the tree and
+    // attaching a watcher per entry, defeating the constant-watcher-profile
+    // goal of this fix. The PR explicitly gates the native path off those
+    // platforms.
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      // Native watcher must NOT have been called for any directory.
+      expect(nativeWatchMock).not.toHaveBeenCalled();
+      // Chokidar should receive the file path AND both directory paths
+      // (the bare `memory/` plus `extraDir`).
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      const chokidarPaths = watchMock.mock.calls[0][0] as string[];
+      expect(chokidarPaths).toStrictEqual(
+        expect.arrayContaining([
+          path.join(workspaceDir, "MEMORY.md"),
+          path.join(workspaceDir, "memory"),
+          extraDir,
+        ]),
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it("creates a chokidar watcher on the fly when no file-path chokidar exists yet", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig({ extraPaths: [] });

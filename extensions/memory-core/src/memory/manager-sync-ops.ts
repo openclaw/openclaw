@@ -488,13 +488,28 @@ export abstract class MemoryManagerSyncOps {
       this.scheduleWatchSync();
     };
     // Native recursive fs.watch for directory paths — one watcher per
-    // directory via FSEvents (macOS) / inotify recursive (Linux >= 4) /
-    // ReadDirectoryChangesW (Windows). Avoids chokidar's per-file fs.watch
-    // fan-out that opened ~12k REG FDs on multi-thousand-`.md` memory trees
-    // (issue #86613). On creation failure (e.g. unsupported filesystem,
-    // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory falls back to
-    // chokidar so freshness is preserved even on the degraded path.
+    // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
+    // Avoids chokidar's per-file fs.watch fan-out that opened ~12k REG FDs
+    // on multi-thousand-`.md` memory trees (issue #86613).
+    //
+    // Linux is intentionally NOT in the native set: Node's
+    // `fs.watch(dir, { recursive: true })` on non-macOS/non-Windows routes
+    // through `internal/fs/recursive_watch`, which walks the tree and
+    // attaches one watcher per entry under the hood. That defeats the
+    // constant-watcher-profile goal of this fix without throwing (so the
+    // creation-failure fallback below would not catch it). Linux paths
+    // therefore go straight to chokidar, matching pre-PR behavior on that
+    // platform.
+    //
+    // On any other native creation failure (e.g. unsupported filesystem,
+    // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory also falls back to
+    // chokidar so freshness is preserved on the degraded path.
+    const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
     for (const dir of dirWatchPaths) {
+      if (!nativeRecursiveSupported) {
+        fileWatchPaths.add(dir);
+        continue;
+      }
       let nativeAttached = false;
       try {
         const w = resolveMemoryNativeWatchFactory()(
@@ -536,6 +551,13 @@ export abstract class MemoryManagerSyncOps {
           const idx = this.nativeMemoryWatchers.indexOf(w);
           if (idx >= 0) {
             this.nativeMemoryWatchers.splice(idx, 1);
+          }
+          // If close() has begun, don't reattach — the manager is going
+          // away and a new chokidar watcher would escape the teardown
+          // window. The marked-closed sync will be discarded by the
+          // shutdown path.
+          if (this.closed) {
+            return;
           }
           // Force a broad re-sync to cover the gap, then restore directory
           // coverage by reattaching to chokidar so subsequent file changes
@@ -584,6 +606,10 @@ export abstract class MemoryManagerSyncOps {
     dir: string,
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
   ): void {
+    if (this.closed) {
+      // Manager teardown started — don't create new watcher resources.
+      return;
+    }
     try {
       if (this.watcher) {
         // Existing chokidar watcher (handling MEMORY.md and/or other file
