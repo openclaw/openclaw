@@ -846,7 +846,7 @@ run_npm_global_install() {
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
-    cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")
+    cmd+=(--no-fund --no-audit --install-links=true "$freshness_flag" install -g "$spec")
     local cmd_display=""
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"
