@@ -10,7 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - Mac: prefer the freshly packaged app in restart flows and collect dSYMs only for requested build architectures so stale installed apps and unrequested arch symbol directories cannot break validation.
 - CI: bound Docker package build, inventory, pack, and tarball checks with process-group timeouts so stuck package children cannot wedge Docker E2E preparation.
-
+- Telegram: keep canonical native commands ahead of aliases when fitting the bot command menu so aliases do not consume Telegram's 100-command slots. (#85270) Thanks @leno23.
 ## 2026.5.26
 
 ### Changes
