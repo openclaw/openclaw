@@ -2354,6 +2354,7 @@ describe("runCodexAppServerAttempt", () => {
       "reply normally in your final assistant message",
     );
     expect(withoutMessageToolInstructions).not.toContain("message(action=send)");
+    expect(withoutMessageToolInstructions).not.toContain("Use `message`");
 
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
