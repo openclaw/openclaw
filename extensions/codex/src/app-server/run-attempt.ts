@@ -4312,6 +4312,9 @@ function hasUserVisibleHistoryAfterCodexBinding(params: {
     if (message.role !== "user" && message.role !== "assistant") {
       return false;
     }
+    if (isCodexAppServerMirroredTranscriptMessage(message)) {
+      return false;
+    }
     const timestamp =
       typeof message.timestamp === "number"
         ? message.timestamp
@@ -4320,6 +4323,19 @@ function hasUserVisibleHistoryAfterCodexBinding(params: {
           : Number.NaN;
     return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
   });
+}
+
+function isCodexAppServerMirroredTranscriptMessage(message: AgentMessage): boolean {
+  const record = message as unknown as Record<string, unknown>;
+  const idempotencyKey = record.idempotencyKey;
+  if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
+    return true;
+  }
+  const meta = record.__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return false;
+  }
+  return typeof (meta as Record<string, unknown>).mirrorIdentity === "string";
 }
 
 function readContextEngineThreadBootstrapProjection(

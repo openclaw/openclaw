@@ -6315,6 +6315,65 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("is the previous message trustworthy?");
   });
 
+  it("does not reproject Codex-owned mirrored messages on consecutive resumes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const oldBindingUpdatedAt = Date.now() - 60_000;
+    const bindingPath = `${sessionFile}.codex-app-server.json`;
+    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    bindingPayload.updatedAt = new Date(oldBindingUpdatedAt).toISOString();
+    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
+    );
+    sessionManager.appendMessage(
+      assistantMessage(
+        "David Ondrej was mentioned in that prior thread",
+        oldBindingUpdatedAt + 2_000,
+      ),
+    );
+
+    const firstHarness = createResumeHarness();
+    const firstParams = createParams(sessionFile, workspaceDir);
+    firstParams.prompt = "is the previous message trustworthy?";
+    const firstRun = runCodexAppServerAttempt(firstParams);
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await firstRun;
+
+    const firstTurnStart = firstHarness.requests.find((request) => request.method === "turn/start");
+    const firstInputText =
+      (firstTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
+        ?.text ?? "";
+    expect(firstInputText).toContain("OpenClaw assembled context for this turn:");
+    expect(firstInputText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(firstInputText).toContain("is the previous message trustworthy?");
+
+    const secondHarness = createResumeHarness();
+    const secondParams = createParams(sessionFile, workspaceDir);
+    secondParams.prompt = "continue from there";
+    const secondRun = runCodexAppServerAttempt(secondParams);
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondRun;
+
+    const secondTurnStart = secondHarness.requests.find(
+      (request) => request.method === "turn/start",
+    );
+    const secondInputText =
+      (secondTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
+        ?.text ?? "";
+    expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(secondInputText).not.toContain("we were discussing the Sonnet leak screenshots");
+    expect(secondInputText).not.toContain("is the previous message trustworthy?");
+    expect(secondInputText).toContain("continue from there");
+  });
+
   it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
