@@ -256,6 +256,17 @@ function extractImages(message: unknown): ImageBlock[] {
             }),
             ...imageMeta,
           });
+        } else if (typeof b.data === "string" && typeof b.mimeType === "string") {
+          // Direct tool-result image block shape emitted by `imageResult()` /
+          // `imageResultFromFile()` in `src/agents/tools/common.ts` and validated by
+          // `normalizeReadImageResult()` in `src/agents/pi-tools.read.ts`.
+          // Read/image-generation tools surface results as `{type:"image", data, mimeType}`
+          // without wrapping in a `source` object, so the grouped renderer must
+          // recognize this shape directly to render the image inline. (#50779)
+          appendImageBlock(images, {
+            url: buildBase64ImageUrl({ data: b.data, mediaType: b.mimeType }),
+            ...imageMeta,
+          });
         } else if (typeof b.url === "string") {
           appendImageBlock(images, { url: b.url, ...imageMeta });
         }
