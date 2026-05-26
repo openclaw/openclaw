@@ -64,6 +64,27 @@ function shouldFallbackAfterHarnessCompaction(
   );
 }
 
+function routeCodexThreadBindingFallbackThroughCodexAuth<T extends ContextEngineRuntimeContext>(
+  runtimeContext: T,
+  params: CompactEmbeddedPiSessionParams,
+): T {
+  const context = runtimeContext as T & {
+    provider?: string;
+    model?: string;
+    authProfileId?: string;
+  };
+  const provider = context.provider?.trim().toLowerCase();
+  if (provider && provider !== "openai") {
+    return runtimeContext;
+  }
+  return {
+    ...runtimeContext,
+    provider: "openai-codex",
+    model: context.model ?? params.model ?? DEFAULT_MODEL,
+    authProfileId: undefined,
+  } as T;
+}
+
 /**
  * Compacts a session with lane queueing (session lane + global lane).
  * Use this from outside a lane context. If already inside a lane, use
@@ -131,7 +152,7 @@ export async function compactEmbeddedPiSession(
     requestedContextTokenBudget ?? resolvedContextTokenBudget,
     resolvedContextTokenBudget,
   );
-  const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
+  let contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params,
     agentDir,
     contextTokenBudget,
@@ -152,18 +173,23 @@ export async function compactEmbeddedPiSession(
   });
   if (harnessResult) {
     if (
-      !shouldFallbackAfterHarnessCompaction(
+      shouldFallbackAfterHarnessCompaction(
         harnessResult,
         harnessPolicy.runtime,
         params.agentHarnessId,
       )
     ) {
+      log.warn(
+        `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+      );
+      contextEngineRuntimeContext = routeCodexThreadBindingFallbackThroughCodexAuth(
+        contextEngineRuntimeContext,
+        params,
+      );
+    } else {
       await contextEngine.dispose?.();
       return harnessResult;
     }
-    log.warn(
-      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
-    );
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);

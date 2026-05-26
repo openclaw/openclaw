@@ -7,16 +7,20 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
-  () => ({
-    spawnWithFallbackMock: vi.fn(),
-    signalProcessTreeMock: vi.fn(),
-    createWindowsOutputDecoderMock: vi.fn(() => ({
-      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
-      flush: () => "",
-    })),
-  }),
-);
+const {
+  spawnWithFallbackMock,
+  signalProcessTreeMock,
+  statSyncMock,
+  createWindowsOutputDecoderMock,
+} = vi.hoisted(() => ({
+  spawnWithFallbackMock: vi.fn(),
+  signalProcessTreeMock: vi.fn(),
+  statSyncMock: vi.fn(),
+  createWindowsOutputDecoderMock: vi.fn(() => ({
+    decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+    flush: () => "",
+  })),
+}));
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -24,6 +28,12 @@ vi.mock("../../spawn-utils.js", () => ({
 
 vi.mock("../../kill-tree.js", () => ({
   signalProcessTree: signalProcessTreeMock,
+}));
+
+vi.mock("node:fs", () => ({
+  default: {
+    statSync: statSyncMock,
+  },
 }));
 
 vi.mock("../../../infra/windows-encoding.js", () => ({
@@ -108,6 +118,7 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: st
 
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+  const originalSystemdScope = process.env.OPENCLAW_CHILD_SYSTEMD_SCOPE;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
   const setPlatform = (platform: NodeJS.Platform) => {
@@ -124,12 +135,15 @@ describe("createChildAdapter", () => {
   beforeEach(() => {
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
+    statSyncMock.mockReset();
+    statSyncMock.mockReturnValue({ isFile: () => true });
     createWindowsOutputDecoderMock.mockClear();
     createWindowsOutputDecoderMock.mockImplementation(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
     }));
     delete process.env.OPENCLAW_SERVICE_MARKER;
+    delete process.env.OPENCLAW_CHILD_SYSTEMD_SCOPE;
     vi.useRealTimers();
   });
 
@@ -138,6 +152,11 @@ describe("createChildAdapter", () => {
       delete process.env.OPENCLAW_SERVICE_MARKER;
     } else {
       process.env.OPENCLAW_SERVICE_MARKER = originalServiceMarker;
+    }
+    if (originalSystemdScope === undefined) {
+      delete process.env.OPENCLAW_CHILD_SYSTEMD_SCOPE;
+    } else {
+      process.env.OPENCLAW_CHILD_SYSTEMD_SCOPE = originalSystemdScope;
     }
   });
 
@@ -374,6 +393,53 @@ describe("createChildAdapter", () => {
     const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+  });
+
+  it("wraps service-managed Linux children in a transient systemd worker scope", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+
+    await createAdapterHarness({
+      pid: 7778,
+      argv: ["/usr/bin/node", "-e", "process.exit(0)"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv?.slice(0, 6)).toEqual([
+      "/usr/bin/systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--property=Slice=openclaw-workers.slice",
+      "--property=CollectMode=inactive-or-failed",
+    ]);
+    expect(spawnArgs.argv?.[6]).toBe("--");
+    expect(spawnArgs.argv?.slice(7, 11)).toEqual([
+      "/bin/sh",
+      "-c",
+      'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"',
+      "/usr/bin/node",
+    ]);
+    expect(spawnArgs.argv?.slice(11)).toEqual(["-e", "process.exit(0)"]);
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+    expect(spawnArgs.options?.env?.OPENCLAW_CHILD_SYSTEMD_SCOPE).toBe("0");
+  });
+
+  it("keeps service-managed Linux children direct when systemd worker scopes are disabled", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_CHILD_SYSTEMD_SCOPE = "0";
+
+    await createAdapterHarness({
+      pid: 7779,
+      argv: ["/usr/bin/node", "-e", "process.exit(0)"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv?.[0]).toBe("/bin/sh");
+    expect(spawnArgs.argv).not.toContain("/usr/bin/systemd-run");
+    expect(spawnArgs.options?.detached).toBe(false);
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {

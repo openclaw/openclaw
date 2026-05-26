@@ -1324,6 +1324,37 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     ).rejects.toThrow("cannot override the active session agent");
   });
 
+  it("routes stale Codex thread-binding fallback compaction through Codex OAuth", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: codex-thread-1",
+      failure: {
+        reason: "stale_thread_binding",
+        rawError: "thread not found: codex-thread-1",
+      },
+    });
+
+    const result = await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    const runtimeContext = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: { provider?: string; model?: string; authProfileId?: string };
+    };
+    expect(runtimeContext.runtimeContext?.provider).toBe("openai-codex");
+    expect(runtimeContext.runtimeContext?.model).toBe("gpt-5.5");
+    expect(runtimeContext.runtimeContext?.authProfileId).toBeUndefined();
+  });
+
   it("fires before_compaction with sentinel -1 and after_compaction on success", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
 

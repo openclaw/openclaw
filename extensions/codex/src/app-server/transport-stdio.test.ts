@@ -6,6 +6,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import {
   resolveCodexAppServerSpawnEnv,
   resolveCodexAppServerSpawnInvocation,
+  resolveCodexAppServerWorkerScopeSpawn,
 } from "./transport-stdio.js";
 
 const tempDirs: string[] = [];
@@ -92,7 +93,9 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
   it("rejects Windows Codex app-server commands that include inline script arguments", () => {
     expect(() =>
       resolveCodexAppServerSpawnInvocation(
-        startOptions("node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js"),
+        startOptions(
+          "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        ),
         {
           platform: "win32",
           env: {},
@@ -180,5 +183,82 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     expect(Object.hasOwn(env, "__proto__")).toBe(false);
     expect(Object.hasOwn(env, "constructor")).toBe(false);
     expect(Object.hasOwn(env, "prototype")).toBe(false);
+  });
+});
+
+describe("resolveCodexAppServerWorkerScopeSpawn", () => {
+  it("wraps Codex app-server launches in a user systemd worker scope on Linux services", () => {
+    const resolved = resolveCodexAppServerWorkerScopeSpawn({
+      command: "/opt/codex/bin/codex",
+      args: ["app-server", "--listen", "stdio://"],
+      env: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        KEEP: "1",
+      },
+      platform: "linux",
+      systemdRunPath: "/usr/bin/systemd-run",
+      systemdRunExists: () => true,
+    });
+
+    expect(resolved).toEqual({
+      command: "/usr/bin/systemd-run",
+      args: [
+        "--user",
+        "--scope",
+        "--quiet",
+        "--property=Slice=openclaw-workers.slice",
+        "--property=CollectMode=inactive-or-failed",
+        "--",
+        "/opt/codex/bin/codex",
+        "app-server",
+        "--listen",
+        "stdio://",
+      ],
+      env: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_CHILD_SYSTEMD_SCOPE: "0",
+        KEEP: "1",
+      },
+      wrapped: true,
+    });
+  });
+
+  it("does not wrap when the worker scope opt-out is set", () => {
+    const resolved = resolveCodexAppServerWorkerScopeSpawn({
+      command: "codex",
+      args: ["app-server", "--listen", "stdio://"],
+      env: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_CHILD_SYSTEMD_SCOPE: "0",
+      },
+      platform: "linux",
+      systemdRunPath: "/usr/bin/systemd-run",
+      systemdRunExists: () => true,
+    });
+
+    expect(resolved).toEqual({
+      command: "codex",
+      args: ["app-server", "--listen", "stdio://"],
+      env: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_CHILD_SYSTEMD_SCOPE: "0",
+      },
+      wrapped: false,
+    });
+  });
+
+  it("does not wrap outside Linux service-managed runtime", () => {
+    const resolved = resolveCodexAppServerWorkerScopeSpawn({
+      command: "codex",
+      args: ["app-server", "--listen", "stdio://"],
+      env: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+      },
+      platform: "darwin",
+      systemdRunExists: () => true,
+    });
+
+    expect(resolved.wrapped).toBe(false);
+    expect(resolved.command).toBe("codex");
   });
 });

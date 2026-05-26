@@ -652,7 +652,12 @@ export function recomputeNextRunsForMaintenance(
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs));
+  const enabled = jobs.filter(
+    (j) =>
+      j.enabled &&
+      typeof j.state.runningAtMs !== "number" &&
+      hasScheduledNextRunAtMs(j.state.nextRunAtMs),
+  );
   if (enabled.length === 0) {
     return undefined;
   }
