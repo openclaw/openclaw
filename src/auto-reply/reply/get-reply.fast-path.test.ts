@@ -280,6 +280,86 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDeliveryAttemptCount).toBe(1);
   });
 
+  it("clears stale heartbeat pending delivery after the replay attempt limit", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-limit-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-limit",
+          updatedAt: Date.now(),
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "HEARTBEAT_OK short",
+          pendingFinalDeliveryCreatedAt: Date.now(),
+          pendingFinalDeliveryAttemptCount: 10,
+          pendingFinalDeliveryLastError: null,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+  });
+
+  it("clears stale heartbeat pending delivery after the replay TTL", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-ttl-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-expired",
+          updatedAt: Date.now(),
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "HEARTBEAT_OK short",
+          pendingFinalDeliveryCreatedAt: Date.now() - 24 * 60 * 60 * 1000 - 1,
+          pendingFinalDeliveryAttemptCount: 2,
+          pendingFinalDeliveryLastError: null,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+  });
+
   it("sanitizes stale heartbeat pending delivery before replay", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-sanitize-"));
     const storePath = path.join(home, "sessions.json");

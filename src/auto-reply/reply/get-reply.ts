@@ -56,6 +56,9 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
+const PENDING_FINAL_DELIVERY_MAX_HEARTBEAT_ATTEMPTS = 10;
+const PENDING_FINAL_DELIVERY_HEARTBEAT_TTL_MS = 24 * 60 * 60 * 1000;
+
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
   const stripped = stripHeartbeatToken(text, {
     mode: "heartbeat",
@@ -75,6 +78,28 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): numb
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
+}
+
+function resolveHeartbeatPendingFinalDeliveryGiveUp(args: {
+  attemptCount: number;
+  now: number;
+  createdAt?: number;
+}) {
+  const ageMs =
+    typeof args.createdAt === "number" ? Math.max(0, args.now - args.createdAt) : undefined;
+  if (args.attemptCount > PENDING_FINAL_DELIVERY_MAX_HEARTBEAT_ATTEMPTS) {
+    return {
+      reason: "retry-limit" as const,
+      ageMs,
+    };
+  }
+  if (typeof ageMs === "number" && ageMs > PENDING_FINAL_DELIVERY_HEARTBEAT_TTL_MS) {
+    return {
+      reason: "expiry" as const,
+      ageMs,
+    };
+  }
+  return null;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -393,6 +418,34 @@ export async function getReplyFromConfig(
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+    const clearPendingFinalDelivery = async () => {
+      sessionEntry.pendingFinalDelivery = undefined;
+      sessionEntry.pendingFinalDeliveryText = undefined;
+      sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+      sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+      sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+      sessionEntry.pendingFinalDeliveryLastError = undefined;
+      sessionEntry.pendingFinalDeliveryContext = undefined;
+      if (sessionKey && sessionStore) {
+        sessionStore[sessionKey] = sessionEntry;
+      }
+      if (sessionKey && storePath) {
+        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            pendingFinalDelivery: undefined,
+            pendingFinalDeliveryText: undefined,
+            pendingFinalDeliveryCreatedAt: undefined,
+            pendingFinalDeliveryLastAttemptAt: undefined,
+            pendingFinalDeliveryAttemptCount: undefined,
+            pendingFinalDeliveryLastError: undefined,
+            pendingFinalDeliveryContext: undefined,
+          }),
+        });
+      }
+    };
 
     // If it's a heartbeat, we definitely want to try delivering the lost reply now.
     // If it's a user message, we deliver the lost reply first, then continue.
@@ -403,59 +456,49 @@ export async function getReplyFromConfig(
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
       if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
-        }
-        if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
-          });
-        }
+        await clearPendingFinalDelivery();
       } else {
         const updatedAt = Date.now();
         const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-        sessionEntry.pendingFinalDeliveryLastError = null;
-        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
-        sessionEntry.pendingFinalDeliveryText = replayText;
-        sessionEntry.updatedAt = updatedAt;
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
+        const giveUp = resolveHeartbeatPendingFinalDeliveryGiveUp({
+          attemptCount,
+          now: updatedAt,
+          createdAt: sessionEntry.pendingFinalDeliveryCreatedAt,
+        });
+        if (giveUp) {
+          const replayAgeSuffix = typeof giveUp.ageMs === "number" ? ` ageMs=${giveUp.ageMs}` : "";
+          defaultRuntime.log(
+            `[warn] Clearing stale heartbeat pending final delivery (${giveUp.reason}) after ${attemptCount} attempts${replayAgeSuffix}${
+              sessionKey ? ` for session ${sessionKey}` : ""
+            }.`,
+          );
+          await clearPendingFinalDelivery();
+        } else {
+          sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+          sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+          sessionEntry.pendingFinalDeliveryLastError = null;
+          const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+          sessionEntry.pendingFinalDeliveryText = replayText;
+          sessionEntry.updatedAt = updatedAt;
+          if (sessionKey && sessionStore) {
+            sessionStore[sessionKey] = sessionEntry;
+          }
+          if (sessionKey && storePath) {
+            const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+            await updateSessionStoreEntry({
+              storePath,
+              sessionKey,
+              update: async () => ({
+                pendingFinalDeliveryText: replayText,
+                pendingFinalDeliveryLastAttemptAt: updatedAt,
+                pendingFinalDeliveryAttemptCount: attemptCount,
+                pendingFinalDeliveryLastError: null,
+                updatedAt,
+              }),
+            });
+          }
+          return { text: replayText };
         }
-        if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({
-              pendingFinalDeliveryText: replayText,
-              pendingFinalDeliveryLastAttemptAt: updatedAt,
-              pendingFinalDeliveryAttemptCount: attemptCount,
-              pendingFinalDeliveryLastError: null,
-              updatedAt,
-            }),
-          });
-        }
-        return { text: replayText };
       }
     }
   }
