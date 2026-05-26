@@ -304,6 +304,6 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to install completion: ${message}`);
+    throw new Error(`Failed to install completion: ${message}`, { cause: err });
   }
 }
