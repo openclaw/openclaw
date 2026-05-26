@@ -610,6 +610,32 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
+    transcripts: {
+      emoji: "📝",
+      title: "Transcripts",
+      actions: {
+        start: {
+          label: "start",
+          detailKeys: ["providerId", "sessionId", "title", "meetingUrl"],
+        },
+        stop: {
+          label: "stop",
+          detailKeys: ["sessionId"],
+        },
+        import: {
+          label: "import",
+          detailKeys: ["providerId", "sessionId", "title", "transcript"],
+        },
+        summarize: {
+          label: "summarize",
+          detailKeys: ["sessionId"],
+        },
+        status: {
+          label: "status",
+          detailKeys: ["providerId"],
+        },
+      },
+    },
     sessions_yield: {
       emoji: "⏸️",
       title: "Yield",
