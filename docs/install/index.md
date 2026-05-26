@@ -72,7 +72,7 @@ If you already manage Node yourself:
 <Tabs>
   <Tab title="npm">
     ```bash
-    npm install -g github:StefRush2099/Zorg_MemoryDB
+    npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
     openclaw onboard --install-daemon
     ```
 
@@ -112,7 +112,7 @@ If you already manage Node yourself:
   If `sharp` fails due to a globally installed libvips:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g github:StefRush2099/Zorg_MemoryDB
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 </Accordion>
@@ -225,3 +225,11 @@ Then open a new terminal. See [Node setup](/install/node) for more details.
 The `StefRush2099/Zorg_MemoryDB` install package includes a Zorg bootstrap at `zorg/install-zorg-memorydb.sh`. During install it prepares PostgreSQL-backed memory, imports public-safe markdown rules into the database, keeps private/user memory tables empty on a clean public baseline, and installs LAN command chat as the local fallback console.
 
 For details, see [Zorg MemoryDB And LAN Command Chat Install](./zorg-memorydb.md).
+
+### Zorg MemoryDB release install command
+
+Use HTTPS for npm installs so clean systems and root installs do not require a GitHub SSH key:
+
+```bash
+sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+```
