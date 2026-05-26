@@ -201,50 +201,19 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("resolvePersistedUserTurnText", () => {
-    it("prefers clean inbound text over model prompt text", () => {
-      expect(
-        resolvePersistedUserTurnText(
-          {
-            RawBody: "What is in this image?",
-            BodyStripped:
-              "[media attached: media://inbound/a.png]\nTo send an image back, prefer the message tool.\nWhat is in this image?",
-          },
-          { hasMedia: true },
-        ),
-      ).toBe("What is in this image?");
+    it("normalizes the selected clean user-turn transcript text", () => {
+      expect(resolvePersistedUserTurnText("  What is in this image?  ", { hasMedia: true })).toBe(
+        "What is in this image?",
+      );
     });
 
-    it("uses audio transcript before media placeholders", () => {
-      expect(
-        resolvePersistedUserTurnText(
-          {
-            Transcript: "please check this voice note",
-            RawBody: "<media:audio>",
-            CommandBody: "<media:audio>",
-          },
-          { hasMedia: true },
-        ),
-      ).toBe("please check this voice note");
-    });
-
-    it("ignores exact generated media placeholders only when structured media is present", () => {
-      expect(
-        resolvePersistedUserTurnText(
-          {
-            RawBody: "<media:image> (2 images)",
-            BodyStripped: "<media:image> (2 images)",
-          },
-          { hasMedia: true, fallback: "fallback" },
-        ),
-      ).toBe("fallback");
-      expect(
-        resolvePersistedUserTurnText(
-          {
-            RawBody: "<media:image> (2 images)",
-          },
-          { hasMedia: false },
-        ),
-      ).toBe("<media:image> (2 images)");
+    it("ignores exact channel media placeholders only when structured media is present", () => {
+      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: true })).toBe(
+        undefined,
+      );
+      expect(resolvePersistedUserTurnText("<media:image> (2 images)", { hasMedia: false })).toBe(
+        "<media:image> (2 images)",
+      );
     });
   });
 

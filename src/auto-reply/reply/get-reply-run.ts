@@ -758,6 +758,7 @@ export async function runPreparedReply(
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
+    transcriptBody: string;
     transcriptCommandBody: string;
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
@@ -814,8 +815,13 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody, transcriptCommandBody, currentInboundContext } =
-    await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
+  let {
+    prefixedCommandBody,
+    queuedBody,
+    transcriptBody,
+    transcriptCommandBody,
+    currentInboundContext,
+  } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
@@ -1096,8 +1102,13 @@ export async function runPreparedReply(
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentInboundContext } =
-          await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+        ({
+          prefixedCommandBody,
+          queuedBody,
+          transcriptBody,
+          transcriptCommandBody,
+          currentInboundContext,
+        } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -1134,14 +1145,9 @@ export async function runPreparedReply(
       ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
-  const userTurnTranscriptText = resolvePersistedUserTurnText(
-    {
-      Transcript: transcriptCommandBody,
-    },
-    {
-      hasMedia: userTurnMediaForPersistence.length > 0,
-    },
-  );
+  const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
+    hasMedia: userTurnMediaForPersistence.length > 0,
+  });
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {

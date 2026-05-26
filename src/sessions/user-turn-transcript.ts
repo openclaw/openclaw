@@ -134,18 +134,8 @@ type CreateUserTurnTranscriptRecorderParams = {
   onPersistenceError?: (error: unknown) => void;
 };
 
-type PersistedUserTurnTextFieldSource = {
-  Transcript?: string | null;
-  RawBody?: string | null;
-  CommandBody?: string | null;
-  BodyForCommands?: string | null;
-  Body?: string | null;
-  BodyStripped?: string | null;
-};
-
 type ResolvePersistedUserTurnTextOptions = {
   hasMedia?: boolean;
-  fallback?: string | null;
 };
 
 type PersistedUserTurnMediaFieldSource = {
@@ -167,43 +157,20 @@ function normalizeTranscriptText(value: string | null | undefined): string {
   return value ?? "";
 }
 
-const MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
+const CHANNEL_MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
 
-function normalizePersistedUserTextCandidate(
+export function resolvePersistedUserTurnText(
   value: string | null | undefined,
-  options: { hasMedia: boolean },
+  options: ResolvePersistedUserTurnTextOptions = {},
 ): string | undefined {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
     return undefined;
   }
-  if (options.hasMedia && MEDIA_PLACEHOLDER_PATTERN.test(normalized)) {
+  if (options.hasMedia === true && CHANNEL_MEDIA_PLACEHOLDER_PATTERN.test(normalized)) {
     return undefined;
   }
   return normalized;
-}
-
-export function resolvePersistedUserTurnText(
-  fields: PersistedUserTurnTextFieldSource | null | undefined,
-  options: ResolvePersistedUserTurnTextOptions = {},
-): string | undefined {
-  const hasMedia = options.hasMedia === true;
-  const candidates = [
-    fields?.Transcript,
-    fields?.RawBody,
-    fields?.CommandBody,
-    fields?.BodyForCommands,
-    fields?.Body,
-    fields?.BodyStripped,
-    options.fallback,
-  ];
-  for (const candidate of candidates) {
-    const normalized = normalizePersistedUserTextCandidate(candidate, { hasMedia });
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
 }
 
 function mediaTypeForTranscript(media: PersistedUserTurnMediaInput): string {
