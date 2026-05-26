@@ -1981,6 +1981,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not stream text-only tool results into progress drafts", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver(
+          { text: "stdout line one\nstdout line two" },
+          { kind: "tool" },
+        );
+        await replyOptions?.onItemEvent?.({ kind: "search", progressText: "docs lookup" });
+        return { queuedFinal: false };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("stdout line one"),
+    );
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      "Shelling\n\n`🛠️ Exec`\n`🔎 Web Search: docs lookup`",
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not restart progress drafts after final answer delivery", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
