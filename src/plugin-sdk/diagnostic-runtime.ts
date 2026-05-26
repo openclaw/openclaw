@@ -7,7 +7,7 @@ export type {
   DiagnosticEventPrivateData,
   DiagnosticModelCallContent,
 } from "../infra/diagnostic-events.js";
-export type { DiagnosticModelCallContent, DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
+export type { DiagnosticModelContentCapturePolicy } from "../infra/diagnostic-llm-content.js";
 export {
   resolveDiagnosticCaptureContentValue,
   resolveDiagnosticModelContentCapturePolicy,

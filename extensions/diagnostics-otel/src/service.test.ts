@@ -4031,17 +4031,20 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      durationMs: 80,
-      inputMessages: ["user prompt"],
-      outputMessages: ["model reply"],
-      systemPrompt: "system prompt",
-    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: ["user prompt"],
+        outputMessages: ["model reply"],
+        systemPrompt: "system prompt",
+      },
+    );
     emitDiagnosticEvent({
       type: "tool.execution.completed",
       runId: "run-1",
