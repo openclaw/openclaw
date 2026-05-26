@@ -13,6 +13,7 @@ import {
   type FinalizeChannelInboundContextParams,
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 
 export {
   createInboundDebouncer,
@@ -94,6 +95,40 @@ export type {
   FinalizeChannelInboundContextParams,
   FinalizeChannelInboundContextResult,
 };
+/** @deprecated Use `BuildChannelInboundEventContextParams`. */
+export type BuildChannelTurnContextParams = Omit<
+  BuildChannelInboundEventContextParams,
+  "message"
+> & {
+  message: BuildChannelInboundEventContextParams["message"] & {
+    inboundTurnKind?: InboundEventKind;
+  };
+};
+/** @deprecated Use `BuiltChannelInboundEventContext`. */
+export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
+  InboundTurnKind: InboundEventKind;
+};
+
+/** @deprecated Use `buildChannelInboundEventContext`. */
+export function buildChannelTurnContext(
+  params: BuildChannelTurnContextParams,
+): BuiltChannelTurnContext {
+  const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
+  const ctx = buildChannelInboundEventContext({
+    ...params,
+    message: {
+      ...params.message,
+      ...(inboundEventKind ? { inboundEventKind } : {}),
+    },
+  });
+  return {
+    ...ctx,
+    InboundTurnKind: ctx.InboundEventKind,
+  };
+}
+
+/** @deprecated Use `filterChannelInboundSupplementalContext`. */
+export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
 export {
   runChannelInboundEvent,
   runPreparedInboundReply,
@@ -119,10 +154,14 @@ export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
   buildChannelInboundMediaPayload,
+  // @deprecated Prefer `buildChannelInboundMediaPayload`.
+  buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,
+  ChannelInboundMediaInput as ChannelTurnMediaInput,
   ChannelInboundMediaPayload,
+  ChannelInboundMediaPayload as ChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   CommandFacts,
@@ -130,6 +169,7 @@ export type {
   SupplementalContextFacts,
 } from "../channels/turn/types.js";
 export type { InboundEventKind } from "../channels/inbound-event/kind.js";
+export type { InboundEventKind as InboundTurnKind } from "../channels/inbound-event/kind.js";
 export {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,
