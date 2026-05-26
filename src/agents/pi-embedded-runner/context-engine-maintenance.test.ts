@@ -535,16 +535,17 @@ describe("runContextEngineMaintenance", () => {
         resetTaskFlowRegistryForTests({ persist: false });
 
         const sessionKey = "agent:main:session-1";
-        const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground: (() => void) | undefined;
-        const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
-          await new Promise<void>((resolve) => {
-            releaseForeground = resolve;
-          });
+        // Block maintain() itself so we can observe the queued/pending task
+        // before maintenance completes. Under the maintenance-lane fix
+        // (#77340) the worker no longer waits for the session lane, so we
+        // gate maintain() instead of holding the session lane busy.
+        let releaseMaintain: (() => void) | undefined;
+        const maintainGate = new Promise<void>((resolve) => {
+          releaseMaintain = resolve;
         });
-        await Promise.resolve();
 
         const maintain = vi.fn(async (params?: unknown) => {
+          await maintainGate;
           await (
             params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
           )?.runtimeContext?.rewriteTranscriptEntries?.({
@@ -595,8 +596,9 @@ describe("runContextEngineMaintenance", () => {
           config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
         });
 
+        // runContextEngineMaintenance returns immediately after scheduling
+        // the deferred worker on its dedicated maintenance lane.
         expect(result).toBeUndefined();
-        expect(maintain).not.toHaveBeenCalled();
 
         const queuedTasks = listTasksForOwnerKey(sessionKey).filter(
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
@@ -613,11 +615,16 @@ describe("runContextEngineMaintenance", () => {
           deliveryStatus: "pending",
         });
 
-        if (!releaseForeground) {
-          throw new Error("Expected foreground turn release callback to be initialized");
-        }
-        releaseForeground();
+        // Maintain runs on its own maintenance lane and should be invoked
+        // even though we have not released anything else; it is now waiting
+        // on its own gate.
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        if (!releaseMaintain) {
+          throw new Error("Expected maintain release callback to be initialized");
+        }
+        releaseMaintain();
+
         const maintainParams = firstMaintainParams(maintain);
         expectRecordFields(maintainParams, {
           sessionId: "session-1",
@@ -630,33 +637,35 @@ describe("runContextEngineMaintenance", () => {
           tokenBudget: 2048,
           currentTokenCount: 1536,
         });
-        expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
-          sessionFile: "/tmp/session.jsonl",
-          sessionId: "session-1",
-          sessionKey,
-          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
-          request: {
-            replacements: [
-              {
-                entryId: "entry-1",
-                message: castAgentMessage({
-                  role: "assistant",
-                  content: [{ type: "text", text: "done" }],
-                  timestamp: 2,
-                }),
-              },
-            ],
-          },
-        });
-
-        const completedTask = getTaskById(queuedTasks[0].taskId);
-        const completedTaskRecord = requireRecord(completedTask, "completed task");
-        expect(completedTaskRecord.status).toBe("succeeded");
-        expect(String(completedTaskRecord.progressSummary)).toContain(
-          "Deferred maintenance completed",
+        await waitForAssertion(() =>
+          expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+            sessionFile: "/tmp/session.jsonl",
+            sessionId: "session-1",
+            sessionKey,
+            config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+            request: {
+              replacements: [
+                {
+                  entryId: "entry-1",
+                  message: castAgentMessage({
+                    role: "assistant",
+                    content: [{ type: "text", text: "done" }],
+                    timestamp: 2,
+                  }),
+                },
+              ],
+            },
+          }),
         );
 
-        await foregroundTurn;
+        await waitForAssertion(() => {
+          const completedTask = getTaskById(queuedTasks[0].taskId);
+          const completedTaskRecord = requireRecord(completedTask, "completed task");
+          expect(completedTaskRecord.status).toBe("succeeded");
+          expect(String(completedTaskRecord.progressSummary)).toContain(
+            "Deferred maintenance completed",
+          );
+        });
       } finally {
         vi.useRealTimers();
       }
@@ -974,7 +983,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("lets foreground turns win while deferred maintenance is waiting", async () => {
+  it("runs deferred maintenance on its own lane independent of the session lane", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       try {
@@ -1027,6 +1036,15 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
 
+        // Under the maintenance-lane fix (#77340) the deferred worker runs
+        // on its own dedicated lane and does NOT wait for the session lane
+        // to drain. Maintenance must therefore be observable while the
+        // session lane is still busy with the first foreground turn.
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        expect(events).toContain("maintenance-start");
+        expect(events).toContain("foreground-1-start");
+        expect(events).not.toContain("foreground-1-end");
+
         const secondForeground = enqueueCommandInLane(sessionLane, async () => {
           events.push("foreground-2-start");
           events.push("foreground-2-end");
@@ -1037,13 +1055,15 @@ describe("runContextEngineMaintenance", () => {
         }
         releaseFirstForeground();
         await waitForAssertion(() =>
-          expect(events).toEqual([
-            "foreground-1-start",
-            "foreground-1-end",
-            "foreground-2-start",
-            "foreground-2-end",
-            "maintenance-start",
-          ]),
+          expect(events).toEqual(
+            expect.arrayContaining([
+              "foreground-1-start",
+              "foreground-1-end",
+              "foreground-2-start",
+              "foreground-2-end",
+              "maintenance-start",
+            ]),
+          ),
         );
         expect(maintain).toHaveBeenCalledTimes(1);
 
@@ -1219,20 +1239,21 @@ describe("runContextEngineMaintenance", () => {
         resetSystemEventsForTest();
 
         const sessionKey = "agent:main:session-long";
-        const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground: (() => void) | undefined;
-        const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
-          await new Promise<void>((resolve) => {
-            releaseForeground = resolve;
-          });
+        // Under the maintenance-lane fix (#77340) the worker no longer
+        // waits for the session lane, so make maintain() itself slow to
+        // exercise the long-running notice timer.
+        let releaseMaintain: (() => void) | undefined;
+        const maintainGate = new Promise<void>((resolve) => {
+          releaseMaintain = resolve;
         });
-        await Promise.resolve();
-
-        const maintain = vi.fn(async () => ({
-          changed: false,
-          bytesFreed: 0,
-          rewrittenEntries: 0,
-        }));
+        const maintain = vi.fn(async () => {
+          await maintainGate;
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          };
+        });
         const backgroundEngine = {
           info: {
             id: "test",
@@ -1256,6 +1277,10 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
 
+        // Wait for the worker to enter maintain() before we trip the
+        // long-running timer.
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
         await vi.advanceTimersByTimeAsync(11_000);
         await waitForAssertion(() =>
           expectSystemEventContaining(
@@ -1264,25 +1289,28 @@ describe("runContextEngineMaintenance", () => {
           ),
         );
 
-        if (!releaseForeground) {
-          throw new Error("Expected foreground turn release callback to be initialized");
+        if (!releaseMaintain) {
+          throw new Error("Expected maintain release callback to be initialized");
         }
-        releaseForeground();
+        releaseMaintain();
         await waitForAssertion(() =>
           expectSystemEventContaining(
             sessionKey,
             "Background task done: Context engine turn maintenance",
           ),
         );
-
-        await foregroundTurn;
       } finally {
         vi.useRealTimers();
       }
     });
   });
 
-  it("throttles deferred wait notices while the session lane stays busy", async () => {
+  it("emits a single long-running notice while deferred maintenance is slow", async () => {
+    // Under the maintenance-lane fix (#77340) the deferred worker no longer
+    // polls the session lane, so the previous "throttle wait notices while
+    // the session lane stays busy" behaviour is gone. The worker now emits
+    // exactly one long-running notice from a single setTimeout while
+    // maintain() itself is slow; this test pins that contract.
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       try {
@@ -1292,15 +1320,18 @@ describe("runContextEngineMaintenance", () => {
         resetSystemEventsForTest();
 
         const sessionKey = "agent:main:session-throttle";
-        const sessionLane = resolveSessionLane(sessionKey);
-        let releaseForeground: (() => void) | undefined;
-        const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
-          await new Promise<void>((resolve) => {
-            releaseForeground = resolve;
-          });
+        let releaseMaintain: (() => void) | undefined;
+        const maintainGate = new Promise<void>((resolve) => {
+          releaseMaintain = resolve;
         });
-        await Promise.resolve();
-
+        const maintain = vi.fn(async () => {
+          await maintainGate;
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          };
+        });
         const backgroundEngine = {
           info: {
             id: "test",
@@ -1313,11 +1344,7 @@ describe("runContextEngineMaintenance", () => {
             estimatedTokens: 0,
           }),
           compact: async () => ({ ok: true, compacted: false }),
-          maintain: vi.fn(async () => ({
-            changed: false,
-            bytesFreed: 0,
-            rewrittenEntries: 0,
-          })),
+          maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
 
         await runContextEngineMaintenance({
@@ -1328,6 +1355,9 @@ describe("runContextEngineMaintenance", () => {
           reason: "turn",
         });
 
+        // Wait for the worker to enter maintain() before tripping timers.
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
         await vi.advanceTimersByTimeAsync(11_000);
         await waitForAssertion(() =>
           expect(
@@ -1337,25 +1367,19 @@ describe("runContextEngineMaintenance", () => {
           ).toHaveLength(1),
         );
 
-        await vi.advanceTimersByTimeAsync(9_000);
+        // Advancing further does not generate additional long-running
+        // notices; the worker schedules exactly one timer.
+        await vi.advanceTimersByTimeAsync(20_000);
         expect(
           peekSystemEvents(sessionKey).filter((event) =>
             event.includes("Background task update: Context engine turn maintenance."),
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
 
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(
-          peekSystemEvents(sessionKey).filter((event) =>
-            event.includes("Background task update: Context engine turn maintenance."),
-          ),
-        ).toHaveLength(2);
-
-        if (!releaseForeground) {
-          throw new Error("Expected foreground turn release callback to be initialized");
+        if (!releaseMaintain) {
+          throw new Error("Expected maintain release callback to be initialized");
         }
-        releaseForeground();
-        await foregroundTurn;
+        releaseMaintain();
       } finally {
         vi.useRealTimers();
       }

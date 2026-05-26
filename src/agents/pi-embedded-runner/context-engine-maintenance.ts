@@ -6,9 +6,8 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
-import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -36,7 +35,6 @@ const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
 const TURN_MAINTENANCE_TASK_TASK = "Deferred context-engine maintenance after turn.";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
-const TURN_MAINTENANCE_WAIT_POLL_MS = 100;
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
@@ -408,31 +406,22 @@ async function runDeferredTurnMaintenanceWorker(params: {
   };
 
   try {
-    const sessionLane = resolveSessionLane(params.sessionKey);
-    const startedWaitingAt = Date.now();
-    let lastWaitNoticeAt = 0;
-
-    for (;;) {
-      while (getQueueSize(sessionLane) > 0) {
-        const now = Date.now();
-        if (
-          now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS &&
-          now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS
-        ) {
-          lastWaitNoticeAt = now;
-          surfaceMaintenanceUpdate(
-            "Waiting for the session lane to go idle.",
-            surfacedUserNotice
-              ? "Still waiting for the session lane to go idle."
-              : "Deferred maintenance is waiting for the session lane to go idle.",
-          );
-        }
-        await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
-      }
-      await Promise.resolve();
-      if (getQueueSize(sessionLane) === 0) {
-        break;
-      }
+    // Fix for #77340: previously this worker waited for
+    // resolveSessionLane(sessionKey) to drain before running maintenance, but
+    // that lane is also used by inference — under steady Telegram DM traffic
+    // the session lane never reaches zero, causing a livelock where deferred
+    // maintenance never commits and trailing-assistant accumulation grows
+    // monotonically with each turn.
+    //
+    // The drain-wait is unnecessary: scheduleDeferredTurnMaintenance already
+    // wraps this worker in enqueueCommandInLane(resolveDeferredTurnMaintenanceLane(
+    // sessionKey), …), which serialises maintenance runs against each other on
+    // a dedicated single-concurrency lane that never contends with inference.
+    // Transcript-correctness file writes are still routed onto the session
+    // lane via deferTranscriptRewriteToSessionLane, so they are ordered
+    // against subsequent inference reads without any extra gate here.
+    if (shutdownAbort.abortSignal?.aborted) {
+      return;
     }
 
     const runningAt = Date.now();
