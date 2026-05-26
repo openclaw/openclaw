@@ -21,7 +21,6 @@ import {
 import {
   applyModelCompatPatch,
   buildProviderReplayFamilyHooks,
-  type ModelCompatConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import {
