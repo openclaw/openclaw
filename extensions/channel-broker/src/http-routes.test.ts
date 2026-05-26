@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import type { BrokerInboundEventV1 } from "openclaw/plugin-sdk/channel-broker";
 import { BROKER_PROTOCOL_VERSION, createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-plugin-common";
@@ -35,6 +35,7 @@ function createRequest(params: {
   signature?: string;
   timestamp?: number | string;
   method?: string;
+  remoteAddress?: string;
 }): IncomingMessage {
   const req = Readable.from([params.body]) as IncomingMessage;
   req.method = params.method ?? "POST";
@@ -43,7 +44,35 @@ function createRequest(params: {
     "x-openclaw-broker-timestamp": String(params.timestamp ?? TEST_SIGNATURE_TIMESTAMP),
     ...(params.signature ? { "x-openclaw-broker-signature": params.signature } : {}),
   };
+  if (params.remoteAddress) {
+    Object.defineProperty(req, "socket", {
+      configurable: true,
+      value: { remoteAddress: params.remoteAddress },
+    });
+  }
   return req;
+}
+
+function createStalledRequest(remoteAddress = "203.0.113.10"): {
+  req: IncomingMessage;
+  end: () => void;
+} {
+  const req = new PassThrough() as PassThrough & IncomingMessage;
+  req.method = "POST";
+  req.headers = {
+    "content-type": "application/json",
+    "x-openclaw-broker-timestamp": String(TEST_SIGNATURE_TIMESTAMP),
+  };
+  Object.defineProperty(req, "socket", {
+    configurable: true,
+    value: { remoteAddress },
+  });
+  return {
+    req,
+    end: () => {
+      req.destroy();
+    },
+  };
 }
 
 function createResponse(): MockResponse {
@@ -126,9 +155,7 @@ function createMemoryKeyedStore<T>() {
 function createOpenKeyedStoreMock(): OpenKeyedStoreMock {
   const stores = new Map<string, ReturnType<typeof createMemoryKeyedStore<unknown>>>();
   const calls: string[] = [];
-  const openKeyedStore = (<T>(
-    options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-  ) => {
+  const openKeyedStore = (<T>(options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0]) => {
     const namespace = options.namespace;
     calls.push(namespace);
     let store = stores.get(namespace);
@@ -1740,6 +1767,28 @@ describe("channel-broker HTTP routes", () => {
     expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects invalid signatures before full broker event normalization", async () => {
+    const body = JSON.stringify({
+      version: BROKER_PROTOCOL_VERSION,
+      eventId: "evt-1",
+      providerId: "acme",
+      platform: "Telegram",
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({ body, signature: sign(body, "wrong-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "invalid_signature" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("rejects stale inbound signatures before runtime dispatch", async () => {
     const body = inboundBody();
     const receiveInboundEvent = vi.fn();
@@ -1944,6 +1993,36 @@ describe("channel-broker HTTP routes", () => {
     expect(res.statusCode).toBe(413);
     expect(res.body).toBe("Payload too large");
     expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("limits concurrent pre-auth broker body reads per source", async () => {
+    const stalled = Array.from({ length: 9 }, () => createStalledRequest());
+    const responses = stalled.map(() => createResponse());
+
+    const runs = stalled.map((request, index) =>
+      handleChannelBrokerInboundHttpRequest({
+        cfg: brokerConfig(),
+        req: request.req,
+        res: responses[index],
+      }),
+    );
+
+    let assertionError: unknown;
+    try {
+      try {
+        expect(responses.filter((res) => res.statusCode === 429)).toHaveLength(1);
+      } catch (error) {
+        assertionError = error;
+      }
+    } finally {
+      for (const request of stalled) {
+        request.end();
+      }
+    }
+    await Promise.all(runs);
+    if (assertionError) {
+      throw assertionError;
+    }
   });
 
   it("enforces configured broker sender allowlists before runtime dispatch", async () => {

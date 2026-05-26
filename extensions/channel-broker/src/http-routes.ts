@@ -8,7 +8,11 @@ import {
   type BrokerInboundEventV1,
 } from "openclaw/plugin-sdk/channel-broker";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
-import { readWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
+  readWebhookBodyOrReject,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { isListedChannelBrokerProviderId, resolveChannelBrokerAccount } from "./accounts.js";
 import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
 import { receiveBrokerInboundEvent } from "./runtime.js";
@@ -18,6 +22,7 @@ const INBOUND_PATH = "/channel-broker/inbound";
 const SIGNATURE_HEADER = "x-openclaw-broker-signature";
 const TIMESTAMP_HEADER = "x-openclaw-broker-timestamp";
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
+const channelBrokerInboundInFlightLimiter = createWebhookInFlightLimiter();
 
 function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>): true {
   res.statusCode = statusCode;
@@ -155,6 +160,18 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return trimmed || undefined;
 }
 
+function getInboundInFlightKey(req: IncomingMessage): string {
+  return `channel-broker:${req.socket?.remoteAddress ?? "unknown"}`;
+}
+
+function extractInboundProviderId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const providerId = (value as { providerId?: unknown }).providerId;
+  return typeof providerId === "string" ? normalizeOptionalString(providerId) : undefined;
+}
+
 function normalizeInboundEventForAccount(params: {
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
@@ -210,82 +227,124 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     return sendJson(params.res, 405, { ok: false, error: "method_not_allowed" });
   }
 
-  const body = await readWebhookBodyOrReject({
+  const requestLifecycle = beginWebhookRequestPipelineOrReject({
     req: params.req,
     res: params.res,
-    profile: "pre-auth",
-    invalidBodyMessage: "invalid payload",
+    inFlightLimiter: channelBrokerInboundInFlightLimiter,
+    inFlightKey: getInboundInFlightKey(params.req),
   });
-  if (!body.ok) {
+  if (!requestLifecycle.ok) {
     return true;
   }
+  let requestLifecycleReleased = false;
+  const releaseRequestLifecycle = () => {
+    if (!requestLifecycleReleased) {
+      requestLifecycle.release();
+      requestLifecycleReleased = true;
+    }
+  };
 
-  let event: BrokerInboundEventV1;
   try {
-    event = parseInboundEvent(JSON.parse(body.value));
-  } catch (error) {
-    return sendJson(params.res, 400, {
-      ok: false,
-      error: "invalid_event",
-      message: error instanceof Error ? error.message : String(error),
+    const body = await readWebhookBodyOrReject({
+      req: params.req,
+      res: params.res,
+      profile: "pre-auth",
+      invalidBodyMessage: "invalid payload",
     });
-  }
+    if (!body.ok) {
+      return true;
+    }
 
-  if (!isListedChannelBrokerProviderId(params.cfg, event.providerId)) {
-    return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
-  }
-  const account = resolveChannelBrokerAccount({ cfg: params.cfg, accountId: event.providerId });
-  if (!account.enabled || !account.configured) {
-    return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
-  }
-  if (!account.signingSecret) {
-    return sendJson(params.res, 401, { ok: false, error: "missing_signing_secret" });
-  }
-  const signatureTimestamp = parseSignatureTimestamp(getHeader(params.req, TIMESTAMP_HEADER));
-  if (signatureTimestamp === null) {
-    return sendJson(params.res, 401, { ok: false, error: "invalid_signature_timestamp" });
-  }
-  if (
-    !verifySignature({
-      body: body.value,
-      secret: account.signingSecret,
-      signature: getHeader(params.req, SIGNATURE_HEADER) ?? "",
-      timestamp: signatureTimestamp,
-    })
-  ) {
-    return sendJson(params.res, 401, { ok: false, error: "invalid_signature" });
-  }
-  const accountScopedEvent = normalizeInboundEventForAccount({ account, event });
-  if (!accountScopedEvent.ok) {
-    return sendJson(params.res, accountScopedEvent.statusCode, {
-      ok: false,
-      error: accountScopedEvent.error,
+    let parsedBody: unknown;
+    try {
+      parsedBody = JSON.parse(body.value);
+    } catch (error) {
+      return sendJson(params.res, 400, {
+        ok: false,
+        error: "invalid_event",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const providerId = extractInboundProviderId(parsedBody);
+    if (!providerId) {
+      return sendJson(params.res, 400, {
+        ok: false,
+        error: "invalid_event",
+        message: "missing broker provider id",
+      });
+    }
+
+    if (!isListedChannelBrokerProviderId(params.cfg, providerId)) {
+      return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
+    }
+    const account = resolveChannelBrokerAccount({ cfg: params.cfg, accountId: providerId });
+    if (!account.enabled || !account.configured) {
+      return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
+    }
+    if (!account.signingSecret) {
+      return sendJson(params.res, 401, { ok: false, error: "missing_signing_secret" });
+    }
+    const signatureTimestamp = parseSignatureTimestamp(getHeader(params.req, TIMESTAMP_HEADER));
+    if (signatureTimestamp === null) {
+      return sendJson(params.res, 401, { ok: false, error: "invalid_signature_timestamp" });
+    }
+    if (
+      !verifySignature({
+        body: body.value,
+        secret: account.signingSecret,
+        signature: getHeader(params.req, SIGNATURE_HEADER) ?? "",
+        timestamp: signatureTimestamp,
+      })
+    ) {
+      return sendJson(params.res, 401, { ok: false, error: "invalid_signature" });
+    }
+    releaseRequestLifecycle();
+
+    let event: BrokerInboundEventV1;
+    try {
+      event = parseInboundEvent(parsedBody);
+    } catch (error) {
+      return sendJson(params.res, 400, {
+        ok: false,
+        error: "invalid_event",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const accountScopedEvent = normalizeInboundEventForAccount({ account, event });
+    if (!accountScopedEvent.ok) {
+      return sendJson(params.res, accountScopedEvent.statusCode, {
+        ok: false,
+        error: accountScopedEvent.error,
+      });
+    }
+    event = accountScopedEvent.event;
+    if (isSelfOriginatedEvent({ account, event })) {
+      return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "self_sender" });
+    }
+    if (isWildcardOnlyBotSender({ account, event })) {
+      return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "bot_sender" });
+    }
+    if (!isSenderAllowed({ account, event })) {
+      return sendJson(params.res, 403, { ok: false, error: "sender_not_allowed" });
+    }
+
+    const dedupeKey = buildBrokerInboundDedupeKey(event);
+    const result = await receiveBrokerInboundEvent({
+      account,
+      event,
+      dedupeKey,
+      ackPolicy: "after_durable_send",
     });
+    return sendJson(params.res, inboundReceiveStatusCode(result), {
+      ok: result.status === "accepted" || result.status === "duplicate",
+      status: result.status,
+      dedupeKey,
+      ...(result.message ? { message: result.message } : {}),
+    });
+  } finally {
+    releaseRequestLifecycle();
   }
-  event = accountScopedEvent.event;
-  if (isSelfOriginatedEvent({ account, event })) {
-    return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "self_sender" });
-  }
-  if (isWildcardOnlyBotSender({ account, event })) {
-    return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "bot_sender" });
-  }
-  if (!isSenderAllowed({ account, event })) {
-    return sendJson(params.res, 403, { ok: false, error: "sender_not_allowed" });
-  }
-
-  const dedupeKey = buildBrokerInboundDedupeKey(event);
-  const result = await receiveBrokerInboundEvent({
-    account,
-    event,
-    dedupeKey,
-    ackPolicy: "after_durable_send",
-  });
-  return sendJson(params.res, inboundReceiveStatusCode(result), {
-    ok: result.status === "accepted" || result.status === "duplicate",
-    status: result.status,
-    dedupeKey,
-    ...(result.message ? { message: result.message } : {}),
-  });
 }
 
 export function registerChannelBrokerHttpRoutes(api: OpenClawPluginApi): void {
