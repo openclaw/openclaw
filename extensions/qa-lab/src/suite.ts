@@ -65,6 +65,15 @@ type QaSuiteStep = {
   run: () => Promise<string | void>;
 };
 
+function resolveQaSuiteControlUiEnabled(params: {
+  explicit?: boolean;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  return (
+    params.explicit ?? params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario))
+  );
+}
+
 export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail";
@@ -1580,6 +1589,8 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  resolveQaSuiteControlUiEnabled,
+  scenarioRequiresControlUi,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,

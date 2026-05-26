@@ -2293,7 +2293,7 @@ function hasToolHistory(messages: Context["messages"]): boolean {
 
 function assertOpenAICompletionsPayloadHasConversationTurn(
   params: Record<string, unknown>,
-  model: Model<Api>,
+  model: Model,
 ): void {
   const messages = params.messages;
   if (!Array.isArray(messages) || hasOpenAICompatibleConversationTurn(messages)) {
