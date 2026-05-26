@@ -394,6 +394,52 @@ describe("xiaomi provider plugin", () => {
     ).rejects.toThrow("This looks like a Xiaomi MiMo pay-as-you-go key");
   });
 
+  it("rejects keys that do not start with sk- on the pay-as-you-go auth choice", async () => {
+    const provider = await getXiaomiProvider();
+    const method = provider.auth[0];
+    if (!method?.runNonInteractive) {
+      throw new Error("expected Xiaomi pay-as-you-go non-interactive auth");
+    }
+
+    await expect(
+      method.runNonInteractive({
+        authChoice: "xiaomi-api-key",
+        config: {},
+        baseConfig: {},
+        opts: { xiaomiApiKey: "bad-key" },
+        runtime: {} as never,
+        resolveApiKey: async () => ({
+          key: "bad-key",
+          source: "flag",
+        }),
+        toApiKeyCredential: vi.fn(),
+      } as never),
+    ).rejects.toThrow('must start with "sk-"');
+  });
+
+  it("rejects keys that do not start with tp- on Token Plan auth choices", async () => {
+    const provider = await getXiaomiTokenPlanProvider();
+    const method = provider.auth.find((entry) => entry.id === "token-plan-ams");
+    if (!method?.runNonInteractive) {
+      throw new Error("expected Xiaomi Token Plan non-interactive auth");
+    }
+
+    await expect(
+      method.runNonInteractive({
+        authChoice: "xiaomi-token-plan-ams",
+        config: {},
+        baseConfig: {},
+        opts: { xiaomiTokenPlanApiKey: "bad-key" },
+        runtime: {} as never,
+        resolveApiKey: async () => ({
+          key: "bad-key",
+          source: "flag",
+        }),
+        toApiKeyCredential: vi.fn(),
+      } as never),
+    ).rejects.toThrow('must start with "tp-"');
+  });
+
   it("owns OpenAI-compatible replay policy", async () => {
     const provider = await getXiaomiProvider();
 

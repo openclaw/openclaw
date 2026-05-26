@@ -89,6 +89,7 @@ function resolveXiaomiCatalog(params: {
   providerId: string;
   buildProvider: () => ReturnType<typeof buildXiaomiProvider>;
   requireConfiguredProvider?: boolean;
+  requireBaseUrl?: boolean;
 }) {
   const apiKey = params.ctx.resolveProviderApiKey(params.providerId).apiKey;
   if (!apiKey) {
@@ -101,6 +102,9 @@ function resolveXiaomiCatalog(params: {
     return null;
   }
   const explicitBaseUrl = trimConfiguredBaseUrl(params.ctx, params.providerId);
+  if (params.requireBaseUrl === true && !explicitBaseUrl) {
+    return null;
+  }
   return {
     provider: {
       ...params.buildProvider(),
@@ -124,6 +128,9 @@ function buildXiaomiKeyMismatchMessage(params: {
   expectedKind: "payg" | "token-plan";
 }): string | undefined {
   const normalized = params.actualKey.trim().toLowerCase();
+  const expectedPrefix = params.expectedKind === "payg" ? "sk-" : "tp-";
+  const oppositeKind = params.expectedKind === "payg" ? "token-plan" : "payg";
+
   if (params.expectedKind === "payg" && normalized.startsWith("tp-")) {
     return (
       "This looks like a Xiaomi MiMo Token Plan key (tp-...). " +
@@ -135,6 +142,12 @@ function buildXiaomiKeyMismatchMessage(params: {
     return (
       "This looks like a Xiaomi MiMo pay-as-you-go key (sk-...). " +
       `Re-run onboarding with --auth-choice xiaomi-api-key or pass ${PAYG_FLAG_NAME}.`
+    );
+  }
+  if (!normalized.startsWith(expectedPrefix)) {
+    return (
+      `Xiaomi MiMo ${oppositeKind === "payg" ? "pay-as-you-go" : "Token Plan"} keys ` +
+      `must start with "${expectedPrefix}". The entered key does not match the expected format.`
     );
   }
   return undefined;
@@ -395,6 +408,7 @@ export default definePluginEntry({
             providerId: XIAOMI_TOKEN_PLAN_PROVIDER_ID,
             buildProvider: buildXiaomiTokenPlanProvider,
             requireConfiguredProvider: true,
+            requireBaseUrl: true,
           }),
       },
       ...XIAOMI_PROVIDER_HOOKS,
