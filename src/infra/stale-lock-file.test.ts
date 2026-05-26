@@ -7,7 +7,7 @@ describe("stale lock file ownership", () => {
       shouldRemoveDeadOwnerOrExpiredLock({
         payload: {
           pid: 123,
-          createdAt: new Date(Date.now() - 60_000).toISOString(),
+          createdAt: new Date(Date.now() - 5).toISOString(),
         },
         staleMs: 10,
         isPidDefinitelyDead: () => false,
@@ -20,10 +20,24 @@ describe("stale lock file ownership", () => {
       shouldRemoveDeadOwnerOrExpiredLock({
         payload: {
           pid: 123,
-          createdAt: new Date(Date.now() - 60_000).toISOString(),
+          createdAt: new Date(Date.now() - 5).toISOString(),
         },
         staleMs: 10,
         isPidDefinitelyDead: () => true,
+      }),
+    ).toBe(true);
+  });
+
+  it("removes expired locks even when PID is alive (reused PID case)", () => {
+    expect(
+      shouldRemoveDeadOwnerOrExpiredLock({
+        payload: {
+          pid: 12345,
+          createdAt: "2026-05-23T00:00:00.000Z",
+        },
+        staleMs: 10,
+        nowMs: Date.parse("2026-05-23T00:00:01.000Z"),
+        isPidDefinitelyDead: () => false,
       }),
     ).toBe(true);
   });
