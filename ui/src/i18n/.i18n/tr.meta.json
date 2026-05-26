@@ -64,6 +64,9 @@
     "overview.operator.quota",
     "overview.operator.quotaLimitLabel",
     "overview.operator.quotaResetShort",
+    "overview.operator.quotaTotalDetail",
+    "overview.operator.quotaUsedDetail",
+    "overview.operator.quotaUsedOfTotalDetail",
     "overview.operator.recentSessionsSubtitle",
     "overview.operator.refreshed",
     "overview.operator.sessionDataLoading",
@@ -87,12 +90,12 @@
     "subtitles.activity",
     "tabs.activity"
   ],
-  "generatedAt": "2026-05-25T18:41:43.182Z",
+  "generatedAt": "2026-05-26T11:49:42.508Z",
   "locale": "tr",
   "model": "claude-opus-4-7",
   "provider": "anthropic",
-  "sourceHash": "1ea3792ff0bde36385ef547b15f8c9b02aba842197bd0d2ae6abf68553d305b9",
-  "totalKeys": 1224,
+  "sourceHash": "7e4cc0329b5235999637293a15eaefbebab726be8db9a4acb73b486b41672082",
+  "totalKeys": 1227,
   "translatedKeys": 1138,
   "workflow": 1
 }

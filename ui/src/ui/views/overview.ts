@@ -168,14 +168,28 @@ function quotaIdentity(entry: QuotaWindowSummary): string {
   return [entry.displayName, entry.label].filter(Boolean).join(" · ");
 }
 
+function quotaUsageDetail(entry: QuotaWindowSummary): string | null {
+  const used = entry.usedLabel?.trim();
+  const total = entry.totalLabel?.trim();
+  if (used && total) {
+    return t("overview.operator.quotaUsedOfTotalDetail", { used, total });
+  }
+  if (used) {
+    return t("overview.operator.quotaUsedDetail", { used });
+  }
+  if (total) {
+    return t("overview.operator.quotaTotalDetail", { total });
+  }
+  return null;
+}
+
 function quotaWindowDurationMinutes(label: string): number {
   const normalized = label.trim().toLowerCase();
   const explicitDuration = /^(\d+(?:\.\d+)?)\s*([hmwd])\b/.exec(normalized);
   if (explicitDuration) {
     const amount = Number(explicitDuration[1]);
     const unit = explicitDuration[2];
-    const multiplier =
-      unit === "h" ? 60 : unit === "d" ? 24 * 60 : unit === "w" ? 7 * 24 * 60 : 1;
+    const multiplier = unit === "h" ? 60 : unit === "d" ? 24 * 60 : unit === "w" ? 7 * 24 * 60 : 1;
     return Number.isFinite(amount) ? amount * multiplier : Number.POSITIVE_INFINITY;
   }
   if (/\bweekly?\b|\bweek\b/.test(normalized)) {
@@ -187,10 +201,7 @@ function quotaWindowDurationMinutes(label: string): number {
   return Number.POSITIVE_INFINITY;
 }
 
-function compareQuotaStatDisplayOrder(
-  a: QuotaWindowSummary,
-  b: QuotaWindowSummary,
-): number {
+function compareQuotaStatDisplayOrder(a: QuotaWindowSummary, b: QuotaWindowSummary): number {
   const durationDelta = quotaWindowDurationMinutes(a.label) - quotaWindowDurationMinutes(b.label);
   if (durationDelta !== 0) {
     return durationDelta;
@@ -511,6 +522,7 @@ export function renderOverview(props: OverviewProps) {
       : primaryQuota
         ? [primaryQuota]
         : [];
+  const showLocalCostStat = totalCost !== "$0.00" || visibleQuotaStats.length === 0;
   const logSummary = summarizeLogLines(props.overviewLogLines);
   const hasOperationalData =
     props.usageResult != null ||
@@ -948,12 +960,16 @@ export function renderOverview(props: OverviewProps) {
                 ${visibleQuotaStats.length > 0
                   ? visibleQuotaStats.map((entry) => {
                       const reset = formatQuotaReset(entry.resetAt);
+                      const details = [
+                        quotaUsageDetail(entry),
+                        reset ? t("overview.operator.quotaResetShort", { time: reset }) : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
                       return renderUsageStat({
                         label: quotaLimitLabel(entry),
                         value: formatQuotaRemaining(entry),
-                        detail: reset
-                          ? t("overview.operator.quotaResetShort", { time: reset })
-                          : null,
+                        detail: details || null,
                         tone: entry.remaining <= 25 ? "warn" : "ok",
                       });
                     })
@@ -962,7 +978,7 @@ export function renderOverview(props: OverviewProps) {
                       value: t("common.na"),
                       tone: "ok",
                     })}
-                ${showSecondaryQuotaStat
+                ${showSecondaryQuotaStat || !showLocalCostStat
                   ? nothing
                   : renderUsageStat({
                       label: t("overview.cards.cost"),

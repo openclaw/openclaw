@@ -284,9 +284,9 @@ describe("overview view rendering", () => {
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
       "Provider Usage Compact view of model usage, costs, and quota signals.",
     );
-    const metricLabels = Array.from(container.querySelectorAll(".ov-usage-metrics .stat-label")).map(
-      compactText,
-    );
+    const metricLabels = Array.from(
+      container.querySelectorAll(".ov-usage-metrics .stat-label"),
+    ).map(compactText);
     expect(metricLabels.slice(0, 2)).toEqual(["3h quota", "Week quota"]);
     expect(container.querySelectorAll(".ov-usage-metrics .stat-detail")).toHaveLength(2);
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
@@ -360,10 +360,11 @@ describe("overview view rendering", () => {
     expect(compactText(container.querySelector('[data-kind="quota"]'))).toBe(
       "Credits $12.34 left OpenRouter · Credits · Z.ai · Tokens (6h) 60% left",
     );
+    expect(compactText(container.querySelector(".ov-usage-card"))).toContain("Credits $12.34 left");
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
-      "Credits $12.34 left",
+      "$8.90 used of $21.24",
     );
-    expect(compactText(container.querySelector(".ov-usage-card"))).toContain("Cost $0.00");
+    expect(compactText(container.querySelector(".ov-usage-card"))).not.toContain("Cost $0.00");
     expect(container.querySelector(".ov-usage-windows")).toBeNull();
     expect(container.querySelector(".ov-usage-note")).toBeNull();
   });
