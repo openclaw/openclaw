@@ -1053,6 +1053,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       this.nativeMemoryWatchers = [];
     }
+    if (this.nativeMemoryParentWatchers.length > 0) {
+      for (const w of this.nativeMemoryParentWatchers) {
+        try {
+          w.close();
+        } catch {
+          // ignore close failures
+        }
+      }
+      this.nativeMemoryParentWatchers = [];
+    }
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;

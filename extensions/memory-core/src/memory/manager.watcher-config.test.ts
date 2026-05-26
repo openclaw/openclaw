@@ -45,10 +45,16 @@ const {
   type NativeEvent = "error";
   type NativeCallback = (eventType: string, filename: string | null) => void;
   type NativeErrorCallback = (err: Error) => void;
-  function createMockNativeWatcher(dir: string, listener: NativeCallback) {
+  function createMockNativeWatcher(
+    dir: string,
+    options: { recursive?: boolean },
+    listener: NativeCallback,
+  ) {
     const errorHandlers: NativeErrorCallback[] = [];
     const watcher = {
       dir,
+      options,
+      recursive: options.recursive === true,
       listener,
       on: vi.fn((event: NativeEvent, callback: NativeErrorCallback) => {
         if (event === "error") {
@@ -82,14 +88,16 @@ const {
       chokidarWatchers.push(watcher);
       return watcher;
     }),
-    nativeWatchMock: vi.fn((dir: string, _options: unknown, listener: NativeCallback) => {
-      if (failingDir.current && dir === failingDir.current) {
-        throw new Error("simulated native fs.watch creation failure");
-      }
-      const watcher = createMockNativeWatcher(dir, listener);
-      nativeWatchers.push(watcher);
-      return watcher;
-    }),
+    nativeWatchMock: vi.fn(
+      (dir: string, options: { recursive?: boolean }, listener: NativeCallback) => {
+        if (failingDir.current && dir === failingDir.current) {
+          throw new Error("simulated native fs.watch creation failure");
+        }
+        const watcher = createMockNativeWatcher(dir, options, listener);
+        nativeWatchers.push(watcher);
+        return watcher;
+      },
+    ),
     nativeWatchMockFailingDir: failingDir,
   };
   (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
@@ -234,15 +242,23 @@ describe("memory watcher config", () => {
     expect(chokidarOptions).not.toHaveProperty("awaitWriteFinish");
 
     // Native fs.watch should receive memory/ and extraDir as recursive watches.
-    expect(nativeWatchMock).toHaveBeenCalledTimes(2);
-    const nativeDirs = nativeWatchMock.mock.calls.map((call) => call[0]);
-    expect(nativeDirs).toStrictEqual(
+    // Each watched directory installs a main recursive watcher PLUS a
+    // non-recursive parent-directory watcher used to detect root
+    // replacement (see attachNativeMemoryWatchForDir). 2 dirs × 2 watchers
+    // each = 4 native fs.watch calls.
+    expect(nativeWatchMock).toHaveBeenCalledTimes(4);
+    const mainNativeCalls = (
+      nativeWatchMock.mock.calls as unknown as [string, { recursive?: boolean }, unknown][]
+    ).filter((call) => call[1].recursive === true);
+    const parentNativeCalls = (
+      nativeWatchMock.mock.calls as unknown as [string, { recursive?: boolean }, unknown][]
+    ).filter((call) => call[1].recursive !== true);
+    expect(mainNativeCalls.map((call) => call[0])).toStrictEqual(
       expect.arrayContaining([path.join(workspaceDir, "memory"), extraDir]),
     );
-    for (const call of nativeWatchMock.mock.calls) {
-      const options = call[1] as Record<string, unknown>;
-      expect(options.recursive).toBe(true);
-    }
+    expect(parentNativeCalls.map((call) => call[0])).toStrictEqual(
+      expect.arrayContaining([workspaceDir, workspaceDir]),
+    );
 
     // Shared ignore predicate still controls non-md/non-multimodal churn.
     const ignored = chokidarOptions.ignored as WatchIgnoredFn | undefined;
@@ -295,10 +311,13 @@ describe("memory watcher config", () => {
     ];
     expect(chokidarPaths).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
 
-    expect(nativeWatchMock).toHaveBeenCalledTimes(2);
-    const nativeDirs = (nativeWatchMock.mock.calls as unknown as [string, ...unknown[]][]).map(
-      (call) => call[0],
-    );
+    // 2 directories × (main + parent) = 4 native watch calls.
+    expect(nativeWatchMock).toHaveBeenCalledTimes(4);
+    const nativeDirs = (
+      nativeWatchMock.mock.calls as unknown as [string, { recursive?: boolean }, unknown][]
+    )
+      .filter((call) => call[1].recursive === true)
+      .map((call) => call[0]);
     expect(nativeDirs).toStrictEqual(
       expect.arrayContaining([path.join(workspaceDir, "memory"), extraDir]),
     );
@@ -502,6 +521,56 @@ describe("memory watcher config", () => {
     }
   });
 
+  it("routes directories through native recursive watch on Windows", async () => {
+    // Windows uses ReadDirectoryChangesW for `fs.watch(dir, { recursive: true })`,
+    // which is a single-watcher native recursive backend (constant FD profile).
+    // The PR explicitly opts Windows into the native path alongside macOS.
+    const originalPlatform = process.platform;
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+
+      // Chokidar should only see the file path (MEMORY.md); both directory
+      // paths (memory/ and extraDir) go to native recursive watch.
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      const [chokidarPathsWin] = watchMock.mock.calls[0] as unknown as [
+        string[],
+        Record<string, unknown>,
+      ];
+      expect(chokidarPathsWin).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+
+      // 2 directories × (main + parent) = 4 native watch calls.
+      expect(nativeWatchMock).toHaveBeenCalledTimes(4);
+      const nativeDirsWin = (
+        nativeWatchMock.mock.calls as unknown as [string, { recursive?: boolean }, unknown][]
+      )
+        .filter((call) => call[1].recursive === true)
+        .map((call) => call[0]);
+      expect(nativeDirsWin).toStrictEqual(
+        expect.arrayContaining([path.join(workspaceDir, "memory"), extraDir]),
+      );
+      // Parent watchers must use recursive:false to avoid double-recursion
+      // over the same tree.
+      const parentDirsWin = (
+        nativeWatchMock.mock.calls as unknown as [string, { recursive?: boolean }, unknown][]
+      )
+        .filter((call) => call[1].recursive !== true)
+        .map((call) => call[0]);
+      expect(parentDirsWin).toHaveLength(2);
+      for (const parentDir of parentDirsWin) {
+        expect(parentDir).toBe(workspaceDir);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it("creates a chokidar watcher on the fly when no file-path chokidar exists yet", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig({ extraPaths: [] });
@@ -532,6 +601,56 @@ describe("memory watcher config", () => {
       | [string[], Record<string, unknown>]
       | undefined;
     expect(newChokidarCall?.[0]).toStrictEqual([memoryDir]);
+  });
+
+  it("attaches a non-recursive parent-directory watcher for root-replacement detection", async () => {
+    // Each native memory directory watch is paired with a non-recursive
+    // watcher on the parent directory; the parent watcher catches
+    // root-replacement events (`rm -rf memory && mkdir memory`) so the
+    // main watcher can be reattached on the new inode.
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig({ extraPaths: [] });
+    await expectWatcherManager(cfg);
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    const mainWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir && w.recursive);
+    const parentWatcher = createdNativeWatchers.find((w) => w.dir === workspaceDir && !w.recursive);
+    expect(mainWatcher).toBeDefined();
+    expect(parentWatcher).toBeDefined();
+    // Parent watcher's mock options must reflect recursive: false.
+    expect(parentWatcher!.options.recursive).not.toBe(true);
+  });
+
+  it("ignores parent-directory events for unrelated basenames", async () => {
+    // When the parent-directory watcher fires for a sibling (not the
+    // watched root's basename), no teardown or reattach should occur.
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig({ extraPaths: [] });
+    await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    const parentWatcher = createdNativeWatchers.find((w) => w.dir === workspaceDir && !w.recursive);
+    expect(parentWatcher).toBeDefined();
+    const nativeCallsBefore = nativeWatchMock.mock.calls.length;
+    const mainCloseSpy = createdNativeWatchers.find(
+      (w) => w.dir === path.join(workspaceDir, "memory") && w.recursive,
+    )!.close;
+
+    // Sibling event — should be ignored.
+    parentWatcher!.emit("rename", "unrelated-sibling-dir");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(mainCloseSpy).not.toHaveBeenCalled();
+    expect(nativeWatchMock.mock.calls.length).toBe(nativeCallsBefore);
+    expect(syncSpy).not.toHaveBeenCalled();
   });
 
   it("ignores re-entrant ensureWatcher calls", async () => {
