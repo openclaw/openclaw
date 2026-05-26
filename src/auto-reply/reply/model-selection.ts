@@ -15,6 +15,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import {
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
@@ -78,11 +79,6 @@ const modelCatalogRuntimeLoader = createLazyImportLoader(
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
 );
-const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
-  allowManifestNormalization: true,
-  allowPluginNormalization: true,
-} as const;
-
 function normalizeRuntimeModelRef(provider: string, model: string) {
   return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
 }

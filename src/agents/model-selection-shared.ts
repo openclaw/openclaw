@@ -822,6 +822,17 @@ export function buildAllowedModelSetWithFallbacks(
   }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
   const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
   const allowAny = !visibility.hasEntries;
+  const defaultModelNormalization = allowAny
+    ? {
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+        manifestPlugins: params.manifestPlugins,
+      }
+    : {
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: params.manifestPlugins,
+      };
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =
     defaultModel && params.defaultProvider
@@ -829,9 +840,7 @@ export function buildAllowedModelSetWithFallbacks(
           cfg: params.cfg,
           raw: defaultModel,
           defaultProvider: params.defaultProvider,
-          allowManifestNormalization: params.allowManifestNormalization,
-          allowPluginNormalization: params.allowPluginNormalization,
-          manifestPlugins: params.manifestPlugins,
+          ...defaultModelNormalization,
         })
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
