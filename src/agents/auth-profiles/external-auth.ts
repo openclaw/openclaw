@@ -89,7 +89,7 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function listRuntimeExternalAuthProfiles(params: {
+export function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;

@@ -26,7 +26,6 @@ import {
   setSerializedSessionStore,
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
-  writeSessionStoreSnapshotCache,
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import {
@@ -214,13 +213,7 @@ function updateSessionStoreWriteCaches(params: {
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
   });
-  writeSessionStoreSnapshotCache({
-    storePath: params.storePath,
-    store: params.store,
-    mtimeMs: fileStat?.mtimeMs,
-    sizeBytes: fileStat?.sizeBytes,
-    serialized: params.serialized,
-  });
+  dropSessionStoreSnapshotCache(params.storePath);
 }
 
 function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
