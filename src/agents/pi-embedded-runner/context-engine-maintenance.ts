@@ -6,7 +6,6 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
-import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -408,85 +407,80 @@ async function runDeferredTurnMaintenanceWorker(params: {
   };
 
   try {
-    const sessionLane = resolveSessionLane(params.sessionKey);
-    const startedWaitingAt = Date.now();
-    let lastWaitNoticeAt = 0;
-
-    for (;;) {
-      while (getQueueSize(sessionLane) > 0) {
-        const now = Date.now();
-        if (
-          now - startedWaitingAt >= TURN_MAINTENANCE_LONG_WAIT_MS &&
-          now - lastWaitNoticeAt >= TURN_MAINTENANCE_LONG_WAIT_MS
-        ) {
-          lastWaitNoticeAt = now;
-          surfaceMaintenanceUpdate(
-            "Waiting for the session lane to go idle.",
-            surfacedUserNotice
-              ? "Still waiting for the session lane to go idle."
-              : "Deferred maintenance is waiting for the session lane to go idle.",
-          );
+    // Fix for #77340: use the dedicated maintenance lane instead of the
+    // session (inference) lane as the gate. The previous implementation waited
+    // for resolveSessionLane(sessionKey) to drain before running maintenance,
+    // but that lane is also used by inference — under steady Telegram DM
+    // traffic the session lane never reaches zero, causing a livelock where
+    // deferred maintenance never commits and trailing-assistant accumulation
+    // grows monotonically with each turn.
+    //
+    // The maintenance lane (resolveDeferredTurnMaintenanceLane) is keyed
+    // separately and serialises maintenance runs against each other without
+    // ever contending with inference. Transcript-correctness writes must
+    // complete before the next read; scheduling them on the maintenance lane
+    // achieves that without blocking the session lane.
+    await enqueueCommandInLane(
+      resolveDeferredTurnMaintenanceLane(params.sessionKey),
+      async () => {
+        if (shutdownAbort.abortSignal?.aborted) {
+          return;
         }
-        await sleepWithAbort(TURN_MAINTENANCE_WAIT_POLL_MS, shutdownAbort.abortSignal);
-      }
-      await Promise.resolve();
-      if (getQueueSize(sessionLane) === 0) {
-        break;
-      }
-    }
 
-    const runningAt = Date.now();
-    startTaskRunByRunId({
-      runId: params.runId,
-      runtime: "acp",
-      sessionKey: params.sessionKey,
-      startedAt: runningAt,
-      lastEventAt: runningAt,
-      progressSummary: "Running deferred maintenance.",
-      eventSummary: "Starting deferred maintenance.",
-    });
-    longRunningTimer = setTimeout(() => {
-      try {
-        surfaceMaintenanceUpdate(
-          "Deferred maintenance is still running.",
-          "Deferred maintenance is still running.",
-        );
-      } catch (error) {
-        log.warn(`failed to surface deferred maintenance progress: ${String(error)}`);
-      }
-    }, TURN_MAINTENANCE_LONG_WAIT_MS);
+        const runningAt = Date.now();
+        startTaskRunByRunId({
+          runId: params.runId,
+          runtime: "acp",
+          sessionKey: params.sessionKey,
+          startedAt: runningAt,
+          lastEventAt: runningAt,
+          progressSummary: "Running deferred maintenance.",
+          eventSummary: "Starting deferred maintenance.",
+        });
+        longRunningTimer = setTimeout(() => {
+          try {
+            surfaceMaintenanceUpdate(
+              "Deferred maintenance is still running.",
+              "Deferred maintenance is still running.",
+            );
+          } catch (error) {
+            log.warn(`failed to surface deferred maintenance progress: ${String(error)}`);
+          }
+        }, TURN_MAINTENANCE_LONG_WAIT_MS);
 
-    const result = await executeContextEngineMaintenance({
-      contextEngine: params.contextEngine,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      reason: "turn",
-      sessionManager: params.sessionManager,
-      runtimeContext: params.runtimeContext,
-      agentId: params.agentId,
-      config: params.config,
-      executionMode: "background",
-    });
-    if (longRunningTimer) {
-      clearTimeout(longRunningTimer);
-      longRunningTimer = null;
-    }
+        const result = await executeContextEngineMaintenance({
+          contextEngine: params.contextEngine,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          reason: "turn",
+          sessionManager: params.sessionManager,
+          runtimeContext: params.runtimeContext,
+          agentId: params.agentId,
+          config: params.config,
+          executionMode: "background",
+        });
+        if (longRunningTimer) {
+          clearTimeout(longRunningTimer);
+          longRunningTimer = null;
+        }
 
-    const endedAt = Date.now();
-    completeTaskRunByRunId({
-      runId: params.runId,
-      runtime: "acp",
-      sessionKey: params.sessionKey,
-      endedAt,
-      lastEventAt: endedAt,
-      progressSummary: result?.changed
-        ? "Deferred maintenance completed with transcript changes."
-        : "Deferred maintenance completed.",
-      terminalSummary: result?.changed
-        ? `Rewrote ${result.rewrittenEntries} transcript entr${result.rewrittenEntries === 1 ? "y" : "ies"} and freed ${result.bytesFreed} bytes.`
-        : "No transcript changes were needed.",
-    });
+        const endedAt = Date.now();
+        completeTaskRunByRunId({
+          runId: params.runId,
+          runtime: "acp",
+          sessionKey: params.sessionKey,
+          endedAt,
+          lastEventAt: endedAt,
+          progressSummary: result?.changed
+            ? "Deferred maintenance completed with transcript changes."
+            : "Deferred maintenance completed.",
+          terminalSummary: result?.changed
+            ? `Rewrote ${result.rewrittenEntries} transcript entr${result.rewrittenEntries === 1 ? "y" : "ies"} and freed ${result.bytesFreed} bytes.`
+            : "No transcript changes were needed.",
+        });
+      }, // end enqueueCommandInLane callback
+    );
   } catch (err) {
     if (shutdownAbort.abortSignal?.aborted) {
       if (longRunningTimer) {
