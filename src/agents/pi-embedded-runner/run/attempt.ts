@@ -339,6 +339,7 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
+  EmbeddedAttemptSessionTakeoverError,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
   installSessionExternalHookWriteLock,
@@ -1058,6 +1059,28 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
+}
+
+function shouldPreservePromptErrorAfterCleanupError(params: {
+  promptError: unknown;
+  cleanupError: unknown;
+}): boolean {
+  return (
+    Boolean(params.promptError) &&
+    params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
+  );
+}
+
+class EmbeddedAttemptPromptErrorWithCleanupTakeoverError extends Error {
+  readonly promptError: unknown;
+  readonly cleanupError: EmbeddedAttemptSessionTakeoverError;
+
+  constructor(params: { promptError: unknown; cleanupError: EmbeddedAttemptSessionTakeoverError }) {
+    super(formatErrorMessage(params.promptError), { cause: params.cleanupError });
+    this.name = "EmbeddedAttemptSessionTakeoverError";
+    this.promptError = params.promptError;
+    this.cleanupError = params.cleanupError;
+  }
 }
 
 function hasVisiblePendingToolMediaReply(
@@ -5173,8 +5196,17 @@ export async function runEmbeddedAttempt(
       } catch (err) {
         cleanupError = err;
       }
+      const synthesizedCleanupTakeoverError =
+        !cleanupError && promptError && sessionLockController.hasSessionTakeover()
+          ? new EmbeddedAttemptSessionTakeoverError(params.sessionFile)
+          : undefined;
+      const cleanupFailure = cleanupError ?? synthesizedCleanupTakeoverError;
+      const shouldPreservePromptError = shouldPreservePromptErrorAfterCleanupError({
+        promptError,
+        cleanupError: cleanupFailure,
+      });
       emitDiagnosticRunCompleted?.(
-        cleanupError
+        cleanupFailure
           ? "error"
           : beforeAgentRunBlocked
             ? "blocked"
@@ -5183,13 +5215,27 @@ export async function runEmbeddedAttempt(
               : aborted || timedOut || idleTimedOut || timedOutDuringCompaction
                 ? "aborted"
                 : "completed",
-        cleanupError ?? promptError,
+        shouldPreservePromptError ? promptError : (cleanupFailure ?? promptError),
         beforeAgentRunBlocked
           ? { blockedBy: beforeAgentRunBlockedBy ?? "before_agent_run" }
           : undefined,
       );
-      if (cleanupError) {
-        await Promise.reject(cleanupError);
+      if (cleanupFailure) {
+        if (shouldPreservePromptError) {
+          log.warn(
+            `embedded attempt cleanup detected session takeover after prompt failure; preserving prompt error: ` +
+              `runId=${params.runId} sessionId=${params.sessionId} ` +
+              `promptError=${formatErrorMessage(promptError)} cleanupError=${formatErrorMessage(cleanupFailure)}`,
+          );
+          await Promise.reject(
+            new EmbeddedAttemptPromptErrorWithCleanupTakeoverError({
+              promptError,
+              cleanupError: cleanupFailure as EmbeddedAttemptSessionTakeoverError,
+            }),
+          );
+        } else {
+          await Promise.reject(cleanupFailure);
+        }
       }
     }
   } finally {
