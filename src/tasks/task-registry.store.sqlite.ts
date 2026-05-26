@@ -484,13 +484,14 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
       throw error;
     }
     const quarantinePath = quarantineCorruptedDatabase(pathname);
-    if (quarantinePath) {
-      log.warn("Corrupted task registry database quarantined, creating fresh database", {
-        originalPath: pathname,
-        quarantinePath,
-        error: String(error),
-      });
+    if (!quarantinePath) {
+      throw error;
     }
+    log.warn("Corrupted task registry database quarantined, creating fresh database", {
+      originalPath: pathname,
+      quarantinePath,
+      error: String(error),
+    });
     ensureTaskRegistryPermissions(pathname);
     db = new DatabaseSync(pathname);
     db.exec(`PRAGMA synchronous = NORMAL;`);
