@@ -357,7 +357,8 @@ async function persistAgentRequestImages(params: {
   const saved: SavedMediaEntry[] = [];
   for (const img of params.images) {
     try {
-      saved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
+      const media = await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound");
+      saved.push({ ...media, contentType: media.contentType ?? img.mimeType });
     } catch (err) {
       params.logGateway.warn(
         `agent.request: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
