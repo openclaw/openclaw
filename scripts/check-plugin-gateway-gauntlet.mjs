@@ -737,6 +737,7 @@ async function main() {
     const commandEnv = buildGauntletPrebuildEnv(env, {
       includePrivateQa: !options.skipQa,
       buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      skipDeclarationBuild: true,
     });
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
