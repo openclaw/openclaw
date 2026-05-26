@@ -1565,7 +1565,7 @@
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
     "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
-    "prepare": "node scripts/prepare-git-hooks.mjs && node scripts/build-all.mjs ciArtifacts",
+    "prepare": "node scripts/prepare-git-hooks.mjs && OPENCLAW_BUILD_ALL_NO_PNPM=1 node scripts/build-all.mjs cliStartup",
     "prepush:ci": "bash scripts/prepush-ci.sh",
     "probe:anthropic:prompt": "node --import tsx scripts/anthropic-prompt-probe.ts",
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
