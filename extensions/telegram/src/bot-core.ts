@@ -239,18 +239,9 @@ export function createTelegramBotCore(
 
   bot.use(async (ctx, next) => {
     const callback = ctx.update?.callback_query;
-    const message = callback?.message;
     const ackText = resolveFinalButtonAckText(callback?.data);
-    if (callback?.id && message && ackText) {
-      (ctx as { openclawFinalButtonAckSent?: boolean }).openclawFinalButtonAckSent = true;
-      const replyOptions =
-        message.message_thread_id != null
-          ? { message_thread_id: message.message_thread_id }
-          : undefined;
-      await Promise.allSettled([
-        bot.api.answerCallbackQuery(callback.id, { text: ackText }),
-        bot.api.sendMessage(message.chat.id, ackText, replyOptions),
-      ]);
+    if (callback?.id && ackText) {
+      await Promise.allSettled([bot.api.answerCallbackQuery(callback.id, { text: ackText })]);
     }
     await next();
   });
