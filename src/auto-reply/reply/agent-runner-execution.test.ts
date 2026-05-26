@@ -4977,7 +4977,7 @@ describe("runAgentTurnWithFallback", () => {
       await params.run("custom", "uncataloged-32k");
       throw new Error("expected fallback candidate to throw");
     });
-    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("Auto-compaction failed: nothing to compact"),
     );
 
