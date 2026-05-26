@@ -295,3 +295,4 @@ private fun BottomTabBar(
     }
   }
 }
+
