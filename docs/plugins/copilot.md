@@ -25,7 +25,11 @@ For the broader model/provider/runtime split, start with
 ## Requirements
 
 - OpenClaw with the bundled `copilot` extension available.
-- If your config uses `plugins.allow`, include `@openclaw/copilot`.
+- If your config uses `plugins.allow`, include `copilot` (the manifest
+  id in `extensions/copilot/openclaw.plugin.json`). A restrictive
+  allowlist that uses the npm-style `@openclaw/copilot` package name
+  will leave the bundled plugin blocked and the runtime will not load
+  even with `agentRuntime.id: "copilot"`.
 - A GitHub Copilot subscription that can drive the Copilot CLI (or a
   `gitHubToken` env / auth-profile entry for headless / cron runs).
 - A writable `copilotHome` directory. The harness defaults to
@@ -135,8 +139,24 @@ Per-agent precedence, applied during `runCopilotAttempt`:
    invoking the harness, and the harness consumes both fields directly.
    This makes a `github-copilot:<profile>` auth profile work end-to-end
    for headless / cron / multi-profile setups without env vars.
-4. **`GITHUB_TOKEN` / `OPENCLAW_GITHUB_TOKEN`** env fallback for direct
-   CLI / dogfood runs where no auth profile is configured.
+4. **Env-var fallback** for direct CLI / dogfood runs where no auth
+   profile is configured. The runtime checks the following vars in
+   precedence order, mirroring the shipped `github-copilot` provider
+   (`extensions/github-copilot/auth.ts`) and the documented Copilot SDK
+   setup:
+   1. `OPENCLAW_GITHUB_TOKEN` -- harness-specific override; set this
+      to pin a token for the OpenClaw harness without disturbing
+      system-wide `gh` / Copilot CLI config.
+   2. `COPILOT_GITHUB_TOKEN` -- standard Copilot SDK / CLI env var.
+   3. `GH_TOKEN` -- standard `gh` CLI env var (matches the existing
+      `github-copilot` provider precedence).
+   4. `GITHUB_TOKEN` -- generic GitHub token fallback.
+
+   The first non-empty value wins; empty strings are treated as
+   absent. The synthesised pool profile id is `env:<NAME>` and the
+   profileVersion is a non-reversible sha256 fingerprint of the
+   token, so rotating the env value cleanly busts the client pool.
+
 5. **Default `useLoggedInUser`** when no token signal is available.
 
 Each agent gets a dedicated `copilotHome` so Copilot CLI tokens, sessions, and
