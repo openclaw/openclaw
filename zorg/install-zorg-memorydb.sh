@@ -31,24 +31,44 @@ PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd -P)"
 log() { printf '%s\n' "zorg-memorydb: $*"; }
 warn() { printf '%s\n' "zorg-memorydb warning: $*" >&2; }
 is_root() { [[ "$(id -u)" -eq 0 ]]; }
-sudo_if_needed() { if is_root; then "$@"; else sudo "$@"; fi; }
+has_passwordless_sudo() { command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; }
+sudo_if_needed() {
+  if is_root; then
+    "$@"
+  elif has_passwordless_sudo; then
+    sudo -n "$@"
+  else
+    return 127
+  fi
+}
 
 install_packages() {
   local packages=("$@")
   [[ "${#packages[@]}" -gt 0 ]] || return 0
+  if ! is_root && ! has_passwordless_sudo && ! command -v brew >/dev/null 2>&1; then
+    warn "Missing prerequisites require root or passwordless sudo: ${packages[*]}"
+    warn "Continuing with packaged Zorg files only. Install those packages as root, then rerun: $0"
+    return 0
+  fi
   if command -v apt-get >/dev/null 2>&1; then
-    sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-    sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${packages[@]}"
+    sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get update -qq || {
+      warn "apt-get update failed; continuing with packaged Zorg files only."
+      return 0
+    }
+    sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${packages[@]}" || {
+      warn "apt-get install failed; continuing with packaged Zorg files only."
+      return 0
+    }
   elif command -v dnf >/dev/null 2>&1; then
-    sudo_if_needed dnf install -y -q "${packages[@]}"
+    sudo_if_needed dnf install -y -q "${packages[@]}" || warn "dnf install failed; continuing with packaged Zorg files only."
   elif command -v yum >/dev/null 2>&1; then
-    sudo_if_needed yum install -y -q "${packages[@]}"
+    sudo_if_needed yum install -y -q "${packages[@]}" || warn "yum install failed; continuing with packaged Zorg files only."
   elif command -v pacman >/dev/null 2>&1; then
-    sudo_if_needed pacman -Sy --noconfirm "${packages[@]}"
+    sudo_if_needed pacman -Sy --noconfirm "${packages[@]}" || warn "pacman install failed; continuing with packaged Zorg files only."
   elif command -v apk >/dev/null 2>&1; then
-    sudo_if_needed apk add --no-cache "${packages[@]}"
+    sudo_if_needed apk add --no-cache "${packages[@]}" || warn "apk add failed; continuing with packaged Zorg files only."
   elif command -v brew >/dev/null 2>&1; then
-    brew install "${packages[@]}"
+    brew install "${packages[@]}" || warn "brew install failed; continuing with packaged Zorg files only."
   else
     warn "No supported package manager found; install missing prerequisites manually."
   fi
