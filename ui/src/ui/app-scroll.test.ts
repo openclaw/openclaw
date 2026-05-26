@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
+import {
+  handleChatScroll,
+  handleChatWheelIntent,
+  scheduleChatScroll,
+  resetChatScroll,
+} from "./app-scroll.ts";
 import type { ChatAutoScrollMode } from "./storage.ts";
 
 /* ------------------------------------------------------------------ */
@@ -51,6 +56,8 @@ function createScrollHost(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatHeaderControlsHidden: false,
+    chatFollowLocked: false,
+    chatSmoothAutoScrolling: false,
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
@@ -67,6 +74,19 @@ function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight
   return {
     currentTarget: { scrollHeight, scrollTop, clientHeight },
   } as unknown as Event;
+}
+
+function createWheelEvent(
+  deltaY: number,
+  scrollHeight: number,
+  clientHeight: number,
+  target: EventTarget | null = null,
+) {
+  return {
+    deltaY,
+    target,
+    currentTarget: { scrollHeight, clientHeight },
+  } as unknown as WheelEvent;
 }
 
 /* ------------------------------------------------------------------ */
@@ -113,6 +133,104 @@ describe("handleChatScroll", () => {
     const event = createScrollEvent(2000, 1100, 400);
     handleChatScroll(host, event);
     expect(host.chatUserNearBottom).toBe(false);
+  });
+
+  it("releases auto-follow immediately when the user scrolls upward away from bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1540, 400));
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+
+  it("does NOT re-enable follow just because a post-wheel scroll event is still near bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 2000,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatLastScrollTop = 2000;
+
+    handleChatWheelIntent(host, createWheelEvent(-120, 2000, 400));
+    handleChatScroll(host, createScrollEvent(2000, 1540, 400));
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
+  });
+
+  it("does NOT reassert follow for tiny upward scrolls inside the reacquire threshold", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1600,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = false;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1588, 400));
+
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("re-enables follow once the user actually returns to the bottom", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1576,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    host.chatLastScrollTop = 1540;
+    host.chatNewMessagesBelow = true;
+
+    handleChatScroll(host, createScrollEvent(2000, 1576, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("does not treat smooth auto-scroll progress as upward manual scroll intent", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1200,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1200;
+
+    handleChatScroll(host, createScrollEvent(2000, 1300, 400));
+
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatFollowLocked).toBe(false);
+  });
+
+  it("releases follow when the user scrolls upward during smooth auto-scroll", () => {
+    const { host } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1200,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = true;
+    host.chatSmoothAutoScrolling = true;
+    host.chatLastScrollTop = 1600;
+
+    handleChatScroll(host, createScrollEvent(2000, 1100, 400));
+
+    expect(host.chatSmoothAutoScrolling).toBe(false);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatFollowLocked).toBe(true);
   });
 
   it("hides chat header controls when scrolling down through transcript history", () => {
@@ -283,6 +401,23 @@ describe("scheduleChatScroll", () => {
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
+  it("does NOT snap back when the user manually scrolls up but is still within the old near-bottom threshold", async () => {
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 1540,
+      clientHeight: 400,
+    });
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+    const originalScrollTop = container.scrollTop;
+
+    scheduleChatScroll(host);
+    await host.updateComplete;
+
+    expect(container.scrollTop).toBe(originalScrollTop);
+    expect(host.chatNewMessagesBelow).toBe(true);
+  });
+
   it("scrolls from the manual scroll-to-bottom action when chat auto-scroll is off", async () => {
     const { host, container } = createScrollHost({
       scrollHeight: 2000,
@@ -380,6 +515,8 @@ describe("resetChatScroll", () => {
     host.chatUserNearBottom = false;
     host.chatLastScrollTop = 300;
     host.chatHeaderControlsHidden = true;
+    host.chatFollowLocked = true;
+    host.chatSmoothAutoScrolling = true;
 
     resetChatScroll(host);
 
@@ -387,6 +524,8 @@ describe("resetChatScroll", () => {
     expect(host.chatUserNearBottom).toBe(true);
     expect(host.chatLastScrollTop).toBe(0);
     expect(host.chatHeaderControlsHidden).toBe(false);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatSmoothAutoScrolling).toBe(false);
     expect(host.chatIsProgrammaticScroll).toBe(false);
     expect(host.chatProgrammaticScrollTarget).toBe(0);
   });
@@ -431,6 +570,7 @@ describe("programmatic scroll guard", () => {
     host.chatIsProgrammaticScroll = true;
     // We had targeted the bottom of a 3000px page.
     host.chatProgrammaticScrollTarget = 3000;
+    host.chatLastScrollTop = 2600;
 
     // User scrolled up to 500 during the guard window — far below the target (2600).
     const event = createScrollEvent(3000, 500, 400); // distanceFromBottom = 2100 > 450
