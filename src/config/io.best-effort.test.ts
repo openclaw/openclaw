@@ -74,6 +74,92 @@ describe("readBestEffortConfig", () => {
       ).toBe("short");
     });
   });
+
+  it("keeps plugin-owned web search config on startup snapshots without recreating legacy scoped fields", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: false,
+              config: {
+                webSearch: {
+                  apiKey: "test-gemini-key",
+                  model: "gemini-2.5-flash",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snapshot = await readConfigFileSnapshot();
+      const sourceSearch = snapshot.sourceConfig.tools?.web?.search;
+      const runtimeSearch = snapshot.runtimeConfig.tools?.web?.search;
+
+      expect(snapshot.valid).toBe(true);
+      expect(sourceSearch).toEqual({
+        enabled: true,
+        provider: "gemini",
+      });
+      expect(runtimeSearch).toEqual({
+        enabled: true,
+        provider: "gemini",
+      });
+      expect(snapshot.runtimeConfig.plugins?.entries?.google?.config?.webSearch).toEqual({
+        apiKey: "test-gemini-key",
+        model: "gemini-2.5-flash",
+      });
+      expect(snapshot.warnings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "plugins.entries.google",
+            message: "plugin disabled (disabled in config) but config is present",
+          }),
+        ]),
+      );
+      expect("gemini" in (sourceSearch ?? {})).toBe(false);
+      expect("gemini" in (runtimeSearch ?? {})).toBe(false);
+    });
+  });
+
+  it("does not materialize tools.web.search when only plugin-owned web search config exists", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        plugins: {
+          entries: {
+            google: {
+              enabled: false,
+              config: {
+                webSearch: {
+                  apiKey: "test-gemini-key",
+                  model: "gemini-2.5-flash",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.valid).toBe(true);
+      expect(snapshot.sourceConfig.tools?.web?.search).toBeUndefined();
+      expect(snapshot.runtimeConfig.tools?.web?.search).toBeUndefined();
+      expect(snapshot.runtimeConfig.plugins?.entries?.google?.config?.webSearch).toEqual({
+        apiKey: "test-gemini-key",
+        model: "gemini-2.5-flash",
+      });
+    });
+  });
 });
 
 describe("readSourceConfigBestEffort", () => {
