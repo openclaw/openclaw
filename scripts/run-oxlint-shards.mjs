@@ -153,7 +153,12 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
     if ((prepareResult.status ?? 1) !== 0) {
       process.exitCode = prepareResult.status ?? 1;
     } else {
-      const runSerial = env.OPENCLAW_OXLINT_SHARDS_SERIAL === "1" || process.platform === "win32";
+      const runSerial =
+        env.OPENCLAW_OXLINT_SHARDS_PARALLEL === "1"
+          ? false
+          : env.OPENCLAW_OXLINT_SHARDS_SERIAL === "1" ||
+            env.OPENCLAW_LOCAL_CHECK === "1" ||
+            process.platform === "win32";
       const results = runSerial
         ? await runShardsSerial({ entries: shards, env, extraArgs, runner })
         : await Promise.all(shards.map((shard) => runShard({ env, extraArgs, runner, shard })));

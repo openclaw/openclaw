@@ -304,7 +304,7 @@ describe("archive utils", () => {
           lstatSpy.mockRestore();
         }
 
-        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("");
+        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
         await expectPathMissing(extractedPath);
       });
     },

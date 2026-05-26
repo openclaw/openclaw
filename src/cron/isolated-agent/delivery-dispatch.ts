@@ -50,7 +50,20 @@ import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
-  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+  if (!toTrimmed) {
+    return "";
+  }
+  const normalized = normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+  const channelId = channel.trim().toLowerCase();
+  if (!channelId) {
+    return normalized;
+  }
+  const prefix = `${channelId}:`;
+  const normalizedTrimmed = normalized.trim();
+  if (normalizedTrimmed.toLowerCase().startsWith(prefix)) {
+    return normalizedTrimmed.slice(prefix.length).trim();
+  }
+  return normalizedTrimmed;
 }
 
 type NormalizedSilentReplyText = {

@@ -272,12 +272,28 @@ export function acquireLocalHeavyCheckLockSync(params) {
 }
 
 function resolveHeavyCheckLocksDir(cwd, env) {
+  const explicitLocksDir = env.OPENCLAW_HEAVY_CHECK_LOCK_DIR?.trim();
+  if (explicitLocksDir) {
+    return path.resolve(cwd, explicitLocksDir);
+  }
+
   const lockScope = env.OPENCLAW_HEAVY_CHECK_LOCK_SCOPE?.trim().toLowerCase();
   if (lockScope === "worktree") {
     return path.join(resolveGitWorktreeRoot(cwd), ".artifacts", "openclaw-local-checks");
   }
+  if (lockScope === "common" || lockScope === "git-common") {
+    return path.join(resolveGitCommonDir(cwd), "openclaw-local-checks");
+  }
 
-  return path.join(resolveGitCommonDir(cwd), "openclaw-local-checks");
+  return path.join(os.tmpdir(), `openclaw-local-checks-${resolveCurrentUserId()}`);
+}
+
+function resolveCurrentUserId() {
+  if (typeof process.getuid === "function") {
+    return String(process.getuid());
+  }
+
+  return os.userInfo().username;
 }
 
 function resolveGitWorktreeRoot(cwd) {
