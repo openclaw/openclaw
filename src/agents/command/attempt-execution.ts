@@ -119,6 +119,8 @@ type PersistTextTurnTranscriptParams = {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  userAlreadyPersisted?: boolean;
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   assistant: {
     api: string;
     provider: string;
@@ -287,6 +289,14 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
   });
 }
 
+function isPersistedUserTurnMessage(message: unknown): message is PersistedUserTurnMessage {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    (message as { role?: unknown }).role === "user"
+  );
+}
+
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
 ): Promise<PersistTextTurnTranscriptResult> {
@@ -298,14 +308,16 @@ async function persistTextTurnTranscript(
 
   const messages = [];
   const userMessage =
-    params.userMessage ??
-    (promptText
-      ? ({
-          role: "user",
-          content: promptText,
-          timestamp: Date.now(),
-        } as PersistedUserTurnMessage)
-      : undefined);
+    params.userAlreadyPersisted === true
+      ? undefined
+      : (params.userMessage ??
+        (promptText
+          ? ({
+              role: "user",
+              content: promptText,
+              timestamp: Date.now(),
+            } as PersistedUserTurnMessage)
+          : undefined));
   if (userMessage) {
     messages.push({
       message: userMessage,
@@ -366,7 +378,39 @@ async function persistTextTurnTranscript(
   if (turn.rejectedReason === "session-rebound") {
     return { kind: "session-rebound", sessionEntry: undefined };
   }
+  const appendedUserMessage = turn.messages.find(
+    (message) => message.appended && isPersistedUserTurnMessage(message.message),
+  )?.message;
+  if (appendedUserMessage && isPersistedUserTurnMessage(appendedUserMessage)) {
+    params.onUserMessagePersisted?.(appendedUserMessage);
+  }
   return { kind: "persisted", sessionEntry: turn.sessionEntry };
+}
+
+export async function persistUserTurnTranscript(params: {
+  body: string;
+  transcriptBody?: string;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionAgentId: string;
+  threadId?: string | number;
+  sessionCwd: string;
+  config: OpenClawConfig;
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+}): Promise<PersistTextTurnTranscriptResult> {
+  return await persistTextTurnTranscript({
+    ...params,
+    finalText: "",
+    onUserMessagePersisted: params.onUserMessagePersisted,
+    assistant: {
+      api: "openclaw",
+      provider: "openclaw",
+      model: "user-turn",
+    },
+  });
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -399,6 +443,7 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
+  userAlreadyPersisted?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
@@ -425,6 +470,7 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  userAlreadyPersisted?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -446,6 +492,7 @@ export async function persistCliTurnTranscript(params: {
     sessionCwd: params.sessionCwd,
     config: params.config,
     embeddedAssistantGapFill: gapFill,
+    userAlreadyPersisted: params.userAlreadyPersisted,
     assistant: {
       api: "cli",
       provider,
@@ -468,6 +515,7 @@ export function runAgentAttempt(params: {
   workspaceDir: string;
   cwd?: string;
   body: string;
+  transcriptBody?: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: boolean;
@@ -717,7 +765,34 @@ export function runAgentAttempt(params: {
             }
           : {}),
       });
+    const persistCurrentCliUserTurn = async () => {
+      if (params.suppressPromptPersistenceOnRetry === true) {
+        return;
+      }
+      try {
+        const result = await persistUserTurnTranscript({
+          body: params.body,
+          transcriptBody: params.transcriptBody,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey ?? params.sessionId,
+          sessionEntry: params.sessionEntry,
+          sessionStore: params.sessionStore,
+          storePath: params.storePath,
+          sessionAgentId: params.sessionAgentId,
+          threadId: params.opts.threadId,
+          sessionCwd: params.workspaceDir,
+          config: params.cfg,
+          onUserMessagePersisted: params.onUserMessagePersisted,
+        });
+        params.sessionEntry = result.sessionEntry ?? params.sessionEntry;
+      } catch (error) {
+        log.warn(
+          `CLI user turn transcript persistence failed for ${params.sessionKey ?? params.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
+      await persistCurrentCliUserTurn();
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {

@@ -12,6 +12,7 @@ import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import {
   persistCliTurnTranscript,
+  persistUserTurnTranscript,
   runAgentAttempt as runAgentAttemptImpl,
 } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
@@ -1246,6 +1247,106 @@ describe("CLI attempt execution", () => {
       SessionEntry
     >;
     expect(persisted[sessionKey]).toBeUndefined();
+  });
+
+  it("persists the current CLI user turn before the runner can fail", async () => {
+    const sessionKey = "agent:main:subagent:cli-user-before-failure";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-user-before-failure",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    const onUserMessagePersisted = vi.fn();
+    runCliAgentMock.mockRejectedValueOnce(new Error("cli crashed before reply"));
+
+    await expect(
+      runAgentAttempt({
+        providerOverride: "claude-cli",
+        originalProvider: "claude-cli",
+        modelOverride: "opus",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "runtime wrapper\nvisible ask",
+        transcriptBody: "visible ask",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-cli-user-before-failure",
+        opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "claude-cli",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+        onUserMessagePersisted,
+      }),
+    ).rejects.toThrow("cli crashed before reply");
+
+    expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
+    const messages = await readSessionMessages(sessionStore[sessionKey]?.sessionFile ?? "");
+    expect(messages).toHaveLength(1);
+    expectRecordFields(requireRecord(messages[0], "persisted user message"), {
+      role: "user",
+      content: "visible ask",
+    });
+  });
+
+  it("does not duplicate a user turn when the CLI user message was already persisted", async () => {
+    const sessionKey = "agent:main:subagent:cli-user-already-persisted";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-user-already-persisted",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const userTurnResult = await persistUserTurnTranscript({
+      body: "first prompt",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+    expect(userTurnResult.kind).toBe("persisted");
+
+    await persistCliTurnTranscript({
+      body: "first prompt",
+      result: makeCliResult("hello from cli"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: userTurnResult.sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      userAlreadyPersisted: true,
+    });
+
+    const messages = await readSessionMessages(userTurnResult.sessionEntry?.sessionFile ?? "");
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expectRecordFields(requireRecord(messages[0], "user message"), {
+      content: "first prompt",
+    });
+    expectRecordFields(requireRecord(messages[1], "assistant message"), {
+      content: [{ type: "text", text: "hello from cli" }],
+    });
   });
 
   it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {
