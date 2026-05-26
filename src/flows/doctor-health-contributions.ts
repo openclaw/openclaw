@@ -132,7 +132,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyFlatAuthProfileStores } =
+  const { maybeRepairLegacyFlatAuthProfileStores, maybeRepairCanonicalApiKeyFieldAlias } =
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
@@ -143,6 +143,10 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../terminal/note.js");
   await maybeRepairLegacyFlatAuthProfileStores({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
+  await maybeRepairCanonicalApiKeyFieldAlias({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });

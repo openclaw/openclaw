@@ -399,3 +399,111 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   }
   return result;
 }
+
+
+type CanonicalApiKeyAliasRepair = {
+  authPath: string;
+  raw: Record<string, unknown>;
+  profileIds: string[];
+};
+
+function resolveCanonicalApiKeyAliasRepair(
+  candidate: AuthProfileRepairCandidate,
+): CanonicalApiKeyAliasRepair | null {
+  if (!fs.existsSync(candidate.authPath)) {
+    return null;
+  }
+  const raw = loadJsonFile(candidate.authPath);
+  if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    return null;
+  }
+  const profileIds: string[] = [];
+  for (const [profileId, value] of Object.entries(raw.profiles)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const type = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
+    const hasApiKeyField = readNonEmptyString(value["api_key"]) !== undefined;
+    const hasCanonicalKey = readNonEmptyString(value.key) !== undefined;
+    if (type === "api_key" && hasApiKeyField && !hasCanonicalKey) {
+      profileIds.push(profileId);
+    }
+  }
+  return profileIds.length > 0
+    ? { authPath: candidate.authPath, raw, profileIds }
+    : null;
+}
+
+function backupCanonicalApiKeyAlias(authPath: string, now: () => number): string {
+  const backupPath = `${authPath}.api-key-alias.${now()}.bak`;
+  fs.copyFileSync(authPath, backupPath);
+  return backupPath;
+}
+
+export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
+  cfg: OpenClawConfig;
+  prompter: DoctorPrompter;
+  now?: () => number;
+}): Promise<LegacyFlatAuthProfileRepairResult> {
+  const now = params.now ?? Date.now;
+  const repairs = listAuthProfileRepairCandidates(params.cfg)
+    .map(resolveCanonicalApiKeyAliasRepair)
+    .filter((entry): entry is CanonicalApiKeyAliasRepair => entry !== null);
+
+  const result: LegacyFlatAuthProfileRepairResult = {
+    detected: repairs.map((entry) => entry.authPath),
+    changes: [],
+    warnings: [],
+  };
+  if (repairs.length === 0) {
+    return result;
+  }
+
+  const noteLines = repairs.map(
+    (entry) =>
+      `- ${shortenHomePath(entry.authPath)} has ${entry.profileIds.length} profile(s) using the non-canonical "api_key" field; the canonical field is "key".`,
+  );
+  noteLines.push(
+    `- Runtime auth parsing only reads the canonical "key" field, so these profiles are silently skipped; ${formatCliCommand("openclaw doctor --fix")} rewrites "api_key" to "key" with a backup.`,
+  );
+  note(noteLines.join("\n"), "Auth profiles");
+
+  const shouldRepair = await params.prompter.confirmAutoFix({
+    message: 'Rewrite non-canonical "api_key" fields to "key" now?',
+    initialValue: true,
+  });
+  if (!shouldRepair) {
+    return result;
+  }
+
+  for (const entry of repairs) {
+    try {
+      const backupPath = backupCanonicalApiKeyAlias(entry.authPath, now);
+      const profiles = entry.raw.profiles as Record<string, Record<string, unknown>>;
+      for (const profileId of entry.profileIds) {
+        const profile = profiles[profileId];
+        if (!isRecord(profile)) {
+          continue;
+        }
+        profile.key = profile["api_key"];
+        delete profile["api_key"];
+      }
+      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
+      result.changes.push(
+        `Rewrote ${entry.profileIds.length} "api_key" field(s) to "key" in ${shortenHomePath(entry.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
+      );
+    } catch (err) {
+      result.warnings.push(
+        `Failed to rewrite "api_key" fields in ${shortenHomePath(entry.authPath)}: ${String(err)}`,
+      );
+    }
+  }
+  clearRuntimeAuthProfileStoreSnapshots();
+  if (result.changes.length > 0) {
+    note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
+  }
+  return result;
+}
