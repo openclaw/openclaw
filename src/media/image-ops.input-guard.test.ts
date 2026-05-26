@@ -12,6 +12,7 @@ import {
   ImageProcessorUnavailableError,
   isImageProcessorUnavailableError,
   MAX_IMAGE_INPUT_PIXELS,
+  normalizeExifOrientation,
   resizeToJpeg,
   resizeToPng,
 } from "./image-ops.js";
@@ -89,6 +90,16 @@ describe("image input pixel guard", () => {
         quality: 80,
       }),
     ).rejects.toThrow(/pixel input limit/i);
+  });
+
+  it("rejects oversized images before EXIF normalization returns unchanged bytes", async () => {
+    await expect(normalizeExifOrientation(oversizedPng)).rejects.toThrow(/pixel input limit/i);
+  });
+
+  it("rejects unreadable images before EXIF normalization returns unchanged bytes", async () => {
+    await expect(normalizeExifOrientation(Buffer.from("not-an-image"))).rejects.toThrow(
+      /unable to determine image dimensions/i,
+    );
   });
 
   it("rejects overflowed pixel counts before resize work starts", async () => {
@@ -174,6 +185,16 @@ describe("image input pixel guard", () => {
 
     await expect(hasAlphaChannel(alphaPng)).resolves.toBe(true);
     await expect(hasAlphaChannel(opaquePng)).resolves.toBe(false);
+  });
+
+  it("returns opaque when header-unknown alpha cannot be decoded", async () => {
+    await expect(hasAlphaChannel(createHeifLikeBuffer({ width: 1, height: 1 }))).resolves.toBe(
+      false,
+    );
+  });
+
+  it("rejects oversized alpha checks before returning a safe default", async () => {
+    await expect(hasAlphaChannel(oversizedPng)).rejects.toThrow(/pixel input limit/i);
   });
 
   it("resizes grayscale alpha PNGs through the Photon backend", async () => {

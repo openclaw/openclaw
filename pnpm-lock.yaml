@@ -88,9 +88,6 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
-      '@silvia-odwyer/photon-node':
-        specifier: 0.3.4
-        version: 0.3.4
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -157,6 +154,9 @@ importers:
       quickjs-wasi:
         specifier: 2.2.0
         version: 2.2.0
+      rastermill:
+        specifier: 0.2.0
+        version: 0.2.0
       tar:
         specifier: 7.5.15
         version: 7.5.15
@@ -6333,6 +6333,10 @@ packages:
     resolution: {integrity: sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==}
     engines: {node: '>= 0.6'}
 
+  rastermill@0.2.0:
+    resolution: {integrity: sha512-Uc3oKCF4v+sh8OznkG5P6wzQQUstZI/dEGubjNXfWqmCn6iMEAVz8V8S3SVJf+lfQsGpL9iIjBOECmt2ernOAA==}
+    engines: {node: '>=20'}
+
   raw-body@3.0.2:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
     engines: {node: '>= 0.10'}
@@ -12321,6 +12325,10 @@ snapshots:
   quickjs-wasi@2.2.0: {}
 
   range-parser@1.2.1: {}
+
+  rastermill@0.2.0:
+    dependencies:
+      '@silvia-odwyer/photon-node': 0.3.4
 
   raw-body@3.0.2:
     dependencies:
