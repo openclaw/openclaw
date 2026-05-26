@@ -2751,6 +2751,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           },
         );
       };
+      const persistGatewayUserTurnTranscriptBestEffort = async () => {
+        await persistGatewayUserTurnTranscript().catch(() => undefined);
+      };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
@@ -2950,7 +2953,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 !userTurnRecorder.hasPersisted() &&
                 !userTurnRecorder.isBlocked()
               ) {
-                await persistGatewayUserTurnTranscript();
+                await persistGatewayUserTurnTranscriptBestEffort();
               }
               if (
                 agentRunStarted &&
@@ -2959,7 +2962,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 !userTurnRecorder.isBlocked() &&
                 userTurnRecorder.hasRuntimePersistencePending()
               ) {
-                await persistGatewayUserTurnTranscript();
+                await persistGatewayUserTurnTranscriptBestEffort();
               }
               let broadcastedSourceReplyFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
@@ -2996,7 +2999,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     sessionKey,
                   });
                 } else {
-                  await persistGatewayUserTurnTranscript();
+                  await persistGatewayUserTurnTranscriptBestEffort();
                   const rawFinalPayloads = appendedWebchatAgentMedia
                     ? []
                     : deliveredReplies
