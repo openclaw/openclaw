@@ -93,7 +93,7 @@ describe("legacy config migrate validation", () => {
     profileConfiguredToolAllowResult = migrateLegacyConfig({
       tools: {
         profile: "messaging",
-        allow: ["message"],
+        allow: ["message", "exec", "process"],
         exec: { security: "allowlist" },
       },
     });
@@ -185,9 +185,8 @@ describe("legacy config migrate validation", () => {
     expect(res.config?.tools?.profile).toBe("full");
     expect(res.config?.tools?.alsoAllow).toBeUndefined();
     expect(res.changes).toStrictEqual([
-      'Replaced tools.allow entries with profile "messaging" grants plus configured tool sections.',
-      'Set tools.profile to "full" so tools.allow controls configured tool sections directly.',
-      'Added tools.allow entries (exec, process) for configured tool sections under profile "messaging".',
+      'Replaced tools.allow entries with profile "messaging" grants plus explicit configured-section grants.',
+      'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
     ]);
   });
 });
