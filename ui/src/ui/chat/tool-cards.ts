@@ -20,7 +20,9 @@ function normalizeContent(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(Boolean) as Array<Record<string, unknown>>;
+  return content.filter(
+    (entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object",
+  );
 }
 
 function coerceArgs(value: unknown): unknown {
@@ -249,7 +251,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
-        name: (item.name as string) ?? "tool",
+        name: typeof item.name === "string" ? item.name : "tool",
         args,
         inputText: serializeToolInput(args),
       });
