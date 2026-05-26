@@ -40,7 +40,7 @@ export const zh_CN: TranslationMap = {
     linked: "已关联",
     mode: "模式",
     system: "系统",
-    light: "浅睡",
+    light: "浅色",
     dark: "深色",
     baseUrl: "基础 URL",
     lastStart: "上次启动",
