@@ -77,6 +77,14 @@ describe("redactSensitiveText", () => {
     expect(output).toBe('DISCORD_BOT_TOKEN="${DISC…890}"');
   });
 
+  it("does not bypass explicit user redaction patterns for shell references", () => {
+    const output = redactSensitiveText("FOO_TOKEN=$FOO_TOKEN", {
+      mode: "tools",
+      patterns: [String.raw`/FOO_TOKEN=(\$FOO_TOKEN)/g`],
+    });
+    expect(output).toBe("FOO_TOKEN=***");
+  });
+
   it("masks JSON-escaped quoted env assignments while keeping the key", () => {
     const xai = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
     const brave = "issue85049-brave-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
