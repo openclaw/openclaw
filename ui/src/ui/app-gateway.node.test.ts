@@ -183,6 +183,7 @@ function createHost(): TestGatewayHost {
     refreshSessionsAfterChat: new Set<string>(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
+    execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
     updateComplete: new Promise(() => undefined),
@@ -538,6 +539,34 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue[0]?.request.commandSpans).toEqual([
       { startIndex: 20, endIndex: 26 },
     ]);
+  });
+
+  it("clears stale approval modal errors without interrupting an in-flight local resolve", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-external-1",
+        request: {
+          command: "pnpm test",
+          host: "gateway",
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    host.execApprovalError = "Approval failed: approval already resolved";
+    host.execApprovalBusy = true;
+
+    client.emitEvent({
+      event: "exec.approval.resolved",
+      payload: { id: "approval-external-1", decision: "allow-once" },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(0);
+    expect(host.execApprovalError).toBeNull();
+    expect(host.execApprovalBusy).toBe(true);
   });
 
   it("clears pending session reload timers when the active client closes", () => {

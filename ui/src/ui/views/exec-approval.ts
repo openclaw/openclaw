@@ -125,13 +125,8 @@ export function renderExecApprovalPrompt(state: AppViewState) {
     : t("execApproval.execApprovalNeeded");
   const titleId = "exec-approval-title";
   const descriptionId = "exec-approval-description";
-  const handleCancel = () => {
-    if (!state.execApprovalBusy) {
-      void state.handleExecApprovalDecision("deny");
-    }
-  };
   return html`
-    <openclaw-modal-dialog label=${title} description=${remaining} @modal-cancel=${handleCancel}>
+    <openclaw-modal-dialog label=${title} description=${remaining}>
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>

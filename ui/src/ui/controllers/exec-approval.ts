@@ -34,6 +34,22 @@ export type ExecApprovalResolved = {
   ts?: number | null;
 };
 
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type ExecApprovalRpcClient = {
+  request(method: string, params?: unknown): Promise<unknown>;
+};
+
+export type ExecApprovalPromptState = {
+  client: ExecApprovalRpcClient | null;
+  execApprovalQueue: ExecApprovalRequest[];
+  execApprovalBusy: boolean;
+  execApprovalError: string | null;
+};
+
+const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
+const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -187,4 +203,160 @@ export function removeExecApproval(
   id: string,
 ): ExecApprovalRequest[] {
   return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
+}
+
+function readGatewayErrorCode(err: unknown): string | null {
+  if (!isRecord(err)) {
+    return null;
+  }
+  return normalizeOptionalString(err.gatewayCode) ?? null;
+}
+
+function readGatewayErrorReason(err: unknown): string | null {
+  if (!isRecord(err)) {
+    return null;
+  }
+  const { details } = err;
+  if (!isRecord(details)) {
+    return null;
+  }
+  return normalizeOptionalString(details.reason) ?? null;
+}
+
+export function isStaleApprovalResolutionError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode = readGatewayErrorCode(err);
+  const reason = readGatewayErrorReason(err);
+  if (reason === APPROVAL_ALREADY_RESOLVED || reason === APPROVAL_NOT_FOUND) {
+    return true;
+  }
+  if (gatewayCode === APPROVAL_NOT_FOUND) {
+    return true;
+  }
+  return /unknown or expired approval id/i.test(err.message);
+}
+
+function parseApprovalList(
+  payload: unknown,
+  parseEntry: (entry: unknown) => ExecApprovalRequest | null,
+): ExecApprovalRequest[] | null {
+  if (!Array.isArray(payload)) {
+    return null;
+  }
+  return payload.flatMap((entry) => {
+    const parsed = parseEntry(entry);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function sortApprovalsNewestFirst(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
+  return queue.toSorted((a, b) => b.createdAtMs - a.createdAtMs);
+}
+
+function currentApprovalsForKind(
+  queue: ExecApprovalRequest[],
+  kind: ExecApprovalRequest["kind"],
+): ExecApprovalRequest[] {
+  return pruneExecApprovalQueue(queue).filter((entry) => entry.kind === kind);
+}
+
+function mergeRefreshedApprovalQueue(
+  refreshed: ExecApprovalRequest[],
+  refreshStartedWith: ExecApprovalRequest[],
+  currentQueue: ExecApprovalRequest[],
+): ExecApprovalRequest[] {
+  const refreshedIds = new Set(refreshed.map((entry) => entry.id));
+  const refreshStartIds = new Set(refreshStartedWith.map((entry) => entry.id));
+  const arrivedDuringRefresh = pruneExecApprovalQueue(currentQueue).filter(
+    (entry) => !refreshStartIds.has(entry.id) && !refreshedIds.has(entry.id),
+  );
+  return sortApprovalsNewestFirst([...refreshed, ...arrivedDuringRefresh]);
+}
+
+function scheduleApprovalExpiryPrune(
+  state: ExecApprovalPromptState,
+  entry: ExecApprovalRequest,
+): void {
+  const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+  globalThis.setTimeout(() => {
+    state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, entry.id);
+  }, delay);
+}
+
+export async function refreshPendingApprovalQueue(state: ExecApprovalPromptState): Promise<void> {
+  const client = state.client;
+  if (!client) {
+    return;
+  }
+  const refreshStartedWith = pruneExecApprovalQueue(state.execApprovalQueue);
+  const [execResult, pluginResult] = await Promise.allSettled([
+    client.request("exec.approval.list", {}),
+    client.request("plugin.approval.list", {}),
+  ]);
+  const execApprovals =
+    execResult.status === "fulfilled"
+      ? (parseApprovalList(execResult.value, parseExecApprovalRequested) ?? [])
+      : currentApprovalsForKind(state.execApprovalQueue, "exec");
+  const pluginApprovals =
+    pluginResult.status === "fulfilled"
+      ? (parseApprovalList(pluginResult.value, parsePluginApprovalRequested) ?? [])
+      : currentApprovalsForKind(state.execApprovalQueue, "plugin");
+  const refreshed = mergeRefreshedApprovalQueue(
+    sortApprovalsNewestFirst([...execApprovals, ...pluginApprovals]),
+    refreshStartedWith,
+    state.execApprovalQueue,
+  );
+  state.execApprovalQueue = refreshed;
+  for (const entry of refreshed) {
+    scheduleApprovalExpiryPrune(state, entry);
+  }
+}
+
+export function dismissExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
+  state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
+  state.execApprovalError = null;
+}
+
+export function clearResolvedExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
+  const activeId = state.execApprovalQueue[0]?.id ?? null;
+  state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
+  if (activeId === id) {
+    state.execApprovalError = null;
+  }
+}
+
+export async function resolveActiveExecApprovalDecision(
+  state: ExecApprovalPromptState,
+  decision: ExecApprovalDecision,
+): Promise<void> {
+  const active = state.execApprovalQueue[0];
+  const client = state.client;
+  if (!active || !client || state.execApprovalBusy) {
+    return;
+  }
+
+  state.execApprovalBusy = true;
+  state.execApprovalError = null;
+  try {
+    const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+    await client.request(method, {
+      id: active.id,
+      decision,
+    });
+    dismissExecApprovalPrompt(state, active.id);
+  } catch (err) {
+    if (isStaleApprovalResolutionError(err)) {
+      dismissExecApprovalPrompt(state, active.id);
+      await refreshPendingApprovalQueue(state);
+      return;
+    }
+    if (!state.execApprovalQueue.some((entry) => entry.id === active.id)) {
+      return;
+    }
+    state.execApprovalError = `Approval failed: ${String(err)}`;
+  } finally {
+    state.execApprovalBusy = false;
+  }
 }

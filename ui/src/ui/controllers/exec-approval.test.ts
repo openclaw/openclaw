@@ -1,5 +1,53 @@
-import { describe, expect, it } from "vitest";
-import { parseExecApprovalRequested, parsePluginApprovalRequested } from "./exec-approval.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  addExecApproval,
+  isStaleApprovalResolutionError,
+  parseExecApprovalRequested,
+  parsePluginApprovalRequested,
+  clearResolvedExecApprovalPrompt,
+  refreshPendingApprovalQueue,
+  resolveActiveExecApprovalDecision,
+  type ExecApprovalPromptState,
+  type ExecApprovalRequest,
+} from "./exec-approval.ts";
+
+type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+function createExecApproval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest {
+  return {
+    id: "approval-1",
+    kind: "exec",
+    request: { command: "echo hello" },
+    createdAtMs: 1000,
+    expiresAtMs: Date.now() + 60_000,
+    ...overrides,
+  };
+}
+
+function createPromptState(
+  request: RequestFn,
+  queue: ExecApprovalRequest[] = [createExecApproval()],
+): ExecApprovalPromptState {
+  return {
+    client: { request },
+    execApprovalQueue: queue,
+    execApprovalBusy: false,
+    execApprovalError: null,
+  };
+}
+
+function createGatewayError(message: string, details?: unknown): Error {
+  const err = new Error(message);
+  Object.defineProperty(err, "gatewayCode", {
+    value: "INVALID_REQUEST",
+    enumerable: true,
+  });
+  Object.defineProperty(err, "details", {
+    value: details,
+    enumerable: true,
+  });
+  return err;
+}
 
 describe("parseExecApprovalRequested", () => {
   it("returns entries with kind 'exec'", () => {
@@ -140,5 +188,186 @@ describe("parseExecApprovalRequested command spans", () => {
       { startIndex: 5, endIndex: 9 },
       { startIndex: 10, endIndex: 15 },
     ]);
+  });
+});
+
+describe("isStaleApprovalResolutionError", () => {
+  it("detects already-resolved approval errors", () => {
+    expect(
+      isStaleApprovalResolutionError(
+        createGatewayError("approval already resolved", {
+          reason: "APPROVAL_ALREADY_RESOLVED",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects unknown or expired approval errors", () => {
+    expect(
+      isStaleApprovalResolutionError(createGatewayError("unknown or expired approval id")),
+    ).toBe(true);
+  });
+
+  it("detects missing approval errors", () => {
+    expect(
+      isStaleApprovalResolutionError(
+        createGatewayError("approval not found", {
+          reason: "APPROVAL_NOT_FOUND",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores unrelated approval resolve errors", () => {
+    expect(isStaleApprovalResolutionError(createGatewayError("gateway unavailable"))).toBe(false);
+  });
+});
+
+describe("resolveActiveExecApprovalDecision", () => {
+  it("dismisses the active approval after same-decision idempotent success", async () => {
+    const request = vi.fn<RequestFn>(async () => ({ ok: true }));
+    const state = createPromptState(request);
+
+    await resolveActiveExecApprovalDecision(state, "allow-once");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-1",
+      decision: "allow-once",
+    });
+    expect(state.execApprovalQueue).toEqual([]);
+    expect(state.execApprovalError).toBeNull();
+    expect(state.execApprovalBusy).toBe(false);
+  });
+
+  it("dismisses and refreshes when the backend reports an already resolved approval", async () => {
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.resolve") {
+        throw createGatewayError("approval already resolved", {
+          reason: "APPROVAL_ALREADY_RESOLVED",
+        });
+      }
+      if (method === "exec.approval.list") {
+        return [];
+      }
+      if (method === "plugin.approval.list") {
+        return [];
+      }
+      return {};
+    });
+    const state = createPromptState(request);
+
+    await resolveActiveExecApprovalDecision(state, "deny");
+
+    expect(state.execApprovalQueue).toEqual([]);
+    expect(state.execApprovalError).toBeNull();
+    expect(state.execApprovalBusy).toBe(false);
+    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
+  });
+
+  it("keeps the active approval open for unrelated errors", async () => {
+    const request = vi.fn<RequestFn>(async () => {
+      throw createGatewayError("gateway unavailable");
+    });
+    const active = createExecApproval();
+    const state = createPromptState(request, [active]);
+
+    await resolveActiveExecApprovalDecision(state, "deny");
+
+    expect(state.execApprovalQueue).toEqual([active]);
+    expect(state.execApprovalError).toBe("Approval failed: Error: gateway unavailable");
+    expect(state.execApprovalBusy).toBe(false);
+  });
+});
+
+describe("clearResolvedExecApprovalPrompt", () => {
+  it("does not clear the active prompt error when another approval resolves", () => {
+    const active = createExecApproval({ id: "approval-active", createdAtMs: 2 });
+    const queued = createExecApproval({ id: "approval-queued", createdAtMs: 1 });
+    const state = createPromptState(
+      vi.fn<RequestFn>(async () => ({})),
+      [active, queued],
+    );
+    state.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+    clearResolvedExecApprovalPrompt(state, "approval-queued");
+
+    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-active"]);
+    expect(state.execApprovalError).toBe("Approval failed: Error: gateway unavailable");
+  });
+
+  it("clears the active prompt error when the active approval resolves", () => {
+    const state = createPromptState(vi.fn<RequestFn>(async () => ({})));
+    state.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+    clearResolvedExecApprovalPrompt(state, "approval-1");
+
+    expect(state.execApprovalQueue).toEqual([]);
+    expect(state.execApprovalError).toBeNull();
+  });
+});
+
+describe("refreshPendingApprovalQueue", () => {
+  it("keeps approvals received while a refresh is in flight", async () => {
+    let resolveExecList: (value: unknown[]) => void = () => {};
+    const execApprovalList = new Promise<unknown[]>((resolve) => {
+      resolveExecList = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return execApprovalList;
+      }
+      if (method === "plugin.approval.list") {
+        return [];
+      }
+      return {};
+    });
+    const state = createPromptState(request, []);
+
+    const refreshPromise = refreshPendingApprovalQueue(state);
+    state.execApprovalQueue = addExecApproval(
+      state.execApprovalQueue,
+      createExecApproval({ id: "approval-arrived-during-refresh", createdAtMs: 2000 }),
+    );
+    resolveExecList([]);
+    await refreshPromise;
+
+    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
+      "approval-arrived-during-refresh",
+    ]);
+  });
+
+  it("removes refreshed approvals after their expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const expiresAtMs = Date.now() + 1_000;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "exec.approval.list") {
+          return [
+            {
+              id: "approval-refreshed-1",
+              request: { command: "pnpm check:changed" },
+              createdAtMs: Date.now(),
+              expiresAtMs,
+            },
+          ];
+        }
+        if (method === "plugin.approval.list") {
+          return [];
+        }
+        return {};
+      });
+      const state = createPromptState(request, []);
+
+      await refreshPendingApprovalQueue(state);
+      expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-refreshed-1"]);
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
