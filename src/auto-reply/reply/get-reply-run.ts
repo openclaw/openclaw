@@ -1136,16 +1136,10 @@ export async function runPreparedReply(
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const userTurnTranscriptText = resolvePersistedUserTurnText(
     {
-      Transcript: ctx.Transcript,
-      RawBody: ctx.RawBody,
-      CommandBody: ctx.CommandBody,
-      BodyForCommands: ctx.BodyForCommands,
-      Body: ctx.Body,
-      BodyStripped: sessionCtx.BodyStripped,
+      Transcript: transcriptCommandBody,
     },
     {
       hasMedia: userTurnMediaForPersistence.length > 0,
-      fallback: baseBodyTrimmedRaw,
     },
   );
   const userTurnInput =
