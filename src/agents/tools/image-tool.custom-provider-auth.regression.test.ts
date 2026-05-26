@@ -159,7 +159,7 @@ describe("image custom provider auth regression", () => {
       expect(text).toContain(`seen:${USER_PRIMARY}`);
       expect(text).not.toMatch(/No image model is configured/i);
     });
-  }, 300_000);
+  });
 
   it("still rejects the same config when apiKey is missing", async () => {
     await withEmptyAgentDir(async (agentDir) => {
