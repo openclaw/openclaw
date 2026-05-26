@@ -87,6 +87,9 @@ export function parseChannelBrokerTarget(params: {
   const parsed = parseBrokerConversationTarget(params.rawTarget);
   const brokerPrefixed = parsed.platform === "broker" || parsed.platform === "channel-broker";
   const brokerPrefixSeparator = brokerPrefixed ? parsed.conversationId.indexOf(":") : -1;
+  if (brokerPrefixed && brokerPrefixSeparator <= 0 && !params.account.defaultPlatform) {
+    throw new Error("broker target must include a platform or configure defaultPlatform");
+  }
   const rawPlatform =
     brokerPrefixed && brokerPrefixSeparator > 0
       ? parsed.conversationId.slice(0, brokerPrefixSeparator)

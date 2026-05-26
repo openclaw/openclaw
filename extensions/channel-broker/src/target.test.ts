@@ -39,4 +39,26 @@ describe("parseChannelBrokerTarget", () => {
       );
     },
   );
+
+  it("rejects broker-prefixed targets without a platform or defaultPlatform", () => {
+    expect(() =>
+      parseChannelBrokerTarget({
+        rawTarget: "broker:C12345678",
+        account: { ...account, platforms: [] },
+      }),
+    ).toThrow("broker target must include a platform or configure defaultPlatform");
+  });
+
+  it("uses defaultPlatform for broker-prefixed targets without an embedded platform", () => {
+    expect(
+      parseChannelBrokerTarget({
+        rawTarget: "broker:C12345678",
+        account: { ...account, defaultPlatform: "slack" },
+      }),
+    ).toEqual({
+      platform: "slack",
+      conversationId: "C12345678",
+      conversationType: "channel",
+    });
+  });
 });
