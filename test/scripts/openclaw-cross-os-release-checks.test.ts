@@ -45,11 +45,13 @@ import {
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
+  maybeBuildOptionalAgentTurnSkipResult,
   parseCrossOsSuiteFilter,
   parseArgs,
   packageHasScript,
   readInstalledVersion,
   readRunnerOverrideEnv,
+  resolveCrossOsAgentTurnOptional,
   runCommand,
   resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
@@ -174,6 +176,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toBe(true);
   });
 
+  it("requires explicit opt-in before cross-OS agent turns become optional", () => {
+    expect(resolveCrossOsAgentTurnOptional({})).toBe(false);
+    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "1" })).toBe(
+      true,
+    );
+    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" })).toBe(
+      false,
+    );
+  });
+
   it("detects embedded fallback agent turns as non-gateway proof", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-fallback-"));
     const logPath = join(dir, "agent.log");
@@ -239,6 +251,46 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           join(dir, "missing.log"),
         ),
       ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("only skips opted-in cross-OS live agent turns after retry exhaustion", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-skip-retry-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      const error = new Error("gateway request timeout for agent after 210000ms");
+
+      expect(
+        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
+          attempt: 1,
+          maxAttempts: 2,
+          optional: true,
+        }),
+      ).toBeNull();
+      expect(
+        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
+          attempt: 2,
+          maxAttempts: 2,
+          optional: false,
+        }),
+      ).toBeNull();
+
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
+        attempt: 2,
+        maxAttempts: 2,
+        optional: true,
+      });
+
+      expect(skipped?.status).toBe(0);
+      expect(JSON.parse(skipped?.stdout ?? "{}")).toEqual({
+        status: "skipped",
+        reason: "cross-os live agent turn unavailable after retry",
+      });
+      expect(readFileSync(logPath, "utf8")).toContain(
+        "skipping optional cross-OS live agent turn after retryable failure",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

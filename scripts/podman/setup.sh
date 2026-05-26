@@ -28,6 +28,7 @@ OPENCLAW_CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 QUADLET_GATEWAY_PORT="18789"
+PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -41,6 +42,15 @@ is_root() { [[ "$(id -u)" -eq 0 ]]; }
 fail() {
   echo "$*" >&2
   exit 1
+}
+
+run_podman_pull() {
+  local image="$1"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"
+    return
+  fi
+  podman pull "$image"
 }
 
 validate_single_line_value() {
@@ -382,7 +392,7 @@ else
     echo "Using existing image $OPENCLAW_IMAGE"
   else
     echo "Pulling image $OPENCLAW_IMAGE ..."
-    podman pull "$OPENCLAW_IMAGE"
+    run_podman_pull "$OPENCLAW_IMAGE"
   fi
 fi
 

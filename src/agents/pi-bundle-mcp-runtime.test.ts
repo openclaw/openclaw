@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
 import {
@@ -21,6 +25,129 @@ type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
 >;
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
+const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
+const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
+
+async function writeListToolsMcpServer(params: {
+  filePath: string;
+  logPath: string;
+  delayMs?: number;
+  hang?: boolean;
+}): Promise<void> {
+  await writeExecutable(
+    params.filePath,
+    `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(params.logPath)};
+const delayMs = ${params.delayMs ?? 0};
+const hang = ${params.hang === true};
+
+let buffer = "";
+let pendingTimer;
+let keepAlive;
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "test-list-tools", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
+  if (message.method === "tools/list") {
+    if (hang) {
+      log("hang tools/list");
+      keepAlive = setInterval(() => {}, 1000);
+      return;
+    }
+    log("delay tools/list " + delayMs);
+    pendingTimer = setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [
+            {
+              name: "slow_tool",
+              description: "Returned after a slow catalog response.",
+              inputSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+      });
+    }, delayMs);
+  }
+}
+process.stdin.setEncoding("utf8");
+function shutdown() {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+  }
+  if (keepAlive) {
+    clearInterval(keepAlive);
+  }
+  process.exit(0);
+}
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+  );
+}
+
+async function waitForFileText(
+  filePath: string,
+  expectedText: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastText = "";
+  while (Date.now() < deadline) {
+    try {
+      lastText = await fs.readFile(filePath, "utf8");
+      if (lastText.includes(expectedText)) {
+        return;
+      }
+    } catch {
+      // The server may not have written the log file yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(
+    `Timed out waiting for ${expectedText} in ${filePath}; saw ${JSON.stringify(lastText)}`,
+  );
+}
 
 function makeRuntime(
   tools: Array<{ toolName: string; description: string }>,
@@ -77,22 +204,278 @@ afterEach(async () => {
 
 describe("session MCP runtime", () => {
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
-    const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
+    const validator = createBundleMcpJsonSchemaValidator().getValidator<{
+      format: string;
+      metadata: { format: string };
+      nullable: { x?: string } | null;
+      url: string;
+    }>({
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
-        url: { type: "string" },
+        format: { type: "string", enum: ["png"] },
+        metadata: { const: { format: "png" } },
+        nullable: {
+          type: ["object", "null"],
+          properties: { x: { type: "string" } },
+          additionalProperties: false,
+        },
+        url: { type: "string", format: "uri" },
       },
-      required: ["url"],
+      required: ["format", "metadata", "nullable", "url"],
       additionalProperties: false,
     });
 
-    expect(validator({ url: "https://example.com" })).toEqual({
+    expect(
+      validator({
+        format: "png",
+        metadata: { format: "png" },
+        nullable: null,
+        url: "not a uri",
+      }),
+    ).toEqual({
       valid: true,
-      data: { url: "https://example.com" },
+      data: {
+        format: "png",
+        metadata: { format: "png" },
+        nullable: null,
+        url: "not a uri",
+      },
       errorMessage: undefined,
     });
     expect(validator({ url: 42 }).valid).toBe(false);
+
+    const dependencyValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      dependencies: {
+        url: {
+          properties: {
+            url: {
+              type: "string",
+              format: "uri",
+            },
+          },
+          required: ["url"],
+        },
+      },
+    });
+    expect(dependencyValidator({ url: "not a uri" }).valid).toBe(true);
+
+    const mapValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: {
+        type: "string",
+      },
+    });
+    expect(mapValidator({ foo: "bar" }).valid).toBe(true);
+    expect(mapValidator({ foo: 42 }).valid).toBe(false);
+  });
+
+  it("rejects invalid draft-2020-12 tool output schemas from external MCP catalogs", () => {
+    for (const schema of [
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "sting",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        required: "url",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "string",
+        minLength: "1",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        allOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        anyOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        oneOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $ref: "#/$defs/Missing",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $dynamicRef: 123,
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $dynamicRef: "#/$defs/Missing",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "string",
+        nullable: "yes",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        nullable: true,
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $defs: {
+          Other: {
+            $id: "other",
+            $anchor: "value",
+            type: "string",
+          },
+        },
+        $ref: "#value",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        dependencies: {
+          mode: 123,
+        },
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        dependencies: {
+          mode: [1],
+        },
+      },
+    ] as const) {
+      expect(() => createBundleMcpJsonSchemaValidator().getValidator(schema as never)).toThrow(
+        "Invalid MCP draft-2020-12 JSON Schema",
+      );
+    }
+  });
+
+  it("accepts draft-2020-12 local refs to boolean schemas and anchors", () => {
+    const neverValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Never: false,
+      },
+      $ref: "#/$defs/Never",
+    });
+    expect(neverValidator("anything").valid).toBe(false);
+
+    const anchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $anchor: "value",
+          type: "string",
+        },
+      },
+      $ref: "#value",
+    });
+    expect(anchorValidator("ok").valid).toBe(true);
+    expect(anchorValidator(1).valid).toBe(false);
+
+    const nestedAnchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Other: {
+          $id: "other",
+          $defs: {
+            Value: {
+              $anchor: "value",
+              type: "string",
+            },
+          },
+          $ref: "#value",
+        },
+      },
+      $ref: "#/$defs/Other",
+    });
+    expect(nestedAnchorValidator("ok").valid).toBe(true);
+    expect(nestedAnchorValidator(1).valid).toBe(false);
+
+    const absoluteRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "https://example.com/schema",
+      $defs: {
+        Value: {
+          type: "string",
+        },
+      },
+      $ref: "https://example.com/schema#/$defs/Value",
+    });
+    expect(absoluteRefValidator("ok").valid).toBe(true);
+    expect(absoluteRefValidator(1).valid).toBe(false);
+
+    const emptyIdRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "",
+      $defs: {
+        Value: {
+          type: "string",
+        },
+      },
+      $ref: "#/$defs/Value",
+    });
+    expect(emptyIdRefValidator("ok").valid).toBe(true);
+    expect(emptyIdRefValidator(1).valid).toBe(false);
+
+    const dynamicRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $dynamicAnchor: "value",
+          type: "string",
+        },
+      },
+      $dynamicRef: "#value",
+    });
+    expect(dynamicRefValidator("ok").valid).toBe(true);
+    expect(dynamicRefValidator(1).valid).toBe(false);
+  });
+
+  it("accepts draft-2020-12 local refs into schema arrays", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      anyOf: [{ type: "string" }],
+      $ref: "#/anyOf/0",
+    });
+    expect(validator("ok").valid).toBe(true);
+    expect(validator(1).valid).toBe(false);
+  });
+
+  it("accepts draft-2020-12 local refs to anchors inside dependency schemas", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      dependencies: {
+        a: {
+          $defs: {
+            Target: {
+              $anchor: "target",
+              type: "object",
+            },
+          },
+        },
+        b: {
+          properties: {
+            b: {
+              $ref: "#target",
+            },
+          },
+          required: ["b"],
+        },
+      },
+    });
+    expect(validator({ a: {}, b: {} }).valid).toBe(true);
+    expect(validator({ a: {}, b: 1 }).valid).toBe(false);
   });
 
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
@@ -179,6 +562,95 @@ describe("session MCP runtime", () => {
 
     await expect(materializeBundleMcpToolsForRun({ runtime })).rejects.toThrow("catalog failed");
     expect(activeLeases).toBe(0);
+  });
+
+  it("keeps MCP tools/list responses that exceed the connection timeout but finish within the internal catalog timeout", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
+    const serverPath = path.join(tempDir, "slow-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      delayMs: 750,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-slow-listtools-server-timeout",
+      sessionKey: "agent:test:session-slow-listtools-server-timeout",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            slowListTools: {
+              command: process.execPath,
+              args: [serverPath],
+              connectionTimeoutMs: 500,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      expect(catalog.servers.slowListTools).toMatchObject({
+        serverName: "slowListTools",
+        toolCount: 1,
+      });
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 750");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("times out default-config hung bundle MCP tools/list using the internal catalog timeout", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
+    const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-listtools-server-timeout",
+      sessionKey: "agent:test:session-listtools-server-timeout",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            hangingListTools: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+    const catalogResult = runtime.getCatalog().then(
+      (catalog) => ({ status: "resolved" as const, catalog }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    try {
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      const result = await Promise.race([
+        catalogResult,
+        new Promise<{ status: "pending" }>((resolve) => {
+          setTimeout(() => resolve({ status: "pending" }), LIST_TOOLS_TEST_DEADLINE_MS);
+        }),
+      ]);
+
+      expect(result.status).toBe("resolved");
+      if (result.status === "resolved") {
+        expect(result.catalog.tools).toEqual([]);
+        expect(result.catalog.servers).toEqual({});
+      }
+    } finally {
+      await runtime.dispose();
+      await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("reuses repeated materialization and recreates after explicit disposal", async () => {

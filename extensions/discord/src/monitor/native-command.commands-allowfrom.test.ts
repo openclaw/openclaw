@@ -142,6 +142,22 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
+  it("authorizes command allowlist users even when commands.ownerAllowFrom is also configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ownerAllowFrom: ["user:123456789012345678"],
+          allowFrom: {
+            discord: ["user:999999999999999999"],
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
   it("authorizes guild slash commands from the global commands.allowFrom list when provider-specific allowFrom is missing", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateConfig: (cfg) => {
@@ -319,6 +335,19 @@ describe("Discord native slash commands with commands.allowFrom", () => {
             ...cfg.channels?.discord,
             allowFrom: ["user:123456789012345678"],
           },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands when commands.ownerAllowFrom fails even if the channel-level native gate allowed the command", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ownerAllowFrom: ["user:123456789012345678"],
         };
       },
     });

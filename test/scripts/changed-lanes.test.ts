@@ -299,18 +299,6 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("runs remote Testbox changed-check children through Corepack pnpm", () => {
-    const command = createPnpmManagedCommand(
-      { name: "conflict markers", args: ["check:no-conflict-markers"] },
-      { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
-    );
-
-    expect(command.bin).toBe("corepack");
-    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
-    expect(command.env?.PATH).not.toBe("/usr/bin");
-    expect(command.env?.PATH).toContain("/usr/bin");
-  });
-
   it("runs CI changed-check children through Corepack pnpm", () => {
     const command = createPnpmManagedCommand(
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
@@ -358,13 +346,6 @@ describe("scripts/changed-lanes", () => {
       "240m",
       "--timing-json",
       "--",
-      "CI=1",
-      "NODE_OPTIONS=--max-old-space-size=4096",
-      "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
-      "OPENCLAW_VITEST_MAX_WORKERS=1",
-      "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
-      "OPENCLAW_TESTBOX=1",
-      "OPENCLAW_TESTBOX_REMOTE_RUN=1",
       "corepack",
       "pnpm",
       "check:changed",
@@ -375,7 +356,7 @@ describe("scripts/changed-lanes", () => {
     ]);
   });
 
-  it("does not delegate dry-run, CI, or already-remote changed gates", () => {
+  it("does not delegate dry-run or CI changed gates", () => {
     expect(shouldDelegateChangedCheckToCrabbox(["--dry-run"], { OPENCLAW_TESTBOX: "1" })).toBe(
       false,
     );
@@ -383,12 +364,6 @@ describe("scripts/changed-lanes", () => {
       shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", GITHUB_ACTIONS: "true" }),
     ).toBe(false);
     expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1", CI: "1" })).toBe(false);
-    expect(
-      shouldDelegateChangedCheckToCrabbox([], {
-        OPENCLAW_TESTBOX: "1",
-        OPENCLAW_TESTBOX_REMOTE_RUN: "1",
-      }),
-    ).toBe(false);
   });
 
   it("runs changed-check lint lanes under the parent heavy-check lock", () => {
@@ -1005,7 +980,7 @@ describe("scripts/changed-lanes", () => {
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     ]);
     const plan = createChangedCheckPlan(result, {
-      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      env: { CI: "1", PATH: "/usr/bin" },
       platform: "linux",
       swiftlintAvailable: true,
     });

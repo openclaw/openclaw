@@ -20,6 +20,10 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  asOptionalRecord as readRecord,
+  isRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
@@ -205,6 +209,10 @@ export function createCodexDynamicToolBridge(params: {
             result.terminate === true ||
             isToolResultYield(rawResult) ||
             isToolResultYield(result),
+        );
+        withDynamicToolAsyncStarted(
+          response,
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
         );
         return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
@@ -431,14 +439,6 @@ function extractInternalSourceReplyPayload(
     : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
 function readPositiveInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -481,6 +481,11 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
     return false;
   }
   return details.status.trim().toLowerCase() === "yielded";
+}
+
+function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  return isRecord(details) && details.async === true && details.status === "started";
 }
 
 function inferToolResultDiagnosticTerminalType(
@@ -532,6 +537,21 @@ function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
     return response;
   }
   Object.defineProperty(response, "terminate", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
+}
+
+function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  asyncStarted: boolean,
+): T {
+  if (!asyncStarted) {
+    return response;
+  }
+  Object.defineProperty(response, "asyncStarted", {
     configurable: true,
     enumerable: false,
     value: true,

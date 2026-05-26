@@ -132,7 +132,7 @@ jobs:
 
       - name: Run root Dockerfile CLI smoke
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
+          timeout 20m docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -163,7 +163,7 @@ jobs:
 
       - name: Smoke test Dockerfile with matrix extension build arg
         run: |
-          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+          timeout 20m docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -326,7 +326,7 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+          timeout 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -359,7 +359,7 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+          timeout 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -481,6 +481,15 @@ jobs:
             -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
             rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6 \
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
+
+      - name: Run Rocky Linux CLI installer smoke
+        run: |
+          timeout 20m docker run --rm \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6 \
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
 
   bun_global_install_smoke:
     needs: [preflight, root_dockerfile_image]

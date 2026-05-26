@@ -40,7 +40,10 @@ import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capabili
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicyDetailed } from "../../sessions/send-policy.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
-import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diagnostic-events.js";
+import {
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  type DiagnosticMessageDeliveryKind,
+} from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";

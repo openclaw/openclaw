@@ -62,10 +62,11 @@ function runAssertInstalled({
   const pluginId = "openclaw-kitchen-sink-fixture";
   const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-home-"));
   const installPath = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-install-"));
-  const pluginsJsonPath = path.join("/tmp", `kitchen-sink-${label}-plugins.json`);
-  const inspectJsonPath = path.join("/tmp", `kitchen-sink-${label}-inspect.json`);
-  const inspectAllJsonPath = path.join("/tmp", `kitchen-sink-${label}-inspect-all.json`);
-  const installPathMarker = path.join("/tmp", `kitchen-sink-${label}-install-path.txt`);
+  const scratchRoot = tmpdir();
+  const pluginsJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-plugins.json`);
+  const inspectJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-inspect.json`);
+  const inspectAllJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-inspect-all.json`);
+  const installPathMarker = path.join(scratchRoot, `kitchen-sink-${label}-install-path.txt`);
   const installsPath = path.join(home, ".openclaw", "plugins", "installs.json");
   const spawnEnv = { ...process.env };
   delete spawnEnv.KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS;
@@ -100,6 +101,7 @@ function runAssertInstalled({
         KITCHEN_SINK_SOURCE: "npm",
         KITCHEN_SINK_SPEC: "npm:@openclaw/kitchen-sink@latest",
         KITCHEN_SINK_SURFACE_MODE: "full",
+        KITCHEN_SINK_TMP_DIR: scratchRoot,
       },
     });
   } finally {
@@ -113,41 +115,32 @@ function runAssertInstalled({
 }
 
 describe("kitchen-sink plugin assertions", () => {
-  it.skipIf(process.platform === "win32")(
-    "fails full-surface installs when stable diagnostic canaries disappear",
-    () => {
-      const result = runAssertInstalled();
+  it("fails full-surface installs when stable diagnostic canaries disappear", () => {
+    const result = runAssertInstalled();
 
-      expect(result.status).not.toBe(0);
-      expect(`${result.stdout}\n${result.stderr}`).toContain(
-        "missing expected kitchen-sink diagnostic error",
-      );
-    },
-  );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "missing expected kitchen-sink diagnostic error",
+    );
+  });
 
-  it.skipIf(process.platform === "win32")(
-    "accepts published full-surface installs with stable diagnostic canaries",
-    () => {
-      const result = runAssertInstalled({
-        diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
-      });
+  it("accepts published full-surface installs with stable diagnostic canaries", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+    });
 
-      expect(result.status).toBe(0);
-    },
-  );
+    expect(result.status).toBe(0);
+  });
 
-  it.skipIf(process.platform === "win32")(
-    "keeps exhaustive diagnostic matching available for synchronized fixtures",
-    () => {
-      const result = runAssertInstalled({
-        diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
-        env: { KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS: "1" },
-      });
+  it("keeps exhaustive diagnostic matching available for synchronized fixtures", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+      env: { KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS: "1" },
+    });
 
-      expect(result.status).not.toBe(0);
-      expect(`${result.stdout}\n${result.stderr}`).toContain(
-        "cli registration missing explicit commands metadata",
-      );
-    },
-  );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "cli registration missing explicit commands metadata",
+    );
+  });
 });
