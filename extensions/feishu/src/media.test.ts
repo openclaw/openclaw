@@ -435,11 +435,15 @@ describe("sanitizeFileNameForUpload", () => {
   });
 
   it("preserves em-dash and full-width brackets", () => {
-    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe("文件—说明（v2）.pdf");
+    expect(sanitizeFileNameForUpload("文件—说明（v2）.pdf")).toBe(
+      "文件—说明（v2）.pdf",
+    );
   });
 
   it("preserves single quotes and parentheses", () => {
-    expect(sanitizeFileNameForUpload("文件'(test).txt")).toBe("文件'(test).txt");
+    expect(sanitizeFileNameForUpload("文件'(test).txt")).toBe(
+      "文件'(test).txt",
+    );
   });
 
   it("preserves filenames without extension", () => {
@@ -447,7 +451,9 @@ describe("sanitizeFileNameForUpload", () => {
   });
 
   it("preserves mixed ASCII and non-ASCII", () => {
-    expect(sanitizeFileNameForUpload("Report_报告_2026.xlsx")).toBe("Report_报告_2026.xlsx");
+    expect(sanitizeFileNameForUpload("Report_报告_2026.xlsx")).toBe(
+      "Report_报告_2026.xlsx",
+    );
   });
 
   it("preserves emoji filenames", () => {
@@ -456,7 +462,9 @@ describe("sanitizeFileNameForUpload", () => {
 
   it("strips control characters", () => {
     expect(sanitizeFileNameForUpload("bad\x00file.txt")).toBe("bad_file.txt");
-    expect(sanitizeFileNameForUpload("inject\r\nheader.txt")).toBe("inject__header.txt");
+    expect(sanitizeFileNameForUpload("inject\r\nheader.txt")).toBe(
+      "inject__header.txt",
+    );
   });
 
   it("strips quotes and backslashes to prevent header injection", () => {
