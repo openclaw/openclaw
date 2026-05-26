@@ -1240,40 +1240,69 @@ describe("schema validator", () => {
       expectedValue: { kind: "api", endpoint: "https://example.com" },
     });
 
-    const branchFlipResult = expectValidationFailure({
-      cacheKey: "schema-validator.test.defaults.conditional-default-branch-flip",
-      schema: {
-        type: "object",
-        if: {
-          not: {
-            required: ["mode"],
-          },
-        },
-        [jsonSchemaThenKeyword]: {
-          properties: {
-            mode: {
-              type: "string",
-              default: "auto",
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.conditional-default-branch-flip",
+        schema: {
+          type: "object",
+          if: {
+            not: {
+              required: ["mode"],
             },
           },
+          [jsonSchemaThenKeyword]: {
+            properties: {
+              mode: {
+                type: "string",
+                default: "auto",
+              },
+            },
+          },
+          else: {
+            properties: {
+              explicit: {
+                type: "boolean",
+                default: true,
+              },
+            },
+            required: ["explicit"],
+          },
         },
-        else: {
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { mode: "auto" },
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.conditional-defaulted-condition-remains-valid",
+        schema: {
+          type: "object",
           properties: {
-            explicit: {
+            flag: {
               type: "boolean",
               default: true,
             },
           },
-          required: ["explicit"],
+          if: {
+            properties: {
+              flag: { const: true },
+            },
+            required: ["flag"],
+          },
+          [jsonSchemaThenKeyword]: {
+            required: ["secret"],
+          },
         },
+        value: {},
+        applyDefaults: true,
       },
-      value: {},
-      applyDefaults: true,
+      expectedValue: { flag: true },
     });
-    expectValidationIssue(branchFlipResult, "explicit");
 
-    const defaultedConditionResult = expectValidationFailure({
-      cacheKey: "schema-validator.test.defaults.conditional-defaulted-condition-remains-invalid",
+    const explicitConditionResult = expectValidationFailure({
+      cacheKey: "schema-validator.test.defaults.conditional-explicit-condition-still-fails",
       schema: {
         type: "object",
         properties: {
@@ -1292,10 +1321,10 @@ describe("schema validator", () => {
           required: ["secret"],
         },
       },
-      value: {},
+      value: { flag: true },
       applyDefaults: true,
     });
-    expectValidationIssue(defaultedConditionResult, "<root>");
+    expectValidationIssue(explicitConditionResult, "<root>");
 
     expectValidationFailure({
       cacheKey: "schema-validator.test.defaults.conditional-invalid-default",

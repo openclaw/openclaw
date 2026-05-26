@@ -80,6 +80,25 @@ function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
   return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
 }
 
+function stripConditionalKeywords(schema: JsonSchemaValue): JsonSchemaValue {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => stripConditionalKeywords(entry as JsonSchemaValue)) as never;
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  return Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key]) => key !== "if" && key !== "then" && key !== "else")
+      .map(([key, value]) => [
+        key,
+        typeof value === "boolean" || (value && typeof value === "object")
+          ? stripConditionalKeywords(value as JsonSchemaValue)
+          : value,
+      ]),
+  ) as JsonSchemaValue;
+}
+
 function withPluginFormatSemantics<T>(callback: () => T): T {
   const previousFormats = Format.Entries();
   // TypeBox format checks are global; snapshot/restore keeps plugin schema semantics local.
@@ -108,6 +127,19 @@ function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidat
 
 function applyDefaultsWithPluginFormatSemantics(schema: JsonSchemaValue, value: unknown): unknown {
   return withPluginFormatSemantics(() => applyJsonSchemaDefaults(schema, value));
+}
+
+function isDefaultActivatedConditionalFailure(params: {
+  schema: JsonSchemaValue;
+  originalValue: unknown;
+  defaultedValue: unknown;
+}): boolean {
+  const nonConditionalValidator = compileSchema(stripConditionalKeywords(params.schema));
+  if (checkSchema(nonConditionalValidator, params.defaultedValue)) {
+    return false;
+  }
+  const originalValidator = compileSchema(params.schema);
+  return checkSchema(originalValidator, params.originalValue) === null;
 }
 
 export type JsonSchemaValidationError = {
@@ -298,6 +330,17 @@ export function validateJsonSchemaValue(params: {
     if (!errors) {
       return { ok: true, value };
     }
+    if (
+      params.applyDefaults &&
+      value !== params.value &&
+      isDefaultActivatedConditionalFailure({
+        schema: params.schema,
+        originalValue: params.value,
+        defaultedValue: value,
+      })
+    ) {
+      return { ok: true, value };
+    }
     return { ok: false, errors: formatValidationErrors(errors) };
   }
 
@@ -327,6 +370,17 @@ export function validateJsonSchemaValue(params: {
       : params.value;
   const errors = checkSchema(cached.validate, value);
   if (!errors) {
+    return { ok: true, value };
+  }
+  if (
+    params.applyDefaults &&
+    value !== params.value &&
+    isDefaultActivatedConditionalFailure({
+      schema: params.schema,
+      originalValue: params.value,
+      defaultedValue: value,
+    })
+  ) {
     return { ok: true, value };
   }
   return { ok: false, errors: formatValidationErrors(errors) };
