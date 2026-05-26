@@ -17,6 +17,7 @@ type PnpmBuildConfig = {
 };
 
 type RootPackageJson = {
+  files?: string[];
   pnpm?: PnpmBuildConfig;
 };
 
@@ -61,6 +62,12 @@ describe("package manager build policy", () => {
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
+  });
+
+  it("includes third-party notices in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
   });
 
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {

@@ -283,11 +283,14 @@ export async function createAgentSession(
   }
 
   const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
+  const customToolNames = options.customTools?.map((tool) => tool.name) ?? [];
   const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
   const initialActiveToolNames: string[] = options.tools
     ? [...options.tools]
-    : options.noTools
+    : options.noTools === "all"
       ? []
+      : options.noTools === "builtin"
+        ? customToolNames
       : defaultActiveToolNames;
 
   let agent: Agent;

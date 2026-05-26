@@ -27,6 +27,7 @@
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
+    "THIRD_PARTY_NOTICES.md",
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
