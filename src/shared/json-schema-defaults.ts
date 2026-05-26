@@ -150,7 +150,12 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
   }
   if (Array.isArray(type) && type.length > 0) {
     const invalid = type.find((entry) => typeof entry !== "string" || !jsonSchemaTypes.has(entry));
-    return invalid === undefined ? undefined : `${path}.type: unsupported JSON Schema type`;
+    if (invalid !== undefined) {
+      return `${path}.type: unsupported JSON Schema type`;
+    }
+    return new Set(type).size === type.length
+      ? undefined
+      : `${path}.type: expected unique JSON Schema types`;
   }
   return `${path}.type: expected string or non-empty string array`;
 }
@@ -295,6 +300,18 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function hasDuplicateJsonValues(values: unknown[]): boolean {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) {
+      return true;
+    }
+    seen.add(key);
+  }
+  return false;
+}
+
 function validateSchemaKeywordShapes(
   schema: Record<string, unknown>,
   path: string,
@@ -333,11 +350,21 @@ function validateSchemaKeywordShapes(
   ) {
     return `${path}.multipleOf: expected positive number`;
   }
-  if (schema.required !== undefined && !isStringArray(schema.required)) {
-    return `${path}.required: expected string array`;
+  if (schema.required !== undefined) {
+    if (!isStringArray(schema.required)) {
+      return `${path}.required: expected string array`;
+    }
+    if (new Set(schema.required).size !== schema.required.length) {
+      return `${path}.required: expected unique string array`;
+    }
   }
-  if (schema.enum !== undefined && !Array.isArray(schema.enum)) {
-    return `${path}.enum: expected array`;
+  if (schema.enum !== undefined) {
+    if (!Array.isArray(schema.enum)) {
+      return `${path}.enum: expected array`;
+    }
+    if (schema.enum.length === 0 || hasDuplicateJsonValues(schema.enum)) {
+      return `${path}.enum: expected non-empty array with unique values`;
+    }
   }
   for (const key of schemaCombinatorKeywords) {
     const value = schema[key];

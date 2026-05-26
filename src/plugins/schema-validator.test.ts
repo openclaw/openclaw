@@ -268,6 +268,31 @@ describe("schema validator", () => {
         },
       ],
       [
+        "schema-validator.test.invalid-empty-enum",
+        {
+          enum: [],
+        },
+      ],
+      [
+        "schema-validator.test.invalid-duplicate-enum",
+        {
+          enum: ["api", "api"],
+        },
+      ],
+      [
+        "schema-validator.test.invalid-duplicate-required",
+        {
+          type: "object",
+          required: ["mode", "mode"],
+        },
+      ],
+      [
+        "schema-validator.test.invalid-duplicate-type-array",
+        {
+          type: ["string", "string"],
+        },
+      ],
+      [
         "schema-validator.test.invalid-ref",
         {
           $ref: "#/$defs/Missing",
