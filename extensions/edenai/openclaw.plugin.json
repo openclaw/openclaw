@@ -26,8 +26,14 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "edenai": ["EDENAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "edenai",
+        "authMethods": ["api-key"],
+        "envVars": ["EDENAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthAliases": {
     "eden": "edenai",

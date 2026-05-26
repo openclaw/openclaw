@@ -29,7 +29,7 @@ read_when:
 
 ## Get an API key
 
-Sign in to the [Eden AI dashboard](https://app.edenai.run/admin/account/settings) and copy your key.
+Sign in to the [Eden AI dashboard](https://app.edenai.run/settings/api-keys) and copy your key.
 
 ## Set the key
 
@@ -149,7 +149,7 @@ If a chat request errors with `provider rejected the request schema or tool payl
 - [Eden AI's OpenClaw integration guide](https://www.edenai.co/docs/v3/integrations/openclaw)
 - [Eden AI data handling](https://www.edenai.co/data-compliancy)
 - [Eden AI model catalog](https://app.edenai.run/models)
-- [Get an API key](https://app.edenai.run/admin/account/settings)
+- [Get an API key](https://app.edenai.run/settings/api-keys)
 
 ## Related
 
