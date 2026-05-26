@@ -65,10 +65,19 @@ async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
   await runtime.runMemoryRemBackfill(opts);
 }
 
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  // Commander recognizes parser failures by code; keep the import type-only for bundled plugin deps.
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
 function parseMemoryCliNumberOption(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
-    throw new Error(`${flag} must be a finite number.`);
+    throw invalidCliArgument(`${flag} must be a finite number.`);
   }
   return parsed;
 }
