@@ -67,6 +67,140 @@ const MESSAGE_MUTATING_ACTIONS = new Set([
   "unpin",
 ]);
 
+const READ_ONLY_SHELL_COMMANDS = new Set([
+  "[",
+  "cat",
+  "cd",
+  "date",
+  "du",
+  "echo",
+  "file",
+  "find",
+  "grep",
+  "head",
+  "jq",
+  "ls",
+  "nl",
+  "printf",
+  "pwd",
+  "rg",
+  "sed",
+  "stat",
+  "tail",
+  "test",
+  "wc",
+  "which",
+]);
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  "branch",
+  "describe",
+  "diff",
+  "grep",
+  "log",
+  "ls-files",
+  "ls-tree",
+  "remote",
+  "rev-parse",
+  "show",
+  "status",
+]);
+
+const READ_ONLY_OPENCLAW_SUBCOMMANDS = new Set([
+  "channels status",
+  "config validate",
+  "cron get",
+  "cron list",
+  "cron status",
+  "doctor",
+  "gateway status",
+  "models status",
+  "status",
+  "update status",
+]);
+
+function extractShellCommand(args: unknown): string | undefined {
+  const record = asRecord(args);
+  const command = record?.command;
+  if (typeof command !== "string") {
+    return undefined;
+  }
+  const trimmed = command.trim();
+  const shellWrapped = trimmed.match(/^(?:\/[\w./-]+\/)?(?:bash|sh)\s+-lc\s+(["'])([\s\S]*)\1$/u);
+  return shellWrapped?.[2]?.trim() || trimmed;
+}
+
+function tokenizeShellSegment(segment: string): string[] {
+  return Array.from(segment.matchAll(/"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\S+/gu)).map((match) =>
+    match[0].replace(/^(["'])([\s\S]*)\1$/u, "$2"),
+  );
+}
+
+function firstNonOptionGitSubcommand(tokens: string[]): string | undefined {
+  for (let i = 1; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (!token) {
+      continue;
+    }
+    if (["-C", "--git-dir", "--work-tree"].includes(token)) {
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    return normalizeActionName(token);
+  }
+  return undefined;
+}
+
+function isReadOnlyOpenClawCommand(tokens: string[]): boolean {
+  const subcommand = tokens.slice(1, 3).map(normalizeActionName).filter(Boolean).join(" ");
+  const single = normalizeActionName(tokens[1]);
+  return (
+    READ_ONLY_OPENCLAW_SUBCOMMANDS.has(subcommand) ||
+    Boolean(single && READ_ONLY_OPENCLAW_SUBCOMMANDS.has(single))
+  );
+}
+
+function isReadOnlyShellCommand(args: unknown): boolean {
+  const command = extractShellCommand(args);
+  if (!command) {
+    return false;
+  }
+  const withoutDevNullRedirects = command.replace(/\s+\d?>\s*\/dev\/null\b/gu, "");
+  if (/[<>]/u.test(withoutDevNullRedirects)) {
+    return false;
+  }
+  return command
+    .split(/\s*(?:&&|\|\||;|\||\n)\s*/u)
+    .filter((segment) => segment.trim().length > 0)
+    .every((segment) => {
+      const tokens = tokenizeShellSegment(segment);
+      while (tokens[0] && /^[A-Za-z_][A-Za-z0-9_]*=.*/u.test(tokens[0])) {
+        tokens.shift();
+      }
+      if (tokens[0] === "env" || tokens[0] === "command") {
+        tokens.shift();
+      }
+      if (tokens[0] === "timeout") {
+        tokens.splice(0, tokens[1]?.startsWith("-") ? 3 : 2);
+      }
+      const commandName = normalizeActionName(tokens[0]);
+      if (!commandName) {
+        return true;
+      }
+      if (commandName === "git") {
+        const subcommand = firstNonOptionGitSubcommand(tokens);
+        return Boolean(subcommand && READ_ONLY_GIT_SUBCOMMANDS.has(subcommand));
+      }
+      if (commandName === "openclaw") {
+        return isReadOnlyOpenClawCommand(tokens);
+      }
+      return READ_ONLY_SHELL_COMMANDS.has(commandName);
+    });
+}
+
 // Structured file-target identity for cross-tool same-target recovery.
 // Carried alongside `actionFingerprint` so comparison does not have to
 // re-parse the joined fingerprint string. Re-parsing was unsafe because
@@ -146,10 +280,11 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "write":
     case "edit":
     case "apply_patch":
-    case "exec":
-    case "bash":
     case "sessions_send":
       return true;
+    case "exec":
+    case "bash":
+      return !isReadOnlyShellCommand(args);
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);
     case "message":

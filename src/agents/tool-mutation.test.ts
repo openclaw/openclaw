@@ -26,8 +26,12 @@ describe("tool mutation helpers", () => {
     );
     expect(writeFingerprint).toBe("tool=write|path=/tmp/demo.txt|id=42");
 
-    const metaOnlyFingerprint = buildToolActionFingerprint("exec", { command: "ls -la" }, "ls -la");
-    expect(metaOnlyFingerprint).toBe("tool=exec|meta=ls -la");
+    const readOnlyExecFingerprint = buildToolActionFingerprint(
+      "exec",
+      { command: "ls -la" },
+      "ls -la",
+    );
+    expect(readOnlyExecFingerprint).toBeUndefined();
 
     const readFingerprint = buildToolActionFingerprint("read", { path: "/tmp/demo.txt" });
     expect(readFingerprint).toBeUndefined();
@@ -61,6 +65,26 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
+  });
+
+  it("treats read-only shell probes as non-mutating", () => {
+    expect(isMutatingToolCall("bash", { command: "ls $HOME/.openclaw/service-env" })).toBe(false);
+    expect(
+      isMutatingToolCall("bash", {
+        command: `/bin/bash -lc "sed -n '1,240p' ~/.openclaw/workspace/skills/discord/SKILL.md"`,
+      }),
+    ).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "git -C /tmp/repo status --short" })).toBe(false);
+    expect(isMutatingToolCall("exec", { command: "timeout 20 openclaw status --json --all" })).toBe(
+      false,
+    );
+  });
+
+  it("keeps mutating shell commands classified as mutating", () => {
+    expect(isMutatingToolCall("bash", { command: "git commit -am fix" })).toBe(true);
+    expect(isMutatingToolCall("bash", { command: "openclaw update --channel beta" })).toBe(true);
+    expect(isMutatingToolCall("exec", { command: "python3 scripts/write-report.py" })).toBe(true);
+    expect(isMutatingToolCall("exec", { command: "ls docs > out.txt" })).toBe(true);
   });
 
   it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {
