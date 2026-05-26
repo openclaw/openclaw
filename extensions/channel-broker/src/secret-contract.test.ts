@@ -70,4 +70,66 @@ describe("channel-broker secret contract", () => {
     );
     expect(context.warnings).toStrictEqual([]);
   });
+
+  it("resolves top-level SecretRefs when the implicit default provider is active", async () => {
+    const sourceConfig = {
+      channels: {
+        "channel-broker": {
+          enabled: true,
+          baseUrl: "https://broker.example.test",
+          outboundToken: { source: "env", provider: "default", id: "BROKER_DEFAULT_TOKEN" },
+          signingSecret: {
+            source: "env",
+            provider: "default",
+            id: "BROKER_DEFAULT_SIGNING_SECRET",
+          },
+          providers: {
+            acme: {
+              enabled: true,
+              baseUrl: "https://acme-broker.example.test",
+              outboundToken: { source: "env", provider: "default", id: "BROKER_ACME_TOKEN" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const resolvedConfig: OpenClawConfig = structuredClone(sourceConfig);
+    const context = createResolverContext({
+      sourceConfig,
+      env: {
+        BROKER_DEFAULT_TOKEN: "resolved-default-token",
+        BROKER_DEFAULT_SIGNING_SECRET: "resolved-default-signing-secret",
+        BROKER_ACME_TOKEN: "resolved-acme-token",
+      },
+    });
+
+    collectRuntimeConfigAssignments({
+      config: resolvedConfig,
+      defaults: undefined,
+      context,
+    });
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      },
+    );
+    applyResolvedAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
+
+    expect(resolvedConfig.channels?.["channel-broker"]?.outboundToken).toBe(
+      "resolved-default-token",
+    );
+    expect(resolvedConfig.channels?.["channel-broker"]?.signingSecret).toBe(
+      "resolved-default-signing-secret",
+    );
+    expect(resolvedConfig.channels?.["channel-broker"]?.providers?.acme?.outboundToken).toBe(
+      "resolved-acme-token",
+    );
+    expect(context.warnings).toStrictEqual([]);
+  });
 });

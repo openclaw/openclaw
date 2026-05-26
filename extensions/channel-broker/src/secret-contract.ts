@@ -1,3 +1,4 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-core";
 import {
   collectSecretInputAssignment,
   hasOwnProperty,
@@ -93,9 +94,11 @@ function collectBrokerSecretFieldAssignments(params: {
 }): void {
   const providerEntries = collectProviderEntries(params.channel);
   const channelEnabled = isEnabledFlag(params.channel);
+  const implicitDefaultActive = channelEnabled && hasConfiguredAccountValue(params.channel.baseUrl);
   const topLevelActive =
     channelEnabled &&
-    (providerEntries.length === 0 ||
+    (implicitDefaultActive ||
+      providerEntries.length === 0 ||
       providerEntries.some(
         (entry) => entry.enabled && !hasOwnProperty(entry.account, params.field),
       ));
