@@ -51,6 +51,20 @@ export type TaskRegistryMaintenanceSummary = {
     cleanupStamped: number;
     pruned: number;
 };
+export type TaskRegistryMaintenanceTaskDiagnostic = {
+    taskId: string;
+    runtime: TaskRecord["runtime"];
+    status: TaskRecord["status"];
+    decision: "retained" | "would_reconcile";
+    reason: "active_cli_run" | "backing_session_missing" | "backing_session_present" | "cron_runtime_not_authoritative" | "lost_grace_pending" | "subagent_recovery_wedged";
+    detail?: string;
+    ageMs: number;
+    childSessionKey?: string;
+    runId?: string;
+};
+export type TaskRegistryMaintenanceDiagnostics = {
+    staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[];
+};
 type CronRecoveryContext = {
     storePath: string;
     store?: CronStoreFile | null;
@@ -71,6 +85,7 @@ export declare function getInspectableTaskRegistrySummary(): TaskRegistrySummary
 export declare function getInspectableTaskAuditSummary(): TaskAuditSummary;
 export declare function reconcileTaskLookupToken(token: string): TaskRecord | undefined;
 export declare function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary;
+export declare function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenanceDiagnostics;
 export declare function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary>;
 export declare function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary>;
 export declare function startTaskRegistryMaintenance(): void;

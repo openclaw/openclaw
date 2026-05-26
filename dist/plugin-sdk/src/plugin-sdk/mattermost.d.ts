@@ -6,4 +6,4 @@
 export { resolveControlCommandGate } from "./command-auth.js";
 export { formatPairingApproveHint } from "./channel-plugin-common.js";
 export type { HistoryEntry } from "./reply-history.js";
-export { buildPendingHistoryContextFromMap, clearHistoryEntriesIfEnabled, recordPendingHistoryEntryIfEnabled, } from "./reply-history.js";
+export { createChannelHistoryWindow, buildPendingHistoryContextFromMap, clearHistoryEntriesIfEnabled, recordPendingHistoryEntryIfEnabled, } from "./reply-history.js";

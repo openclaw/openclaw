@@ -1,6 +1,4 @@
-import { t as XaiToolAuthContext } from "../../tool-auth-shared-DVABFHEn.js";
-import * as _$typebox from "typebox";
-import * as _$_earendil_works_pi_agent_core0 from "@earendil-works/pi-agent-core";
+import { t as XaiToolAuthContext } from "../../tool-auth-shared-Bmx32iMq.js";
 
 //#region extensions/xai/x-search.d.ts
 declare function createXSearchTool(options?: {
@@ -11,16 +9,16 @@ declare function createXSearchTool(options?: {
   label: string;
   name: string;
   description: string;
-  parameters: _$typebox.TObject<{
-    query: _$typebox.TString;
-    allowed_x_handles: _$typebox.TOptional<_$typebox.TArray<_$typebox.TString>>;
-    excluded_x_handles: _$typebox.TOptional<_$typebox.TArray<_$typebox.TString>>;
-    from_date: _$typebox.TOptional<_$typebox.TString>;
-    to_date: _$typebox.TOptional<_$typebox.TString>;
-    enable_image_understanding: _$typebox.TOptional<_$typebox.TBoolean>;
-    enable_video_understanding: _$typebox.TOptional<_$typebox.TBoolean>;
+  parameters: import("typebox").TObject<{
+    query: import("typebox").TString;
+    allowed_x_handles: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
+    excluded_x_handles: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
+    from_date: import("typebox").TOptional<import("typebox").TString>;
+    to_date: import("typebox").TOptional<import("typebox").TString>;
+    enable_image_understanding: import("typebox").TOptional<import("typebox").TBoolean>;
+    enable_video_understanding: import("typebox").TOptional<import("typebox").TBoolean>;
   }>;
-  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<_$_earendil_works_pi_agent_core0.AgentToolResult<unknown>>;
+  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<import("@earendil-works/pi-agent-core").AgentToolResult<unknown>>;
 } | null;
 //#endregion
 export { createXSearchTool };

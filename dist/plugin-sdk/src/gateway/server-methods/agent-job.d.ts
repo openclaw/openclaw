@@ -1,3 +1,4 @@
+import { type AgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 type AgentRunSnapshot = {
     runId: string;
     status: "ok" | "error" | "timeout";
@@ -7,6 +8,8 @@ type AgentRunSnapshot = {
     stopReason?: string;
     livenessState?: string;
     yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
     ts: number;
 };
 export declare function waitForAgentJob(params: {
@@ -15,8 +18,8 @@ export declare function waitForAgentJob(params: {
     signal?: AbortSignal;
     ignoreCachedSnapshot?: boolean;
 }): Promise<AgentRunSnapshot | null>;
-export declare const __testing: {
+export declare const testing: {
     getWaiterCount(runId?: string): number;
     resetWaiters(): void;
 };
-export {};
+export { testing as __testing };

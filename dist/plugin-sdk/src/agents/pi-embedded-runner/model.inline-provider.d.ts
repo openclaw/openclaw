@@ -13,6 +13,7 @@ export type InlineProviderConfig = {
     contextWindow?: ModelProviderConfig["contextWindow"];
     contextTokens?: ModelProviderConfig["contextTokens"];
     maxTokens?: ModelProviderConfig["maxTokens"];
+    params?: ModelProviderConfig["params"];
     headers?: unknown;
     authHeader?: boolean;
     timeoutSeconds?: ModelProviderConfig["timeoutSeconds"];

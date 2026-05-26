@@ -1,2 +1,2 @@
-import { t as resolveFirstGithubToken } from "../../auth-DER5SSX9.js";
+import { t as resolveFirstGithubToken } from "../../auth-BXReeF2O.js";
 export { resolveFirstGithubToken };

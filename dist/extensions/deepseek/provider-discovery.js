@@ -1,4 +1,4 @@
-import { t as buildDeepSeekProvider } from "../../provider-catalog-jbSIuQVe.js";
+import { t as buildDeepSeekProvider } from "../../provider-catalog-gNsEYitN.js";
 //#region extensions/deepseek/provider-discovery.ts
 const deepSeekProviderDiscovery = {
 	id: "deepseek",

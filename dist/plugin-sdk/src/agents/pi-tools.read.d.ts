@@ -23,6 +23,7 @@ type MemoryFlushAppendOnlyWriteOptions = {
 };
 export declare function wrapToolMemoryFlushAppendOnlyWrite(tool: AnyAgentTool, options: MemoryFlushAppendOnlyWriteOptions): AnyAgentTool;
 export declare function wrapToolWorkspaceRootGuardWithOptions(tool: AnyAgentTool, root: string, options?: {
+    additionalRoots?: readonly string[];
     additionalContainerMounts?: readonly {
         containerRoot: string;
         hostRoot: string;

@@ -33,5 +33,8 @@ export declare function recordCliCompactionInStore(params: {
     sessionKey: string;
     sessionStore: Record<string, SessionEntry>;
     storePath: string;
+    tokensAfter?: number;
+    newSessionId?: string;
+    newSessionFile?: string;
 }): Promise<SessionEntry | undefined>;
 export {};

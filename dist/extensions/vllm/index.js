@@ -1,8 +1,8 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { i as VLLM_PROVIDER_LABEL, n as VLLM_DEFAULT_BASE_URL, r as VLLM_MODEL_PLACEHOLDER, t as VLLM_DEFAULT_API_KEY_ENV_VAR } from "../../defaults-D9ISrF42.js";
-import { t as buildVllmProvider } from "../../models-BnyzsQD6.js";
-import { r as wrapVllmProviderStream } from "../../stream-DKDJJ-CW.js";
-import "../../api-BDEu1bxg.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { i as VLLM_PROVIDER_LABEL, n as VLLM_DEFAULT_BASE_URL, r as VLLM_MODEL_PLACEHOLDER, t as VLLM_DEFAULT_API_KEY_ENV_VAR } from "../../defaults-Cha6Xv-5.js";
+import { t as buildVllmProvider } from "../../models-C_NyT8MT.js";
+import { r as wrapVllmProviderStream } from "../../stream-BabfpIl2.js";
+import "../../api-YxXhUv-j.js";
 //#region extensions/vllm/index.ts
 const PROVIDER_ID = "vllm";
 async function loadProviderSetup() {

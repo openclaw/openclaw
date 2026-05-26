@@ -2,14 +2,12 @@ import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@earen
 import type { TSchema } from "typebox";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<TParameters, TResult> & {
-    ownerOnly?: boolean;
     displaySummary?: string;
 };
 type ErasedAgentToolExecute = {
     execute(this: void, toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): Promise<AgentToolResult<unknown>>;
 };
 export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> & ErasedAgentToolExecute & {
-    ownerOnly?: boolean;
     displaySummary?: string;
 };
 export declare function asToolParamsRecord(params: unknown): Record<string, unknown>;
@@ -20,7 +18,6 @@ export type StringParamOptions = {
     allowEmpty?: boolean;
 };
 export type ActionGate<T extends Record<string, boolean | undefined>> = (key: keyof T, defaultValue?: boolean) => boolean;
-export declare const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 export declare class ToolInputError extends Error {
     readonly status: number;
     constructor(message: string);
@@ -72,7 +69,6 @@ export declare function failedTextResult<TDetails extends {
 }>(text: string, details: TDetails): AgentToolResult<TDetails>;
 export declare function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails>;
 export declare function jsonResult(payload: unknown): AgentToolResult<unknown>;
-export declare function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool;
 export declare function imageResult(params: {
     label: string;
     path: string;

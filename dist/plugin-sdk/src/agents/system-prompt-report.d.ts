@@ -19,4 +19,5 @@ export declare function buildSystemPromptReport(params: {
     injectedFiles: EmbeddedContextFile[];
     skillsPrompt: string;
     tools: AgentTool[];
+    currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport;

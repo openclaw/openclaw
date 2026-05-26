@@ -14,7 +14,9 @@ export declare function collectStalePluginConfigWarnings(params: {
     doctorFixCommand: string;
     autoRepairBlocked?: boolean;
 }): string[];
-export declare function maybeRepairStalePluginConfig(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): {
+export declare function maybeRepairStalePluginConfig(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv, params?: {
+    preservePluginIds?: Iterable<string>;
+}): {
     config: OpenClawConfig;
     changes: string[];
 };

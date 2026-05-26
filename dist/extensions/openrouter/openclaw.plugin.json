@@ -53,6 +53,10 @@
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",
       "groupHint": "API key",
+      "onboardingScopes": [
+        "text-inference",
+        "music-generation"
+      ],
       "optionKey": "openrouterApiKey",
       "cliFlag": "--openrouter-api-key",
       "cliOption": "--openrouter-api-key <key>",
@@ -64,6 +68,9 @@
       "openrouter"
     ],
     "imageGenerationProviders": [
+      "openrouter"
+    ],
+    "musicGenerationProviders": [
       "openrouter"
     ],
     "videoGenerationProviders": [

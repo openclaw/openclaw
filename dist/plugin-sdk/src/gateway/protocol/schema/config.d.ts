@@ -81,6 +81,7 @@ export declare const ConfigSchemaLookupChildSchema: Type.TObject<{
     type: Type.TOptional<Type.TUnion<[Type.TString, Type.TArray<Type.TString>]>>;
     required: Type.TBoolean;
     hasChildren: Type.TBoolean;
+    reloadKind: Type.TOptional<Type.TUnion<[Type.TLiteral<"restart">, Type.TLiteral<"hot">, Type.TLiteral<"none">]>>;
     hint: Type.TOptional<Type.TObject<{
         label: Type.TOptional<Type.TString>;
         help: Type.TOptional<Type.TString>;
@@ -97,6 +98,7 @@ export declare const ConfigSchemaLookupChildSchema: Type.TObject<{
 export declare const ConfigSchemaLookupResultSchema: Type.TObject<{
     path: Type.TString;
     schema: Type.TUnknown;
+    reloadKind: Type.TOptional<Type.TUnion<[Type.TLiteral<"restart">, Type.TLiteral<"hot">, Type.TLiteral<"none">]>>;
     hint: Type.TOptional<Type.TObject<{
         label: Type.TOptional<Type.TString>;
         help: Type.TOptional<Type.TString>;
@@ -115,6 +117,7 @@ export declare const ConfigSchemaLookupResultSchema: Type.TObject<{
         type: Type.TOptional<Type.TUnion<[Type.TString, Type.TArray<Type.TString>]>>;
         required: Type.TBoolean;
         hasChildren: Type.TBoolean;
+        reloadKind: Type.TOptional<Type.TUnion<[Type.TLiteral<"restart">, Type.TLiteral<"hot">, Type.TLiteral<"none">]>>;
         hint: Type.TOptional<Type.TObject<{
             label: Type.TOptional<Type.TString>;
             help: Type.TOptional<Type.TString>;

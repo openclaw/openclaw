@@ -1,6 +1,7 @@
-import { o as onDiagnosticEvent } from "../diagnostic-events-BkhOFI0h.js";
-import { n as registerContextEngine } from "../registry-CNnI9MEE.js";
-import { i as stringEnum, r as optionalStringEnum } from "../typebox-B_Peztf1.js";
-import { n as delegateCompactionToRuntime, t as buildMemorySystemPromptAddition } from "../delegate-DKKaY4dk.js";
-import { r as emptyPluginConfigSchema } from "../config-schema-jDHhDDcb.js";
-export { buildMemorySystemPromptAddition, delegateCompactionToRuntime, emptyPluginConfigSchema, onDiagnosticEvent, optionalStringEnum, registerContextEngine, stringEnum };
+import { s as onDiagnosticEvent } from "../diagnostic-events-BLgzARSp.js";
+import { r as registerContextEngine } from "../registry-DxH_0Os-.js";
+import { r as assertContextEngineHostSupport } from "../host-compat-DMtVtGSr.js";
+import { i as stringEnum, r as optionalStringEnum } from "../typebox-CjEaoMel.js";
+import { n as delegateCompactionToRuntime, t as buildMemorySystemPromptAddition } from "../delegate-CUgSnBCT.js";
+import { r as emptyPluginConfigSchema } from "../config-schema-DBTUnI0T.js";
+export { assertContextEngineHostSupport, buildMemorySystemPromptAddition, delegateCompactionToRuntime, emptyPluginConfigSchema, onDiagnosticEvent, optionalStringEnum, registerContextEngine, stringEnum };

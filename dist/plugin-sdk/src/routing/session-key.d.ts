@@ -19,6 +19,12 @@ export declare function toAgentStoreSessionKey(params: {
 }): string;
 export declare function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string;
 export declare function classifySessionKeyShape(sessionKey: string | undefined | null): SessionKeyShape;
+export declare function isUnscopedSessionKeySentinel(sessionKey: string | undefined | null): boolean;
+export declare function scopeLegacySessionKeyToAgent(params: {
+    agentId?: string | undefined;
+    sessionKey?: string | undefined;
+    mainKey?: string | undefined;
+}): string | undefined;
 export declare function normalizeAgentId(value: string | undefined | null): string;
 export declare function isValidAgentId(value: string | undefined | null): boolean;
 export declare function sanitizeAgentId(value: string | undefined | null): string;

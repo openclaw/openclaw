@@ -1,21 +1,22 @@
-import { n as isWSL2Sync } from "../../wsl-CPSzfLq9.js";
-import { r as describeImagesWithModel, t as describeImageWithModel } from "../../image-runtime-pndfllVY.js";
-import "../../media-understanding-CR4579N1.js";
-import { h as buildOpenAICompatibleReplayPolicy, r as OPENAI_COMPATIBLE_REPLAY_HOOKS } from "../../provider-model-shared-D-slKnZa.js";
-import { n as buildApiKeyCredential } from "../../provider-auth-helpers-Hp3hWZu2.js";
-import "../../provider-auth-D5QGE8z6.js";
-import "../../runtime-env-AKjXcC53.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { r as resolvePluginConfigObject } from "../../plugin-config-runtime-DyMlx_D0.js";
-import "../../defaults-B7Swclqd.js";
-import { i as buildOllamaProvider, l as queryOllamaModelShowInfo, r as buildOllamaModelDefinition, t as readProviderBaseUrl } from "../../provider-base-url-BorJpQi-.js";
-import { i as promptAndConfigureOllama, n as configureOllamaNonInteractive, r as ensureOllamaModelPulled } from "../../setup-DG6UlbBI.js";
-import { d as resolveConfiguredOllamaProviderConfig, l as isOllamaCompatProvider, o as createConfiguredOllamaCompatStreamWrapper, s as createConfiguredOllamaStreamFn } from "../../stream-rxdgQFVo.js";
-import "../../api-DLhGiD_8.js";
-import { n as resolveThinkingProfile } from "../../provider-policy-api-B09yUvQX.js";
-import { i as shouldUseSyntheticOllamaAuth, n as OLLAMA_PROVIDER_ID, r as resolveOllamaDiscoveryResult, t as OLLAMA_DEFAULT_API_KEY } from "../../discovery-shared-DCvt1ibE.js";
-import { n as createOllamaEmbeddingProvider, t as DEFAULT_OLLAMA_EMBEDDING_MODEL } from "../../embedding-provider-BeE4Vy0z.js";
-import { t as createOllamaWebSearchProvider } from "../../web-search-provider-DYZ9Ax_b.js";
+import { n as isWSL2Sync } from "../../wsl-2-jVkfxN.js";
+import { r as describeImagesWithModel, t as describeImageWithModel } from "../../image-runtime-Dye6Uj6e.js";
+import "../../media-understanding-C_qxfCIa.js";
+import { a as buildOpenAICompatibleReplayPolicy } from "../../provider-replay-helpers-BHVsUct1.js";
+import "../../runtime-env-BtvWnLRh.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { r as OPENAI_COMPATIBLE_REPLAY_HOOKS } from "../../provider-model-shared-DtsPmvDx.js";
+import { n as buildApiKeyCredential } from "../../provider-auth-helpers-BZ5Z8RV6.js";
+import "../../provider-auth-BtRKd5us.js";
+import { r as resolvePluginConfigObject } from "../../plugin-config-runtime-DWa7yCpn.js";
+import "../../defaults-Ct4-oW82.js";
+import { i as buildOllamaProvider, l as queryOllamaModelShowInfo, r as buildOllamaModelDefinition, t as readProviderBaseUrl } from "../../provider-base-url-CrecHiog.js";
+import { i as promptAndConfigureOllama, n as configureOllamaNonInteractive, r as ensureOllamaModelPulled } from "../../setup-fXWhcJhl.js";
+import { d as resolveConfiguredOllamaProviderConfig, l as isOllamaCompatProvider, o as createConfiguredOllamaCompatStreamWrapper, s as createConfiguredOllamaStreamFn } from "../../stream-DcS_ejJS.js";
+import "../../api-FTzA6POj.js";
+import { n as resolveThinkingProfile } from "../../provider-policy-api-B-HOzv3B.js";
+import { i as shouldUseSyntheticOllamaAuth, n as OLLAMA_PROVIDER_ID, r as resolveOllamaDiscoveryResult, t as OLLAMA_DEFAULT_API_KEY } from "../../discovery-shared-ROvQIBGQ.js";
+import { n as createOllamaEmbeddingProvider, t as DEFAULT_OLLAMA_EMBEDDING_MODEL } from "../../embedding-provider-CvVtKgB6.js";
+import { t as createOllamaWebSearchProvider } from "../../web-search-provider-qpePEaOb.js";
 import { access } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -120,6 +121,12 @@ function usesOllamaOpenAICompatTransport(model) {
 		baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : void 0,
 		api: "openai-completions"
 	});
+}
+function buildNativeOllamaReplayPolicy() {
+	return {
+		...buildOpenAICompatibleReplayPolicy("openai-completions", { sanitizeToolCallIds: false }),
+		sanitizeToolCallIds: false
+	};
 }
 const dynamicModelCache = /* @__PURE__ */ new Map();
 function buildDynamicCacheKey(provider, baseUrl) {
@@ -262,7 +269,7 @@ var ollama_default = definePluginEntry({
 				});
 			},
 			...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-			buildReplayPolicy: (ctx) => ctx.modelApi === "ollama" ? buildOpenAICompatibleReplayPolicy("openai-completions") : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+			buildReplayPolicy: (ctx) => ctx.modelApi === "ollama" ? buildNativeOllamaReplayPolicy() : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
 			contributeResolvedModelCompat: ({ model }) => usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : void 0,
 			resolveReasoningOutputMode: () => "native",
 			resolveThinkingProfile,

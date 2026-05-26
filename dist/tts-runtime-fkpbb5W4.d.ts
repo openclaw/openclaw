@@ -1,0 +1,36 @@
+import { o as TtsRuntimeFacade } from "./tts-runtime.types-DsGX4LDs.js";
+//#region src/plugin-sdk/tts-runtime.d.ts
+type FacadeModule = TtsRuntimeFacade;
+declare function prewarmTtsRuntimeFacade(): void;
+declare const testApi: FacadeModule["testApi"];
+declare const buildTtsSystemPromptHint: FacadeModule["buildTtsSystemPromptHint"];
+declare const getLastTtsAttempt: FacadeModule["getLastTtsAttempt"];
+declare const getResolvedSpeechProviderConfig: FacadeModule["getResolvedSpeechProviderConfig"];
+declare const getTtsMaxLength: FacadeModule["getTtsMaxLength"];
+declare const getTtsPersona: FacadeModule["getTtsPersona"];
+declare const getTtsProvider: FacadeModule["getTtsProvider"];
+declare const isSummarizationEnabled: FacadeModule["isSummarizationEnabled"];
+declare const isTtsEnabled: FacadeModule["isTtsEnabled"];
+declare const isTtsProviderConfigured: FacadeModule["isTtsProviderConfigured"];
+declare const listSpeechVoices: FacadeModule["listSpeechVoices"];
+declare const listTtsPersonas: FacadeModule["listTtsPersonas"];
+declare const maybeApplyTtsToPayload: FacadeModule["maybeApplyTtsToPayload"];
+declare const resolveExplicitTtsOverrides: FacadeModule["resolveExplicitTtsOverrides"];
+declare const resolveTtsAutoMode: FacadeModule["resolveTtsAutoMode"];
+declare const resolveTtsConfig: FacadeModule["resolveTtsConfig"];
+declare const resolveTtsPrefsPath: FacadeModule["resolveTtsPrefsPath"];
+declare const resolveTtsProviderOrder: FacadeModule["resolveTtsProviderOrder"];
+declare const setLastTtsAttempt: FacadeModule["setLastTtsAttempt"];
+declare const setSummarizationEnabled: FacadeModule["setSummarizationEnabled"];
+declare const setTtsAutoMode: FacadeModule["setTtsAutoMode"];
+declare const setTtsEnabled: FacadeModule["setTtsEnabled"];
+declare const setTtsMaxLength: FacadeModule["setTtsMaxLength"];
+declare const setTtsPersona: FacadeModule["setTtsPersona"];
+declare const setTtsProvider: FacadeModule["setTtsProvider"];
+declare const synthesizeSpeech: FacadeModule["synthesizeSpeech"];
+declare const streamSpeech: FacadeModule["streamSpeech"];
+declare const textToSpeech: FacadeModule["textToSpeech"];
+declare const textToSpeechStream: FacadeModule["textToSpeechStream"];
+declare const textToSpeechTelephony: FacadeModule["textToSpeechTelephony"];
+//#endregion
+export { textToSpeechStream as A, setTtsMaxLength as C, synthesizeSpeech as D, streamSpeech as E, testApi as O, setTtsEnabled as S, setTtsProvider as T, resolveTtsPrefsPath as _, getTtsPersona as a, setSummarizationEnabled as b, isTtsEnabled as c, listTtsPersonas as d, maybeApplyTtsToPayload as f, resolveTtsConfig as g, resolveTtsAutoMode as h, getTtsMaxLength as i, textToSpeechTelephony as j, textToSpeech as k, isTtsProviderConfigured as l, resolveExplicitTtsOverrides as m, getLastTtsAttempt as n, getTtsProvider as o, prewarmTtsRuntimeFacade as p, getResolvedSpeechProviderConfig as r, isSummarizationEnabled as s, buildTtsSystemPromptHint as t, listSpeechVoices as u, resolveTtsProviderOrder as v, setTtsPersona as w, setTtsAutoMode as x, setLastTtsAttempt as y };

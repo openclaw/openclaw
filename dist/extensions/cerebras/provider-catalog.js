@@ -1,2 +1,2 @@
-import { t as buildCerebrasProvider } from "../../provider-catalog--iFzISwx.js";
+import { t as buildCerebrasProvider } from "../../provider-catalog-BT9k0Ubq.js";
 export { buildCerebrasProvider };

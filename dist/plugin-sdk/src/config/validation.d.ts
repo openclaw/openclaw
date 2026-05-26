@@ -2,7 +2,7 @@ import { type PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 export declare function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[];
 declare function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue;
-export declare const __testing: {
+export declare const testing: {
     mapZodIssueToConfigIssue: typeof mapZodIssueToConfigIssue;
 };
 /**
@@ -13,6 +13,7 @@ export declare function validateConfigObjectRaw(raw: unknown, opts?: {
     sourceRaw?: unknown;
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
     validateBundledChannels?: boolean;
+    preservedLegacyRootKeys?: readonly string[];
 }): {
     ok: true;
     config: OpenClawConfig;
@@ -45,7 +46,8 @@ type ValidateConfigWithPluginsParams = {
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
     loadPluginMetadataSnapshot?: (config: OpenClawConfig) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
     sourceRaw?: unknown;
+    preservedLegacyRootKeys?: readonly string[];
 };
 export declare function validateConfigObjectWithPlugins(raw: unknown, params?: ValidateConfigWithPluginsParams): ValidateConfigWithPluginsResult;
 export declare function validateConfigObjectRawWithPlugins(raw: unknown, params?: ValidateConfigWithPluginsParams): ValidateConfigWithPluginsResult;
-export {};
+export { testing as __testing };

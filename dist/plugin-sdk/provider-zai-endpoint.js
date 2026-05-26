@@ -1,4 +1,4 @@
-import { r as loadBundledPluginPublicSurfaceModuleSync } from "../facade-loader-BqRX3EBI.js";
+import { r as loadBundledPluginPublicSurfaceModuleSync } from "../facade-loader-Cog8gw3V.js";
 //#region src/plugin-sdk/provider-zai-endpoint.ts
 /**
 * @deprecated Z.AI provider-owned endpoint detection helper. Use the bundled

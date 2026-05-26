@@ -13,6 +13,7 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
     mode?: string;
     root?: string;
+    handoffId?: string;
     before?: Record<string, unknown> | null;
     after?: Record<string, unknown> | null;
     steps?: RestartSentinelStep[];

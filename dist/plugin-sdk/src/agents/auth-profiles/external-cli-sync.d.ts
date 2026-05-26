@@ -14,6 +14,13 @@ export declare function isSafeToUseExternalCliCredential(existing: OAuthCredenti
 export declare function readExternalCliBootstrapCredential(params: {
     profileId: string;
     credential: OAuthCredential;
+    allowInlineOAuthTokenMaterial?: boolean;
+    allowKeychainPrompt?: boolean;
 }): OAuthCredential | null;
 export declare const readManagedExternalCliCredential: typeof readExternalCliBootstrapCredential;
+export declare function readExternalCliFallbackCredential(params: {
+    profileId: string;
+    credential: OAuthCredential;
+    allowKeychainPrompt?: boolean;
+}): OAuthCredential | null;
 export declare function resolveExternalCliAuthProfiles(store: AuthProfileStore, options?: ExternalCliAuthProfileOptions): ExternalCliResolvedProfile[];

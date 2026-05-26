@@ -64,11 +64,24 @@ declare function resolveXaiToolSearchConfig(ctx: {
   searchConfig?: Record<string, unknown>;
 }): Record<string, unknown> | undefined;
 declare function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined;
+type XaiResolvedWebSearchAuth = {
+  apiKey: string;
+  mode?: "api-key" | "oauth" | "token" | "aws-sdk";
+  profileId?: string;
+};
+declare function resolveXaiWebSearchAuth(ctx: {
+  config?: Record<string, unknown>;
+  agentDir?: string;
+}, searchConfig?: Record<string, unknown>, options?: {
+  forceRefresh?: boolean;
+  profileId?: string;
+}): Promise<XaiResolvedWebSearchAuth | undefined>;
 declare function resolveXaiWebSearchTimeoutSeconds(searchConfig?: Record<string, unknown>): number;
-declare const __testing: {
+declare const testing: {
   buildXaiWebSearchPayload: typeof buildXaiWebSearchPayload;
   extractXaiWebSearchContent: typeof extractXaiWebSearchContent;
   resolveXaiToolSearchConfig: typeof resolveXaiToolSearchConfig;
+  resolveXaiWebSearchAuth: typeof resolveXaiWebSearchAuth;
   resolveXaiInlineCitations: typeof resolveXaiInlineCitations;
   resolveXaiWebSearchCredential: typeof resolveXaiWebSearchCredential;
   resolveXaiWebSearchEndpoint: typeof resolveXaiWebSearchEndpoint;
@@ -77,4 +90,4 @@ declare const __testing: {
   requestXaiWebSearch: typeof requestXaiWebSearch;
 };
 //#endregion
-export { __testing };
+export { testing as __testing, testing };

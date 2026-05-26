@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { type ModelRef } from "./model-selection-normalize.js";
+import { type ModelManifestNormalizationContext, type ModelRef } from "./model-selection-normalize.js";
+type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"];
 export type ModelAliasIndex = {
     byAlias: Map<string, {
         alias: string;
@@ -9,13 +9,10 @@ export type ModelAliasIndex = {
     }>;
     byKey: Map<string, string[]>;
 };
-type ManifestNormalizationContext = {
-    manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-};
 export declare function inferUniqueProviderFromConfiguredModels(params: {
     cfg: OpenClawConfig;
     model: string;
-}): string | undefined;
+} & ModelManifestNormalizationContext): string | undefined;
 export declare function inferUniqueProviderFromCatalog(params: {
     catalog: readonly ModelCatalogEntry[];
     model: string;
@@ -25,29 +22,29 @@ export declare function resolveBareModelDefaultProvider(params: {
     catalog: readonly ModelCatalogEntry[];
     model: string;
     defaultProvider: string;
-}): string;
+} & ModelManifestNormalizationContext): string;
 export declare function resolveConfiguredOpenRouterCompatAlias(params: {
     cfg?: OpenClawConfig;
     raw: string;
     defaultProvider: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-} & ManifestNormalizationContext): ModelRef | null;
+} & ModelManifestNormalizationContext): ModelRef | null;
 export declare function resolveAllowlistModelKey(params: {
     cfg?: OpenClawConfig;
     raw: string;
     defaultProvider: string;
-}): string | null;
+} & ModelManifestNormalizationContext): string | null;
 export declare function buildConfiguredAllowlistKeys(params: {
     cfg: OpenClawConfig | undefined;
     defaultProvider: string;
-}): Set<string> | null;
+} & ModelManifestNormalizationContext): Set<string> | null;
 export declare function buildModelAliasIndex(params: {
     cfg: OpenClawConfig;
     defaultProvider: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-} & ManifestNormalizationContext): ModelAliasIndex;
+} & ModelManifestNormalizationContext): ModelAliasIndex;
 export declare function resolveModelRefFromString(params: {
     cfg?: OpenClawConfig;
     raw: string;
@@ -55,7 +52,7 @@ export declare function resolveModelRefFromString(params: {
     aliasIndex?: ModelAliasIndex;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-} & ManifestNormalizationContext): {
+} & ModelManifestNormalizationContext): {
     ref: ModelRef;
     alias?: string;
 } | null;
@@ -65,14 +62,16 @@ export declare function resolveConfiguredModelRef(params: {
     defaultModel: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-}): ModelRef;
+} & ModelManifestNormalizationContext): ModelRef;
 export declare function buildAllowedModelSetWithFallbacks(params: {
     cfg: OpenClawConfig;
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
-}): {
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+} & ModelManifestNormalizationContext): {
     allowAny: boolean;
     allowedCatalog: ModelCatalogEntry[];
     allowedKeys: Set<string>;
@@ -96,21 +95,24 @@ export declare function getModelRefStatusWithFallbackModels(params: {
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
-}): ModelRefStatus;
+} & ModelManifestNormalizationContext): ModelRefStatus;
 export declare function resolveAllowedModelRefFromAliasIndex(params: {
     cfg: OpenClawConfig;
     raw: string;
     defaultProvider: string;
     aliasIndex: ModelAliasIndex;
     getStatus: (ref: ModelRef) => ModelRefStatus;
-}): ResolveAllowedModelRefResult;
+} & ModelManifestNormalizationContext): ResolveAllowedModelRefResult;
+export declare function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean;
 export declare function buildConfiguredModelCatalog(params: {
     cfg: OpenClawConfig;
+    workspaceDir?: string;
+    manifestPlugins?: ModelManifestPlugins;
 }): ModelCatalogEntry[];
 export declare function resolveHooksGmailModel(params: {
     cfg: OpenClawConfig;
     defaultProvider: string;
-}): ModelRef | null;
+} & ModelManifestNormalizationContext): ModelRef | null;
 export declare function normalizeModelSelection(value: unknown): string | undefined;
 export declare function parseConfiguredModelVisibilityEntries(params: {
     cfg?: OpenClawConfig;
@@ -127,7 +129,7 @@ export declare function resolveAllowedModelSelection(params: {
     allowAny: boolean;
     allowedKeys: ReadonlySet<string>;
     allowedCatalog: readonly ModelCatalogEntry[];
-}): ModelRef | null;
+} & ModelManifestNormalizationContext): ModelRef | null;
 export type ModelVisibilityPolicy = {
     allowAny: boolean;
     allowedCatalog: ModelCatalogEntry[];
@@ -157,5 +159,5 @@ export declare function createModelVisibilityPolicyWithFallbacks(params: {
     defaultProvider: string;
     defaultModel?: string;
     fallbackModels: readonly string[];
-}): ModelVisibilityPolicy;
+} & ModelManifestNormalizationContext): ModelVisibilityPolicy;
 export {};

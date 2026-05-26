@@ -1,2 +1,2 @@
-import { t as signalPlugin } from "../../channel-DjZg8i8w.js";
+import { t as signalPlugin } from "../../channel-DSON1k5L.js";
 export { signalPlugin };

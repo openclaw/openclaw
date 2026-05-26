@@ -1,4 +1,4 @@
-import { r as loadBundledEntryExportSync, t as defineBundledChannelEntry } from "../../channel-entry-contract-DGmOIqjJ.js";
+import { r as loadBundledEntryExportSync, t as defineBundledChannelEntry } from "../../channel-entry-contract-BDMmGZzs.js";
 //#region extensions/mattermost/index.ts
 function registerSlashCommandRoute(api) {
 	loadBundledEntryExportSync(import.meta.url, {

@@ -5,6 +5,7 @@ export type ToolParameterSchemaOptions = {
     modelId?: string;
     modelCompat?: ModelCompatConfig;
 };
+export declare function inlineLocalToolSchemaRefs(schema: unknown): TSchema;
 export declare function normalizeToolParameterSchema(schema: unknown, options?: {
     modelProvider?: string;
     modelId?: string;

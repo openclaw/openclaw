@@ -1,7 +1,7 @@
-import { t as formatDocsLink } from "../links-Dz4PCYCN.js";
-import { t as DEFAULT_ACCOUNT_ID } from "../account-id-CwBWagLE.js";
-import { J as setSetupChannelEnabled, Q as splitSetupEntries, m as createTopLevelChannelDmPolicy } from "../setup-wizard-helpers-Cm8y4liy.js";
-import "../setup-BmF6Yxnk.js";
+import { t as formatDocsLink } from "../links-CM5vg8_V.js";
+import { t as DEFAULT_ACCOUNT_ID } from "../account-id-B32J-iNN.js";
+import { J as setSetupChannelEnabled, Q as splitSetupEntries, m as createTopLevelChannelDmPolicy } from "../setup-wizard-helpers-Dbpzm32P.js";
+import "../setup-DPvocg6M.js";
 //#region src/plugin-sdk/optional-channel-setup.ts
 function buildOptionalChannelSetupMessage(params) {
 	const installTarget = params.npmSpec ?? `the ${params.label} plugin`;

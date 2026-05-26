@@ -1,11 +1,11 @@
-import { n as ChannelPlugin } from "../../types.public-BfuQlAVf.js";
-import { n as RoutePeer } from "../../resolve-route-CSRop7gD.js";
-import { a as resolveSignalAccount, c as probeSignal, i as resolveDefaultSignalAccountId, n as listEnabledSignalAccounts, r as listSignalAccountIds, s as SignalProbe, t as ResolvedSignalAccount } from "../../accounts-BqKPHZLa.js";
-import { t as signalPlugin } from "../../channel-DjZg8i8w.js";
-import { _ as markdownToSignalTextChunks, a as sendMessageSignal, c as ResolvedSignalReactionLevel, d as MonitorSignalOpts, f as monitorSignalProvider, g as markdownToSignalText, h as SignalTextStyleRange, i as SignalSendResult, l as SignalReactionLevel, m as SignalFormattedText, n as SignalRpcOpts, o as sendReadReceiptSignal, p as signalMessageActions, r as SignalSendOpts, s as sendTypingSignal, t as SignalReceiptType, u as resolveSignalReactionLevel } from "../../send-CipCU2tN.js";
-import { a as isSignalSenderAllowed, c as resolveSignalRecipient, i as formatSignalSenderId, l as resolveSignalSender, n as formatSignalPairingIdLine, o as normalizeSignalAllowRecipient, r as formatSignalSenderDisplay, s as resolveSignalPeerId, t as SignalSender, u as looksLikeUuid } from "../../identity-C4KrOSSQ.js";
-import { a as SignalInstallResult, c as installSignalCli, d as pickAsset, i as ReleaseAsset, n as normalizeSignalMessagingTarget, r as NamedAsset, s as extractSignalCliArchive, t as looksLikeSignalTargetId, u as looksLikeArchive } from "../../normalize-Bfd2y0j-.js";
-import { i as sendReactionSignal, n as SignalReactionResult, r as removeReactionSignal, t as SignalReactionOpts } from "../../send-reactions-C8y_Te1K.js";
+import { n as ChannelPlugin } from "../../types.public-B2Ho5PN_.js";
+import { n as RoutePeer } from "../../resolve-route-BZP_W0Z9.js";
+import { a as resolveSignalAccount, c as probeSignal, i as resolveDefaultSignalAccountId, n as listEnabledSignalAccounts, r as listSignalAccountIds, s as SignalProbe, t as ResolvedSignalAccount } from "../../accounts-Bs5xT9n9.js";
+import { t as signalPlugin } from "../../channel-DSON1k5L.js";
+import { _ as markdownToSignalTextChunks, a as sendMessageSignal, c as ResolvedSignalReactionLevel, d as MonitorSignalOpts, f as monitorSignalProvider, g as markdownToSignalText, h as SignalTextStyleRange, i as SignalSendResult, l as SignalReactionLevel, m as SignalFormattedText, n as SignalRpcOpts, o as sendReadReceiptSignal, p as signalMessageActions, r as SignalSendOpts, s as sendTypingSignal, t as SignalReceiptType, u as resolveSignalReactionLevel } from "../../send-DHXH4pW3.js";
+import { a as isSignalSenderAllowed, c as resolveSignalRecipient, i as formatSignalSenderId, l as resolveSignalSender, n as formatSignalPairingIdLine, o as normalizeSignalAllowRecipient, r as formatSignalSenderDisplay, s as resolveSignalPeerId, t as SignalSender, u as looksLikeUuid } from "../../identity-DLlvfU6p.js";
+import { a as SignalInstallResult, c as installSignalCli, d as pickAsset, i as ReleaseAsset, n as normalizeSignalMessagingTarget, r as NamedAsset, s as extractSignalCliArchive, t as looksLikeSignalTargetId, u as looksLikeArchive } from "../../normalize-BtYM5FLJ.js";
+import { i as sendReactionSignal, n as SignalReactionResult, r as removeReactionSignal, t as SignalReactionOpts } from "../../send-reactions-BZcn5zZ0.js";
 
 //#region extensions/signal/src/channel.setup.d.ts
 declare const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount>;

@@ -85,7 +85,7 @@ export declare function resolvePluginConversationBindingApproval(params: {
     senderId?: string;
 }): Promise<PluginBindingResolveResult>;
 export declare function buildPluginBindingResolvedText(params: PluginBindingResolveResult): string;
-export declare const __testing: {
+export declare const testing: {
     reset(): void;
 };
-export {};
+export { testing as __testing };

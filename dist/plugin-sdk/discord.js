@@ -1,19 +1,18 @@
-import { n as normalizeAccountId, t as DEFAULT_ACCOUNT_ID } from "../account-id-CwBWagLE.js";
-import { i as getRuntimeConfig } from "../io-5xE1dPMK.js";
-import { i as getRuntimeConfigSnapshot } from "../runtime-snapshot-tLK3Mx7y.js";
-import { n as DiscordConfigSchema } from "../zod-schema.providers-whatsapp-BElo3xB4.js";
-import { t as getChatChannelMeta } from "../chat-meta-DTmQp8Tt.js";
-import { r as buildChannelConfigSchema } from "../config-schema-DftNRjDz.js";
-import { r as loadBundledPluginPublicSurfaceModuleSync, t as createLazyFacadeObjectValue } from "../facade-loader-BqRX3EBI.js";
-import { r as emptyPluginConfigSchema } from "../config-schema-jDHhDDcb.js";
-import { s as migrateBaseNameToDefaultAccount, t as applyAccountNameToChannelSection } from "../setup-helpers-D1h9Zq-C.js";
-import { a as resolveConfiguredFromCredentialStatuses, r as projectCredentialSnapshotFields } from "../account-snapshot-fields-C13MnFmj.js";
-import "../runtime-config-snapshot-pRc6W_Li.js";
-import { t as PAIRING_APPROVED_MESSAGE } from "../pairing-message-C5_Dm1pD.js";
-import "../channel-plugin-common-DCeLU7rb.js";
-import { o as buildTokenChannelStatusSummary, r as buildComputedAccountStatusSnapshot } from "../status-helpers-Dk-3BT6p.js";
-import "../channel-status-DQzE7laT.js";
-import "../bundled-channel-config-schema-B1433kYy.js";
+import { n as normalizeAccountId, t as DEFAULT_ACCOUNT_ID } from "../account-id-B32J-iNN.js";
+import { i as getRuntimeConfig } from "../io-DoswVvYe.js";
+import { i as getRuntimeConfigSnapshot } from "../runtime-snapshot-DgdkBEdP.js";
+import { t as getChatChannelMeta } from "../chat-meta-2H4wOcrq.js";
+import { r as buildChannelConfigSchema } from "../config-schema-ChfiQrSg.js";
+import { r as loadBundledPluginPublicSurfaceModuleSync, t as createLazyFacadeObjectValue } from "../facade-loader-Cog8gw3V.js";
+import { r as emptyPluginConfigSchema } from "../config-schema-DBTUnI0T.js";
+import { s as migrateBaseNameToDefaultAccount, t as applyAccountNameToChannelSection } from "../setup-helpers-BC9z9VvG.js";
+import { a as resolveConfiguredFromCredentialStatuses, r as projectCredentialSnapshotFields } from "../account-snapshot-fields-YzCGlwrq.js";
+import "../runtime-config-snapshot-BBsNBtE3.js";
+import { t as PAIRING_APPROVED_MESSAGE } from "../pairing-message-C9w9gv4K.js";
+import "../channel-plugin-common-fWZhnLoH.js";
+import { o as buildTokenChannelStatusSummary, r as buildComputedAccountStatusSnapshot } from "../status-helpers-CnvYAK73.js";
+import "../channel-status-pVVcmlap.js";
+import { n as DiscordConfigSchema } from "../bundled-channel-config-schema-CA36mrPs.js";
 //#region src/plugin-sdk/discord.ts
 function loadDiscordApiFacadeModule() {
 	return loadBundledPluginPublicSurfaceModuleSync({

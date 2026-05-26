@@ -66,6 +66,7 @@ export declare function buildStatusCommandReportData(params: {
     formatUpdateAvailableHint: (update: StatusOverviewSurface["update"]) => string | null;
     accentDim: (value: string) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
     theme: {
         heading: (value: string) => string;
         muted: (value: string) => string;
@@ -83,6 +84,7 @@ export declare function buildStatusCommandReportData(params: {
     taskMaintenanceHint: string;
     pluginCompatibilityLines: string[];
     pairingRecoveryLines: string[];
+    modelSelectionLines: string[];
     securityAuditLines: string[];
     channelsColumns: readonly [{
         readonly key: "Channel";
@@ -121,7 +123,7 @@ export declare function buildStatusCommandReportData(params: {
     })[];
     sessionsRows: {
         Key: string;
-        Kind: string;
+        Kind: import("../sessions/classify-session-kind.ts").SessionKind;
         Age: string;
         Model: string;
         Runtime: string;

@@ -10,7 +10,10 @@ export declare function findOpenAIStrictSchemaViolations(schema: unknown, path: 
     requireObjectRoot?: boolean;
 }): string[];
 export declare function inspectOpenAIToolSchemas(ctx: ProviderNormalizeToolSchemasContext): ProviderToolSchemaDiagnostic[];
-export type ProviderToolCompatFamily = "gemini" | "openai";
+export declare const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS: Set<string>;
+export declare function normalizeDeepSeekToolSchemas(ctx: ProviderNormalizeToolSchemasContext): AnyAgentTool[];
+export declare function inspectDeepSeekToolSchemas(ctx: ProviderNormalizeToolSchemasContext): ProviderToolSchemaDiagnostic[];
+export type ProviderToolCompatFamily = "deepseek" | "gemini" | "openai";
 export declare function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
     normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
     inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];

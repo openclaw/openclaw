@@ -16,6 +16,7 @@ export type InlineActionResult = {
     kind: "continue";
     directives: InlineDirectives;
     abortedLastRun: boolean;
+    cleanedBody: string;
 };
 export declare function handleInlineActions(params: {
     ctx: MsgContext;

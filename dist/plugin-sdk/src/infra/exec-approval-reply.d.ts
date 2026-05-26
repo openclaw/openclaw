@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
+import type { InteractiveReply, MessagePresentation, MessagePresentationButton } from "../interactive/payload.js";
 import { type ExecApprovalDecision, type ExecHost } from "./exec-approvals.js";
 export type ExecApprovalReplyDecision = ExecApprovalDecision;
 export type ExecApprovalUnavailableReason = "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
@@ -14,7 +14,7 @@ export type ExecApprovalReplyMetadata = {
 export type ExecApprovalActionDescriptor = {
     decision: ExecApprovalReplyDecision;
     label: string;
-    style: NonNullable<InteractiveReplyButton["style"]>;
+    style: NonNullable<MessagePresentationButton["style"]>;
     command: string;
 };
 export type ExecApprovalPendingReplyParams = {
@@ -50,12 +50,35 @@ export declare function buildExecApprovalActionDescriptors(params: {
     ask?: string | null;
     allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): ExecApprovalActionDescriptor[];
+/** Build the portable approval button presentation for already-resolved actions. */
+export declare function buildApprovalPresentationFromActionDescriptors(actions: readonly ExecApprovalActionDescriptor[]): MessagePresentation | undefined;
+/** Build the portable approval presentation for an approval id and decision allowlist. */
+export declare function buildApprovalPresentation(params: {
+    approvalId: string;
+    ask?: string | null;
+    allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined;
+/** Build the portable exec-approval presentation for command callback buttons. */
+export declare function buildExecApprovalPresentation(params: {
+    approvalCommandId: string;
+    ask?: string | null;
+    allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined;
+/**
+ * @deprecated Use buildApprovalPresentationFromActionDescriptors.
+ */
 export declare function buildApprovalInteractiveReplyFromActionDescriptors(actions: readonly ExecApprovalActionDescriptor[]): InteractiveReply | undefined;
+/**
+ * @deprecated Use buildApprovalPresentation.
+ */
 export declare function buildApprovalInteractiveReply(params: {
     approvalId: string;
     ask?: string | null;
     allowedDecisions?: readonly ExecApprovalReplyDecision[];
 }): InteractiveReply | undefined;
+/**
+ * @deprecated Use buildExecApprovalPresentation.
+ */
 export declare function buildExecApprovalInteractiveReply(params: {
     approvalCommandId: string;
     ask?: string | null;

@@ -9,6 +9,7 @@ export declare function archiveSessionTranscriptsForSession(params: {
     sessionFile?: string;
     agentId?: string;
     reason: "reset" | "deleted";
+    onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[];
 export declare function archiveSessionTranscriptsForSessionDetailed(params: {
     sessionId: string | undefined;
@@ -16,6 +17,7 @@ export declare function archiveSessionTranscriptsForSessionDetailed(params: {
     sessionFile?: string;
     agentId?: string;
     reason: "reset" | "deleted";
+    onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[];
 export declare function emitGatewaySessionEndPluginHook(params: {
     cfg: OpenClawConfig;

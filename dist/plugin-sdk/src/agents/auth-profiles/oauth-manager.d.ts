@@ -11,6 +11,10 @@ export type OAuthManagerAdapter = {
         profileId: string;
         credential: OAuthCredential;
     }) => OAuthCredential | null;
+    readFallbackCredential?: (params: {
+        profileId: string;
+        credential: OAuthCredential;
+    }) => OAuthCredential | null;
     isRefreshTokenReusedError: (error: unknown) => boolean;
 };
 export type ResolvedOAuthAccess = {
@@ -25,6 +29,7 @@ export declare class OAuthManagerRefreshError extends Error {
     readonly lockPath?: string;
     constructor(params: {
         credential: OAuthCredential;
+        attemptedCredentials?: OAuthCredential[];
         profileId: string;
         refreshedStore: AuthProfileStore;
         cause: unknown;
@@ -52,6 +57,7 @@ export declare function createOAuthManager(adapter: OAuthManagerAdapter): {
         credential: OAuthCredential;
         agentDir?: string;
         cfg?: OpenClawConfig;
+        forceRefresh?: boolean;
     }) => Promise<ResolvedOAuthAccess | null>;
     resetRefreshQueuesForTest: () => void;
 };

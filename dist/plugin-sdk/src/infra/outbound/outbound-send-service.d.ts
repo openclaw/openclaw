@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
@@ -27,11 +28,12 @@ export type OutboundSendContext = {
     requesterSenderName?: string;
     requesterSenderUsername?: string;
     requesterSenderE164?: string;
+    senderIsOwner?: boolean;
     mediaAccess?: OutboundMediaAccess;
     mediaReadFile?: OutboundMediaReadFile;
     accountId?: string | null;
-    senderIsOwner?: boolean;
     sessionId?: string;
+    inboundEventKind?: InboundEventKind;
     gateway?: OutboundGatewayContext;
     toolContext?: ChannelThreadingToolContext;
     deps?: OutboundSendDeps;

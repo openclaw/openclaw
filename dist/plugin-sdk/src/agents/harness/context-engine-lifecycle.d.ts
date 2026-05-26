@@ -75,6 +75,7 @@ export declare function runHarnessContextEngineMaintenance(params: {
     sessionManager?: unknown;
     runtimeContext?: ContextEngineRuntimeContext;
     executionMode?: "foreground" | "background";
+    onDeferredMaintenance?: (promise: Promise<void>) => void;
     config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<import("../../context-engine/types.js").TranscriptRewriteResult | undefined>;
 /**

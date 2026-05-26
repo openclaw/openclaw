@@ -1,6 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type AuthChoiceGroup, type AuthChoiceOption } from "./auth-choice-options.static.js";
+export declare function compareAuthChoiceGroups(a: AuthChoiceGroup, b: AuthChoiceGroup): number;
 export declare function formatAuthChoiceChoicesForCli(params?: {
     includeSkip?: boolean;
     includeLegacyAliases?: boolean;

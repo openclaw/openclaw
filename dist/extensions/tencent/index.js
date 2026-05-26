@@ -1,10 +1,10 @@
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { c as buildSingleProviderApiKeyCatalog } from "../../provider-catalog-shared-4kkagm5f.js";
-import { n as TOKENHUB_MODEL_CATALOG, r as TOKENHUB_PROVIDER_ID } from "../../models-XNmSbtfr.js";
-import { t as buildTokenHubProvider } from "../../provider-catalog-u6q2gnHx.js";
-import { n as applyTokenHubConfig, t as TOKENHUB_DEFAULT_MODEL_REF } from "../../onboard-DFz6LHlo.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { c as buildSingleProviderApiKeyCatalog } from "../../provider-catalog-shared-BLp5nwNN.js";
+import { n as TOKENHUB_MODEL_CATALOG, r as TOKENHUB_PROVIDER_ID } from "../../models-NbkgAGHo.js";
+import { t as buildTokenHubProvider } from "../../provider-catalog-BJVFoaeo.js";
+import { n as applyTokenHubConfig, t as TOKENHUB_DEFAULT_MODEL_REF } from "../../onboard-DhceXskF.js";
 //#region extensions/tencent/index.ts
 function buildStaticCatalogEntries(providerId, catalog) {
 	return catalog.map((entry) => ({

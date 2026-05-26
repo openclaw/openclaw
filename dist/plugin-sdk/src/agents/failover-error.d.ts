@@ -26,6 +26,14 @@ export declare class FailoverError extends Error {
 }
 export declare function isFailoverError(err: unknown): err is FailoverError;
 export declare function resolveFailoverStatus(reason: FailoverReason): number | undefined;
+/**
+ * True when the error is a local runtime coordination error (session write-lock
+ * timeout or embedded attempt session takeover) rather than a provider/model
+ * failure. The model fallback chain must abort on these instead of consuming
+ * candidate slots — retrying any model would hit the same local condition.
+ * See #83510.
+ */
+export declare function isNonProviderRuntimeCoordinationError(err: unknown): boolean;
 export declare function isTimeoutError(err: unknown): boolean;
 export declare function resolveFailoverReasonFromError(err: unknown, providerHint?: string): FailoverReason | null;
 export declare function describeFailoverError(err: unknown): {

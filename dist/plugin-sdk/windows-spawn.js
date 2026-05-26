@@ -1,2 +1,2 @@
-import { a as resolveWindowsSpawnProgramCandidate, i as resolveWindowsSpawnProgram, n as materializeWindowsSpawnProgram, r as resolveWindowsExecutablePath, t as applyWindowsSpawnProgramPolicy } from "../windows-spawn-CpvP3TLe.js";
-export { applyWindowsSpawnProgramPolicy, materializeWindowsSpawnProgram, resolveWindowsExecutablePath, resolveWindowsSpawnProgram, resolveWindowsSpawnProgramCandidate };
+import { a as resolveWindowsSpawnProgram, i as resolveWindowsExecutablePath, n as detectWindowsSpawnCommandInlineArgs, o as resolveWindowsSpawnProgramCandidate, r as materializeWindowsSpawnProgram, t as applyWindowsSpawnProgramPolicy } from "../windows-spawn-B76fGM3V.js";
+export { applyWindowsSpawnProgramPolicy, detectWindowsSpawnCommandInlineArgs, materializeWindowsSpawnProgram, resolveWindowsExecutablePath, resolveWindowsSpawnProgram, resolveWindowsSpawnProgramCandidate };

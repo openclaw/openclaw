@@ -1,4 +1,4 @@
-import { d as OPENAI_CODEX_DEVICE_PAIRING_LABEL, f as OPENAI_CODEX_LOGIN_HINT, m as OPENAI_CODEX_WIZARD_GROUP, n as OPENAI_API_KEY_LABEL, p as OPENAI_CODEX_LOGIN_LABEL, t as OPENAI_ACCOUNT_WIZARD_GROUP, u as OPENAI_CODEX_DEVICE_PAIRING_HINT } from "../../auth-choice-copy-C74Tw01v.js";
+import { d as OPENAI_CODEX_DEVICE_PAIRING_LABEL, f as OPENAI_CODEX_LOGIN_HINT, m as OPENAI_CODEX_WIZARD_GROUP, n as OPENAI_API_KEY_LABEL, p as OPENAI_CODEX_LOGIN_LABEL, t as OPENAI_ACCOUNT_WIZARD_GROUP, u as OPENAI_CODEX_DEVICE_PAIRING_HINT } from "../../auth-choice-copy-CI2uePXw.js";
 //#region extensions/openai/provider-contract-api.ts
 const noopAuth = async () => ({ profiles: [] });
 function createOpenAICodexProvider() {
@@ -21,6 +21,7 @@ function createOpenAICodexProvider() {
 				choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
 				choiceHint: OPENAI_CODEX_LOGIN_HINT,
 				assistantPriority: -30,
+				onboardingFeatured: true,
 				...OPENAI_CODEX_WIZARD_GROUP
 			}
 		}, {

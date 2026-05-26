@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { GatewayBindMode } from "../config/types.gateway.js";
-import { __resetContainerEnvironmentCacheForTest, isContainerEnvironment } from "../infra/container-environment.js";
+import { resetContainerEnvironmentCacheForTest, isContainerEnvironment } from "../infra/container-environment.js";
+import { type NetworkInterfacesSnapshot } from "../infra/network-interfaces.js";
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
  * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
@@ -9,6 +10,8 @@ export declare function pickPrimaryLanIPv4(): string | undefined;
 export declare function normalizeHostHeader(hostHeader?: string): string;
 export declare function resolveHostName(hostHeader?: string): string;
 export declare function isLoopbackAddress(ip: string | undefined): boolean;
+export declare function isLocalInterfaceAddress(ip: string | undefined, snapshot?: NetworkInterfacesSnapshot): boolean;
+export declare function resolveLocalInterfaceAddressMatch(ip: string | undefined, snapshot?: NetworkInterfacesSnapshot): boolean | undefined;
 /**
  * Returns true if the IP belongs to a private or loopback network range.
  * Private ranges: RFC1918, link-local, ULA IPv6, and CGNAT (100.64/10), plus loopback.
@@ -24,7 +27,7 @@ export declare function resolveClientIp(params: {
     allowRealIpFallback?: boolean;
 }): string | undefined;
 export declare function resolveRequestClientIp(req?: IncomingMessage, trustedProxies?: string[], allowRealIpFallback?: boolean): string | undefined;
-export { isContainerEnvironment, __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest, };
+export { isContainerEnvironment, resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest, };
 /**
  * Resolves gateway bind host with fallback strategy.
  *
@@ -86,8 +89,8 @@ export declare function isPrivateOrLoopbackHost(host: string): boolean;
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - ws:// is secure for loopback, private IP literals, .local, and Tailnet hosts
+ * - optional break-glass: other private-DNS ws:// hostnames can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.

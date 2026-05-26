@@ -4,11 +4,9 @@ export declare const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for mi
 export declare const MIGRATION_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
 export declare const MIGRATION_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
 export declare const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
-export declare const MIGRATION_SELECTION_SKIP = "__openclaw_migrate_skip_for_now__";
 export declare const MIGRATION_SKILL_SELECTION_ACCEPT = "__openclaw_migrate_accept_recommended__";
 export declare const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON = "__openclaw_migrate_toggle_all_on__";
 export declare const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all_off__";
-export declare const MIGRATION_SKILL_SELECTION_SKIP = "__openclaw_migrate_skip_for_now__";
 type InteractiveMigrationSelection = {
     action: "select";
     selectedItemIds: Set<string>;

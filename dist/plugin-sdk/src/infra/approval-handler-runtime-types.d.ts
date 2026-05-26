@@ -95,6 +95,11 @@ type ChannelApprovalNativeInteractionAdapterForView<TPendingEntry = unknown, TBi
         entry: TPendingEntry;
         phase: "resolved" | "expired";
     }) => Promise<void>;
+    cancelDelivered?: (params: ChannelApprovalCapabilityHandlerContext & {
+        entry: TPendingEntry;
+        request: ApprovalRequest;
+        approvalKind: ChannelApprovalKind;
+    }) => Promise<void> | void;
 };
 export type ChannelApprovalNativeInteractionAdapter<TPendingEntry = unknown, TBinding = unknown> = ChannelApprovalNativeInteractionAdapterForView<TPendingEntry, TBinding>;
 type ChannelApprovalNativeObserveAdapterForView<TPreparedTarget = unknown, TPendingPayload = unknown, TPendingEntry = unknown, TPendingView extends PendingApprovalView = PendingApprovalView> = {

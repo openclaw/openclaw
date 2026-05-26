@@ -22,3 +22,10 @@ export declare function hasSnapshotProviderEnvAvailability(params: {
     providerId: string;
     config?: OpenClawConfig;
 }): boolean;
+export declare function hasSnapshotCapabilityProviderAvailability(params: {
+    snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+    key: CapabilityContractKey;
+    providerId: string;
+    config?: OpenClawConfig;
+    authStore?: AuthProfileStore;
+}): boolean;

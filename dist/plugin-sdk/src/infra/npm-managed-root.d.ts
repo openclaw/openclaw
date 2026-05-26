@@ -42,10 +42,12 @@ export declare function syncManagedNpmRootPeerDependencies(params: {
     npmRoot: string;
     managedOverrides?: Record<string, unknown>;
     omitUnsupportedManagedOverrides?: boolean;
-    preferredPackageName?: string;
+    runCommand?: ManagedNpmRootRunCommand;
+    timeoutMs?: number;
 }): Promise<boolean>;
 export declare function repairManagedNpmRootOpenClawPeer(params: {
     npmRoot: string;
+    packageRoot?: string | null;
     timeoutMs?: number;
     logger?: ManagedNpmRootLogger;
     runCommand?: ManagedNpmRootRunCommand;

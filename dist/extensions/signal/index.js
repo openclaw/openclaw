@@ -1,4 +1,4 @@
-import { t as defineBundledChannelEntry } from "../../channel-entry-contract-DGmOIqjJ.js";
+import { t as defineBundledChannelEntry } from "../../channel-entry-contract-BDMmGZzs.js";
 //#region extensions/signal/index.ts
 var signal_default = defineBundledChannelEntry({
 	id: "signal",

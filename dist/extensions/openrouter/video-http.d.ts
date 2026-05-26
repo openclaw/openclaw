@@ -1,4 +1,4 @@
-import { i as fetchWithTimeoutGuarded } from "../../provider-http-CgsAYhns.js";
+import { c as fetchWithTimeoutGuarded } from "../../provider-http-ByynA2MJ.js";
 
 //#region extensions/openrouter/video-http.d.ts
 type GuardedFetchResult = Awaited<ReturnType<typeof fetchWithTimeoutGuarded>>;

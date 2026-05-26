@@ -20,6 +20,11 @@ export declare function runAgentHarnessAgentEndHook(params: {
     ctx: AgentHarnessHookContext;
     hookRunner?: AgentHarnessHookRunner;
 }): void;
+export declare function awaitAgentHarnessAgentEndHook(params: {
+    event: PluginHookAgentEndEvent;
+    ctx: AgentHarnessHookContext;
+    hookRunner?: AgentHarnessHookRunner;
+}): Promise<void>;
 export type AgentHarnessBeforeAgentFinalizeOutcome = {
     action: "continue";
 } | {

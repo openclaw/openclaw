@@ -9,7 +9,7 @@ export type OpenAiCompatibleImageResponseEntry = {
     revised_prompt?: unknown;
 };
 export type OpenAiCompatibleImageResponsePayload = {
-    data?: OpenAiCompatibleImageResponseEntry[];
+    data?: unknown;
 };
 export declare function imageFileExtensionForMimeType(mimeType: string | undefined, fallback?: string): string;
 export declare function sniffImageMimeType(buffer: Buffer, fallbackMimeType?: string): ImageMimeTypeDetection;
@@ -41,9 +41,10 @@ export declare function generatedImageAssetFromOpenAiCompatibleEntry(entry: Open
     fileNamePrefix?: string;
     sniffMimeType?: boolean;
 }): GeneratedImageAsset | undefined;
-export declare function parseOpenAiCompatibleImageResponse(payload: OpenAiCompatibleImageResponsePayload, options?: {
+export declare function parseOpenAiCompatibleImageResponse(payload: unknown, options?: {
     defaultMimeType?: string;
     fileNamePrefix?: string;
+    malformedResponseError?: string;
     sniffMimeType?: boolean;
 }): GeneratedImageAsset[];
 export declare function imageSourceUploadFileName(params: {

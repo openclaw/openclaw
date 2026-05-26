@@ -1,4 +1,4 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
 //#region extensions/qwen/onboard.d.ts
 declare function applyQwenProviderConfig(cfg: OpenClawConfig): OpenClawConfig;
 declare function applyQwenProviderConfigCn(cfg: OpenClawConfig): OpenClawConfig;

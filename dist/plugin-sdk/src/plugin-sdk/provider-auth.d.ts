@@ -9,7 +9,7 @@ export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-prof
 export { ensureAuthProfileStore, ensureAuthProfileStoreForLocalUpdate, updateAuthProfileStoreWithLock, } from "../agents/auth-profiles/store.js";
 export { listProfilesForProvider, removeProviderAuthProfilesWithLock, upsertAuthProfile, upsertAuthProfileWithLock, } from "../agents/auth-profiles/profiles.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
-export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
+export { readClaudeCliCredentialsCached, readCodexCliCredentialsCached, } from "../agents/cli-credentials.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export { CUSTOM_LOCAL_AUTH_MARKER, MINIMAX_OAUTH_MARKER, isKnownEnvApiKeyMarker, isNonSecretApiKeyMarker, resolveOAuthApiKeyMarker, resolveNonEnvSecretRefApiKeyMarker, } from "../agents/model-auth-markers.js";
 export { formatApiKeyPreview, normalizeApiKeyInput, validateApiKeyInput, } from "../plugins/provider-auth-input.js";
@@ -27,16 +27,7 @@ export { listKnownProviderAuthEnvVarNames, omitEnvKeysCaseInsensitive, } from ".
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { generateHexPkceVerifierChallenge, generatePkceVerifierChallenge, toFormUrlEncoded, } from "./oauth-utils.js";
 export { DEFAULT_OAUTH_REFRESH_MARGIN_MS, hasUsableOAuthCredential, } from "../agents/auth-profiles/credential-state.js";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export declare const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export declare const COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export declare const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export declare const COPILOT_GITHUB_API_VERSION = "2025-04-01";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export declare const COPILOT_INTEGRATION_ID = "vscode-chat";
+export { COPILOT_EDITOR_PLUGIN_VERSION, COPILOT_EDITOR_VERSION, COPILOT_GITHUB_API_VERSION, COPILOT_INTEGRATION_ID, COPILOT_USER_AGENT, buildCopilotIdeHeaders, } from "../agents/copilot-dynamic-headers.js";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export declare const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
@@ -46,10 +37,6 @@ export type CachedCopilotToken = {
     updatedAt: number;
     integrationId?: string;
 };
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export declare function buildCopilotIdeHeaders(params?: {
-    includeApiVersion?: boolean;
-}): Record<string, string>;
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export declare function deriveCopilotApiBaseUrlFromToken(token: string): string | null;
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
@@ -74,6 +61,7 @@ export declare function listUsableProviderAuthProfileIds(params: {
     provider: string;
     cfg?: OpenClawConfig;
     agentDir?: string;
+    allowKeychainPrompt?: boolean;
 }): {
     agentDir: string;
     profileIds: string[];
@@ -82,9 +70,11 @@ export declare function isProviderAuthProfileConfigured(params: {
     provider: string;
     cfg?: OpenClawConfig;
     agentDir?: string;
+    allowKeychainPrompt?: boolean;
 }): boolean;
 export declare function resolveProviderAuthProfileApiKey(params: {
     provider: string;
     cfg?: OpenClawConfig;
     agentDir?: string;
+    allowKeychainPrompt?: boolean;
 }): Promise<string | undefined>;

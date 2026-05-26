@@ -1,1 +1,2 @@
-export { readMediaBuffer, resolveMediaBufferPath, saveMediaBuffer } from "../media/store.js";
+export { readMediaBuffer, resolveMediaBufferPath, saveMediaBuffer, saveMediaStream, } from "../media/store.js";
+export type { SavedMedia } from "../media/store.js";

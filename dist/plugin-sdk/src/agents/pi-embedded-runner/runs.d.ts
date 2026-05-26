@@ -1,23 +1,34 @@
 import { type ActiveEmbeddedRunSnapshot, type EmbeddedPiQueueHandle, type EmbeddedPiQueueMessageOptions, type EmbeddedRunModelSwitchRequest } from "./run-state.js";
-export { getActiveEmbeddedRunCount, type ActiveEmbeddedRunSnapshot, type EmbeddedPiQueueHandle, type EmbeddedPiQueueMessageOptions, type EmbeddedRunModelSwitchRequest, } from "./run-state.js";
-export type EmbeddedPiQueueFailureReason = "no_active_run" | "not_streaming" | "compacting";
+export { getActiveEmbeddedRunCount, listActiveEmbeddedRunSessionIds, listActiveEmbeddedRunSessionKeys, type ActiveEmbeddedRunSnapshot, type EmbeddedPiQueueHandle, type EmbeddedPiQueueMessageOptions, type EmbeddedRunModelSwitchRequest, } from "./run-state.js";
+export type EmbeddedPiQueueFailureReason = "no_active_run" | "not_streaming" | "compacting" | "source_reply_delivery_mode_mismatch" | "transcript_commit_wait_unsupported" | "runtime_rejected";
 export type EmbeddedPiQueueMessageOutcome = {
     queued: true;
     sessionId: string;
     target: "embedded_run" | "reply_run";
     gatewayHealth: "live";
+    deliveredAtMs?: number;
+    enqueuedAtMs?: number;
 } | {
     queued: false;
     sessionId: string;
     reason: EmbeddedPiQueueFailureReason;
     gatewayHealth: "live";
+    errorMessage?: string;
 };
 export declare function formatEmbeddedPiQueueFailureSummary(outcome: EmbeddedPiQueueMessageOutcome): string | undefined;
 /**
- * @deprecated Use queueEmbeddedPiMessageWithOutcome so callers preserve failure reasons.
+ * @deprecated Use queueEmbeddedPiMessageWithOutcomeAsync for delivery decisions.
+ * This boolean helper only reports immediate queue eligibility; it cannot surface
+ * async runtime rejection from the active run.
  */
 export declare function queueEmbeddedPiMessage(sessionId: string, text: string, options?: EmbeddedPiQueueMessageOptions): boolean;
+/**
+ * @deprecated Prefer queueEmbeddedPiMessageWithOutcomeAsync when callers need to
+ * know whether steering was accepted. This sync helper is fire-and-forget after
+ * initial eligibility and only logs later runtime rejection.
+ */
 export declare function queueEmbeddedPiMessageWithOutcome(sessionId: string, text: string, options?: EmbeddedPiQueueMessageOptions): EmbeddedPiQueueMessageOutcome;
+export declare function queueEmbeddedPiMessageWithOutcomeAsync(sessionId: string, text: string, options?: EmbeddedPiQueueMessageOptions): Promise<EmbeddedPiQueueMessageOutcome>;
 /**
  * Abort embedded PI runs.
  *
@@ -64,6 +75,7 @@ export declare function setActiveEmbeddedRun(sessionId: string, handle: Embedded
 export declare function updateActiveEmbeddedRunSnapshot(sessionId: string, snapshot: ActiveEmbeddedRunSnapshot): void;
 export declare function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle, sessionKey?: string): void;
 export declare function forceClearEmbeddedPiRun(sessionId: string, sessionKey?: string, reason?: string): boolean;
-export declare const __testing: {
+export declare const testing: {
     resetActiveEmbeddedRuns(): void;
 };
+export { testing as __testing };

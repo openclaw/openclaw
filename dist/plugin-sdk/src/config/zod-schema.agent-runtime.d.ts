@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
+export declare const AgentRunRetriesConfigSchema: z.ZodObject<{
+    base: z.ZodOptional<z.ZodNumber>;
+    perProfile: z.ZodOptional<z.ZodNumber>;
+    min: z.ZodOptional<z.ZodNumber>;
+    max: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strict>;
 export declare const HeartbeatSchema: z.ZodOptional<z.ZodObject<{
     every: z.ZodOptional<z.ZodString>;
     activeHours: z.ZodOptional<z.ZodObject<{
@@ -248,7 +254,7 @@ export declare const MemorySearchSchema: z.ZodOptional<z.ZodObject<{
         maxEntries: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strict>>;
 }, z.core.$strict>>;
-export { AgentModelSchema };
+export { AgentModelSchema, AgentToolModelSchema };
 export declare const AgentEmbeddedHarnessSchema: z.ZodOptional<z.ZodObject<{
     runtime: z.ZodOptional<z.ZodString>;
 }, z.core.$strict>>;
@@ -259,6 +265,7 @@ export declare const AgentEntrySchema: z.ZodObject<{
     id: z.ZodString;
     default: z.ZodOptional<z.ZodBoolean>;
     name: z.ZodOptional<z.ZodString>;
+    description: z.ZodOptional<z.ZodString>;
     workspace: z.ZodOptional<z.ZodString>;
     agentDir: z.ZodOptional<z.ZodString>;
     systemPromptOverride: z.ZodOptional<z.ZodString>;
@@ -271,7 +278,6 @@ export declare const AgentEntrySchema: z.ZodObject<{
     model: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodObject<{
         primary: z.ZodOptional<z.ZodString>;
         fallbacks: z.ZodOptional<z.ZodArray<z.ZodString>>;
-        timeoutMs: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strict>]>>;
     models: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
         alias: z.ZodOptional<z.ZodString>;
@@ -306,6 +312,12 @@ export declare const AgentEntrySchema: z.ZodObject<{
         stream: "stream";
     }>>;
     fastModeDefault: z.ZodOptional<z.ZodBoolean>;
+    contextInjection: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"always">, z.ZodLiteral<"continuation-skip">, z.ZodLiteral<"never">]>>;
+    bootstrapMaxChars: z.ZodOptional<z.ZodNumber>;
+    bootstrapTotalMaxChars: z.ZodOptional<z.ZodNumber>;
+    experimental: z.ZodOptional<z.ZodObject<{
+        localModelLean: z.ZodOptional<z.ZodBoolean>;
+    }, z.core.$strict>>;
     skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
     memorySearch: z.ZodOptional<z.ZodObject<{
         enabled: z.ZodOptional<z.ZodBoolean>;
@@ -535,6 +547,10 @@ export declare const AgentEntrySchema: z.ZodObject<{
     groupChat: z.ZodOptional<z.ZodObject<{
         mentionPatterns: z.ZodOptional<z.ZodArray<z.ZodString>>;
         historyLimit: z.ZodOptional<z.ZodNumber>;
+        unmentionedInbound: z.ZodOptional<z.ZodEnum<{
+            room_event: "room_event";
+            user_request: "user_request";
+        }>>;
         visibleReplies: z.ZodOptional<z.ZodUnion<readonly [z.ZodEnum<{
             automatic: "automatic";
             message_tool: "message_tool";
@@ -552,6 +568,12 @@ export declare const AgentEntrySchema: z.ZodObject<{
         }, z.core.$strict>]>>;
         thinking: z.ZodOptional<z.ZodString>;
         requireAgentId: z.ZodOptional<z.ZodBoolean>;
+    }, z.core.$strict>>;
+    runRetries: z.ZodOptional<z.ZodObject<{
+        base: z.ZodOptional<z.ZodNumber>;
+        perProfile: z.ZodOptional<z.ZodNumber>;
+        min: z.ZodOptional<z.ZodNumber>;
+        max: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strict>>;
     embeddedPi: z.ZodOptional<z.ZodObject<{
         executionContract: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"default">, z.ZodLiteral<"strict-agentic">]>>;
@@ -679,6 +701,23 @@ export declare const AgentEntrySchema: z.ZodObject<{
             alsoAllow: z.ZodOptional<z.ZodArray<z.ZodString>>;
             deny: z.ZodOptional<z.ZodArray<z.ZodString>>;
         }, z.core.$strict>>>>;
+        codeMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodObject<{
+            enabled: z.ZodOptional<z.ZodBoolean>;
+            runtime: z.ZodOptional<z.ZodLiteral<"quickjs-wasi">>;
+            mode: z.ZodOptional<z.ZodLiteral<"only">>;
+            languages: z.ZodOptional<z.ZodArray<z.ZodEnum<{
+                javascript: "javascript";
+                typescript: "typescript";
+            }>>>;
+            timeoutMs: z.ZodOptional<z.ZodNumber>;
+            memoryLimitBytes: z.ZodOptional<z.ZodNumber>;
+            maxOutputBytes: z.ZodOptional<z.ZodNumber>;
+            maxSnapshotBytes: z.ZodOptional<z.ZodNumber>;
+            maxPendingToolCalls: z.ZodOptional<z.ZodNumber>;
+            snapshotTtlSeconds: z.ZodOptional<z.ZodNumber>;
+            searchDefaultLimit: z.ZodOptional<z.ZodNumber>;
+            maxSearchLimit: z.ZodOptional<z.ZodNumber>;
+        }, z.core.$strict>]>>;
         elevated: z.ZodOptional<z.ZodObject<{
             enabled: z.ZodOptional<z.ZodBoolean>;
             allowFrom: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber]>>>>;
@@ -801,7 +840,7 @@ export declare const ToolsSchema: z.ZodOptional<z.ZodObject<{
         deny: z.ZodOptional<z.ZodArray<z.ZodString>>;
     }, z.core.$strict>>>>;
     web: z.ZodOptional<z.ZodObject<{
-        search: z.ZodOptional<z.ZodObject<{
+        search: z.ZodOptional<z.ZodPreprocess<z.ZodObject<{
             enabled: z.ZodOptional<z.ZodBoolean>;
             provider: z.ZodOptional<z.ZodString>;
             maxResults: z.ZodOptional<z.ZodNumber>;
@@ -842,7 +881,7 @@ export declare const ToolsSchema: z.ZodOptional<z.ZodObject<{
                     timezone?: string | undefined;
                 }>>>;
             }, z.core.$strict>>;
-        }, z.core.$strict>>;
+        }, z.core.$catchall<z.ZodUnknown>>>>;
         fetch: z.ZodOptional<z.ZodObject<{
             enabled: z.ZodOptional<z.ZodBoolean>;
             provider: z.ZodOptional<z.ZodString>;
@@ -2714,6 +2753,23 @@ export declare const ToolsSchema: z.ZodOptional<z.ZodObject<{
             tools: "tools";
         }>>;
         codeTimeoutMs: z.ZodOptional<z.ZodNumber>;
+        searchDefaultLimit: z.ZodOptional<z.ZodNumber>;
+        maxSearchLimit: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strict>]>>;
+    codeMode: z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodObject<{
+        enabled: z.ZodOptional<z.ZodBoolean>;
+        runtime: z.ZodOptional<z.ZodLiteral<"quickjs-wasi">>;
+        mode: z.ZodOptional<z.ZodLiteral<"only">>;
+        languages: z.ZodOptional<z.ZodArray<z.ZodEnum<{
+            javascript: "javascript";
+            typescript: "typescript";
+        }>>>;
+        timeoutMs: z.ZodOptional<z.ZodNumber>;
+        memoryLimitBytes: z.ZodOptional<z.ZodNumber>;
+        maxOutputBytes: z.ZodOptional<z.ZodNumber>;
+        maxSnapshotBytes: z.ZodOptional<z.ZodNumber>;
+        maxPendingToolCalls: z.ZodOptional<z.ZodNumber>;
+        snapshotTtlSeconds: z.ZodOptional<z.ZodNumber>;
         searchDefaultLimit: z.ZodOptional<z.ZodNumber>;
         maxSearchLimit: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strict>]>>;

@@ -15,6 +15,11 @@ export declare function recordCapabilityCandidateFailure(params: {
     error: unknown;
 }): void;
 export declare function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(entry: MediaNormalizationEntry<TValue> | undefined): entry is MediaNormalizationEntry<TValue>;
+export declare function resolveMediaProviderDefaultTimeoutMs(timeoutMs: number | undefined): number | undefined;
+export declare function resolveMediaProviderRequestTimeoutMs(params: {
+    timeoutMs?: number;
+    providerDefaultTimeoutMs?: number;
+}): number | undefined;
 type CapabilityProviderCandidate = {
     id: string;
     aliases?: readonly string[];

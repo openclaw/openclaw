@@ -13,13 +13,14 @@ export declare class EmbeddedTuiBackend implements TuiBackend {
     }) => void;
     private readonly deps;
     private readonly runs;
+    private readonly runPromises;
     private unsubscribe?;
     private previousRuntimeLog?;
     private previousRuntimeError?;
     private seq;
     private readonly pendingLifecycleErrors;
     start(): void;
-    stop(): void;
+    stop(): Promise<void>;
     sendChat(opts: ChatSendOptions): Promise<{
         runId: string;
     }>;
@@ -52,6 +53,7 @@ export declare class EmbeddedTuiBackend implements TuiBackend {
     getGatewayStatus(): Promise<string>;
     listModels(): Promise<TuiModelChoice[]>;
     private abortSessionRuns;
+    private findPendingSessionRunPromise;
     private nextSeq;
     private emit;
     private clearPendingLifecycleError;

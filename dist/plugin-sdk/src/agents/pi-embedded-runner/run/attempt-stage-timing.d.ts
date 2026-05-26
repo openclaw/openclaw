@@ -11,6 +11,12 @@ export type EmbeddedRunStageTracker = {
     mark: (name: string) => void;
     snapshot: () => EmbeddedRunStageSummary;
 };
+export declare const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE: {
+    readonly workspace: "attempt-workspace";
+    readonly prompt: "attempt-prompt";
+    readonly runtimePlan: "attempt-runtime-plan";
+    readonly dispatch: "attempt-dispatch";
+};
 export declare function createEmbeddedRunStageTracker(options?: {
     now?: () => number;
 }): EmbeddedRunStageTracker;

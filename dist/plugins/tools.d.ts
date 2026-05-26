@@ -1,5 +1,5 @@
-import { C as OpenClawPluginToolContext } from "../types-core-CxmUEffr.js";
-import { r as AnyAgentTool } from "../common-5s-NiX7e.js";
+import { D as OpenClawPluginToolContext } from "../types-core-DxqEkbXr.js";
+import { r as AnyAgentTool } from "../common-BDN0bXby.js";
 //#region src/plugins/tool-descriptor-cache.d.ts
 declare function resetPluginToolDescriptorCache(): void;
 //#endregion

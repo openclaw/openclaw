@@ -1,4 +1,4 @@
-import { yt as ProviderAuthContext } from "../../types-lCXG2pW_.js";
+import { wt as ProviderAuthContext } from "../../types-Vx7Jq4_-2.js";
 import { OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 
 //#region extensions/openai/openai-codex-oauth.runtime.d.ts

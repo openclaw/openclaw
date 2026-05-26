@@ -1,7 +1,7 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { n as RuntimeEnv } from "../../runtime-CZFxIuHh.js";
-import { l as NormalizedPluginNodeCapabilityUrl } from "../../types-BczMykKN.js";
-import { p as HostedPluginSurfaceUrlParams } from "../../gateway-runtime-DVuE4IFq.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { n as RuntimeEnv } from "../../runtime-Bxifh4bY.js";
+import { l as NormalizedPluginNodeCapabilityUrl } from "../../types-BMFYBAxt.js";
+import { p as HostedPluginSurfaceUrlParams } from "../../gateway-runtime-C9hNVeWM.js";
 import { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import { IncomingMessage, ServerResponse } from "node:http";
@@ -202,9 +202,10 @@ declare function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepe
 //#endregion
 //#region extensions/canvas/src/cli-helpers.d.ts
 type CanvasSnapshotPayload = {
-  format: string;
+  format: CanvasSnapshotFormat;
   base64: string;
 };
+type CanvasSnapshotFormat = "png" | "jpg" | "jpeg";
 declare function parseCanvasSnapshotPayload(value: unknown): CanvasSnapshotPayload;
 declare function canvasSnapshotTempPath(opts: {
   ext: string;

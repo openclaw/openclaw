@@ -1,4 +1,4 @@
-import { l as ensureGlobalUndiciEnvProxyDispatcher } from "../../wsl-FiYoUppe.js";
+import { c as ensureGlobalUndiciEnvProxyDispatcher } from "../../wsl-DGjWf35r.js";
 import { getOAuthApiKey as getOAuthApiKey$1, refreshOpenAICodexToken as refreshOpenAICodexToken$1 } from "@earendil-works/pi-ai/oauth";
 
 //#region extensions/openai/openai-codex-provider.runtime.d.ts

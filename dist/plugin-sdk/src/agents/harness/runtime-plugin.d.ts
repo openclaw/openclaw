@@ -5,5 +5,6 @@ export declare function ensureSelectedAgentHarnessPlugin(params: {
     config?: OpenClawConfig;
     agentId?: string;
     sessionKey?: string;
+    agentHarnessRuntimeOverride?: string;
     workspaceDir: string;
 }): Promise<void>;

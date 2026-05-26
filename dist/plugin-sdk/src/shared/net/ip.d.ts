@@ -28,6 +28,8 @@ export declare function normalizeIpAddress(raw: string | undefined): string | un
 export declare function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean;
 export declare function isLegacyIpv4Literal(raw: string | undefined): boolean;
 export declare function isLoopbackIpAddress(raw: string | undefined): boolean;
+export declare function isLinkLocalIpAddress(raw: string | undefined): boolean;
+export declare function isCloudMetadataIpAddress(raw: string | undefined): boolean;
 export declare function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean;
 export declare function isBlockedSpecialUseIpv6Address(address: ipaddr.IPv6, options?: Ipv6SpecialUseBlockOptions): boolean;
 export declare function isRfc1918Ipv4Address(raw: string | undefined): boolean;

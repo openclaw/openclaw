@@ -1,32 +1,14 @@
-import { r as AnyAgentTool } from "../../common-5s-NiX7e.js";
-import { $t as ProviderNormalizeToolSchemasContext, An as ProviderSanitizeReplayHistoryContext, Mn as ProviderToolSchemaDiagnostic, Wn as ProviderDefaultThinkingPolicyContext, gn as ProviderReplayPolicyContext, hn as ProviderReplayPolicy, mn as ProviderReasoningOutputModeContext, pn as ProviderReasoningOutputMode } from "../../types-lCXG2pW_.js";
-import { d as createGoogleThinkingStreamWrapper } from "../../provider-stream-shared-DIx4tURD.js";
-import * as _$_earendil_works_pi_agent_core0 from "@earendil-works/pi-agent-core";
-
+import { r as AnyAgentTool } from "../../common-BDN0bXby.js";
+import { Fn as ProviderSanitizeReplayHistoryContext, Ln as ProviderToolSchemaDiagnostic, Yn as ProviderDefaultThinkingPolicyContext, Zn as ProviderThinkingProfile, bn as ProviderReplayPolicy, in as ProviderNormalizeToolSchemasContext, vn as ProviderReasoningOutputMode, xn as ProviderReplayPolicyContext, yn as ProviderReasoningOutputModeContext } from "../../types-Vx7Jq4_-2.js";
+import { d as createGoogleThinkingStreamWrapper } from "../../provider-stream-shared-BeJa0RWE.js";
 //#region extensions/google/provider-hooks.d.ts
 declare const GOOGLE_GEMINI_PROVIDER_HOOKS: {
-  resolveThinkingProfile: ({
-    modelId
-  }: ProviderDefaultThinkingPolicyContext) => {
-    levels: ({
-      id: "off";
-    } | {
-      id: "minimal";
-    } | {
-      id: "low";
-    } | {
-      id: "medium";
-    } | {
-      id: "adaptive";
-    } | {
-      id: "high";
-    })[];
-  };
+  resolveThinkingProfile: (context: ProviderDefaultThinkingPolicyContext) => ProviderThinkingProfile | undefined;
   wrapStreamFn: typeof createGoogleThinkingStreamWrapper;
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
   inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];
   buildReplayPolicy?: ((ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | null | undefined) | undefined;
-  sanitizeReplayHistory?: ((ctx: ProviderSanitizeReplayHistoryContext) => Promise<_$_earendil_works_pi_agent_core0.AgentMessage[] | null | undefined> | _$_earendil_works_pi_agent_core0.AgentMessage[] | null | undefined) | undefined;
+  sanitizeReplayHistory?: ((ctx: ProviderSanitizeReplayHistoryContext) => Promise<import("@earendil-works/pi-agent-core").AgentMessage[] | null | undefined> | import("@earendil-works/pi-agent-core").AgentMessage[] | null | undefined) | undefined;
   resolveReasoningOutputMode?: ((ctx: ProviderReasoningOutputModeContext) => ProviderReasoningOutputMode | null | undefined) | undefined;
 };
 //#endregion

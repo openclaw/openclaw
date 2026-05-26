@@ -26,6 +26,7 @@ export declare function formatModelsAvailableHeader(params: {
     provider: string;
     total: number;
     cfg: OpenClawConfig;
+    agentId?: string;
     agentDir?: string;
     workspaceDir?: string;
     sessionEntry?: ModelsCommandSessionEntry;

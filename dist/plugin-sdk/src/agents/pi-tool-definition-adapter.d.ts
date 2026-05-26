@@ -15,6 +15,6 @@ export declare function findClientToolNameConflicts(params: {
 }): string[];
 export declare function createClientToolNameConflictError(conflicts: string[]): Error;
 export declare function isClientToolNameConflictError(err: unknown): err is Error;
-export declare function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[];
+export declare function toToolDefinitions(tools: AnyAgentTool[], hookContext?: HookContext): ToolDefinition[];
 export declare function toClientToolDefinitions(tools: ClientToolDefinition[], onClientToolCall?: ClientToolCallRecorder, hookContext?: HookContext): ToolDefinition[];
 export {};

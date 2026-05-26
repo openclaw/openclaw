@@ -1,4 +1,4 @@
-import { Sn as ProviderResolveDynamicModelContext, qn as ProviderRuntimeModel } from "../../types-lCXG2pW_.js";
+import { Dn as ProviderResolveDynamicModelContext, Qn as ProviderRuntimeModel } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/google/provider-models.d.ts
 declare function resolveGoogleGeminiForwardCompatModel(params: {
   providerId: string;

@@ -1,6 +1,13 @@
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { type GatewayClientMode, type GatewayClientName } from "../utils/message-channel.js";
 import { type EventFrame, type HelloOk } from "./protocol/index.js";
+export type GatewayClientRequestOptions = {
+    expectFinal?: boolean;
+    timeoutMs?: number | null;
+    signal?: AbortSignal;
+    /** Called once for expectFinal requests after an accepted response, before the final result. */
+    onAccepted?: (payload: unknown) => void;
+};
 type GatewayClientErrorShape = {
     code?: string;
     message?: string;
@@ -20,6 +27,7 @@ export declare class GatewayClientRequestError extends Error {
     readonly retryAfterMs?: number;
     constructor(error: GatewayClientErrorShape);
 }
+export declare function isGatewayConnectAssemblyError(value: unknown): value is Error;
 export type GatewayClientOptions = {
     url?: string;
     connectChallengeTimeoutMs?: number;
@@ -36,6 +44,7 @@ export type GatewayClientOptions = {
     bootstrapToken?: string;
     deviceToken?: string;
     password?: string;
+    approvalRuntimeToken?: string;
     instanceId?: string;
     clientName?: GatewayClientName;
     clientDisplayName?: string;
@@ -80,8 +89,11 @@ export declare class GatewayClient {
     private reconnectTimer;
     private pendingDeviceTokenRetry;
     private deviceTokenRetryBudgetUsed;
+    private approvalRuntimeTokenCompatibilityDisabled;
+    private approvalRuntimeTokenRetryBudgetUsed;
     private pendingStartupReconnectDelayMs;
     private pendingConnectErrorDetailCode;
+    private pendingConnectErrorDetails;
     private lastTick;
     private tickIntervalMs;
     private tickTimer;
@@ -98,10 +110,15 @@ export declare class GatewayClient {
     private createPendingStop;
     private resolvePendingStop;
     private sendConnect;
+    private assembleConnectParams;
+    private buildDeviceConnectParams;
+    private handleConnectFailure;
+    private notifyConnectError;
     private resolveConnectScopes;
     private loadStoredDeviceAuth;
     private shouldPauseReconnectAfterAuthFailure;
     private shouldRetryWithStoredDeviceToken;
+    private shouldRetryWithoutApprovalRuntimeToken;
     private isTrustedDeviceRetryEndpoint;
     private selectConnectAuth;
     private handleMessage;
@@ -113,9 +130,6 @@ export declare class GatewayClient {
     private flushPendingErrors;
     private startTickWatch;
     private validateTlsFingerprint;
-    request<T = Record<string, unknown>>(method: string, params?: unknown, opts?: {
-        expectFinal?: boolean;
-        timeoutMs?: number | null;
-    }): Promise<T>;
+    request<T = Record<string, unknown>>(method: string, params?: unknown, opts?: GatewayClientRequestOptions): Promise<T>;
 }
 export {};

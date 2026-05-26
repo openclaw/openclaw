@@ -1,2 +1,2 @@
-import { t as buildGoogleImageGenerationProvider } from "../../image-generation-provider-BA_8h8K1.js";
+import { t as buildGoogleImageGenerationProvider } from "../../image-generation-provider-BZacBzxA.js";
 export { buildGoogleImageGenerationProvider };

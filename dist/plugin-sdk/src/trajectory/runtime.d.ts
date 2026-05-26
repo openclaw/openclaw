@@ -21,6 +21,7 @@ type TrajectoryRuntimeRecorder = {
     filePath: string;
     recordEvent: (type: string, data?: Record<string, unknown>) => void;
     flush: () => Promise<void>;
+    describeFlushState: () => string | undefined;
 };
 export declare function toTrajectoryToolDefinitions(tools: ReadonlyArray<{
     name?: string;

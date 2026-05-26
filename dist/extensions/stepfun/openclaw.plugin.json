@@ -16,18 +16,12 @@
     "providers": [
       {
         "id": "stepfun",
-        "authMethods": [
-          "api-key"
-        ],
         "envVars": [
           "STEPFUN_API_KEY"
         ]
       },
       {
         "id": "stepfun-plan",
-        "authMethods": [
-          "api-key"
-        ],
         "envVars": [
           "STEPFUN_API_KEY"
         ]

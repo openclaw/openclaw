@@ -3,6 +3,7 @@ import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 export type RepairMissingPluginInstallsResult = {
     changes: string[];
     warnings: string[];
+    failedPluginIds?: string[];
     /**
      * The full install-record map after repair. Equal to the input
      * `baselineRecords` (or the disk-loaded records when no baseline was

@@ -43,6 +43,7 @@ type AssistantDecisionParams = {
     failoverFailure: boolean;
     failoverReason: FailoverReason | null;
     timedOut: boolean;
+    idleTimedOut: boolean;
     timedOutDuringCompaction: boolean;
     timedOutDuringToolExecution: boolean;
     profileRotated: boolean;

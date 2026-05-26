@@ -1,9 +1,9 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { bn as TtsProvider, fn as ResolvedTtsPersona, gn as TtsModelOverrideConfig, pn as TtsAutoMode } from "../../types.channels-qd_8k3sY.js";
-import { L as SpeechVoiceOption, R as TtsDirectiveOverrides, d as ResolvedTtsConfig, f as ResolvedTtsModelOverrides, p as TtsConfigResolutionContext, x as SpeechProviderConfig, z as TtsDirectiveParseResult } from "../../tts-runtime.types-CNnt44C-.js";
-import { r as ReplyPayload } from "../../reply-payload-DjPL5qa-.js";
-import { t as summarizeText } from "../../speech-core-CIOYfiJ5.js";
-import { o as parseTtsDirectives } from "../../provider-registry-B0_VYuun.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { _n as TtsAutoMode, bn as TtsModelOverrideConfig, gn as ResolvedTtsPersona, wn as TtsProvider } from "../../types.channels-C67UBRPK.js";
+import { L as SpeechVoiceOption, R as TtsDirectiveOverrides, d as ResolvedTtsConfig, f as ResolvedTtsModelOverrides, p as TtsConfigResolutionContext, x as SpeechProviderConfig, z as TtsDirectiveParseResult } from "../../tts-runtime.types-DsGX4LDs.js";
+import { r as ReplyPayload } from "../../reply-payload-BlNiejVc.js";
+import { t as summarizeText } from "../../speech-core-zZkENv1H.js";
+import { o as parseTtsDirectives } from "../../provider-registry-Bp4RyAcE.js";
 //#region extensions/speech-core/src/tts.d.ts
 type TtsAttemptReasonCode = "success" | "no_provider_registered" | "not_configured" | "unsupported_for_streaming" | "unsupported_for_telephony" | "timeout" | "provider_error";
 type TtsProviderAttempt = {
@@ -209,7 +209,7 @@ declare function maybeApplyTtsToPayload(params: {
   agentId?: string;
   accountId?: string;
 }): Promise<ReplyPayload>;
-declare const _test: {
+declare const testApi: {
   parseTtsDirectives: typeof parseTtsDirectives;
   resolveModelOverridePolicy: typeof resolveModelOverridePolicy;
   supportsNativeVoiceNoteTts: typeof supportsNativeVoiceNoteTts;
@@ -222,4 +222,4 @@ declare const _test: {
   sanitizeTtsErrorForLog: typeof sanitizeTtsErrorForLog;
 };
 //#endregion
-export { type ResolvedTtsConfig, type ResolvedTtsModelOverrides, type TtsDirectiveOverrides, type TtsDirectiveParseResult, type TtsResult, type TtsStreamResult, type TtsSynthesisResult, type TtsSynthesisStreamResult, type TtsTelephonyResult, _test, buildTtsSystemPromptHint, getLastTtsAttempt, getResolvedSpeechProviderConfig, getTtsMaxLength, getTtsPersona, getTtsProvider, isSummarizationEnabled, isTtsEnabled, isTtsProviderConfigured, listSpeechVoices, listTtsPersonas, maybeApplyTtsToPayload, resolveExplicitTtsOverrides, resolveTtsAutoMode, resolveTtsConfig, resolveTtsPrefsPath, resolveTtsProviderOrder, setLastTtsAttempt, setSummarizationEnabled, setTtsAutoMode, setTtsEnabled, setTtsMaxLength, setTtsPersona, setTtsProvider, streamSpeech, synthesizeSpeech, textToSpeech, textToSpeechStream, textToSpeechTelephony };
+export { type ResolvedTtsConfig, type ResolvedTtsModelOverrides, type TtsDirectiveOverrides, type TtsDirectiveParseResult, type TtsResult, type TtsStreamResult, type TtsSynthesisResult, type TtsSynthesisStreamResult, type TtsTelephonyResult, testApi as _test, testApi, buildTtsSystemPromptHint, getLastTtsAttempt, getResolvedSpeechProviderConfig, getTtsMaxLength, getTtsPersona, getTtsProvider, isSummarizationEnabled, isTtsEnabled, isTtsProviderConfigured, listSpeechVoices, listTtsPersonas, maybeApplyTtsToPayload, resolveExplicitTtsOverrides, resolveTtsAutoMode, resolveTtsConfig, resolveTtsPrefsPath, resolveTtsProviderOrder, setLastTtsAttempt, setSummarizationEnabled, setTtsAutoMode, setTtsEnabled, setTtsMaxLength, setTtsPersona, setTtsProvider, streamSpeech, synthesizeSpeech, textToSpeech, textToSpeechStream, textToSpeechTelephony };

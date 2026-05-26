@@ -22,6 +22,7 @@ export declare function runProviderEntry(params: {
     attachmentIndex: number;
     cache: MediaAttachmentCache;
     agentDir?: string;
+    workspaceDir?: string;
     providerRegistry: ProviderRegistry;
     config?: MediaUnderstandingConfig;
 }): Promise<MediaUnderstandingOutput | null>;

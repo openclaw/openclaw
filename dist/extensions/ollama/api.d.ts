@@ -1,10 +1,10 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { l as SecretInput } from "../../types.secrets-n2DWfQVx.js";
-import { l as ModelProviderConfig, o as ModelDefinitionConfig } from "../../types.models-CkWCv1xp.js";
-import { n as RuntimeEnv } from "../../runtime-CZFxIuHh.js";
-import { i as WizardPrompter } from "../../prompts-CAujqc6P.js";
-import { t as SecretInputMode } from "../../provider-auth-types-Dkrd4Vmf.js";
-import { f as resolveOllamaCompatNumCtxEnabled, l as isOllamaCompatProvider, m as wrapOllamaCompatNumCtx, o as createConfiguredOllamaCompatStreamWrapper, p as shouldInjectOllamaCompatNumCtx, r as buildOllamaChatRequest } from "../../stream-fACa7Fir.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { l as SecretInput } from "../../types.secrets-tbFW-hY6.js";
+import { f as ModelProviderDeclarationConfig, s as ModelDefinitionConfig } from "../../types.models-tqxsISRc.js";
+import { n as RuntimeEnv } from "../../runtime-Bxifh4bY.js";
+import { i as WizardPrompter } from "../../prompts-DgKIGa-v.js";
+import { t as SecretInputMode } from "../../provider-auth-types-C72FsWut.js";
+import { f as resolveOllamaCompatNumCtxEnabled, l as isOllamaCompatProvider, m as wrapOllamaCompatNumCtx, o as createConfiguredOllamaCompatStreamWrapper, p as shouldInjectOllamaCompatNumCtx, r as buildOllamaChatRequest } from "../../stream-CI_Rrbq3.js";
 
 //#region extensions/ollama/src/defaults.d.ts
 declare const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
@@ -56,7 +56,7 @@ declare function fetchOllamaModels(baseUrl: string): Promise<{
 }>;
 declare function buildOllamaProvider(configuredBaseUrl?: string, opts?: {
   quiet?: boolean;
-}): Promise<ModelProviderConfig>;
+}): Promise<ModelProviderDeclarationConfig>;
 //#endregion
 //#region extensions/ollama/src/setup.d.ts
 type OllamaSetupOptions = {

@@ -26,6 +26,7 @@ export type ObserveRecoveryDeps = {
             }): Promise<unknown>;
             readdir(path: string): Promise<string[]>;
             rmdir(path: string): Promise<unknown>;
+            unlink(path: string): Promise<unknown>;
             appendFile(path: string, data: string, options?: {
                 encoding?: BufferEncoding;
                 mode?: number;
@@ -57,6 +58,7 @@ export type ObserveRecoveryDeps = {
         }): unknown;
         readdirSync(path: string): string[];
         rmdirSync(path: string): unknown;
+        unlinkSync(path: string): unknown;
         appendFileSync(path: string, data: string, options?: {
             encoding?: BufferEncoding;
             mode?: number;

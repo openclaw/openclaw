@@ -12,6 +12,7 @@ export declare function resolveMessageChannelSelection(params: {
     configured: MessageChannelId[];
     source: MessageChannelSelectionSource;
 }>;
-export declare const __testing: {
+export declare const testing: {
     resetLoggedChannelSelectionErrors(): void;
 };
+export { testing as __testing };

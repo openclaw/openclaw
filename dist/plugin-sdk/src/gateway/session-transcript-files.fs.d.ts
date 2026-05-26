@@ -17,6 +17,7 @@ export declare function archiveSessionTranscripts(opts: {
      * This prevents maintenance operations from mutating paths outside the agent sessions dir.
      */
     restrictToStoreDir?: boolean;
+    onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[];
 export declare function archiveSessionTranscriptsDetailed(opts: {
     sessionId: string;
@@ -29,6 +30,11 @@ export declare function archiveSessionTranscriptsDetailed(opts: {
      * This prevents maintenance operations from mutating paths outside the agent sessions dir.
      */
     restrictToStoreDir?: boolean;
+    /**
+     * Invoked when an individual transcript candidate fails to archive. The
+     * caller decides whether to log, warn-deliver, or escalate.
+     */
+    onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[];
 export declare function resolveStableSessionEndTranscript(params: {
     sessionId: string;

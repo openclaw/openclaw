@@ -45,7 +45,7 @@ declare function containsRealConversationMessages(messages: AgentMessage[]): boo
  * Use this when already inside a session/global lane to avoid deadlocks.
  */
 export declare function compactEmbeddedPiSessionDirect(params: CompactEmbeddedPiSessionParams): Promise<EmbeddedPiCompactResult>;
-export declare const __testing: {
+export declare const testing: {
     readonly hasRealConversationContent: typeof hasRealConversationContent;
     readonly hasMeaningfulConversationContent: typeof hasMeaningfulConversationContent;
     readonly containsRealConversationMessages: typeof containsRealConversationMessages;
@@ -59,3 +59,4 @@ export declare const __testing: {
     readonly runPostCompactionSideEffects: typeof runPostCompactionSideEffects;
 };
 export { runPostCompactionSideEffects } from "./compaction-hooks.js";
+export { testing as __testing };

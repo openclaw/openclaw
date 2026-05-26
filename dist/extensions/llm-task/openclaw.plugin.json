@@ -5,19 +5,8 @@
   },
   "name": "LLM Task",
   "description": "Generic JSON-only LLM tool for structured tasks callable from workflows.",
-  "contracts": {
-    "tools": [
-      "llm-task"
-    ]
-  },
-  "toolMetadata": {
-    "llm-task": {
-      "optional": true
-    }
-  },
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
       "defaultProvider": {
         "type": "string"
@@ -41,6 +30,18 @@
       "timeoutMs": {
         "type": "number"
       }
+    },
+    "additionalProperties": false
+  },
+  "version": "2026.5.21",
+  "contracts": {
+    "tools": [
+      "llm-task"
+    ]
+  },
+  "toolMetadata": {
+    "llm-task": {
+      "optional": true
     }
   }
 }

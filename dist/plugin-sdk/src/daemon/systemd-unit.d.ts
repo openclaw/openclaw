@@ -5,3 +5,8 @@ export declare function parseSystemdEnvAssignment(raw: string): {
     key: string;
     value: string;
 } | null;
+export declare function parseSystemdEnvAssignments(raw: string): Array<{
+    key: string;
+    value: string;
+}>;
+export declare function renderSystemdEnvAssignment(key: string, value: string): string;

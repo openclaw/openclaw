@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { s as KILOCODE_DEFAULT_MODEL_REF, t as KILOCODE_BASE_URL } from "../../provider-models-DIKsi7_8.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { s as KILOCODE_DEFAULT_MODEL_REF, t as KILOCODE_BASE_URL } from "../../provider-models-CzCT-7Xn.js";
 
 //#region extensions/kilocode/onboard.d.ts
 declare function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig;

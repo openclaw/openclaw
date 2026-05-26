@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../types.openclaw-DIZy8jcb.js";
-import { n as PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types-B1XKSJMK.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { n as PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types-CemL6rws.js";
 //#region src/agents/models-config.d.ts
 declare function ensureOpenClawModelsJson(config?: OpenClawConfig, agentDirOverride?: string, options?: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;

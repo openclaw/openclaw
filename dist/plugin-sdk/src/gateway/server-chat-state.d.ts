@@ -1,6 +1,13 @@
+import type { AgentEventPayload } from "../infra/agent-events.js";
 export type ChatRunEntry = {
     sessionKey: string;
     clientRunId: string;
+};
+export type BufferedAgentEvent = {
+    sessionKey?: string;
+    payload: AgentEventPayload & {
+        spawnedBy?: string;
+    };
 };
 export type ChatRunRegistry = {
     add: (sessionId: string, entry: ChatRunEntry) => void;
@@ -18,6 +25,8 @@ export type ChatRunState = {
     /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
     deltaLastBroadcastLen: Map<string, number>;
     deltaLastBroadcastText: Map<string, string>;
+    agentDeltaSentAt: Map<string, number>;
+    bufferedAgentEvents: Map<string, BufferedAgentEvent>;
     abortedRuns: Map<string, number>;
     clear: () => void;
 };

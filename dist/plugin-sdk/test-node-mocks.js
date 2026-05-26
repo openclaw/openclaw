@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 //#region src/plugin-sdk/test-helpers/node-builtin-mocks.ts
 function resolveMockOverrides(actual, factory) {
 	return typeof factory === "function" ? factory(actual) : factory;
@@ -30,4 +31,32 @@ async function mockNodeChildProcessExecFile(execFile) {
 	return mockNodeBuiltinModule(() => import("node:child_process"), { execFile });
 }
 //#endregion
-export { mockNodeBuiltinModule, mockNodeChildProcessExecFile, mockNodeChildProcessSpawnSync };
+//#region src/test-utils/vitest-spies.ts
+function restoreMocks(mocks) {
+	for (const mock of mocks.toReversed()) mock.mockRestore();
+}
+function isPromiseLike(value) {
+	return typeof value === "object" && value !== null && typeof value.finally === "function";
+}
+function withRestoredMocks(mocks, run) {
+	try {
+		const result = run();
+		if (isPromiseLike(result)) return result.finally(() => restoreMocks(mocks));
+		restoreMocks(mocks);
+		return result;
+	} catch (error) {
+		restoreMocks(mocks);
+		throw error;
+	}
+}
+function mockProcessPlatform(platform) {
+	return vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+}
+function withMockedPlatform(platform, run) {
+	return withRestoredMocks([mockProcessPlatform(platform)], run);
+}
+function withMockedWindowsPlatform(run) {
+	return withMockedPlatform("win32", run);
+}
+//#endregion
+export { mockNodeBuiltinModule, mockNodeChildProcessExecFile, mockNodeChildProcessSpawnSync, withMockedPlatform, withMockedWindowsPlatform, withRestoredMocks };

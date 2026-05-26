@@ -1,11 +1,21 @@
 import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type AuthProfileStore } from "./auth-profiles.js";
+import { type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import { type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export { ensureAuthProfileStore, ensureAuthProfileStoreWithoutExternalProfiles, resolveAuthProfileOrder, } from "./auth-profiles.js";
-export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+export { formatMissingAuthError, requireApiKey, resolveAwsSdkEnvVarName, } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
+export type RuntimeProviderAuthLookup = {
+    envApiKey: Pick<EnvApiKeyLookupOptions, "aliasMap" | "candidateMap" | "authEvidenceMap">;
+    syntheticAuthProviderRefs?: readonly string[];
+};
+export declare function createRuntimeProviderAuthLookup(params: {
+    cfg?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+}): RuntimeProviderAuthLookup;
 export declare function getCustomProviderApiKey(cfg: OpenClawConfig | undefined, provider: string): string | undefined;
 type ResolvedCustomProviderApiKey = {
     apiKey: string;
@@ -28,6 +38,7 @@ export declare function hasRuntimeAvailableProviderAuth(params: {
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     allowPluginSyntheticAuth?: boolean;
+    runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean;
 export declare function resolveApiKeyForProvider(params: {
     provider: string;
@@ -40,7 +51,9 @@ export declare function resolveApiKeyForProvider(params: {
     /** When true, treat profileId as a user-locked selection that must not be
      *  silently overridden by env/config credentials. */
     lockedProfile?: boolean;
+    forceRefresh?: boolean;
     credentialPrecedence?: ProviderCredentialPrecedence;
+    modelApi?: string;
 }): Promise<ResolvedProviderAuth>;
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 export { resolveEnvApiKey } from "./model-auth-env.js";

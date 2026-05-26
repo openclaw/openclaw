@@ -1,16 +1,16 @@
-import { T as pathExists, p as resolvePathWithinRoot } from "../../fs-safe-DpJlqO1z.js";
-import { c as resolveDefaultAgentId } from "../../agent-scope-config-26EcJVc0.js";
-import { n as resolveAgentEffectiveModelPrimary } from "../../agent-scope-C1Fl7gAf.js";
-import { n as replaceFileAtomic } from "../../replace-file-VPhXrtU-.js";
-import { t as privateFileStore } from "../../private-file-store-9NwvLNnb.js";
-import { s as resolveDefaultModelForAgent } from "../../model-selection-VRXWv5rs.js";
-import { l as jsonResult } from "../../common-V7-zd73S.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { n as resolveLivePluginConfigObject } from "../../plugin-config-runtime-DyMlx_D0.js";
-import "../../agent-runtime-C0lBBqMR.js";
-import { t as bumpSkillsSnapshotVersion } from "../../refresh-state-CJpHWFGC.js";
-import "../../security-runtime-JcBeOGgV.js";
-import "../../api-fmxZERsY.js";
+import { E as pathExists, m as resolvePathWithinRoot } from "../../fs-safe-CV86zY9G.js";
+import { a as resolveAgentEffectiveModelPrimary } from "../../agent-scope-CtLXGcWm.js";
+import { c as resolveDefaultAgentId } from "../../agent-scope-config-CMp71_27.js";
+import { n as replaceFileAtomic } from "../../replace-file-C7_Inj8B.js";
+import { t as privateFileStore } from "../../private-file-store-DMtyjgoc.js";
+import { s as resolveDefaultModelForAgent } from "../../model-selection-P-81eBKx.js";
+import { c as jsonResult } from "../../common-E9YpX7pB.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { n as resolveLivePluginConfigObject } from "../../plugin-config-runtime-DWa7yCpn.js";
+import "../../agent-runtime-Lc7H-PlR.js";
+import { t as bumpSkillsSnapshotVersion } from "../../refresh-state-PCEDjmSb.js";
+import "../../security-runtime-CcSekjBd.js";
+import "../../api-CjZQh8jH.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -280,7 +280,6 @@ function compactWhitespace(value) {
 }
 //#endregion
 //#region extensions/skill-workshop/src/reviewer.ts
-const MAX_TRANSCRIPT_CHARS = 12e3;
 const MAX_SKILL_CHARS = 2e3;
 const MAX_SKILLS = 12;
 function resolveReviewerFallbackModel(params) {
@@ -376,7 +375,7 @@ function countToolCalls(messages) {
 	return messages.reduce((sum, message) => sum + countToolCallsInValue(message), 0);
 }
 function buildTranscript(messages) {
-	return extractTranscriptText(messages).map((entry) => `${entry.role}: ${compactWhitespace(entry.text)}`).join("\n").slice(-MAX_TRANSCRIPT_CHARS).trim() || "(no text transcript)";
+	return extractTranscriptText(messages).map((entry) => `${entry.role}: ${compactWhitespace(entry.text)}`).join("\n").slice(-12e3).trim() || "(no text transcript)";
 }
 async function readExistingSkills(workspaceDir) {
 	const skillsDir = path.join(workspaceDir, "skills");

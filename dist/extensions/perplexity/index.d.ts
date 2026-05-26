@@ -1,4 +1,4 @@
-import { T as OpenClawPluginDefinition, w as OpenClawPluginConfigSchema } from "../../types-lCXG2pW_.js";
+import { A as OpenClawPluginDefinition, k as OpenClawPluginConfigSchema } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/perplexity/index.d.ts
 declare const _default: {
   id: string;

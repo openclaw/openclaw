@@ -1,2 +1,2 @@
-import { t as detectZaiEndpoint } from "../../detect-CqMevYOP.js";
+import { t as detectZaiEndpoint } from "../../detect-BosazCiT.js";
 export { detectZaiEndpoint };

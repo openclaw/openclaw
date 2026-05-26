@@ -1,4 +1,4 @@
-import { Ln as ProviderWrapStreamFnContext } from "../../types-lCXG2pW_.js";
+import { Hn as ProviderWrapStreamFnContext } from "../../types-Vx7Jq4_-2.js";
 import { StreamFn } from "@earendil-works/pi-agent-core";
 
 //#region extensions/xai/stream.d.ts

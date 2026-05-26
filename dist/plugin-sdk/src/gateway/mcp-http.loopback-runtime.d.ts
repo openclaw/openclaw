@@ -18,6 +18,7 @@ export declare function createMcpLoopbackServerConfig(port: number): {
                 "x-openclaw-agent-id": string;
                 "x-openclaw-account-id": string;
                 "x-openclaw-message-channel": string;
+                "x-openclaw-inbound-event-kind": string;
             };
         };
     };

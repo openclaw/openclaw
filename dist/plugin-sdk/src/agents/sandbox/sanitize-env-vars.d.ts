@@ -10,3 +10,4 @@ export type EnvSanitizationOptions = {
 };
 export declare function validateEnvVarValue(value: string): string | undefined;
 export declare function sanitizeEnvVars(envVars: Record<string, string | undefined>, options?: EnvSanitizationOptions): EnvVarSanitizationResult;
+export declare function sanitizeExplicitSandboxEnvVars(envVars: Record<string, string | undefined>): EnvVarSanitizationResult;

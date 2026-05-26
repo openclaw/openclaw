@@ -6,7 +6,7 @@ import { describeImageWithModel, describeImagesWithModel } from "../../plugin-sd
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { coerceImageAssistantText, decodeDataUrl, hasImageReasoningOnlyResponse, type ImageModelConfig } from "./image-tool.helpers.js";
 import { type AnyAgentTool, type SandboxFsBridge, type ToolFsPolicy } from "./tool-runtime.helpers.js";
-export declare const __testing: {
+export declare const testing: {
     readonly decodeDataUrl: typeof decodeDataUrl;
     readonly coerceImageAssistantText: typeof coerceImageAssistantText;
     readonly hasImageReasoningOnlyResponse: typeof hasImageReasoningOnlyResponse;
@@ -54,4 +54,4 @@ export declare function createImageTool(options?: {
      */
     deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null;
-export {};
+export { testing as __testing };

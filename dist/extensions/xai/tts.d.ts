@@ -1,4 +1,4 @@
-import { t as XAI_BASE_URL } from "../../model-definitions-id7yPScD.js";
+import { t as XAI_BASE_URL } from "../../model-definitions-6jK-31b4.js";
 //#region extensions/xai/tts.d.ts
 declare const XAI_TTS_VOICES: readonly ["eve", "ara", "rex", "sal", "leo", "una"];
 type XaiTtsVoice = (typeof XAI_TTS_VOICES)[number];

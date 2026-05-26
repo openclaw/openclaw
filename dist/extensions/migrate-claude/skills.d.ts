@@ -1,6 +1,6 @@
-import { a as MigrationItem } from "../../types-lCXG2pW_.js";
-import { t as ClaudeSource } from "../../source-P3GL63PJ.js";
-import { t as PlannedTargets } from "../../targets-DRKcxIRA.js";
+import { l as MigrationItem } from "../../types-Vx7Jq4_-2.js";
+import { t as ClaudeSource } from "../../source-Czne5iNW.js";
+import { t as PlannedTargets } from "../../targets-DAZLMfDK.js";
 
 //#region extensions/migrate-claude/skills.d.ts
 declare function buildSkillItems(params: {

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type { PluginAgentEventSubscriptionRegistration, PluginControlUiDescriptor, PluginRuntimeLifecycleRegistration, PluginSessionActionRegistration, PluginSessionSchedulerJobRegistration, PluginSessionExtensionRegistration, PluginToolMetadataRegistration, PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
@@ -19,6 +20,7 @@ export type CapturedPluginRegistration = {
     textTransforms: PluginTextTransformRegistration[];
     codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
     agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
+    embeddingProviders: EmbeddingProviderAdapter[];
     speechProviders: SpeechProviderPlugin[];
     realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
     realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];

@@ -1,4 +1,5 @@
 import { callGateway } from "../gateway/call.js";
+import { type AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 type GatewayCaller = typeof callGateway;
 export type AssistantReplySnapshot = {
     text?: string;
@@ -12,6 +13,8 @@ export type AgentWaitResult = {
     stopReason?: string;
     livenessState?: string;
     yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
 };
 export type AgentRunsDrainResult = {
     timedOut: boolean;
@@ -51,9 +54,9 @@ export declare function waitForAgentRunsToDrain(params: {
     deadlineAtMs?: number;
     callGateway?: GatewayCaller;
 }): Promise<AgentRunsDrainResult>;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<{
         callGateway: GatewayCaller;
     }>): void;
 };
-export {};
+export { testing as __testing };

@@ -1,10 +1,10 @@
-import { n as createLazyRuntimeMethodBinder, r as createLazyRuntimeModule } from "../lazy-runtime-Dh47Iq4d.js";
+import { n as createLazyRuntimeMethodBinder, r as createLazyRuntimeModule } from "../lazy-runtime-D-7_JraP.js";
 //#region src/plugin-sdk/provider-auth-login.ts
 /**
 * @deprecated Compatibility subpath for provider-owned login helpers.
 * Use provider auth hooks instead of importing bundled provider login commands.
 */
-const bindProviderAuthLoginRuntime = createLazyRuntimeMethodBinder(createLazyRuntimeModule(() => import("../provider-auth-login.runtime-D-6CIPMF.js")));
+const bindProviderAuthLoginRuntime = createLazyRuntimeMethodBinder(createLazyRuntimeModule(() => import("../provider-auth-login.runtime-ReJ0S728.js")));
 /** @deprecated GitHub Copilot provider-owned login helper; use provider auth hooks instead. */
 const githubCopilotLoginCommand = bindProviderAuthLoginRuntime((runtime) => runtime.githubCopilotLoginCommand);
 /** @deprecated Chutes provider-owned login helper; use provider auth hooks instead. */

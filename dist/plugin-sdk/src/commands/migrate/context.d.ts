@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 export declare function createMigrationLogger(runtime: RuntimeEnv, opts?: {
@@ -15,6 +16,7 @@ export declare function buildMigrationContext(params: {
     overwrite?: boolean;
     providerOptions?: Record<string, unknown>;
     backupPath?: string;
+    configOverride?: OpenClawConfig;
     runtime: RuntimeEnv;
     reportDir?: string;
     json?: boolean;

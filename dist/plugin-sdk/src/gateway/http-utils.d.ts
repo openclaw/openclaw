@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-export { authorizeGatewayHttpRequestOrReply, authorizeScopedGatewayHttpRequestOrReply, checkGatewayHttpRequestAuth, getBearerToken, getHeader, isGatewayBearerHttpRequest, resolveHttpBrowserOriginPolicy, resolveHttpSenderIsOwner, resolveOpenAiCompatibleHttpOperatorScopes, resolveOpenAiCompatibleHttpSenderIsOwner, resolveTrustedHttpOperatorScopes, type AuthorizedGatewayHttpRequest, type GatewayHttpRequestAuthCheckResult, } from "./http-auth-utils.js";
+export { authorizeGatewayHttpRequestOrReply, authorizeScopedGatewayHttpRequestOrReply, checkGatewayHttpRequestAuth, getBearerToken, getHeader, isGatewayBearerHttpRequest, resolveHttpBrowserOriginPolicy, resolveHttpSenderIsOwner, resolveOpenAiCompatibleHttpOperatorScopes, resolveOpenAiCompatibleHttpSenderIsOwner, resolveSharedSecretHttpOperatorScopes, resolveTrustedHttpOperatorScopes, type AuthorizedGatewayHttpRequest, type GatewayHttpRequestAuthCheckResult, } from "./http-auth-utils.js";
 export declare const OPENCLAW_MODEL_ID = "openclaw";
 export declare const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 export declare function resolveAgentIdFromModel(model: string | undefined, cfg?: import("openclaw/plugin-sdk").OpenClawConfig): string | undefined;

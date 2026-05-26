@@ -10,6 +10,7 @@ export declare function hasUsableOAuthCredential(credential: OAuthCredential | u
 export declare function normalizeAuthIdentityToken(value: string | undefined): string | undefined;
 export declare function normalizeAuthEmailToken(value: string | undefined): string | undefined;
 export declare function hasOAuthIdentity(credential: Pick<OAuthCredential, "accountId" | "email">): boolean;
+export declare function hasMatchingOAuthIdentity(existing: Pick<OAuthCredential, "accountId" | "email">, incoming: Pick<OAuthCredential, "accountId" | "email">): boolean;
 export declare function isSafeToOverwriteStoredOAuthIdentity(existing: OAuthCredential | undefined, incoming: OAuthCredential): boolean;
 export declare function isSafeToAdoptBootstrapOAuthIdentity(existing: OAuthCredential | undefined, incoming: OAuthCredential): boolean;
 export declare function isSafeToAdoptMainStoreOAuthIdentity(existing: OAuthCredential | undefined, incoming: OAuthCredential): boolean;

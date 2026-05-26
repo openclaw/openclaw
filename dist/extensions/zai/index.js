@@ -1,24 +1,27 @@
-import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-LndEvhRk.js";
-import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CrCOUFln.js";
-import { a as normalizeModelCompat } from "../../provider-model-compat-Dk5etUbu.js";
-import { a as upsertAuthProfile } from "../../profiles-Bj_dclxz.js";
-import { a as buildProviderReplayFamilyHooks } from "../../provider-model-shared-D-slKnZa.js";
-import { i as normalizeApiKeyInput, n as ensureApiKeyFromOptionEnvOrPrompt, s as validateApiKeyInput } from "../../provider-auth-input-BB3v7mkT.js";
-import { n as buildApiKeyCredential, t as applyAuthProfileConfig } from "../../provider-auth-helpers-Hp3hWZu2.js";
-import { o as createPayloadPatchStreamWrapper, s as defaultToolStreamExtraParams, v as createToolStreamWrapper } from "../../provider-stream-shared-BMzmRA_f.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { a as resolveLegacyPiAgentAccessToken } from "../../provider-usage.shared-ilPwVSe1.js";
-import { t as fetchZaiUsage } from "../../provider-usage-DQntMfSF.js";
-import { l as buildZaiModelDefinition } from "../../model-definitions-ekENkC_o.js";
-import { t as detectZaiEndpoint } from "../../detect-CqMevYOP.js";
-import { t as zaiMediaUnderstandingProvider } from "../../media-understanding-provider-Ce1Cp0Ma.js";
-import { n as applyZaiConfig, r as applyZaiProviderConfig, t as ZAI_DEFAULT_MODEL_REF } from "../../onboard-DnGlvZj8.js";
+import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-DyL154ka.js";
+import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CsdRhsMj.js";
+import { a as normalizeModelCompat } from "../../provider-model-compat-CmPOKTzc.js";
+import { s as upsertAuthProfileWithLock } from "../../profiles-9GB1thhi.js";
+import { c as defaultToolStreamExtraParams, o as createPayloadPatchStreamWrapper, y as createToolStreamWrapper } from "../../provider-stream-shared-jI_a6bxx.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { a as buildProviderReplayFamilyHooks } from "../../provider-model-shared-DtsPmvDx.js";
+import { i as normalizeApiKeyInput, n as ensureApiKeyFromOptionEnvOrPrompt, s as validateApiKeyInput } from "../../provider-auth-input-DMNIEm93.js";
+import { n as buildApiKeyCredential, t as applyAuthProfileConfig } from "../../provider-auth-helpers-BZ5Z8RV6.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { a as resolveLegacyPiAgentAccessToken } from "../../provider-usage.shared-Dk5t9Xpy.js";
+import { t as fetchZaiUsage } from "../../provider-usage-OfXY2nM7.js";
+import { l as buildZaiModelDefinition } from "../../model-definitions-B1PKfuNM.js";
+import { t as detectZaiEndpoint } from "../../detect-BosazCiT.js";
+import { t as zaiMediaUnderstandingProvider } from "../../media-understanding-provider-Dgf8aQV2.js";
+import { n as applyZaiConfig, r as applyZaiProviderConfig, t as ZAI_DEFAULT_MODEL_REF } from "../../onboard-C_uy0yZN.js";
 //#region extensions/zai/index.ts
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+async function upsertAuthProfileWithLockOrThrow(params) {
+	if (!await upsertAuthProfileWithLock(params)) throw new Error("Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.");
+}
 function resolveGlm5ForwardCompatModel(ctx) {
 	const trimmedModelId = ctx.modelId.trim();
 	if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) return;
@@ -158,7 +161,7 @@ async function runZaiApiKeyAuthNonInteractive(ctx, endpoint) {
 			resolved
 		});
 		if (!credential) return null;
-		upsertAuthProfile({
+		await upsertAuthProfileWithLockOrThrow({
 			profileId: PROFILE_ID,
 			credential,
 			agentDir: ctx.agentDir

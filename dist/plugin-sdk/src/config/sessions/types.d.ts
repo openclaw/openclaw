@@ -1,6 +1,7 @@
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 export type SessionScope = "per-sender" | "global";
@@ -66,6 +67,7 @@ export type CliSessionBinding = {
     authEpoch?: string;
     authEpochVersion?: number;
     extraSystemPromptHash?: string;
+    promptToolNamesHash?: string;
     mcpConfigHash?: string;
     mcpResumeHash?: string;
 };
@@ -174,6 +176,10 @@ export type SessionEntry = {
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Session-scoped tool deny entries inherited from the caller that created this session. */
+    inheritedToolDeny?: string[];
+    /** Session-scoped tool allow entries inherited from the caller that created this session. */
+    inheritedToolAllow?: string[];
     /** Plugin id that created this session through api.runtime.subagent. */
     pluginOwnerId?: string;
     systemSent?: boolean;
@@ -250,7 +256,7 @@ export type SessionEntry = {
     groupActivation?: "mention" | "always";
     groupActivationNeedsSystemIntro?: boolean;
     sendPolicy?: "allow" | "deny";
-    queueMode?: "steer" | "followup" | "collect" | "steer-backlog" | "steer+backlog" | "queue" | "interrupt";
+    queueMode?: "steer" | "followup" | "collect" | "interrupt";
     queueDebounceMs?: number;
     queueCap?: number;
     queueDrop?: "old" | "new" | "summarize";
@@ -310,6 +316,7 @@ export type SessionEntry = {
     groupChannel?: string;
     space?: string;
     origin?: SessionOrigin;
+    route?: ChannelRouteRef;
     deliveryContext?: DeliveryContext;
     lastChannel?: SessionChannelId;
     lastTo?: string;
@@ -395,6 +402,11 @@ export type SessionSystemPromptReport = {
         chars: number;
         projectContextChars: number;
         nonProjectContextChars: number;
+    };
+    currentTurn?: {
+        kind?: "user_request" | "room_event";
+        promptChars: number;
+        runtimeContextChars: number;
     };
     injectedWorkspaceFiles: Array<{
         name: string;

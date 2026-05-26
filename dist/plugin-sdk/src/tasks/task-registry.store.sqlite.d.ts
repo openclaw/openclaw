@@ -1,6 +1,7 @@
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 export declare function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot;
+export declare function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[];
 export declare function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot): void;
 export declare function upsertTaskRegistryRecordToSqlite(task: TaskRecord): void;
 export declare function upsertTaskWithDeliveryStateToSqlite(params: {

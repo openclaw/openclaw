@@ -1,5 +1,5 @@
 import { clearPluginCommands, clearPluginCommandsForPlugin, type RegisteredPluginCommand } from "./command-registry-state.js";
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+import { type OpenClawPluginCommandDefinition } from "./types.js";
 export type CommandRegistrationResult = {
     ok: boolean;
     error?: string;

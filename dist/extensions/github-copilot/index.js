@@ -1,21 +1,21 @@
-import { s as normalizeOptionalLowercaseString } from "../../string-coerce-LndEvhRk.js";
-import { o as coerceSecretRef } from "../../types.secrets-BxqheYvy.js";
-import { l as resolveDefaultSecretProviderAlias } from "../../ref-contract-BLk8mcqQ.js";
-import { n as ensureAuthProfileStore } from "../../store-a4exFSck.js";
-import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CrCOUFln.js";
-import { n as listProfilesForProvider } from "../../profile-list-1dJMPDMe.js";
-import { o as upsertAuthProfileWithLock } from "../../profiles-Bj_dclxz.js";
-import { t as applyAuthProfileConfig } from "../../provider-auth-helpers-Hp3hWZu2.js";
-import "../../provider-auth-D5QGE8z6.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { r as resolvePluginConfigObject } from "../../plugin-config-runtime-DyMlx_D0.js";
-import { i as getCachedLiveCatalogValue } from "../../provider-catalog-shared-4kkagm5f.js";
-import { n as fetchCopilotModelCatalog, r as resolveCopilotForwardCompatModel, t as PROVIDER_ID } from "../../models-HcPRaTUw.js";
-import { t as resolveFirstGithubToken } from "../../auth-DER5SSX9.js";
-import { t as githubCopilotMemoryEmbeddingProviderAdapter } from "../../embeddings-CQ2tPxwL.js";
-import { t as buildGithubCopilotReplayPolicy } from "../../replay-policy-7eDP1U0B.js";
-import { a as wrapCopilotProviderStream } from "../../stream-BcoQhaTT.js";
+import { s as normalizeOptionalLowercaseString } from "../../string-coerce-DyL154ka.js";
+import { o as coerceSecretRef } from "../../types.secrets-DwPik3M8.js";
+import { l as resolveDefaultSecretProviderAlias } from "../../ref-contract-D_h_G00C.js";
+import { n as ensureAuthProfileStore } from "../../store-BMQkMM4l.js";
+import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CsdRhsMj.js";
+import { n as listProfilesForProvider } from "../../profile-list-C0HtPlut.js";
+import { s as upsertAuthProfileWithLock } from "../../profiles-9GB1thhi.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as applyAuthProfileConfig } from "../../provider-auth-helpers-BZ5Z8RV6.js";
+import "../../provider-auth-BtRKd5us.js";
+import { r as resolvePluginConfigObject } from "../../plugin-config-runtime-DWa7yCpn.js";
+import { i as getCachedLiveCatalogValue } from "../../provider-catalog-shared-BLp5nwNN.js";
+import { n as fetchCopilotModelCatalog, r as resolveCopilotForwardCompatModel, t as PROVIDER_ID } from "../../models-B4VtbNxu.js";
+import { t as resolveFirstGithubToken } from "../../auth-BXReeF2O.js";
+import { t as githubCopilotMemoryEmbeddingProviderAdapter } from "../../embeddings-SipWYOX8.js";
+import { t as buildGithubCopilotReplayPolicy } from "../../replay-policy-_iCin1z0.js";
+import { o as wrapCopilotProviderStream } from "../../stream-10pEdHPb.js";
 //#region extensions/github-copilot/index.ts
 const COPILOT_ENV_VARS = [
 	"COPILOT_GITHUB_TOKEN",

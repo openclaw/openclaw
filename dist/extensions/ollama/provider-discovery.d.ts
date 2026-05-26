@@ -1,5 +1,5 @@
-import { l as ModelProviderConfig } from "../../types.models-CkWCv1xp.js";
-import { Mt as ProviderCatalogContext } from "../../types-lCXG2pW_.js";
+import { f as ModelProviderDeclarationConfig } from "../../types.models-tqxsISRc.js";
+import { Lt as ProviderCatalogContext } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/ollama/provider-discovery.d.ts
 type OllamaProviderPlugin = {
   id: string;
@@ -9,7 +9,7 @@ type OllamaProviderPlugin = {
   auth: [];
   resolveSyntheticAuth: (ctx: {
     provider?: string;
-    providerConfig?: ModelProviderConfig;
+    providerConfig?: ModelProviderDeclarationConfig;
   }) => {
     apiKey: string;
     source: string;
@@ -21,7 +21,7 @@ type OllamaProviderPlugin = {
   };
 };
 declare function runOllamaDiscovery(ctx: ProviderCatalogContext): Promise<{
-  provider: ModelProviderConfig;
+  provider: ModelProviderDeclarationConfig;
 } | null>;
 declare const ollamaProviderDiscovery: OllamaProviderPlugin;
 //#endregion

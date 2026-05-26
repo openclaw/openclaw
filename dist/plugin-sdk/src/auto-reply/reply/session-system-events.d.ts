@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-/** Drain queued system events, format as `System:` lines, return the block (or undefined). */
+/** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
 export declare function drainFormattedSystemEvents(params: {
     cfg: OpenClawConfig;
     sessionKey: string;

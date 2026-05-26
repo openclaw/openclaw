@@ -1,3 +1,4 @@
+import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,10 +11,16 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 declare function compactEmbeddedPiSessionDefault(...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>>>;
 declare function runEmbeddedPiAgentDefault(...args: Parameters<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>>>;
+declare function ensureMemoryFlushTargetFile(params: {
+    workspaceDir: string;
+    relativePath: string;
+}): Promise<void>;
 declare const memoryDeps: {
     compactEmbeddedPiSession: typeof compactEmbeddedPiSessionDefault;
     runWithModelFallback: typeof runWithModelFallback;
+    ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPlugin;
     runEmbeddedPiAgent: typeof runEmbeddedPiAgentDefault;
+    ensureMemoryFlushTargetFile: typeof ensureMemoryFlushTargetFile;
     registerAgentRunContext: typeof registerAgentRunContext;
     refreshQueuedFollowupSession: typeof refreshQueuedFollowupSession;
     incrementCompactionCount: typeof incrementCompactionCount;

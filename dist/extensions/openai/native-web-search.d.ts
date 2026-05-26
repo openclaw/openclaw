@@ -1,4 +1,4 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
 import { StreamFn } from "@earendil-works/pi-agent-core";
 
 //#region extensions/openai/native-web-search.d.ts

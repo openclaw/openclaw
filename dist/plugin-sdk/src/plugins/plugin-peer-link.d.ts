@@ -8,7 +8,7 @@ type RelinkManagedNpmRootResult = {
     repaired: number;
     skipped: number;
 };
-type OpenClawPeerLinkAuditIssue = {
+export type OpenClawPeerLinkAuditIssue = {
     packageName: string;
     packageDir: string;
     reason: string;
@@ -18,6 +18,10 @@ type AuditManagedNpmRootResult = {
     broken: number;
     issues: OpenClawPeerLinkAuditIssue[];
 };
+export declare function auditOpenClawPeerDependencyLink(params: {
+    packageDir: string;
+    packageName?: string;
+}): Promise<OpenClawPeerLinkAuditIssue | null>;
 /**
  * Symlink the host openclaw package for plugins that declare it as a peer.
  * Plugin package managers still own third-party dependencies; this only wires

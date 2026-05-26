@@ -1,13 +1,13 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { type PluginCandidate } from "./discovery.js";
+import { type PluginCandidate, type PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type { PluginBundleFormat, PluginConfigUiHint, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import { type OpenClawPackageManifest, type PluginManifestActivation, type PluginManifestConfigContracts, type PluginManifest, type PluginManifestCapabilityProviderMetadata, type PluginManifestChannelCommandDefaults, type PluginManifestChannelConfig, type PluginManifestContracts, type PluginManifestMediaUnderstandingProviderMetadata, type PluginManifestModelCatalog, type PluginManifestModelIdNormalization, type PluginManifestModelPricing, type PluginManifestModelSupport, type PluginManifestProviderEndpoint, type PluginManifestProviderRequest, type PluginManifestQaRunner, type PluginManifestSetup, type PluginManifestToolMetadata, type PluginPackageChannel, type PluginPackageInstall } from "./manifest.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.js";
-export type PluginManifestContractListKey = "speechProviders" | "externalAuthProviders" | "mediaUnderstandingProviders" | "documentExtractors" | "realtimeVoiceProviders" | "realtimeTranscriptionProviders" | "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders" | "memoryEmbeddingProviders" | "webContentExtractors" | "webFetchProviders" | "webSearchProviders" | "migrationProviders";
+export type PluginManifestContractListKey = "speechProviders" | "externalAuthProviders" | "embeddingProviders" | "mediaUnderstandingProviders" | "documentExtractors" | "realtimeVoiceProviders" | "realtimeTranscriptionProviders" | "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders" | "memoryEmbeddingProviders" | "webContentExtractors" | "webFetchProviders" | "webSearchProviders" | "migrationProviders" | "gatewayMethodDispatch";
 export type PluginManifestRecord = {
     id: string;
     name?: string;
@@ -96,4 +96,5 @@ export declare function loadPluginManifestRegistry(params?: {
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
     bundledChannelConfigCollector?: BundledChannelConfigCollector;
+    discovery?: PluginDiscoveryResult;
 }): PluginManifestRegistry;

@@ -1,4 +1,4 @@
-import { n as resolveStaticCopilotModelOverride, t as resolveCopilotTransportApi } from "../../model-metadata-D_CTx7yH.js";
+import { n as resolveCopilotTransportApi, r as resolveStaticCopilotModelOverride, t as resolveCopilotModelCompat } from "../../model-metadata-CuGtXx9C.js";
 //#region extensions/github-copilot/models-defaults.ts
 const DEFAULT_CONTEXT_WINDOW = 128e3;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -33,6 +33,7 @@ function buildCopilotModelDefinition(modelId) {
 	const id = modelId.trim();
 	if (!id) throw new Error("Model id required");
 	const staticOverride = resolveStaticCopilotModelOverride(id);
+	const compat = staticOverride?.compat ?? resolveCopilotModelCompat(id);
 	return {
 		id,
 		name: staticOverride?.name ?? id,
@@ -47,7 +48,7 @@ function buildCopilotModelDefinition(modelId) {
 		},
 		contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
 		maxTokens: staticOverride?.maxTokens ?? DEFAULT_MAX_TOKENS,
-		...staticOverride?.compat ? { compat: staticOverride.compat } : {}
+		...compat ? { compat } : {}
 	};
 }
 //#endregion

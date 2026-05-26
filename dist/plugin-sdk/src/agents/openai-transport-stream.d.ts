@@ -2,20 +2,38 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { type Api, type Context, type Model } from "@earendil-works/pi-ai";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { FunctionTool, ResponseCreateParamsStreaming, ResponseInput } from "openai/resources/responses/responses.js";
+import type { FunctionTool, ResponseCreateParamsStreaming, ResponseInput, ResponseReasoningItem } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { type OpenAIApiReasoningEffort, type OpenAIReasoningEffort } from "./openai-reasoning-effort.js";
+declare const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
+type OpenAIResponsesReasoningReplayMetadata = {
+    v: 1;
+    source: "openai-responses";
+    provider: string;
+    api: Api;
+    model: string;
+    baseUrlHash?: string;
+    sessionHash?: string;
+    authProfileHash?: string;
+};
+type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & {
+    id?: string;
+    [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
+};
 type BaseStreamOptions = {
     temperature?: number;
+    topP?: number;
     maxTokens?: number;
     signal?: AbortSignal;
     apiKey?: string;
     cacheRetention?: "none" | "short" | "long";
     sessionId?: string;
+    authProfileId?: string;
     onPayload?: (payload: unknown, model: Model<Api>) => unknown;
     headers?: Record<string, string>;
     openclawCodeModeToolSurface?: boolean;
+    responseFormat?: Record<string, unknown>;
 };
 type OpenAIResponsesOptions = BaseStreamOptions & {
     reasoning?: OpenAIReasoningEffort;
@@ -23,6 +41,14 @@ type OpenAIResponsesOptions = BaseStreamOptions & {
     reasoningSummary?: "auto" | "detailed" | "concise" | null;
     serviceTier?: ResponseCreateParamsStreaming["service_tier"];
     toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
+};
+type OpenAIResponsesReplayContext = {
+    provider: string;
+    api: Api;
+    model: string;
+    baseUrlHash?: string;
+    sessionHash?: string;
+    authProfileHash?: string;
 };
 type OpenAICompletionsOptions = BaseStreamOptions & {
     toolChoice?: "auto" | "none" | "required" | {
@@ -51,6 +77,7 @@ type MutableAssistantOutput = {
         output: number;
         cacheRead: number;
         cacheWrite: number;
+        reasoningTokens?: number;
         totalTokens: number;
         cost: {
             input: number;
@@ -64,12 +91,42 @@ type MutableAssistantOutput = {
     timestamp: number;
     responseId?: string;
     errorMessage?: string;
+    errorCode?: string;
+    errorType?: string;
+    errorBody?: string;
 };
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 declare function summarizeResponsesTools(tools: unknown): string;
 declare function enforceCodeModeResponsesToolSurface(payload: unknown): void;
 declare function assertCodeModeResponsesToolSurface(payload: unknown): void;
+type ResponsesFailedNoDetailsObservation = {
+    event: "openai_responses_response_failed_without_details";
+    provider: string;
+    api: Api;
+    transportModel: string;
+    providerRuntimeFailureKind: "no_error_details";
+    responseId: string;
+    responseStatus: string;
+    responseModel: string;
+    responseObject: string;
+    metadataKeys: string[];
+    requestIdHashes: string[];
+    failureFieldsPreview: string;
+    responsePreview: string;
+};
+type ResponsesFailedEventSummary = {
+    message: string;
+    responseId?: string;
+    observation?: ResponsesFailedNoDetailsObservation;
+};
+declare function buildResponsesFailedNoDetailsObservation(event: Record<string, unknown>, model: Model<Api>, response?: Record<string, unknown> | undefined): ResponsesFailedNoDetailsObservation;
+declare function summarizeResponsesFailedNoDetailsObservation(observation: ResponsesFailedNoDetailsObservation): string;
+declare function normalizeResponsesFailedEvent(event: Record<string, unknown>, model: Model<Api>): ResponsesFailedEventSummary;
 declare function summarizeResponsesPayload(params: unknown): string;
+declare function stripResponsesRequestEncryptedContent(params: OpenAIResponsesRequestParams): OpenAIResponsesRequestParams;
+declare function buildOpenAIResponsesReasoningReplayMetadata(model: Model<Api>, options?: Pick<BaseStreamOptions, "authProfileId" | "sessionId">): OpenAIResponsesReasoningReplayMetadata;
+declare function tagOpenAIResponsesReasoningReplayItem(item: Record<string, unknown>, model: Model<Api>, options?: Pick<BaseStreamOptions, "authProfileId" | "sessionId">): Record<string, unknown>;
+declare function prepareOpenAIResponsesReasoningItemForReplay(item: ReplayableResponseReasoningItem, context: OpenAIResponsesReplayContext, blockMetadata?: OpenAIResponsesReasoningReplayMetadata): ReplayableResponseReasoningItem;
 export declare function resolveAzureOpenAIApiVersion(env?: NodeJS.ProcessEnv): string;
 declare function withResponsesFirstEventTimeout(openaiStream: AsyncIterable<unknown>, model: Model<Api>, timeoutMs: number | undefined): AsyncIterable<unknown>;
 declare function processResponsesStream(openaiStream: AsyncIterable<unknown>, output: MutableAssistantOutput, stream: {
@@ -78,6 +135,9 @@ declare function processResponsesStream(openaiStream: AsyncIterable<unknown>, ou
     serviceTier?: ResponseCreateParamsStreaming["service_tier"];
     applyServiceTierPricing?: (usage: MutableAssistantOutput["usage"], serviceTier?: ResponseCreateParamsStreaming["service_tier"]) => void;
     firstEventTimeoutMs?: number;
+    signal?: AbortSignal;
+    sessionId?: string;
+    authProfileId?: string;
 }): Promise<void>;
 declare function buildOpenAIClientHeaders(model: Model<Api>, context: Context, optionHeaders?: Record<string, string>, turnHeaders?: Record<string, string>): Record<string, string>;
 declare function buildOpenAISdkClientOptions(model: Model<Api>): {
@@ -102,6 +162,8 @@ declare function buildOpenAICompletionsClientConfig(model: Model<Api>, context: 
 export declare function createOpenAICompletionsTransportStreamFn(): StreamFn;
 declare function processOpenAICompletionsStream(responseStream: AsyncIterable<ChatCompletionChunk>, output: MutableAssistantOutput, model: Model<Api>, stream: {
     push(event: unknown): void;
+}, options?: {
+    signal?: AbortSignal;
 }): Promise<void>;
 type OpenAIResponsesRequestParams = {
     model: string;
@@ -114,6 +176,8 @@ type OpenAIResponsesRequestParams = {
     store?: boolean;
     max_output_tokens?: number;
     temperature?: number;
+    top_p?: number;
+    text?: ResponseCreateParamsStreaming["text"];
     service_tier?: ResponseCreateParamsStreaming["service_tier"];
     tools?: FunctionTool[];
     tool_choice?: ResponseCreateParamsStreaming["tool_choice"];
@@ -131,6 +195,7 @@ export declare function parseTransportChunkUsage(rawUsage: NonNullable<ChatCompl
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    reasoningTokens?: number | undefined;
     totalTokens: number;
     cost: {
         input: number;
@@ -140,7 +205,7 @@ export declare function parseTransportChunkUsage(rawUsage: NonNullable<ChatCompl
         total: number;
     };
 };
-export declare const __testing: {
+export declare const testing: {
     assertCodeModeResponsesToolSurface: typeof assertCodeModeResponsesToolSurface;
     buildOpenAIClientHeaders: typeof buildOpenAIClientHeaders;
     buildOpenAISdkClientOptions: typeof buildOpenAISdkClientOptions;
@@ -154,7 +219,15 @@ export declare const __testing: {
     processOpenAICompletionsStream: typeof processOpenAICompletionsStream;
     processResponsesStream: typeof processResponsesStream;
     formatModelTransportDebugBaseUrl: typeof formatModelTransportDebugBaseUrl;
+    buildResponsesFailedNoDetailsObservation: typeof buildResponsesFailedNoDetailsObservation;
+    buildOpenAIResponsesReasoningReplayMetadata: typeof buildOpenAIResponsesReasoningReplayMetadata;
+    normalizeResponsesFailedEvent: typeof normalizeResponsesFailedEvent;
+    prepareOpenAIResponsesReasoningItemForReplay: typeof prepareOpenAIResponsesReasoningItemForReplay;
+    stripResponsesRequestEncryptedContent: typeof stripResponsesRequestEncryptedContent;
+    tagOpenAIResponsesReasoningReplayItem: typeof tagOpenAIResponsesReasoningReplayItem;
+    summarizeResponsesFailedNoDetailsObservation: typeof summarizeResponsesFailedNoDetailsObservation;
     summarizeResponsesPayload: typeof summarizeResponsesPayload;
     summarizeResponsesTools: typeof summarizeResponsesTools;
     withResponsesFirstEventTimeout: typeof withResponsesFirstEventTimeout;
 };
+export { testing as __testing };

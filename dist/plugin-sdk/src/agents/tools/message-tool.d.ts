@@ -1,4 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,6 +8,7 @@ import type { AnyAgentTool } from "./common.js";
 type MessageToolOptions = {
     agentAccountId?: string;
     agentSessionKey?: string;
+    runId?: string;
     sessionId?: string;
     agentId?: string;
     config?: OpenClawConfig;
@@ -23,9 +25,11 @@ type MessageToolOptions = {
     hasRepliedRef?: {
         value: boolean;
     };
+    sameChannelThreadRequired?: boolean;
     sandboxRoot?: string;
     requireExplicitTarget?: boolean;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    inboundEventKind?: InboundEventKind;
     requesterSenderId?: string;
     senderIsOwner?: boolean;
 };

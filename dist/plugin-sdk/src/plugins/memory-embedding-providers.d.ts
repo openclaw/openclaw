@@ -14,6 +14,9 @@ export type MemoryEmbeddingBatchOptions = {
     timeoutMs: number;
     debug: (message: string, data?: Record<string, unknown>) => void;
 };
+export type MemoryEmbeddingProviderCallOptions = {
+    signal?: AbortSignal;
+};
 export type MemoryEmbeddingProviderRuntime = {
     id: string;
     cacheKeyData?: Record<string, unknown>;
@@ -25,9 +28,10 @@ export type MemoryEmbeddingProvider = {
     id: string;
     model: string;
     maxInputTokens?: number;
-    embedQuery: (text: string) => Promise<number[]>;
-    embedBatch: (texts: string[]) => Promise<number[][]>;
-    embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
+    embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
+    embedBatch: (texts: string[], options?: MemoryEmbeddingProviderCallOptions) => Promise<number[][]>;
+    embedBatchInputs?: (inputs: EmbeddingInput[], options?: MemoryEmbeddingProviderCallOptions) => Promise<number[][]>;
+    close?: () => Promise<void> | void;
 };
 export type MemoryEmbeddingProviderCreateOptions = {
     config: OpenClawConfig;
@@ -82,4 +86,4 @@ export declare function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderA
 export declare function restoreMemoryEmbeddingProviders(adapters: MemoryEmbeddingProviderAdapter[]): void;
 export declare function restoreRegisteredMemoryEmbeddingProviders(entries: RegisteredMemoryEmbeddingProvider[]): void;
 export declare function clearMemoryEmbeddingProviders(): void;
-export declare const _resetMemoryEmbeddingProviders: typeof clearMemoryEmbeddingProviders;
+export declare const resetMemoryEmbeddingProviders: typeof clearMemoryEmbeddingProviders;

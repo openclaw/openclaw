@@ -7,4 +7,5 @@ export declare function resolveModelAuthLabel(params: {
     agentDir?: string;
     workspaceDir?: string;
     includeExternalProfiles?: boolean;
+    acceptedProviderIds?: readonly string[];
 }): string | undefined;

@@ -12,6 +12,7 @@ export type WideAreaGatewayZoneOpts = {
     tailnetIPv6?: string;
     gatewayTlsEnabled?: boolean;
     gatewayTlsFingerprintSha256?: string;
+    gatewayDirectReachable?: boolean;
     instanceLabel?: string;
     hostLabel?: string;
     tailnetDns?: string;

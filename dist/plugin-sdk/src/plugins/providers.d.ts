@@ -28,12 +28,14 @@ export declare function resolveExternalAuthProfileProviderPluginIds(params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
+    manifestRegistry?: PluginManifestRegistry;
 }): string[];
 export declare function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
     declaredPluginIds?: ReadonlySet<string>;
+    manifestRegistry?: PluginManifestRegistry;
 }): string[];
 export declare function resolveDiscoveredProviderPluginIds(params: {
     config?: PluginLoadOptions["config"];
@@ -49,6 +51,8 @@ export declare function resolveDiscoverableProviderOwnerPluginIds(params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
+    registry?: PluginRegistrySnapshot;
+    manifestRegistry?: PluginManifestRegistry;
     includeUntrustedWorkspacePlugins?: boolean;
 }): string[];
 export declare function resolveActivatableProviderOwnerPluginIds(params: {
@@ -56,9 +60,11 @@ export declare function resolveActivatableProviderOwnerPluginIds(params: {
     config?: PluginLoadOptions["config"];
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
+    registry?: PluginRegistrySnapshot;
+    manifestRegistry?: PluginManifestRegistry;
     includeUntrustedWorkspacePlugins?: boolean;
 }): string[];
-export declare const __testing: {
+export declare const testing: {
     readonly resolveActivatableProviderOwnerPluginIds: typeof resolveActivatableProviderOwnerPluginIds;
     readonly resolveEnabledProviderPluginIds: typeof resolveEnabledProviderPluginIds;
     readonly resolveExternalAuthProfileCompatFallbackPluginIds: typeof resolveExternalAuthProfileCompatFallbackPluginIds;
@@ -100,4 +106,4 @@ export declare function resolveCatalogHookProviderPluginIds(params: {
     workspaceDir?: string;
     env?: PluginLoadOptions["env"];
 }): string[];
-export {};
+export { testing as __testing };

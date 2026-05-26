@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { FlowContribution, FlowOption } from "./types.js";
-type ProviderFlowScope = "text-inference" | "image-generation";
+type ProviderFlowScope = "text-inference" | "image-generation" | "music-generation";
 type ProviderSetupFlowOption = FlowOption & {
     onboardingScopes?: ProviderFlowScope[];
     onboardingFeatured?: boolean;

@@ -74,7 +74,28 @@ type DrainableTui = {
         drainInput?: (maxMs?: number, idleMs?: number) => Promise<void>;
     };
 };
+type TuiProcessExitTimer = {
+    unref?: () => void;
+};
+type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProcessExitTimer;
 export declare function drainAndStopTuiSafely(tui: DrainableTui): Promise<void>;
+export declare function canSubmitTuiChatMessage(params: {
+    local?: boolean;
+    activityStatus: string;
+    activeChatRunId?: string | null;
+    pendingChatRunId?: string | null;
+    pendingOptimisticUserMessage?: boolean;
+}): boolean;
+export declare function isTuiBusyActivityStatus(status: string): boolean;
+export declare function resolveTuiShutdownHardExitMs(params?: {
+    localMode?: boolean;
+}): number;
+export declare function scheduleProcessExitAfterTuiReturn(params?: {
+    delayMs?: number;
+    setTimeoutFn?: TuiProcessExitTimeout;
+    exit?: (code?: number) => never | void;
+    writeStderr?: (text: string) => void;
+}): TuiProcessExitTimer;
 type CtrlCAction = "clear" | "warn" | "exit";
 type TuiCtrlCAction = CtrlCAction | "force-exit";
 export declare function resolveCtrlCAction(params: {

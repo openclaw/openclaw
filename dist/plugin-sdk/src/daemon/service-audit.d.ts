@@ -54,5 +54,6 @@ export declare function auditGatewayServiceConfig(params: {
     platform?: NodeJS.Platform;
     expectedGatewayToken?: string;
     expectedManagedServiceEnvKeys?: Iterable<string>;
+    expectedServicePath?: string;
     expectedPort?: number;
 }): Promise<ServiceConfigAudit>;

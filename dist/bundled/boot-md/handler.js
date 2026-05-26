@@ -1,19 +1,19 @@
-import { i as formatErrorMessage } from "../../errors-VfATXfah.js";
-import { u as resolveAgentIdFromSessionKey } from "../../session-key-DFEyR49L.js";
-import { n as listAgentIds, o as resolveAgentWorkspaceDir } from "../../agent-scope-config-26EcJVc0.js";
-import "../../agent-scope-C1Fl7gAf.js";
-import { n as defaultRuntime } from "../../runtime-DDH_zqCr.js";
-import { t as createSubsystemLogger } from "../../subsystem-DLRoKDlF.js";
-import { o as isGatewayStartupEvent } from "../../internal-hooks-C8Y435Ix.js";
-import { i as resolveMainSessionKey, n as resolveAgentMainSessionKey } from "../../main-session-BkilxHe0.js";
-import { u as resolveStorePath } from "../../paths-kGAxo7MN.js";
-import { t as loadSessionStore } from "../../store-load-cmAGD4uk.js";
-import { s as updateSessionStore } from "../../store-3qAZ3Zl6.js";
-import { n as SILENT_REPLY_TOKEN } from "../../tokens-CUA96vf1.js";
-import { n as agentCommand } from "../../agent-command-BQgTSh4F.js";
-import { t as createDefaultDeps } from "../../deps-eRxJcC0K.js";
-import "../../agent-834cof0Q.js";
-import { t as runStartupTasks } from "../../startup-tasks-zkS6Bq36.js";
+import { i as formatErrorMessage } from "../../errors-b3ZrCRlt.js";
+import "../../agent-scope-CtLXGcWm.js";
+import { d as resolveAgentIdFromSessionKey } from "../../session-key-Bte0mmcq.js";
+import { n as listAgentIds, o as resolveAgentWorkspaceDir } from "../../agent-scope-config-CMp71_27.js";
+import { n as defaultRuntime } from "../../runtime-yzlkhCoS.js";
+import { t as createSubsystemLogger } from "../../subsystem-DSPWLoK5.js";
+import { o as isGatewayStartupEvent } from "../../internal-hooks-DpfQDjis.js";
+import { i as resolveMainSessionKey, n as resolveAgentMainSessionKey } from "../../main-session-D3q_5w0B.js";
+import { u as resolveStorePath } from "../../paths-Bg3PO6Gj.js";
+import { t as loadSessionStore } from "../../store-load-z4thf6ld.js";
+import { u as updateSessionStore } from "../../store-BmtchQvp.js";
+import { n as SILENT_REPLY_TOKEN } from "../../tokens-CFv3Qu_v.js";
+import { t as agentCommand } from "../../agent-command-QBBzz2Au.js";
+import { t as createDefaultDeps } from "../../deps-C1bdn-NA.js";
+import "../../agent-DBVvbEwY.js";
+import { t as runStartupTasks } from "../../startup-tasks-Uk0WDxvd.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
@@ -133,8 +133,7 @@ async function runBootOnce(params) {
 			message,
 			sessionKey,
 			sessionId,
-			deliver: false,
-			senderIsOwner: true
+			deliver: false
 		}, bootRuntime, params.deps);
 	} catch (err) {
 		agentFailure = formatErrorMessage(err);

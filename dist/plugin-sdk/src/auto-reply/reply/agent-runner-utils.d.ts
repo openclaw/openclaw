@@ -80,6 +80,7 @@ export declare function buildEmbeddedRunContexts(params: {
         hasRepliedRef?: {
             value: boolean;
         };
+        sameChannelThreadRequired?: boolean;
         skipCrossContextDecoration?: boolean;
         sessionId: string;
         sessionKey: string | undefined;
@@ -119,6 +120,7 @@ export declare function buildEmbeddedRunExecutionParams(params: {
         hasRepliedRef?: {
             value: boolean;
         };
+        sameChannelThreadRequired?: boolean;
         skipCrossContextDecoration?: boolean;
         sessionId: string;
         sessionKey: string | undefined;

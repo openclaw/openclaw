@@ -56,7 +56,6 @@ export declare function readSessionTitleFieldsFromTranscriptAsync(sessionId: str
 export declare function readFirstUserMessageFromTranscript(sessionId: string, storePath: string | undefined, sessionFile?: string, agentId?: string, opts?: {
     includeInterSession?: boolean;
 }): string | null;
-export declare function readLastMessagePreviewFromTranscript(sessionId: string, storePath: string | undefined, sessionFile?: string, agentId?: string): string | null;
 type SessionTranscriptUsageSnapshot = {
     modelProvider?: string;
     model?: string;

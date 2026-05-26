@@ -11,4 +11,8 @@ export declare function getActiveMemorySearchManager(params: {
     purpose?: ActiveMemorySearchPurpose;
 }): Promise<ActiveMemorySearchManagerResult>;
 export declare function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void>;
+export declare function closeActiveMemorySearchManager(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+}): Promise<void>;
 export {};

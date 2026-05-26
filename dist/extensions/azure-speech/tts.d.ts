@@ -1,4 +1,4 @@
-import { L as SpeechVoiceOption } from "../../tts-runtime.types-CNnt44C-.js";
+import { L as SpeechVoiceOption } from "../../tts-runtime.types-DsGX4LDs.js";
 //#region extensions/azure-speech/tts.d.ts
 declare const DEFAULT_AZURE_SPEECH_VOICE = "en-US-JennyNeural";
 declare const DEFAULT_AZURE_SPEECH_LANG = "en-US";

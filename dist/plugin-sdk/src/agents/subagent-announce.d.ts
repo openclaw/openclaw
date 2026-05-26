@@ -42,8 +42,9 @@ export declare function runSubagentAnnounceFlow(params: {
     bestEffortDeliver?: boolean;
     onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
 }): Promise<boolean>;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<SubagentAnnounceDeps> & {
         callGateway?: typeof callGateway;
     }): void;
 };
+export { testing as __testing };

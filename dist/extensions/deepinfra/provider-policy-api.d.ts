@@ -1,4 +1,4 @@
-import { l as ModelProviderConfig } from "../../types.models-CkWCv1xp.js";
+import { u as ModelProviderConfig } from "../../types.models-tqxsISRc.js";
 //#region extensions/deepinfra/provider-policy-api.d.ts
 /**
  * Passthrough normalization for DeepInfra provider config.

@@ -1,7 +1,7 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { nn as ProviderPlugin } from "../../types-lCXG2pW_.js";
-import { d as matchesExactOrPrefix, u as cloneFirstTemplateModel } from "../../provider-model-shared-sJ_hqyVf.js";
-import { u as findCatalogTemplate } from "../../provider-catalog-shared-DON1fFRh.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { sn as ProviderPlugin } from "../../types-Vx7Jq4_-2.js";
+import { d as matchesExactOrPrefix, u as cloneFirstTemplateModel } from "../../provider-model-shared-fqN4xxDB.js";
+import { u as findCatalogTemplate } from "../../provider-catalog-shared-COv85EY6.js";
 
 //#region extensions/openai/shared.d.ts
 type SyntheticOpenAIModelCatalogCost = {

@@ -1,13 +1,13 @@
-import { a as normalizeLowercaseStringOrEmpty, c as normalizeOptionalString, s as normalizeOptionalLowercaseString } from "../string-coerce-LndEvhRk.js";
-import { r as normalizeProviderId } from "../provider-id-Cz7K6wgK.js";
-import { i as resolveAgentModelPrimaryValue } from "../model-input-B9p-bobB.js";
-import { i as isCronSessionKey } from "../session-key-utils-qD-NZHCY.js";
-import { n as DEFAULT_MODEL, r as DEFAULT_PROVIDER } from "../defaults-BGwElg4C.js";
-import { x as resolveConfiguredProviderFallback } from "../model-selection-shared-Dh1KrVmr.js";
-import { i as parseModelRef } from "../model-selection-normalize-B4tdZ1L4.js";
-import { u as resolvePersistedSelectedModelRef } from "../model-selection-VRXWv5rs.js";
-import { t as resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata-BCvCZvLv.js";
-import { t as resolveAgentRuntimeLabel } from "../agent-runtime-label-BMN3Hrxm.js";
+import { a as normalizeLowercaseStringOrEmpty, c as normalizeOptionalString, s as normalizeOptionalLowercaseString } from "../string-coerce-DyL154ka.js";
+import { r as normalizeProviderId } from "../provider-id-zTW9Rdln.js";
+import { i as resolveAgentModelPrimaryValue } from "../model-input-ChW9XXsQ.js";
+import { n as DEFAULT_MODEL, r as DEFAULT_PROVIDER } from "../defaults-mDjiWzE5.js";
+import { t as resolveConfiguredProviderFallback } from "../configured-provider-fallback-C0W42MAj.js";
+import { i as parseModelRef } from "../model-selection-normalize-CBfQo-Fd.js";
+import { u as resolvePersistedSelectedModelRef } from "../model-selection-P-81eBKx.js";
+import { t as resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata-DOglN8Yf.js";
+import { t as classifySessionKind } from "../classify-session-kind-_uifHbnL.js";
+import { t as resolveAgentRuntimeLabel } from "../agent-runtime-label-DPvzpWzS.js";
 //#region src/commands/status.summary.runtime.ts
 function resolveStatusModelRefFromRaw(params) {
 	const trimmed = params.rawModel.trim();
@@ -70,14 +70,6 @@ function resolveConfiguredProviderContextTokens(cfg, provider, model) {
 		}
 	}
 }
-function classifySessionKey(key, entry) {
-	if (key === "global") return "global";
-	if (key === "unknown") return "unknown";
-	if (isCronSessionKey(key)) return "cron";
-	if (entry?.chatType === "group" || entry?.chatType === "channel") return "group";
-	if (key.includes(":group:") || key.includes(":channel:")) return "group";
-	return "direct";
-}
 function resolveSessionModelRef(cfg, entry, agentId) {
 	const resolved = resolveConfiguredStatusModelRef({
 		cfg,
@@ -100,7 +92,9 @@ function resolveSessionRuntimeLabel(params) {
 		agentId: params.agentId ?? "",
 		provider: params.provider,
 		model: params.model,
-		sessionKey: params.sessionKey
+		sessionKey: params.sessionKey,
+		acpRuntime: params.entry?.acp != null,
+		acpBackend: params.entry?.acp?.backend
 	}).id);
 	const resolvedHarness = id && id !== "pi" && id !== "auto" ? id : void 0;
 	return resolveAgentRuntimeLabel({
@@ -121,7 +115,7 @@ function resolveContextTokensForModel(params) {
 }
 const statusSummaryRuntime = {
 	resolveContextTokensForModel,
-	classifySessionKey,
+	classifySessionKey: classifySessionKind,
 	resolveSessionModelRef,
 	resolveSessionRuntimeLabel,
 	resolveConfiguredStatusModelRef

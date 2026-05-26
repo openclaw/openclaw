@@ -1,5 +1,5 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { t as registerOcPathCli } from "../../cli-registration-BAviOb1q.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as registerOcPathCli } from "../../cli-registration-BPxgdYEv.js";
 //#region extensions/oc-path/cli-metadata.ts
 var cli_metadata_default = definePluginEntry({
 	id: "oc-path",

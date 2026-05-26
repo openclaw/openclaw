@@ -1,0 +1,138 @@
+import { n as isRich, r as theme, t as colorize } from "./theme-D58JpUfy.js";
+import { n as asNullableRecord } from "./record-coerce-aMlBWINm.js";
+import { t as formatChannelStatusState } from "./status-state-Dua3XQiC.js";
+//#region src/commands/health-format.ts
+const formatKv = (line, rich) => {
+	const idx = line.indexOf(": ");
+	if (idx <= 0) return colorize(rich, theme.muted, line);
+	const key = line.slice(0, idx);
+	const value = line.slice(idx + 2);
+	const valueColor = key === "Gateway target" || key === "Config" ? theme.command : key === "Source" ? theme.muted : theme.info;
+	return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
+};
+function formatHealthCheckFailure(err, opts = {}) {
+	const rich = opts.rich ?? isRich();
+	const raw = String(err);
+	const message = err instanceof Error ? err.message : raw;
+	if (!rich) return `Health check failed: ${raw}`;
+	const lines = message.split("\n").map((l) => l.trimEnd()).filter(Boolean);
+	const detailsIdx = lines.findIndex((l) => l.startsWith("Gateway target: "));
+	const summaryLines = (detailsIdx >= 0 ? lines.slice(0, detailsIdx) : lines).map((l) => l.trim()).filter(Boolean);
+	const detailLines = detailsIdx >= 0 ? lines.slice(detailsIdx) : [];
+	const summary = summaryLines.length > 0 ? summaryLines.join(" ") : message;
+	const out = [`${colorize(rich, theme.error.bold, "Health check failed")}: ${summary}`];
+	for (const line of detailLines) out.push(`  ${formatKv(line, rich)}`);
+	return out.join("\n");
+}
+const formatProbeLine = (probe, opts = {}) => {
+	const record = asNullableRecord(probe);
+	if (!record) return null;
+	const ok = typeof record.ok === "boolean" ? record.ok : void 0;
+	if (ok === void 0) return null;
+	const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
+	const status = typeof record.status === "number" ? record.status : null;
+	const error = typeof record.error === "string" ? record.error : null;
+	const bot = asNullableRecord(record.bot);
+	const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
+	const webhook = asNullableRecord(record.webhook);
+	const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
+	const usernames = /* @__PURE__ */ new Set();
+	if (botUsername) usernames.add(botUsername);
+	for (const extra of opts.botUsernames ?? []) if (extra) usernames.add(extra);
+	if (ok) {
+		let label = "ok";
+		if (usernames.size > 0) label += ` (@${Array.from(usernames).join(", @")})`;
+		if (elapsedMs != null) label += ` (${elapsedMs}ms)`;
+		if (webhookUrl) label += ` - webhook ${webhookUrl}`;
+		return label;
+	}
+	let label = `failed (${status ?? "unknown"})`;
+	if (error) label += ` - ${error}`;
+	return label;
+};
+const formatAccountProbeTiming = (summary) => {
+	const probe = asNullableRecord(summary.probe);
+	if (!probe) return null;
+	const elapsedMs = typeof probe.elapsedMs === "number" ? Math.round(probe.elapsedMs) : null;
+	const ok = typeof probe.ok === "boolean" ? probe.ok : null;
+	if (elapsedMs == null && ok !== true) return null;
+	const accountId = summary.accountId || "default";
+	const botRecord = asNullableRecord(probe.bot);
+	const botUsername = botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
+	return `${botUsername ? `@${botUsername}` : accountId}:${accountId}:${elapsedMs != null ? `${elapsedMs}ms` : "ok"}`;
+};
+const isProbeFailure = (summary) => {
+	const probe = asNullableRecord(summary.probe);
+	if (!probe) return false;
+	return (typeof probe.ok === "boolean" ? probe.ok : null) === false;
+};
+const formatHealthChannelLines = (summary, opts = {}) => {
+	const channels = summary.channels ?? {};
+	const channelOrder = summary.channelOrder?.length > 0 ? summary.channelOrder : Object.keys(channels);
+	const accountMode = opts.accountMode ?? "default";
+	const lines = [];
+	for (const channelId of channelOrder) {
+		const channelSummary = channels[channelId];
+		if (!channelSummary) continue;
+		const label = summary.channelLabels?.[channelId] ?? channelId;
+		const accountSummaries = channelSummary.accounts ?? {};
+		const accountIds = opts.accountIdsByChannel?.[channelId];
+		const filteredSummaries = accountIds && accountIds.length > 0 ? accountIds.map((accountId) => accountSummaries[accountId]).filter((entry) => Boolean(entry)) : void 0;
+		const listSummaries = accountMode === "all" ? Object.values(accountSummaries) : filteredSummaries ?? (channelSummary.accounts ? Object.values(accountSummaries) : []);
+		const baseSummary = filteredSummaries && filteredSummaries.length > 0 ? filteredSummaries[0] : channelSummary;
+		const botUsernames = listSummaries ? listSummaries.map((account) => {
+			const probeRecord = asNullableRecord(account.probe);
+			const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
+			return bot && typeof bot.username === "string" ? bot.username : null;
+		}).filter((value) => Boolean(value)) : [];
+		const statusState = typeof baseSummary.statusState === "string" ? baseSummary.statusState : null;
+		if (statusState) {
+			if (statusState === "linked") {
+				const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
+				const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 6e4)}m)` : "";
+				lines.push(`${label}: ${formatChannelStatusState(statusState)}${authLabel}`);
+			} else lines.push(`${label}: ${formatChannelStatusState(statusState)}`);
+			continue;
+		}
+		const linked = typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
+		if (linked !== null) {
+			if (linked) {
+				const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
+				const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 6e4)}m)` : "";
+				lines.push(`${label}: linked${authLabel}`);
+			} else lines.push(`${label}: not linked`);
+			continue;
+		}
+		const configured = typeof baseSummary.configured === "boolean" ? baseSummary.configured : null;
+		if (configured === false) {
+			lines.push(`${label}: not configured`);
+			continue;
+		}
+		const accountTimings = accountMode === "all" ? listSummaries.map((account) => formatAccountProbeTiming(account)).filter((value) => Boolean(value)) : [];
+		const failedSummary = listSummaries.find((summary) => isProbeFailure(summary));
+		if (failedSummary) {
+			const failureLine = formatProbeLine(failedSummary.probe, { botUsernames });
+			if (failureLine) {
+				lines.push(`${label}: ${failureLine}`);
+				continue;
+			}
+		}
+		if (accountTimings.length > 0) {
+			lines.push(`${label}: ok (${accountTimings.join(", ")})`);
+			continue;
+		}
+		const probeLine = formatProbeLine(baseSummary.probe, { botUsernames });
+		if (probeLine) {
+			lines.push(`${label}: ${probeLine}`);
+			continue;
+		}
+		if (configured === true) {
+			lines.push(`${label}: configured`);
+			continue;
+		}
+		lines.push(`${label}: unknown`);
+	}
+	return lines;
+};
+//#endregion
+export { formatHealthCheckFailure as n, formatHealthChannelLines as t };

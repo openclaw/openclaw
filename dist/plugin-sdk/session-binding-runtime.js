@@ -1,3 +1,3 @@
-import { a as registerSessionBindingAdapter, n as __testing, r as getSessionBindingService } from "../session-binding-service-C69Hco9-.js";
-import "../session-binding-runtime-BfivqSb3.js";
-export { __testing, getSessionBindingService, registerSessionBindingAdapter };
+import { a as testing, i as registerSessionBindingAdapter, n as getSessionBindingService } from "../session-binding-service-B19FMAqz.js";
+import "../session-binding-runtime-B_bKWdzh.js";
+export { testing as __testing, testing, getSessionBindingService, registerSessionBindingAdapter };

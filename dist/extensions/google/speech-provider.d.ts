@@ -1,2 +1,2 @@
-import { n as buildGoogleSpeechProvider, t as __testing } from "../../speech-provider-DmWBdVa0.js";
-export { __testing, buildGoogleSpeechProvider };
+import { n as testing, t as buildGoogleSpeechProvider } from "../../speech-provider-DD7x6P6d.js";
+export { testing as __testing, testing, buildGoogleSpeechProvider };

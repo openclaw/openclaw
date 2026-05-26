@@ -1,2 +1,2 @@
-import { n as transcribeOpenRouterAudio, t as openrouterMediaUnderstandingProvider } from "../../media-understanding-provider-BmPtpnnb.js";
+import { n as transcribeOpenRouterAudio, t as openrouterMediaUnderstandingProvider } from "../../media-understanding-provider-BsasrrkS.js";
 export { openrouterMediaUnderstandingProvider, transcribeOpenRouterAudio };

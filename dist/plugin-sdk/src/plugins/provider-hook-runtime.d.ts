@@ -26,6 +26,7 @@ export declare function resolveProviderPluginsForHooks(params: {
     bundledProviderVitestCompat?: boolean;
 }): ProviderPlugin[];
 export declare function resolveProviderRuntimePlugin(params: ProviderRuntimePluginLookupParams): ProviderPlugin | undefined;
+export declare function resolveLoadedProviderRuntimePlugin(params: ProviderRuntimePluginLookupParams): ProviderPlugin | undefined;
 export declare function resolveProviderHookPlugin(params: {
     provider: string;
     config?: OpenClawConfig;

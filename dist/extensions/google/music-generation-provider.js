@@ -1,2 +1,2 @@
-import { t as buildGoogleMusicGenerationProvider } from "../../music-generation-provider-ATsL2Dmy.js";
+import { t as buildGoogleMusicGenerationProvider } from "../../music-generation-provider-DG845rbh.js";
 export { buildGoogleMusicGenerationProvider };

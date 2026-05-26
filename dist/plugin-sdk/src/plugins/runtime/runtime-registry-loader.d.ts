@@ -9,6 +9,7 @@ export declare function ensurePluginRegistryLoaded(options?: {
     onlyPluginIds?: string[];
     onlyChannelIds?: string[];
 }): void;
-export declare const __testing: {
+export declare const testing: {
     resetPluginRegistryLoadedForTests(): void;
 };
+export { testing as __testing };

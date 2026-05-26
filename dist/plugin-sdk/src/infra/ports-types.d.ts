@@ -6,6 +6,10 @@ export type PortListener = {
     user?: string;
     address?: string;
 };
+export type PortConnectionDirection = "client" | "server" | "unknown";
+export type PortConnection = PortListener & {
+    direction: PortConnectionDirection;
+};
 export type PortUsageStatus = "free" | "busy" | "unknown";
 export type PortUsage = {
     port: number;
@@ -16,3 +20,9 @@ export type PortUsage = {
     errors?: string[];
 };
 export type PortListenerKind = "gateway" | "ssh" | "unknown";
+export type PortConnections = {
+    port: number;
+    connections: PortConnection[];
+    detail?: string;
+    errors?: string[];
+};

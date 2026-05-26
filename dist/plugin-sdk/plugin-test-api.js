@@ -1,4 +1,4 @@
-import { t as attachPluginApiFacades } from "../api-facades-B7aKRySD.js";
+import { t as attachPluginApiFacades } from "../api-facades-BqeVKWB0.js";
 //#region src/plugin-sdk/plugin-test-api.ts
 function createTestPluginApi(api = {}) {
 	const { agent, lifecycle, runContext, session, ...flatApi } = api;
@@ -37,6 +37,7 @@ function createTestPluginApi(api = {}) {
 			registerAutoEnableProbe() {},
 			registerProvider() {},
 			registerModelCatalogProvider() {},
+			registerEmbeddingProvider() {},
 			registerSpeechProvider() {},
 			registerRealtimeTranscriptionProvider() {},
 			registerRealtimeVoiceProvider() {},

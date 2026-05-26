@@ -1,4 +1,4 @@
-import { c as OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, t as CurrentTurnPromptContext } from "../../../params-DXH1hJUt.js";
+import { c as OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, t as CurrentInboundPromptContext } from "../../../params-C8lj3xSa.js";
 
 //#region src/agents/pi-embedded-runner/run/runtime-context-prompt.d.ts
 type RuntimeContextSession = {
@@ -18,14 +18,16 @@ type RuntimeContextPromptParts = {
   runtimeOnly?: boolean;
   runtimeSystemContext?: string;
 };
-declare function buildCurrentTurnPromptContextPrefix(context: CurrentTurnPromptContext | undefined): string;
-declare function buildCurrentTurnPrompt(params: {
-  context: CurrentTurnPromptContext | undefined;
+type EmptyTranscriptMode = "model-prompt" | "runtime-event";
+declare function buildCurrentInboundPromptContextPrefix(context: CurrentInboundPromptContext | undefined): string;
+declare function buildCurrentInboundPrompt(params: {
+  context: CurrentInboundPromptContext | undefined;
   prompt: string;
 }): string;
 declare function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
+  emptyTranscriptMode?: EmptyTranscriptMode;
 }): RuntimeContextPromptParts;
 declare function buildRuntimeContextSystemContext(runtimeContext: string): string;
 declare function buildRuntimeEventSystemContext(runtimeContext: string): string;
@@ -34,4 +36,4 @@ declare function queueRuntimeContextForNextTurn(params: {
   runtimeContext?: string;
 }): Promise<void>;
 //#endregion
-export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, buildCurrentTurnPrompt, buildCurrentTurnPromptContextPrefix, buildRuntimeContextSystemContext, buildRuntimeEventSystemContext, queueRuntimeContextForNextTurn, resolveRuntimeContextPromptParts };
+export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, buildCurrentInboundPrompt, buildCurrentInboundPromptContextPrefix, buildRuntimeContextSystemContext, buildRuntimeEventSystemContext, queueRuntimeContextForNextTurn, resolveRuntimeContextPromptParts };

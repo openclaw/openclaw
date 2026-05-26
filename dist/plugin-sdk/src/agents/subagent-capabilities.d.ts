@@ -7,6 +7,8 @@ type SessionCapabilityEntry = {
     subagentRole?: unknown;
     subagentControlScope?: unknown;
     spawnedBy?: unknown;
+    inheritedToolAllow?: unknown;
+    inheritedToolDeny?: unknown;
 };
 export type SessionCapabilityStore = Record<string, {
     sessionId?: unknown;
@@ -14,6 +16,8 @@ export type SessionCapabilityStore = Record<string, {
     subagentRole?: unknown;
     subagentControlScope?: unknown;
     spawnedBy?: unknown;
+    inheritedToolAllow?: unknown;
+    inheritedToolDeny?: unknown;
 }>;
 export declare function resolveSubagentCapabilityStore(sessionKey: string | undefined | null, opts?: {
     cfg?: OpenClawConfig;
@@ -44,4 +48,12 @@ export declare function resolveStoredSubagentCapabilities(sessionKey: string | u
     canSpawn: boolean;
     canControlChildren: boolean;
 };
+export declare function resolveStoredSubagentInheritedToolDenylist(sessionKey: string | undefined | null, opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+}): string[];
+export declare function resolveStoredSubagentInheritedToolAllowlist(sessionKey: string | undefined | null, opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+}): string[];
 export {};

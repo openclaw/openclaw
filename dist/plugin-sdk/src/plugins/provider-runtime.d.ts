@@ -8,7 +8,7 @@ import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import type { ProviderAuthDoctorHintContext, ProviderAugmentModelCatalogContext, ProviderExternalAuthProfile, ProviderBuildMissingAuthMessageContext, ProviderBuildUnknownModelHintContext, ProviderCacheTtlEligibilityContext, ProviderCreateEmbeddingProviderContext, ProviderDeferSyntheticProfileAuthContext, ProviderResolveSyntheticAuthContext, ProviderCreateStreamFnContext, ProviderDefaultThinkingPolicyContext, ProviderFetchUsageSnapshotContext, ProviderFailoverErrorContext, ProviderNormalizeToolSchemasContext, ProviderNormalizeConfigContext, ProviderNormalizeModelIdContext, ProviderReasoningOutputMode, ProviderReasoningOutputModeContext, ProviderReplayPolicy, ProviderReplayPolicyContext, ProviderNormalizeResolvedModelContext, ProviderNormalizeTransportContext, ProviderModernModelPolicyContext, ProviderPrepareDynamicModelContext, ProviderPreferRuntimeResolvedModelContext, ProviderResolveExternalAuthProfilesContext, ProviderResolveExternalOAuthProfilesContext, ProviderPrepareRuntimeAuthContext, ProviderApplyConfigDefaultsContext, ProviderResolveConfigApiKeyContext, ProviderSanitizeReplayHistoryContext, ProviderResolveUsageAuthContext, ProviderResolveDynamicModelContext, ProviderResolveTransportTurnStateContext, ProviderResolveWebSocketSessionPolicyContext, ProviderSystemPromptContributionContext, ProviderTransformSystemPromptContext, ProviderThinkingPolicyContext, ProviderTransportTurnState, ProviderValidateReplayTurnsContext, ProviderWebSocketSessionPolicy, PluginTextTransforms } from "./types.js";
 declare function resetExternalAuthFallbackWarningCacheForTest(): void;
 export { prepareProviderExtraParams, resolveProviderAuthProfileId, resolveProviderExtraParamsForTransport, resolveProviderFollowupFallbackRoute, resolveProviderRuntimePlugin, wrapProviderStreamFn, };
-export declare const __testing: {
+export declare const testing: {
     readonly resetExternalAuthFallbackWarningCacheForTest: typeof resetExternalAuthFallbackWarningCacheForTest;
 };
 export declare function runProviderDynamicModel(params: {
@@ -173,6 +173,7 @@ export declare function resolveProviderStreamFn(params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    allowRuntimePluginLoad?: boolean;
     context: ProviderCreateStreamFnContext;
 }): import("@earendil-works/pi-agent-core").StreamFn | undefined;
 export declare function resolveProviderTransportTurnStateWithPlugin(params: {
@@ -321,6 +322,7 @@ export declare function resolveProviderSyntheticAuthWithPlugin(params: {
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     context: ProviderResolveSyntheticAuthContext;
+    modelApi?: string;
 }): import("./provider-external-auth.types.ts").ProviderSyntheticAuthResult | null | undefined;
 export declare function resolveExternalAuthProfilesWithPlugins(params: {
     config?: OpenClawConfig;
@@ -340,6 +342,7 @@ export declare function shouldDeferProviderSyntheticProfileAuthWithPlugin(params
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     context: ProviderDeferSyntheticProfileAuthContext;
+    modelApi?: string;
 }): boolean | undefined;
 export declare function augmentModelCatalogWithProviderPlugins(params: {
     config?: OpenClawConfig;
@@ -347,3 +350,4 @@ export declare function augmentModelCatalogWithProviderPlugins(params: {
     env?: NodeJS.ProcessEnv;
     context: ProviderAugmentModelCatalogContext;
 }): Promise<import("openclaw/plugin-sdk/agent-runtime").ModelCatalogEntry[]>;
+export { testing as __testing };

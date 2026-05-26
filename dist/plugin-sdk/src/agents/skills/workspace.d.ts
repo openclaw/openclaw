@@ -12,7 +12,7 @@ export declare function buildWorkspaceSkillSnapshot(workspaceDir: string, opts?:
     snapshotVersion?: number;
 }): SkillSnapshot;
 export declare function buildWorkspaceSkillsPrompt(workspaceDir: string, opts?: WorkspaceSkillBuildOptions): string;
-export declare const __testing: {
+export declare const testing: {
     compactHomePath: typeof compactHomePath;
 };
 type WorkspaceSkillBuildOptions = {
@@ -65,4 +65,4 @@ export declare function filterWorkspaceSkillEntriesWithOptions(entries: SkillEnt
     skillFilter?: string[];
     eligibility?: SkillEligibilityContext;
 }): SkillEntry[];
-export {};
+export { testing as __testing };

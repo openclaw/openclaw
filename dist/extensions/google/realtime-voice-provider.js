@@ -1,10 +1,10 @@
-import { c as normalizeOptionalString } from "../../string-coerce-LndEvhRk.js";
-import { u as normalizeResolvedSecretInputString } from "../../types.secrets-BxqheYvy.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import "../../secret-input-DlbCRffO.js";
-import { A as REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, c as REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, k as REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "../../session-runtime-CA9Yhu5F.js";
-import { i as resamplePcm, n as mulawToPcm, t as convertPcmToMulaw8k } from "../../realtime-voice-m-eI7iVp.js";
-import { t as createGoogleGenAI } from "../../google-genai-runtime-CPTcsQMa.js";
+import { c as normalizeOptionalString } from "../../string-coerce-DyL154ka.js";
+import { u as normalizeResolvedSecretInputString } from "../../types.secrets-DwPik3M8.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import "../../secret-input-CWnTb0tw.js";
+import { A as REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, c as REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, k as REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "../../session-runtime-CCTSwqCz.js";
+import { i as resamplePcm, n as mulawToPcm, t as convertPcmToMulaw8k } from "../../realtime-voice-D-uczs8E.js";
+import { t as createGoogleGenAI } from "../../google-genai-runtime-CMlucVkZ.js";
 import { randomUUID } from "node:crypto";
 //#region extensions/google/realtime-voice-provider.ts
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
@@ -360,7 +360,7 @@ var GoogleRealtimeVoiceBridge = class {
 		return this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio);
 	}
 	toGoogleInputPcm16k(audio) {
-		if (this.audioFormat.encoding === "g711_ulaw" && this.audioFormat.sampleRateHz === 8e3 && GOOGLE_REALTIME_INPUT_SAMPLE_RATE === 16e3) return convertMulaw8kToPcm16k(audio);
+		if (this.audioFormat.encoding === "g711_ulaw" && this.audioFormat.sampleRateHz === 8e3 && true) return convertMulaw8kToPcm16k(audio);
 		return resamplePcm(this.toInputPcm(audio), this.audioFormat.sampleRateHz, GOOGLE_REALTIME_INPUT_SAMPLE_RATE);
 	}
 	toOutputAudio(pcm, sampleRate) {

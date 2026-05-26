@@ -113,8 +113,93 @@ export declare function clearToolSearchCatalog(params: {
     runId?: string;
     catalogRef?: ToolSearchCatalogRef;
 }): void;
+export declare class ToolSearchRuntime {
+    private readonly ctx;
+    private readonly config;
+    private callSequence;
+    constructor(ctx: ToolSearchToolContext, config: ToolSearchConfig);
+    search: (query: string, options?: {
+        limit?: number;
+    }) => Promise<{
+        id: string;
+        source: CatalogSource;
+        sourceName: string | undefined;
+        name: string;
+        label: string | undefined;
+        description: string;
+    }[]>;
+    all: () => {
+        id: string;
+        source: CatalogSource;
+        sourceName: string | undefined;
+        name: string;
+        label: string | undefined;
+        description: string;
+    }[];
+    describe: (id: string) => Promise<{
+        id: string;
+        source: CatalogSource;
+        sourceName: string | undefined;
+        name: string;
+        label: string | undefined;
+        description: string;
+        parameters: {};
+    }>;
+    call: (id: string, input?: unknown, options?: {
+        parentToolCallId?: string;
+        signal?: AbortSignal;
+        onUpdate?: AgentToolUpdateCallback<unknown>;
+    }) => Promise<{
+        tool: {
+            id: string;
+            source: CatalogSource;
+            sourceName: string | undefined;
+            name: string;
+            label: string | undefined;
+            description: string;
+        };
+        result: AgentToolResult<unknown>;
+    }>;
+    telemetry(): {
+        catalogSize: number;
+        sources: Record<CatalogSource, number>;
+        searchCount: number;
+        describeCount: number;
+        callCount: number;
+    };
+}
+export declare function applyToolCatalogCompaction(params: {
+    tools: AnyAgentTool[];
+    enabled: boolean;
+    sessionId?: string;
+    sessionKey?: string;
+    agentId?: string;
+    runId?: string;
+    catalogRef?: ToolSearchCatalogRef;
+    toolHookContext?: HookContext;
+    isVisibleControlTool: (tool: AnyAgentTool) => boolean;
+    shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+}): {
+    tools: AnyAgentTool[];
+    compacted: boolean;
+    catalogToolCount: number;
+    catalogRegistered: boolean;
+};
+export declare function addClientToolsToToolCatalog(params: {
+    tools: ToolDefinition[];
+    enabled: boolean;
+    sessionId?: string;
+    sessionKey?: string;
+    agentId?: string;
+    runId?: string;
+    catalogRef?: ToolSearchCatalogRef;
+}): {
+    tools: ToolDefinition[];
+    compacted: boolean;
+    catalogToolCount: number;
+};
 export declare function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[];
-export declare const __testing: {
+export declare const testing: {
     sessionCatalogs: Map<string, ToolSearchCatalogSession>;
     resolveToolSearchConfig: typeof resolveToolSearchConfig;
     isToolSearchCodeModeSupported: typeof isToolSearchCodeModeSupported;
@@ -122,4 +207,4 @@ export declare const __testing: {
     applyToolSearchCatalog: typeof applyToolSearchCatalog;
     addClientToolsToToolSearchCatalog: typeof addClientToolsToToolSearchCatalog;
 };
-export {};
+export { testing as __testing };

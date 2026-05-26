@@ -1,12 +1,12 @@
-import { i as PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "../../provider-model-shared-D-slKnZa.js";
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { n as applyOpencodeGoConfig, t as OPENCODE_GO_DEFAULT_MODEL_REF } from "../../onboard-B8ZFMwJJ.js";
-import "../../api-C_hpgJSY.js";
-import { t as opencodeGoMediaUnderstandingProvider } from "../../media-understanding-provider-T9nBu8vl.js";
-import { n as normalizeOpencodeGoBaseUrl, r as resolveOpencodeGoSupplementalModel, t as listOpencodeGoSupplementalModelCatalogEntries } from "../../provider-catalog-NgyBPZfo.js";
-import { t as createOpencodeGoDeepSeekV4Wrapper } from "../../stream-CTUWJ4fY.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { i as PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "../../provider-model-shared-DtsPmvDx.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { n as applyOpencodeGoConfig, t as OPENCODE_GO_DEFAULT_MODEL_REF } from "../../onboard-DHo52Wpn.js";
+import "../../api-hKkcF8dm.js";
+import { t as opencodeGoMediaUnderstandingProvider } from "../../media-understanding-provider-DTL6lnrZ.js";
+import { a as resolveOpencodeGoSupplementalModel, i as normalizeOpencodeGoResolvedModel, n as listOpencodeGoSupplementalModelCatalogEntries, r as normalizeOpencodeGoBaseUrl } from "../../provider-catalog-CPLia89-.js";
+import { r as createOpencodeGoWrapper } from "../../stream-DcrKLb1r.js";
 //#region extensions/opencode-go/index.ts
 const PROVIDER_ID = "opencode-go";
 const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"];
@@ -66,10 +66,13 @@ var opencode_go_default = definePluginEntry({
 					api: model.api,
 					baseUrl: model.baseUrl
 				});
-				return normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl ? {
+				const baseUrlNormalized = normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl ? {
 					...model,
 					baseUrl: normalizedBaseUrl
-				} : void 0;
+				} : model;
+				const modelNormalized = normalizeOpencodeGoResolvedModel(baseUrlNormalized);
+				if (modelNormalized) return modelNormalized;
+				return baseUrlNormalized !== model ? baseUrlNormalized : void 0;
 			},
 			normalizeTransport: ({ api, baseUrl }) => {
 				const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
@@ -84,7 +87,7 @@ var opencode_go_default = definePluginEntry({
 			resolveDynamicModel: ({ modelId }) => resolveOpencodeGoSupplementalModel(modelId),
 			augmentModelCatalog: () => listOpencodeGoSupplementalModelCatalogEntries(),
 			...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
-			wrapStreamFn: (ctx) => createOpencodeGoDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
+			wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
 			isModernModelRef: () => true
 		});
 		api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);

@@ -1,2 +1,2 @@
-import { t as createTokenjuiceOpenClawEmbeddedExtension } from "../../runtime-api-BUwF386Q.js";
+import { t as createTokenjuiceOpenClawEmbeddedExtension } from "../../runtime-api-Cw3HnOBh.js";
 export { createTokenjuiceOpenClawEmbeddedExtension };

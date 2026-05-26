@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { r as AnyAgentTool } from "../../common-5s-NiX7e.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { r as AnyAgentTool } from "../../common-BDN0bXby.js";
 
 //#region src/agents/pi-embedded-runner/effective-tool-policy.d.ts
 /**
@@ -33,8 +33,6 @@ type FinalEffectiveToolPolicyParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-  senderIsOwner?: boolean;
-  ownerOnlyToolAllowlist?: string[];
   warn: (message: string) => void;
 };
 declare function applyFinalEffectiveToolPolicy(params: FinalEffectiveToolPolicyParams): AnyAgentTool[];

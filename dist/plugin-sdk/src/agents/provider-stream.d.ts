@@ -7,4 +7,5 @@ export declare function registerProviderStreamForModel<TApi extends Api>(params:
     agentDir?: string;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    allowRuntimePluginLoad?: boolean;
 }): StreamFn | undefined;

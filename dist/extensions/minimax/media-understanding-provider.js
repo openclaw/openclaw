@@ -1,2 +1,2 @@
-import { n as minimaxPortalMediaUnderstandingProvider, t as minimaxMediaUnderstandingProvider } from "../../media-understanding-provider-CgG7F6K2.js";
+import { n as minimaxPortalMediaUnderstandingProvider, t as minimaxMediaUnderstandingProvider } from "../../media-understanding-provider-BUHg4vk8.js";
 export { minimaxMediaUnderstandingProvider, minimaxPortalMediaUnderstandingProvider };

@@ -1,6 +1,6 @@
-import { c as isRecord } from "../../utils-CKsuXgDI.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../tool-config-shared-BNwC26dj.js";
+import { c as isRecord } from "../../utils-sBTEdeml.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../tool-config-shared-Dk_VjbjJ.js";
 //#region extensions/xai/setup-api.ts
 var setup_api_default = definePluginEntry({
 	id: "xai",

@@ -16,6 +16,7 @@ export declare const ConnectErrorDetailCodes: {
     readonly AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED";
     readonly AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH";
     readonly CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED";
+    readonly PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH";
     readonly CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED";
     readonly DEVICE_IDENTITY_REQUIRED: "DEVICE_IDENTITY_REQUIRED";
     readonly DEVICE_AUTH_INVALID: "DEVICE_AUTH_INVALID";
@@ -45,6 +46,9 @@ export type PairingConnectErrorDetails = {
     reason?: ConnectPairingRequiredReason;
     requestId?: string;
     remediationHint?: string;
+    recommendedNextStep?: ConnectRecoveryNextStep;
+    retryable?: boolean;
+    pauseReconnect?: boolean;
     deviceId?: string;
     requestedRole?: string;
     requestedScopes?: string[];
@@ -64,6 +68,9 @@ export declare function buildPairingConnectErrorDetails(params: {
     reason: ConnectPairingRequiredReason | undefined;
     requestId?: string;
     remediationHint?: string;
+    recommendedNextStep?: ConnectRecoveryNextStep;
+    retryable?: boolean;
+    pauseReconnect?: boolean;
     deviceId?: string;
     requestedRole?: string;
     requestedScopes?: string[];

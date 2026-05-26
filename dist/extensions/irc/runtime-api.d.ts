@@ -1,2 +1,2 @@
-import { t as setIrcRuntime } from "../../runtime-Dm7FDVlw.js";
+import { t as setIrcRuntime } from "../../runtime-Db1PNyII.js";
 export { setIrcRuntime };

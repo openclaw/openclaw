@@ -7,6 +7,17 @@
   "providers": [
     "nvidia"
   ],
+  "providerEndpoints": [
+    {
+      "endpointClass": "nvidia-native",
+      "hosts": [
+        "integrate.api.nvidia.com"
+      ],
+      "baseUrls": [
+        "https://integrate.api.nvidia.com/v1"
+      ]
+    }
+  ],
   "modelIdNormalization": {
     "providers": {
       "nvidia": {

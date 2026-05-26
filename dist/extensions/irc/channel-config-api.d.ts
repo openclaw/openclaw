@@ -1,6 +1,4 @@
-import { n as ChannelConfigSchema } from "../../types.config-U9f3z9SA.js";
-import { z } from "zod";
-
+import { n as ChannelConfigSchema } from "../../types.config-CKJTcS4X.js";
 //#region extensions/irc/src/config-schema.d.ts
 declare const IrcChannelConfigSchema: ChannelConfigSchema;
 //#endregion

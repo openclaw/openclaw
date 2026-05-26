@@ -7,6 +7,9 @@ export declare const ProxyLoopbackModeSchema: z.ZodEnum<{
 export declare const ProxyConfigSchema: z.ZodOptional<z.ZodObject<{
     enabled: z.ZodOptional<z.ZodBoolean>;
     proxyUrl: z.ZodOptional<z.ZodURL>;
+    tls: z.ZodOptional<z.ZodObject<{
+        caFile: z.ZodOptional<z.ZodString>;
+    }, z.core.$strict>>;
     loopbackMode: z.ZodOptional<z.ZodEnum<{
         block: "block";
         "gateway-only": "gateway-only";

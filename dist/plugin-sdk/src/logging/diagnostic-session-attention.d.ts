@@ -24,3 +24,4 @@ export declare function classifySessionAttention(params: {
     activity: DiagnosticSessionActivitySnapshot;
     staleMs: number;
 }): SessionAttentionClassification;
+export declare function isTerminalDiagnosticProgressReason(reason: string | undefined): boolean;

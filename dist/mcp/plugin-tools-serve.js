@@ -1,14 +1,13 @@
-import { i as formatErrorMessage } from "../errors-VfATXfah.js";
-import { n as VERSION } from "../version-B2G3zXnp.js";
-import { a as routeLogsToStderr } from "../console-DTusPN3F.js";
-import { i as getRuntimeConfig } from "../io-5xE1dPMK.js";
-import "../config-CzeRK-GW.js";
-import { t as coerceChatContentText } from "../chat-content-Dc1e9mcQ.js";
-import { n as pickSandboxToolPolicy } from "../sandbox-tool-policy-7ufxS0Kx.js";
-import { a as resolveToolProfilePolicy } from "../tool-policy-shared-CnnYZoj3.js";
-import { a as collectExplicitAllowlist, o as collectExplicitDenylist, u as mergeAlsoAllowPolicy } from "../tool-policy-74_siKto.js";
-import { a as resolvePluginTools, r as ensureStandalonePluginToolRegistryLoaded } from "../tools-DsGaQCaM.js";
-import { c as isToolWrappedWithBeforeToolCallHook, u as wrapToolWithBeforeToolCallHook } from "../pi-tools.before-tool-call-BmZM4hyt.js";
+import { i as formatErrorMessage } from "../errors-b3ZrCRlt.js";
+import { n as VERSION } from "../version-CQfgAE7_.js";
+import { a as routeLogsToStderr } from "../console-BAPPAj56.js";
+import { i as getRuntimeConfig } from "../io-DoswVvYe.js";
+import "../config-B6Oplu5W.js";
+import { t as coerceChatContentText } from "../chat-content-BNTcXm1Z.js";
+import { n as pickSandboxToolPolicy } from "../sandbox-tool-policy-A1J2EpRM.js";
+import { a as collectExplicitDenylist, h as resolveToolProfilePolicy, i as collectExplicitAllowlist, l as mergeAlsoAllowPolicy } from "../tool-policy-COX5DaEj.js";
+import { a as resolvePluginTools, r as ensureStandalonePluginToolRegistryLoaded } from "../tools-KpflAzxD.js";
+import { c as isToolWrappedWithBeforeToolCallHook, p as wrapToolWithBeforeToolCallHook } from "../pi-tools.before-tool-call-CP_aEkky.js";
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -23,7 +22,7 @@ function resolveJsonSchemaForTool(tool) {
 	};
 }
 function createPluginToolsMcpHandlers(tools) {
-	const wrappedTools = tools.filter((tool) => !tool.ownerOnly).map((tool) => {
+	const wrappedTools = tools.map((tool) => {
 		if (isToolWrappedWithBeforeToolCallHook(tool)) return tool;
 		return wrapToolWithBeforeToolCallHook(tool);
 	});
@@ -35,7 +34,7 @@ function createPluginToolsMcpHandlers(tools) {
 			description: tool.description ?? "",
 			inputSchema: resolveJsonSchemaForTool(tool)
 		})) }),
-		callTool: async (params) => {
+		callTool: async (params, signal) => {
 			const tool = toolMap.get(params.name);
 			if (!tool) return {
 				content: [{
@@ -45,7 +44,7 @@ function createPluginToolsMcpHandlers(tools) {
 				isError: true
 			};
 			try {
-				const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {});
+				const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);
 				const rawContent = result && typeof result === "object" && "content" in result ? result.content : result;
 				return { content: Array.isArray(rawContent) ? rawContent : [{
 					type: "text",
@@ -72,8 +71,8 @@ function createToolsMcpServer(params) {
 		version: VERSION
 	}, { capabilities: { tools: {} } });
 	server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-	server.setRequestHandler(CallToolRequestSchema, async (request) => {
-		return await handlers.callTool(request.params);
+	server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+		return await handlers.callTool(request.params, extra.signal);
 	});
 	return server;
 }

@@ -15,6 +15,10 @@ export type GatewayRestartHandoff = {
     source: GatewayRestartHandoffSource;
     restartKind: GatewayRestartHandoffRestartKind;
     supervisorMode: GatewayRestartHandoffSupervisorMode;
+    restartTrace?: {
+        startedAt: number;
+        lastAt: number;
+    };
 };
 export declare function formatGatewayRestartHandoffDiagnostic(handoff: GatewayRestartHandoff, now?: number): string;
 export declare function clearGatewayRestartHandoffSync(env?: NodeJS.ProcessEnv): void;
@@ -26,6 +30,7 @@ export declare function writeGatewayRestartHandoffSync(opts: {
     source?: GatewayRestartHandoffSource;
     restartKind: GatewayRestartHandoffRestartKind;
     supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
+    restartTrace?: GatewayRestartHandoff["restartTrace"];
     ttlMs?: number;
     createdAt?: number;
 }): GatewayRestartHandoff | null;

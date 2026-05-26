@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { type PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 export type ProviderEnvVarLookupParams = {
     config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     includeUntrustedWorkspacePlugins?: boolean;
+    metadataSnapshot?: PluginMetadataSnapshot;
 };
 export type ProviderAuthEvidence = {
     type: "local-file-with-env";
@@ -35,10 +37,11 @@ export declare const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly s
  * overrides where generic onboarding wants a different preferred env var.
  */
 export declare const PROVIDER_ENV_VARS: Record<string, readonly string[]>;
-export declare const __testing: {
+export declare const testing: {
     resetProviderEnvVarCachesForTests(): void;
 };
 export declare function getProviderEnvVars(providerId: string, params?: ProviderEnvVarLookupParams): string[];
 export declare function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[];
 export declare function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[];
 export declare function omitEnvKeysCaseInsensitive(baseEnv: NodeJS.ProcessEnv, keys: Iterable<string>): NodeJS.ProcessEnv;
+export { testing as __testing };

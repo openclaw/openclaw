@@ -1,8 +1,9 @@
 import { type CommandResolution } from "./exec-command-resolution.js";
-export { matchAllowlist, parseExecArgvToken, resolveAllowlistCandidatePath, resolveApprovalAuditCandidatePath, resolveCommandResolution, resolveCommandResolutionFromArgv, resolveExecutionTargetCandidatePath, resolveExecutionTargetResolution, resolvePolicyAllowlistCandidatePath, resolvePolicyTargetCandidatePath, resolvePolicyTargetResolution, type CommandResolution, type ExecutableResolution, type ExecArgvToken, } from "./exec-command-resolution.js";
+export { matchAllowlist, parseExecArgvToken, resolveAllowlistCandidatePath, resolveApprovalAuditCandidatePath, resolveApprovalAuditTrustPath, resolveCommandResolution, resolveCommandResolutionFromArgv, resolveExecutionTargetCandidatePath, resolveExecutionTargetResolution, resolveExecutionTargetTrustPath, resolvePolicyAllowlistCandidatePath, resolvePolicyTargetCandidatePath, resolvePolicyTargetResolution, resolvePolicyTargetTrustPath, resolveExecutableTrustPath, type CommandResolution, type ExecutableResolution, type ExecArgvToken, } from "./exec-command-resolution.js";
 export type ExecCommandSegment = {
     raw: string;
     argv: string[];
+    sourceArgv?: string[];
     resolution: CommandResolution | null;
 };
 export type ExecCommandAnalysis = {
@@ -51,7 +52,9 @@ export declare function resolvePlannedSegmentArgv(segment: ExecCommandSegment): 
 export declare function buildSafeBinsShellCommand(params: {
     command: string;
     segments: ExecCommandSegment[];
-    segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
+    segmentSatisfiedBy: ("allowlist" | "safeBins" | "inlineChain" | "skills" | null)[];
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
     platform?: string | null;
 }): {
     ok: boolean;

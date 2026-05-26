@@ -1,6 +1,8 @@
-import { o as ModelDefinitionConfig } from "../../types.models-CkWCv1xp.js";
+import { s as ModelDefinitionConfig } from "../../types.models-tqxsISRc.js";
 //#region extensions/github-copilot/model-metadata.d.ts
-declare function resolveCopilotTransportApi(modelId: string): "anthropic-messages" | "openai-responses";
+type CopilotRuntimeApi = "anthropic-messages" | "openai-completions" | "openai-responses";
+declare function resolveCopilotTransportApi(modelId: string): CopilotRuntimeApi;
+declare function resolveCopilotModelCompat(modelId: string): ModelDefinitionConfig["compat"] | undefined;
 declare function resolveStaticCopilotModelOverride(modelId: string): Partial<ModelDefinitionConfig> | undefined;
 //#endregion
-export { resolveCopilotTransportApi, resolveStaticCopilotModelOverride };
+export { resolveCopilotModelCompat, resolveCopilotTransportApi, resolveStaticCopilotModelOverride };

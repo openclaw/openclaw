@@ -44,6 +44,7 @@ type ResolveManifestActivationPlanParams = {
     origin?: PluginOrigin;
     onlyPluginIds?: readonly string[];
     manifestRecords?: readonly PluginManifestRecord[];
+    allowRestrictiveAllowlistBypass?: boolean;
 };
 export declare function resolveManifestActivationPlan(params: ResolveManifestActivationPlanParams): PluginActivationPlan;
 export declare function resolveManifestActivationPluginIds(params: ResolveManifestActivationPlanParams): string[];

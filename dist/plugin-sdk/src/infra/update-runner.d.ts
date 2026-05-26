@@ -91,6 +91,7 @@ type UpdateRunnerOptions = {
     tag?: string;
     channel?: UpdateChannel;
     devTargetRef?: string;
+    deferConfiguredPluginInstallRepair?: boolean;
     timeoutMs?: number;
     runCommand?: CommandRunner;
     progress?: UpdateStepProgress;

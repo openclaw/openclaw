@@ -3,6 +3,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
+import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
 import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../pi-embedded-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../pi-embedded-runner/run/preemptive-compaction.js";
@@ -39,6 +41,8 @@ type CliCompactionDeps = {
     shouldPreemptivelyCompactBeforePrompt: typeof shouldPreemptivelyCompactBeforePromptImpl;
     resolveLiveToolResultMaxChars: typeof resolveLiveToolResultMaxCharsImpl;
     runContextEngineMaintenance: typeof runContextEngineMaintenanceImpl;
+    ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPluginImpl;
+    maybeCompactAgentHarnessSession: typeof maybeCompactAgentHarnessSessionImpl;
     recordCliCompactionInStore: typeof recordCliCompactionInStoreImpl;
 };
 declare const cliCompactionDeps: CliCompactionDeps;

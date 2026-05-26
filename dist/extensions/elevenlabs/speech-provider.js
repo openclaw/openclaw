@@ -1,2 +1,2 @@
-import { n as isValidVoiceId, t as buildElevenLabsSpeechProvider } from "../../speech-provider-CE0zaWit.js";
+import { n as isValidVoiceId, t as buildElevenLabsSpeechProvider } from "../../speech-provider-C9pLiKqA.js";
 export { buildElevenLabsSpeechProvider, isValidVoiceId };

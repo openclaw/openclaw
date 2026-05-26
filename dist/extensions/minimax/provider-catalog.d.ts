@@ -1,2 +1,2 @@
-import { n as buildMinimaxProvider, t as buildMinimaxPortalProvider } from "../../provider-catalog-CnPmhS0O.js";
+import { n as buildMinimaxProvider, t as buildMinimaxPortalProvider } from "../../provider-catalog-DEnBdkaC.js";
 export { buildMinimaxPortalProvider, buildMinimaxProvider };

@@ -1,1 +1,1 @@
-export { __testing, getSessionBindingService, registerSessionBindingAdapter, type SessionBindingRecord, type SessionBindingService, } from "../infra/outbound/session-binding-service.js";
+export { testing as __testing, testing, getSessionBindingService, registerSessionBindingAdapter, type SessionBindingRecord, type SessionBindingService, } from "../infra/outbound/session-binding-service.js";

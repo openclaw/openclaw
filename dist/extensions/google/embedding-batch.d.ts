@@ -1,4 +1,4 @@
-import { i as GeminiTextEmbeddingRequest, r as GeminiEmbeddingClient } from "../../embedding-provider-lH60Mwfk.js";
+import { i as GeminiTextEmbeddingRequest, r as GeminiEmbeddingClient } from "../../embedding-provider-C87_JWtG.js";
 
 //#region extensions/google/embedding-batch.d.ts
 type EmbeddingBatchExecutionParams = {

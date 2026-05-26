@@ -1,4 +1,4 @@
-import { v as OpenClawPluginApi } from "../../types-lCXG2pW_.js";
+import { C as OpenClawPluginApi } from "../../types-Vx7Jq4_-2.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 
 //#region extensions/mattermost/src/mattermost/slash-state.d.ts

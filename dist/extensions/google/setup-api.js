@@ -1,6 +1,6 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { t as buildGoogleGeminiCliBackend } from "../../cli-backend-B0c198fI.js";
-import { r as createGoogleVertexProvider } from "../../provider-contract-api-Dl1J92sT.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as buildGoogleGeminiCliBackend } from "../../cli-backend-B6x02u_n.js";
+import { r as createGoogleVertexProvider } from "../../provider-contract-api-B5_Torho.js";
 //#region extensions/google/setup-api.ts
 var setup_api_default = definePluginEntry({
 	id: "google",

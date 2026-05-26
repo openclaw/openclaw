@@ -1,2 +1,2 @@
-import { t as buildXaiRealtimeTranscriptionProvider } from "../../realtime-transcription-provider-DrUcK6Qp.js";
+import { t as buildXaiRealtimeTranscriptionProvider } from "../../realtime-transcription-provider-pxjLHCVi.js";
 export { buildXaiRealtimeTranscriptionProvider };

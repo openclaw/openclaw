@@ -1,3 +1,3 @@
-import { i as OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../../internal-runtime-context-BfEj0QEU.js";
-import { a as queueRuntimeContextForNextTurn, i as buildRuntimeEventSystemContext, n as buildCurrentTurnPromptContextPrefix, o as resolveRuntimeContextPromptParts, r as buildRuntimeContextSystemContext, t as buildCurrentTurnPrompt } from "../../../runtime-context-prompt-BrtaVc2i.js";
-export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, buildCurrentTurnPrompt, buildCurrentTurnPromptContextPrefix, buildRuntimeContextSystemContext, buildRuntimeEventSystemContext, queueRuntimeContextForNextTurn, resolveRuntimeContextPromptParts };
+import { i as OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../../internal-runtime-context-DWxvZFcB.js";
+import { a as queueRuntimeContextForNextTurn, i as buildRuntimeEventSystemContext, n as buildCurrentInboundPromptContextPrefix, o as resolveRuntimeContextPromptParts, r as buildRuntimeContextSystemContext, t as buildCurrentInboundPrompt } from "../../../runtime-context-prompt-C9hMyzmx.js";
+export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, buildCurrentInboundPrompt, buildCurrentInboundPromptContextPrefix, buildRuntimeContextSystemContext, buildRuntimeEventSystemContext, queueRuntimeContextForNextTurn, resolveRuntimeContextPromptParts };

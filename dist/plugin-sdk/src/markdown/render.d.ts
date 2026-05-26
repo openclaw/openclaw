@@ -1,6 +1,6 @@
-import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle } from "./ir.js";
+import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 export type RenderStyleMarker = {
-    open: string;
+    open: string | ((span: MarkdownStyleSpan) => string);
     close: string;
 };
 export type RenderStyleMap = Partial<Record<MarkdownStyle, RenderStyleMarker>>;

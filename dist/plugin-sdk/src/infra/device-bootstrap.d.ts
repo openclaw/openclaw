@@ -7,6 +7,7 @@ export type DeviceBootstrapTokenRecord = {
     publicKey?: string;
     profile?: DeviceBootstrapProfile;
     redeemedProfile?: DeviceBootstrapProfile;
+    pendingProfile?: DeviceBootstrapProfile;
     roles?: string[];
     scopes?: string[];
     issuedAtMs: number;
@@ -32,6 +33,13 @@ export declare function revokeDeviceBootstrapToken(params: {
 }): Promise<{
     removed: boolean;
     record?: DeviceBootstrapTokenRecord;
+}>;
+export declare function revokeDeviceBootstrapTokensForDevice(params: {
+    deviceId: string;
+    publicKey: string;
+    baseDir?: string;
+}): Promise<{
+    removed: number;
 }>;
 export declare function restoreDeviceBootstrapToken(params: {
     record: DeviceBootstrapTokenRecord;

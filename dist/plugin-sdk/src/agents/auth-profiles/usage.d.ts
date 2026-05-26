@@ -2,7 +2,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileBlockedSource, AuthProfileFailureReason, AuthProfileStore } from "./types.js";
 export { clearExpiredCooldowns, getSoonestCooldownExpiry, isProfileInCooldown, resolveProfileUnusableUntil, } from "./usage-state.js";
-export declare const __testing: {
+export declare function setAuthProfileFailureHook(hook: (() => void) | undefined): void;
+export declare const testing: {
     setDepsForTest(overrides: Partial<{
         saveAuthProfileStore: typeof saveAuthProfileStore;
         updateAuthProfileStoreWithLock: typeof updateAuthProfileStoreWithLock;
@@ -64,3 +65,4 @@ export declare function clearAuthProfileCooldown(params: {
     profileId: string;
     agentDir?: string;
 }): Promise<void>;
+export { testing as __testing };

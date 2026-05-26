@@ -2,6 +2,7 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
@@ -75,6 +76,8 @@ export declare function buildAgentSystemPrompt(params: {
     subagentDelegationMode?: SubagentDelegationMode;
     /** Whether ACP-specific routing guidance should be included. Defaults to true. */
     acpEnabled?: boolean;
+    /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+    promptSurface?: AgentPromptSurfaceKind;
     /** Registered runtime slash/native command names such as `codex`. */
     nativeCommandNames?: string[];
     /** Plugin-owned prompt guidance for registered native slash commands. */

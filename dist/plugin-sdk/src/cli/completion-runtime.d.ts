@@ -6,6 +6,13 @@ export declare function resolveShellFromEnv(env?: NodeJS.ProcessEnv): Completion
 export declare function resolveCompletionCachePath(shell: CompletionShell, binName: string): string;
 /** Check if the completion cache file exists for the given shell. */
 export declare function completionCacheExists(shell: CompletionShell, binName?: string): Promise<boolean>;
+export declare function formatCompletionSourceLine(shell: CompletionShell, _binName: string, cachePath: string): string;
+export declare function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string;
+export declare function resolveCompletionProfilePath(shell: CompletionShell, options?: {
+    env?: NodeJS.ProcessEnv;
+    homeDir?: () => string;
+    platform?: NodeJS.Platform;
+}): string;
 export declare function isCompletionInstalled(shell: CompletionShell, binName?: string): Promise<boolean>;
 /**
  * Check if the profile uses the slow dynamic completion pattern.

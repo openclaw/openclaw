@@ -6,6 +6,8 @@ export declare function createEditorSubmitHandler(params: {
     handleCommand: (value: string) => Promise<void> | void;
     sendMessage: (value: string) => Promise<void> | void;
     handleBangLine: (value: string) => Promise<void> | void;
+    canSubmitMessage?: () => boolean;
+    onBlockedMessageSubmit?: (value: string) => void;
 }): (text: string) => void;
 export declare function shouldEnableWindowsGitBashPasteFallback(params?: {
     platform?: string;

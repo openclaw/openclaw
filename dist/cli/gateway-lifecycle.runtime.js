@@ -1,29 +1,33 @@
-import { s as normalizeOptionalLowercaseString } from "../string-coerce-LndEvhRk.js";
-import { i as formatErrorMessage } from "../errors-VfATXfah.js";
-import { t as isContainerEnvironment } from "../container-environment-DQOYng0C.js";
-import { i as getRuntimeConfig } from "../io-5xE1dPMK.js";
-import "../config-CzeRK-GW.js";
-import { c as markGatewaySigusr1RestartHandled, d as resolveGatewayRestartDeferralTimeoutMs, f as scheduleGatewaySigusr1Restart, h as triggerOpenClawRestart, i as consumeGatewaySigusr1RestartAuthorization, l as peekGatewaySigusr1RestartReason, n as consumeGatewayRestartIntentPayloadSync, r as consumeGatewayRestartIntentSync, s as isGatewaySigusr1RestartExternallyAllowed, u as resetGatewayRestartStateForInProcessRestart } from "../restart-CvCdHpp_.js";
-import { r as writeGatewayRestartHandoffSync } from "../restart-handoff-B-AEFp6O.js";
-import { S as reloadTaskRegistryFromStore } from "../task-registry-DFUW-xBJ.js";
-import "../runtime-internal-Bqu0JS7i.js";
-import { o as getActiveEmbeddedRunCount } from "../run-state-BvIK-BSF.js";
-import { f as writeDiagnosticStabilityBundleForFailureSync } from "../diagnostic-stability-bundle-DLQkfhfT.js";
-import { g as waitForActiveEmbeddedRuns, n as abortEmbeddedPiRun } from "../runs-CP7D8ODl.js";
-import { t as detectRespawnSupervisor } from "../supervisor-markers-BxQjF_nO.js";
-import { a as markUpdateRestartSentinelFailure } from "../restart-sentinel-DAa8g4GN.js";
-import { a as getActiveTaskCount, d as markGatewayDraining, f as resetAllLanes, h as waitForActiveTasks } from "../command-queue-DB7xEnvP.js";
-import { n as getInspectableActiveTaskRestartBlockers } from "../task-registry.maintenance-gbHgqdM1.js";
+import { s as normalizeOptionalLowercaseString } from "../string-coerce-DyL154ka.js";
+import { i as formatErrorMessage } from "../errors-b3ZrCRlt.js";
+import { v as isContainerEnvironment } from "../net-DCUMtgJy.js";
+import { i as getRuntimeConfig } from "../io-DoswVvYe.js";
+import "../config-B6Oplu5W.js";
+import { c as markGatewaySigusr1RestartHandled, d as resolveGatewayRestartDeferralTimeoutMs, f as scheduleGatewaySigusr1Restart, h as triggerOpenClawRestart, i as consumeGatewaySigusr1RestartAuthorization, l as peekGatewaySigusr1RestartReason, n as consumeGatewayRestartIntentPayloadSync, r as consumeGatewayRestartIntentSync, s as isGatewaySigusr1RestartExternallyAllowed, u as resetGatewayRestartStateForInProcessRestart } from "../restart-C-r_0sSG.js";
+import { r as writeGatewayRestartHandoffSync } from "../restart-handoff-BSak1pJo.js";
+import { C as reloadTaskRegistryFromStore } from "../task-registry-B9ljq8Nk.js";
+import "../runtime-internal-2F71tA3B.js";
+import { p as writeDiagnosticStabilityBundleForFailureSync } from "../diagnostic-stability-bundle-fLJOD4qU.js";
+import { c as listActiveEmbeddedRunSessionKeys, o as getActiveEmbeddedRunCount, s as listActiveEmbeddedRunSessionIds } from "../run-state-primn49x.js";
+import { g as waitForActiveEmbeddedRuns, n as abortEmbeddedPiRun } from "../runs-DrbsiywK.js";
+import { t as markRestartAbortedMainSessions } from "../main-session-restart-recovery-C_yReR9o.js";
+import { n as detectRespawnSupervisor } from "../supervisor-markers-B5EgETF5.js";
+import { a as markUpdateRestartSentinelFailure } from "../restart-sentinel-BDtpdKoy.js";
+import { a as getActiveTaskCount, d as markGatewayDraining, f as resetAllLanes, h as waitForActiveTasks } from "../command-queue-Da2Lh3Ua.js";
+import { n as getInspectableActiveTaskRestartBlockers } from "../task-registry.maintenance-BGxQNDMF.js";
 import { spawn } from "node:child_process";
 //#region src/infra/process-respawn.ts
 function isTruthy(value) {
 	const normalized = normalizeOptionalLowercaseString(value);
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
-function spawnDetachedGatewayProcess() {
+function spawnDetachedGatewayProcess(opts = {}) {
 	const args = [...process.execArgv, ...process.argv.slice(1)];
 	const child = spawn(process.execPath, args, {
-		env: process.env,
+		env: opts.env ? {
+			...process.env,
+			...opts.env
+		} : process.env,
 		detached: true,
 		stdio: "inherit"
 	});
@@ -37,9 +41,10 @@ function spawnDetachedGatewayProcess() {
 * Attempt to restart this process with a fresh PID.
 * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
 * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
-* - otherwise: spawn detached child with current argv/execArgv, then caller exits
+* - unmanaged environments: caller should keep in-process restart behavior so
+*   custom supervisors keep tracking the same gateway PID
 */
-function restartGatewayProcessWithFreshPid() {
+function restartGatewayProcessWithFreshPid(_opts = {}) {
 	if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) return { mode: "disabled" };
 	const supervisor = detectRespawnSupervisor(process.env);
 	if (supervisor) {
@@ -60,18 +65,10 @@ function restartGatewayProcessWithFreshPid() {
 		mode: "disabled",
 		detail: "container: use in-process restart to keep PID 1 alive"
 	};
-	try {
-		const { pid } = spawnDetachedGatewayProcess();
-		return {
-			mode: "spawned",
-			pid
-		};
-	} catch (err) {
-		return {
-			mode: "failed",
-			detail: formatErrorMessage(err)
-		};
-	}
+	return {
+		mode: "disabled",
+		detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable"
+	};
 }
 /**
 * Update restarts must replace the OS process so the new code runs from a
@@ -81,7 +78,7 @@ function restartGatewayProcessWithFreshPid() {
 * unmanaged Windows installs because there is no safe in-process fallback once
 * the installed package contents have been replaced.
 */
-function respawnGatewayProcessForUpdate() {
+function respawnGatewayProcessForUpdate(opts = {}) {
 	if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) return {
 		mode: "disabled",
 		detail: "OPENCLAW_NO_RESPAWN"
@@ -98,7 +95,7 @@ function respawnGatewayProcessForUpdate() {
 		return { mode: "supervised" };
 	}
 	try {
-		const { child, pid } = spawnDetachedGatewayProcess();
+		const { child, pid } = spawnDetachedGatewayProcess(opts);
 		return {
 			mode: "spawned",
 			pid,
@@ -112,4 +109,4 @@ function respawnGatewayProcessForUpdate() {
 	}
 }
 //#endregion
-export { abortEmbeddedPiRun, consumeGatewayRestartIntentPayloadSync, consumeGatewayRestartIntentSync, consumeGatewaySigusr1RestartAuthorization, detectRespawnSupervisor, getActiveEmbeddedRunCount, getActiveTaskCount, getInspectableActiveTaskRestartBlockers, getRuntimeConfig, isGatewaySigusr1RestartExternallyAllowed, markGatewayDraining, markGatewaySigusr1RestartHandled, markUpdateRestartSentinelFailure, peekGatewaySigusr1RestartReason, reloadTaskRegistryFromStore, resetAllLanes, resetGatewayRestartStateForInProcessRestart, resolveGatewayRestartDeferralTimeoutMs, respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid, scheduleGatewaySigusr1Restart, waitForActiveEmbeddedRuns, waitForActiveTasks, writeDiagnosticStabilityBundleForFailureSync, writeGatewayRestartHandoffSync };
+export { abortEmbeddedPiRun, consumeGatewayRestartIntentPayloadSync, consumeGatewayRestartIntentSync, consumeGatewaySigusr1RestartAuthorization, detectRespawnSupervisor, getActiveEmbeddedRunCount, getActiveTaskCount, getInspectableActiveTaskRestartBlockers, getRuntimeConfig, isGatewaySigusr1RestartExternallyAllowed, listActiveEmbeddedRunSessionIds, listActiveEmbeddedRunSessionKeys, markGatewayDraining, markGatewaySigusr1RestartHandled, markRestartAbortedMainSessions, markUpdateRestartSentinelFailure, peekGatewaySigusr1RestartReason, reloadTaskRegistryFromStore, resetAllLanes, resetGatewayRestartStateForInProcessRestart, resolveGatewayRestartDeferralTimeoutMs, respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid, scheduleGatewaySigusr1Restart, waitForActiveEmbeddedRuns, waitForActiveTasks, writeDiagnosticStabilityBundleForFailureSync, writeGatewayRestartHandoffSync };

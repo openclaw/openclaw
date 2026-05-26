@@ -70,7 +70,7 @@ export type PairedDevice = {
     lastSeenAtMs?: number;
     lastSeenReason?: string;
 };
-export type PairedDeviceMetadataPatch = Pick<PairedDevice, "displayName" | "clientId" | "clientMode" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason">;
+export type PairedDeviceMetadataPatch = Pick<PairedDevice, "displayName" | "platform" | "clientId" | "clientMode" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason">;
 export type DevicePairingList = {
     pending: DevicePairingPendingRequest[];
     paired: PairedDevice[];

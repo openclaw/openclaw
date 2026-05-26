@@ -1,4 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -9,6 +10,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import type { MediaGenerateAsyncStartCallback } from "./tools/media-generate-background-shared.js";
 type OpenClawToolsDeps = {
     callGateway: typeof callGateway;
     config?: OpenClawConfig;
@@ -24,6 +26,7 @@ export declare function createOpenClawTools(options?: {
      */
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
+    runId?: string;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
@@ -50,6 +53,8 @@ export declare function createOpenClawTools(options?: {
     hasRepliedRef?: {
         value: boolean;
     };
+    /** Fail closed instead of posting same-channel thread-originated replies at the root. */
+    sameChannelThreadRequired?: boolean;
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
     /** Active model provider for provider-specific tool gating. */
@@ -60,12 +65,15 @@ export declare function createOpenClawTools(options?: {
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
     requesterAgentIdOverride?: string;
+    /** Trusted sender identity bit for channel action auth. */
+    senderIsOwner?: boolean;
     /** Restrict the cron tool to self-removing this active cron job. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -86,8 +94,6 @@ export declare function createOpenClawTools(options?: {
     requesterSenderId?: string | null;
     /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
     authProfileStore?: AuthProfileStore;
-    /** Whether the requesting sender is an owner. */
-    senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
     /**
@@ -99,11 +105,13 @@ export declare function createOpenClawTools(options?: {
     spawnWorkspaceDir?: string;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
+    /** Callback invoked when a media tool starts async background work. */
+    onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
 } & SpawnedToolContext): AnyAgentTool[];
-export declare const __testing: {
+export declare const testing: {
     resolveOptionalMediaToolFactoryPlan: typeof resolveOptionalMediaToolFactoryPlan;
     setDepsForTest(overrides?: Partial<OpenClawToolsDeps>): void;
 };
-export {};
+export { testing as __testing };

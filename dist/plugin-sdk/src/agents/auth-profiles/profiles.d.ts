@@ -24,6 +24,11 @@ export declare function removeProviderAuthProfilesWithLock(params: {
     provider: string;
     agentDir?: string;
 }): Promise<AuthProfileStore | null>;
+export declare function clearLastGoodProfileWithLock(params: {
+    provider: string;
+    profileId: string;
+    agentDir?: string;
+}): Promise<AuthProfileStore | null>;
 export declare function markAuthProfileSuccess(params: {
     store: AuthProfileStore;
     provider: string;

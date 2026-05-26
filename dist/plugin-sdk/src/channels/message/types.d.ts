@@ -3,8 +3,9 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type { PollInput } from "../../polls.js";
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
-export declare const durableFinalDeliveryCapabilities: readonly ["text", "media", "payload", "silent", "replyTo", "thread", "nativeQuote", "messageSendingHooks", "batch", "reconcileUnknownSend", "afterSendSuccess", "afterCommit"];
+export declare const durableFinalDeliveryCapabilities: readonly ["text", "media", "poll", "payload", "silent", "replyTo", "thread", "nativeQuote", "messageSendingHooks", "batch", "reconcileUnknownSend", "afterSendSuccess", "afterCommit"];
 export type DurableFinalDeliveryCapability = (typeof durableFinalDeliveryCapabilities)[number];
 export type DurableFinalDeliveryRequirementMap = Partial<Record<DurableFinalDeliveryCapability, boolean>>;
 export type DurableFinalDeliveryPayloadShape = {
@@ -25,7 +26,7 @@ export type MessageReceiptSourceResult = {
     timestamp?: number;
     meta?: Record<string, unknown>;
 };
-export type MessageReceiptPartKind = "text" | "media" | "voice" | "card" | "preview" | "unknown";
+export type MessageReceiptPartKind = "text" | "media" | "voice" | "poll" | "card" | "preview" | "unknown";
 export type MessageReceiptPart = {
     platformMessageId: string;
     kind: MessageReceiptPartKind;
@@ -129,17 +130,24 @@ export type ChannelMessageSendPayloadContext<TConfig = OpenClawConfig> = Channel
     gifPlayback?: boolean;
     forceDocument?: boolean;
 };
+export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<ChannelMessageSendTextContext<TConfig>, "text" | "threadId"> & {
+    poll: PollInput;
+    threadId?: string | null;
+    isAnonymous?: boolean;
+};
 export type ChannelMessageSendResult = {
     receipt: MessageReceipt;
     messageId?: string;
 };
-export type ChannelMessageSendAttemptKind = "text" | "media" | "payload";
+export type ChannelMessageSendAttemptKind = "text" | "media" | "payload" | "poll";
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> = (ChannelMessageSendTextContext<TConfig> & {
     kind: "text";
 }) | (ChannelMessageSendMediaContext<TConfig> & {
     kind: "media";
 }) | (ChannelMessageSendPayloadContext<TConfig> & {
     kind: "payload";
+}) | (ChannelMessageSendPollContext<TConfig> & {
+    kind: "poll";
 });
 export type ChannelMessageSendSuccessContext<TConfig = OpenClawConfig, TSendResult extends ChannelMessageSendResult = ChannelMessageSendResult> = ChannelMessageSendAttemptContext<TConfig> & {
     result: TSendResult;
@@ -187,6 +195,7 @@ export type ChannelMessageSendAdapter<TConfig = OpenClawConfig, TSendResult exte
     text?: (ctx: ChannelMessageSendTextContext<TConfig>) => Promise<TSendResult>;
     media?: (ctx: ChannelMessageSendMediaContext<TConfig>) => Promise<TSendResult>;
     payload?: (ctx: ChannelMessageSendPayloadContext<TConfig>) => Promise<TSendResult>;
+    poll?: (ctx: ChannelMessageSendPollContext<TConfig>) => Promise<TSendResult>;
     lifecycle?: ChannelMessageSendLifecycleAdapter<TConfig, TSendResult>;
 };
 export type ChannelMessageDurableFinalAdapter = {

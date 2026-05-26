@@ -45,11 +45,11 @@ declare function writeTarArchiveWithRetry(params: {
     log?: BackupTarRetryLogger;
     sleepMs?: (ms: number) => Promise<void>;
 }): Promise<void>;
-export declare const __test: {
+export declare const testApi: {
     writeTarArchiveWithRetry: typeof writeTarArchiveWithRetry;
     isTarEofRaceError: typeof isTarEofRaceError;
 };
+export { testApi as __test };
 export declare function formatBackupCreateSummary(result: BackupCreateResult): string[];
 export declare function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean;
 export declare function createBackupArchive(opts?: BackupCreateOptions): Promise<BackupCreateResult>;
-export {};

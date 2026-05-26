@@ -55,7 +55,15 @@
             "type": "object",
             "properties": {
               "enabled": {
-                "type": "boolean"
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "string",
+                    "const": "auto"
+                  }
+                ]
               },
               "approvers": {
                 "type": "array",
@@ -838,6 +846,22 @@
                       "raw",
                       "status"
                     ]
+                  },
+                  "nativeToolProgress": {
+                    "type": "boolean"
+                  },
+                  "nativeToolProgressAllowFrom": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -863,6 +887,11 @@
                     }
                   },
                   "maxLines": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "maxLineChars": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
                     "maximum": 9007199254740991
@@ -1290,7 +1319,15 @@
                   "type": "object",
                   "properties": {
                     "enabled": {
-                      "type": "boolean"
+                      "anyOf": [
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "string",
+                          "const": "auto"
+                        }
+                      ]
                     },
                     "approvers": {
                       "type": "array",
@@ -2073,6 +2110,22 @@
                             "raw",
                             "status"
                           ]
+                        },
+                        "nativeToolProgress": {
+                          "type": "boolean"
+                        },
+                        "nativeToolProgressAllowFrom": {
+                          "type": "array",
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "number"
+                              }
+                            ]
+                          }
                         }
                       },
                       "additionalProperties": false
@@ -2098,6 +2151,11 @@
                           }
                         },
                         "maxLines": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "maxLineChars": {
                           "type": "integer",
                           "exclusiveMinimum": 0,
                           "maximum": 9007199254740991
@@ -2592,6 +2650,10 @@
         "streaming.progress.maxLines": {
           "label": "Telegram Progress Max Lines",
           "help": "Maximum number of compact progress lines to keep below the draft label (default: 8)."
+        },
+        "streaming.progress.maxLineChars": {
+          "label": "Telegram Progress Max Line Chars",
+          "help": "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes."
         },
         "streaming.progress.toolProgress": {
           "label": "Telegram Progress Tool Lines",

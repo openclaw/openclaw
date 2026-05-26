@@ -1,2 +1,2 @@
-import { n as getAcpSessionManager, r as AcpSessionManager, t as __testing } from "../../manager-D1tsINaa.js";
-export { AcpSessionManager, __testing, getAcpSessionManager };
+import { n as testing, r as AcpSessionManager, t as getAcpSessionManager } from "../../manager-CnO_4PJM.js";
+export { AcpSessionManager, testing as __testing, testing, getAcpSessionManager };

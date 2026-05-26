@@ -14,6 +14,9 @@ export type HookRunnerLogger = {
     error: (message: string) => void;
 };
 export type HookFailurePolicy = "fail-open" | "fail-closed";
+export type VoidHookRunOptions = {
+    unrefTimeout?: boolean;
+};
 export type HookRunnerOptions = {
     logger?: HookRunnerLogger;
     /** If true, errors in hooks will be caught and logged instead of thrown */
@@ -61,7 +64,7 @@ export declare function createHookRunner(registry: GlobalHookRunnerRegistry, opt
     runLlmInput: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void>;
     runLlmOutput: (event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) => Promise<void>;
     runBeforeAgentFinalize: (event: PluginHookBeforeAgentFinalizeEvent, ctx: PluginHookAgentContext) => Promise<PluginHookBeforeAgentFinalizeResult | undefined>;
-    runAgentEnd: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void>;
+    runAgentEnd: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext, options?: VoidHookRunOptions) => Promise<void>;
     runBeforeCompaction: (event: PluginHookBeforeCompactionEvent, ctx: PluginHookAgentContext) => Promise<void>;
     runAfterCompaction: (event: PluginHookAfterCompactionEvent, ctx: PluginHookAgentContext) => Promise<void>;
     runBeforeReset: (event: PluginHookBeforeResetEvent, ctx: PluginHookAgentContext) => Promise<void>;

@@ -12,6 +12,7 @@ type CreateTalkRealtimeRelaySessionParams = {
     tools: RealtimeVoiceTool[];
     model?: string;
     voice?: string;
+    forceAgentConsultOnFinalTranscript?: boolean;
 };
 type TalkRealtimeRelaySessionResult = {
     provider: string;

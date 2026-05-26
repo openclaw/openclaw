@@ -15,6 +15,7 @@ export declare function applyMediaUnderstanding(params: {
     ctx: MsgContext;
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     providers?: Record<string, MediaUnderstandingProvider>;
     activeModel?: ActiveMediaModel;
 }): Promise<ApplyMediaUnderstandingResult>;

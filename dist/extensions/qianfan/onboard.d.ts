@@ -1,2 +1,2 @@
-import { n as applyQianfanConfig, r as applyQianfanProviderConfig, t as QIANFAN_DEFAULT_MODEL_REF } from "../../onboard-_63FN0Sz.js";
+import { n as applyQianfanConfig, r as applyQianfanProviderConfig, t as QIANFAN_DEFAULT_MODEL_REF } from "../../onboard-8vAjhlXd.js";
 export { QIANFAN_DEFAULT_MODEL_REF, applyQianfanConfig, applyQianfanProviderConfig };

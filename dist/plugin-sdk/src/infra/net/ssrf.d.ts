@@ -18,13 +18,21 @@ export type SsrFPolicy = {
      */
     allowIpv6UniqueLocalRange?: boolean;
     allowedHostnames?: string[];
+    /**
+     * Exact HTTP origins that may promote only the current request hostname into
+     * `allowedHostnames`. Evaluated per URL inside the redirect loop.
+     */
+    allowedOrigins?: string[];
     hostnameAllowlist?: string[];
 };
 export declare function isSameSsrFPolicy(a?: SsrFPolicy, b?: SsrFPolicy): boolean;
+export declare function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined;
 export declare function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFPolicy | undefined;
+export declare function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPolicy | undefined;
 export declare function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl: string): SsrFPolicy | undefined;
 export declare function normalizeHostnameAllowlist(values?: string[]): string[];
 export declare function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean;
+export declare function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined;
 export declare function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean;
 export declare function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolean;
 export declare function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolean;

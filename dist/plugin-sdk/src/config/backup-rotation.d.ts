@@ -28,7 +28,7 @@ interface PreUpdateSnapshotFs {
     writeFile: (path: string, content: string, options: {
         encoding: "utf-8";
         mode: number;
-        flag: "w" | "wx";
+        flag: "w";
     }) => Promise<void>;
     readFile: (path: string, encoding: "utf-8") => Promise<string>;
     existsSync: (path: string) => boolean;

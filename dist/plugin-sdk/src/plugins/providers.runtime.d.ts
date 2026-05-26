@@ -1,4 +1,5 @@
 import { type PluginLoadOptions } from "./loader.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import type { ProviderPlugin } from "./types.js";
 export declare function isPluginProvidersLoadInFlight(params: Parameters<typeof resolvePluginProviders>[0]): boolean;
 export declare function resolvePluginProviders(params: {
@@ -17,4 +18,5 @@ export declare function resolvePluginProviders(params: {
     pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
     mode?: "runtime" | "setup";
     includeUntrustedWorkspacePlugins?: boolean;
+    pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[];

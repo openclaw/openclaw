@@ -1,4 +1,4 @@
-import { c as normalizeOptionalString } from "../../string-coerce-B1bNWrQ4.js";
+import { c as normalizeOptionalString } from "../../string-coerce-CXN6d3lE.js";
 
 //#region extensions/openai/realtime-provider-shared.d.ts
 declare const trimToUndefined: typeof normalizeOptionalString;

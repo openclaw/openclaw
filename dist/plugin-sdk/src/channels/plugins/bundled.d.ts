@@ -29,6 +29,7 @@ type BundledChannelSetupEntryRuntimeContract = {
     };
 };
 type BundledChannelPackageSetupFeature = "configPromotion" | "legacyStateMigrations" | "legacySessionSurfaces";
+export declare function describeBundledChannelLoadError(error: unknown, channelId: string): string;
 export declare function listBundledChannelPluginIds(): readonly ChannelId[];
 export declare function hasBundledChannelPackageSetupFeature(id: ChannelId, feature: BundledChannelPackageSetupFeature): boolean;
 export declare function listBundledChannelPlugins(): readonly ChannelPlugin[];

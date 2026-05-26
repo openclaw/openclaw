@@ -70,6 +70,7 @@ export declare const TalkSessionJoinParamsSchema: Type.TObject<{
 }>;
 export declare const TalkSessionCreateParamsSchema: Type.TObject<{
     sessionKey: Type.TOptional<Type.TString>;
+    spawnedBy: Type.TOptional<Type.TString>;
     provider: Type.TOptional<Type.TString>;
     model: Type.TOptional<Type.TString>;
     voice: Type.TOptional<Type.TString>;

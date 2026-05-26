@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
 export type PluginHttpRouteHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void> | boolean | void;
+export declare function withPluginHttpRouteRegistry<T>(registry: PluginRegistry, run: () => T): T;
 export declare function registerPluginHttpRoute(params: {
     path?: string | null;
     fallbackPath?: string | null;

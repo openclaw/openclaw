@@ -7,7 +7,7 @@ export declare function scanCodexNativeAssets(params: {
     cfg: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
 }): Promise<CodexNativeAssetHit[]>;
-export declare function collectCodexNativeAssetWarnings(params: {
+export declare function collectCodexNativeAssetInfoNotes(params: {
     cfg: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
 }): Promise<string[]>;

@@ -1,4 +1,4 @@
-import { n as AudioTranscriptionResult, t as AudioTranscriptionRequest } from "../../types-Dp_Bsq2N.js";
+import { n as AudioTranscriptionResult, t as AudioTranscriptionRequest } from "../../types-ByzWuf9L.js";
 //#region extensions/deepgram/audio.d.ts
 declare const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 declare const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";

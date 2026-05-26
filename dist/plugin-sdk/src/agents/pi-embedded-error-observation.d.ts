@@ -1,5 +1,6 @@
 import { type ProviderRuntimeFailureKind } from "./pi-embedded-helpers.js";
 export { sanitizeForConsole } from "./console-sanitize.js";
+export declare function shouldSuppressRawErrorConsoleSuffix(providerRuntimeFailureKind?: ProviderRuntimeFailureKind): boolean;
 export declare function buildApiErrorObservationFields(rawError?: string, opts?: {
     provider?: string;
 }): {

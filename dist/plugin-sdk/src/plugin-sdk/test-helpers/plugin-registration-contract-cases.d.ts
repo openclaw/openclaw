@@ -40,6 +40,7 @@ export declare const pluginRegistrationContractCases: {
         pluginId: string;
         providerIds: string[];
         imageGenerationProviderIds: string[];
+        musicGenerationProviderIds: string[];
     };
     firecrawl: {
         pluginId: string;
@@ -111,6 +112,7 @@ export declare const pluginRegistrationContractCases: {
         providerIds: string[];
         mediaUnderstandingProviderIds: string[];
         imageGenerationProviderIds: string[];
+        musicGenerationProviderIds: string[];
         videoGenerationProviderIds: string[];
         requireDescribeImages: true;
         requireGenerateImage: true;

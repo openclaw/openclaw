@@ -1,6 +1,7 @@
 type TrustedSafeBinDirsParams = {
     baseDirs?: readonly string[];
     extraDirs?: readonly string[];
+    safeBins?: readonly string[];
 };
 type TrustedSafeBinPathParams = {
     resolvedPath: string;
@@ -16,6 +17,7 @@ export declare function buildTrustedSafeBinDirs(params?: TrustedSafeBinDirsParam
 export declare function getTrustedSafeBinDirs(params?: {
     baseDirs?: readonly string[];
     extraDirs?: readonly string[];
+    safeBins?: readonly string[];
     refresh?: boolean;
 }): Set<string>;
 export declare function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean;

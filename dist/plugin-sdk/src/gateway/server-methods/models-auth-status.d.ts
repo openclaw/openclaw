@@ -38,6 +38,11 @@ export type ModelAuthStatusResult = {
     ts: number;
     providers: ModelAuthStatusProvider[];
 };
+export type ModelAuthLogoutResult = {
+    provider: string;
+    removedProfiles: string[];
+    abortedRunIds: string[];
+};
 /**
  * Invalidate the in-memory cache. Reserved for future gateway-side auth
  * mutation handlers (login, logout, token rotation) so the next read returns

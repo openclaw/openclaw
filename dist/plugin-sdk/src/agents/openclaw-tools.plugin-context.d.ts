@@ -15,7 +15,6 @@ export type OpenClawPluginToolOptions = {
     modelId?: string;
     requesterSenderId?: string | null;
     requesterAgentIdOverride?: string;
-    senderIsOwner?: boolean;
     sessionId?: string;
     sandboxBrowserBridgeUrl?: string;
     allowHostBrowserControl?: boolean;
@@ -53,7 +52,6 @@ export declare function resolveOpenClawPluginToolInputs(params: {
         agentAccountId: string | undefined;
         deliveryContext: import("../utils/delivery-context.types.ts").DeliveryContext | undefined;
         requesterSenderId: string | undefined;
-        senderIsOwner: boolean | undefined;
         sandboxed: boolean | undefined;
     };
     allowGatewaySubagentBinding: boolean | undefined;

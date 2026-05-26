@@ -1,2 +1,2 @@
-import { n as buildSkillItems, t as applyGeneratedSkillItem } from "../../skills-Bl6vHrbc.js";
+import { n as buildSkillItems, t as applyGeneratedSkillItem } from "../../skills-BrrciZEb.js";
 export { applyGeneratedSkillItem, buildSkillItems };

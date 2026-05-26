@@ -1,6 +1,6 @@
-import { d as resolveProviderHttpRequestConfig } from "../../provider-http-CgsAYhns.js";
-import { r as music_generation_provider_d_exports } from "../../music-generation-provider-BzSMZ0DF.js";
-import { r as video_generation_provider_d_exports } from "../../video-generation-provider-CeYppKSl.js";
+import { h as resolveProviderHttpRequestConfig } from "../../provider-http-ByynA2MJ.js";
+import { r as music_generation_provider_d_exports } from "../../music-generation-provider-BOkZNHAi.js";
+import { r as video_generation_provider_d_exports } from "../../video-generation-provider-Cd2cCE-M.js";
 import { Mock } from "vitest";
 
 //#region extensions/minimax/provider-http.test-helpers.d.ts
@@ -18,7 +18,9 @@ interface MinimaxProviderHttpMocks {
   }>>;
   postJsonRequestMock: AnyMock;
   fetchWithTimeoutMock: AnyMock;
-  assertOkOrThrowHttpErrorMock: Mock<() => Promise<void>>;
+  fetchProviderOperationResponseMock: AnyMock;
+  fetchProviderDownloadResponseMock: AnyMock;
+  assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
   resolveProviderHttpRequestConfigMock: Mock<(params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult>;
 }
 declare function getMinimaxProviderHttpMocks(): MinimaxProviderHttpMocks;

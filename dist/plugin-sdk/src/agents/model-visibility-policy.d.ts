@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import { type ModelVisibilityPolicy } from "./model-selection-shared.js";
 export declare function createModelVisibilityPolicy(params: {
     cfg: OpenClawConfig;
@@ -7,5 +8,5 @@ export declare function createModelVisibilityPolicy(params: {
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
-}): ModelVisibilityPolicy;
+} & ModelManifestNormalizationContext): ModelVisibilityPolicy;
 export type { ModelVisibilityPolicy };

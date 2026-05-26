@@ -5,5 +5,6 @@ export { scheduleFollowupDrain } from "./queue/drain.js";
 export { enqueueFollowupRun, getFollowupQueueDepth, resetRecentQueuedMessageIdDedupe, } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearFollowupQueue, refreshQueuedFollowupSession } from "./queue/state.js";
-export { isSteeringQueueMode, resolvePiSteeringModeForQueueMode, type PiSteeringMode, } from "./queue/steering.js";
 export type { FollowupRun, QueueDedupeMode, QueueDropPolicy, QueueMode, QueueSettings, } from "./queue/types.js";
+export { isFollowupRunAborted } from "./queue/types.js";
+export { completeFollowupRunLifecycle } from "./queue/types.js";

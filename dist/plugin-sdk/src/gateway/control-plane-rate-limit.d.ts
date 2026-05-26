@@ -15,7 +15,8 @@ export declare function consumeControlPlaneWriteBudget(params: {
  * by the gateway maintenance timer to prevent unbounded growth.
  */
 export declare function pruneStaleControlPlaneBuckets(nowMs?: number): number;
-export declare const __testing: {
+export declare const testing: {
     getControlPlaneRateLimitBucketCount(): number;
     resetControlPlaneRateLimitState(): void;
 };
+export { testing as __testing };

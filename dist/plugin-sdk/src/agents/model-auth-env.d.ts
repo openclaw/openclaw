@@ -4,12 +4,12 @@ export type EnvApiKeyResult = {
     apiKey: string;
     source: string;
 };
-type EnvApiKeyLookupOptions = {
+export type EnvApiKeyLookupOptions = {
     config?: OpenClawConfig;
     workspaceDir?: string;
     aliasMap?: Readonly<Record<string, string>>;
     candidateMap?: Readonly<Record<string, readonly string[]>>;
     authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+    skipSetupProviderFallback?: boolean;
 };
 export declare function resolveEnvApiKey(provider: string, env?: NodeJS.ProcessEnv, options?: EnvApiKeyLookupOptions): EnvApiKeyResult | null;
-export {};

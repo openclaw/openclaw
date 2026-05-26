@@ -1,2 +1,2 @@
-import { a as resolveEnvelopeFormatOptions, r as formatInboundEnvelope } from "../envelope-DNto3K3h.js";
+import { a as resolveEnvelopeFormatOptions, r as formatInboundEnvelope } from "../envelope-DUI2KFD9.js";
 export { formatInboundEnvelope, resolveEnvelopeFormatOptions };

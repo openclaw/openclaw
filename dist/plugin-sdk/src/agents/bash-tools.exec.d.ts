@@ -23,7 +23,8 @@ export declare const execTool: AgentToolWithMeta<import("typebox").TObject<{
     ask: import("typebox").TOptional<import("typebox").TString>;
     node: import("typebox").TOptional<import("typebox").TString>;
 }>, ExecToolDetails>;
-export declare const __testing: {
+export declare const testing: {
     parseOpenClawChannelsLoginShellCommand: typeof parseOpenClawChannelsLoginShellCommand;
     validateScriptFileForShellBleed: typeof validateScriptFileForShellBleed;
 };
+export { testing as __testing };

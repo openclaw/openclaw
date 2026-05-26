@@ -31,6 +31,7 @@ export declare function cleanupEmbeddedAttemptResources(params: {
     };
     aborted?: boolean;
     abortSettlePromise?: Promise<unknown> | null;
+    skipSessionFlush?: boolean;
     runId?: string;
     sessionId?: string;
 }): Promise<void>;

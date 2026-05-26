@@ -3,8 +3,9 @@ import { buildSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { type SessionEntry, type SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ModelCostConfig } from "../utils/usage-format.js";
 import type { GatewayAgentRow, GatewaySessionRow, GatewaySessionsDefaults, SessionsListResult } from "./session-utils.types.js";
-export { archiveFileOnDisk, archiveSessionTranscripts, attachOpenClawTranscriptMeta, capArrayByJsonBytes, readFirstUserMessageFromTranscript, readLastMessagePreviewFromTranscript, readLatestSessionUsageFromTranscriptAsync, readLatestRecentSessionUsageFromTranscriptAsync, readRecentSessionUsageFromTranscriptAsync, readRecentSessionMessagesAsync, readRecentSessionMessagesWithStatsAsync, readRecentSessionTranscriptLines, readRecentSessionUsageFromTranscript, readSessionMessageCountAsync, readSessionTitleFieldsFromTranscript, readSessionTitleFieldsFromTranscriptAsync, readSessionPreviewItemsFromTranscript, readSessionMessagesAsync, visitSessionMessagesAsync, resolveSessionTranscriptCandidates, } from "./session-utils.fs.js";
+export { archiveFileOnDisk, archiveSessionTranscripts, attachOpenClawTranscriptMeta, capArrayByJsonBytes, readFirstUserMessageFromTranscript, readLatestSessionUsageFromTranscriptAsync, readLatestRecentSessionUsageFromTranscriptAsync, readRecentSessionUsageFromTranscriptAsync, readRecentSessionMessagesAsync, readRecentSessionMessagesWithStatsAsync, readRecentSessionTranscriptLines, readRecentSessionUsageFromTranscript, readSessionMessageCountAsync, readSessionTitleFieldsFromTranscript, readSessionTitleFieldsFromTranscriptAsync, readSessionPreviewItemsFromTranscript, readSessionMessagesAsync, visitSessionMessagesAsync, resolveSessionTranscriptCandidates, } from "./session-utils.fs.js";
 export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type { GatewayAgentRow, GatewaySessionRow, GatewaySessionsDefaults, SessionsListResult, SessionsPatchResult, SessionsPreviewEntry, SessionsPreviewResult, } from "./session-utils.types.js";
@@ -17,6 +18,11 @@ type SessionListRowContext = {
         levels: ReturnType<typeof listThinkingLevelOptions>;
         defaultLevel: ReturnType<typeof resolveGatewaySessionThinkingDefault>;
     }>;
+    displayModelIdentityByKey: Map<string, {
+        provider?: string;
+        model?: string;
+    }>;
+    modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
 };
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -24,7 +30,9 @@ type SessionListRowContext = {
  * keys, or when the owning agent still exists (#65524).
  */
 export declare function resolveDeletedAgentIdFromSessionKey(cfg: OpenClawConfig, sessionKey: string): string | null;
-export declare function loadSessionEntry(sessionKey: string): {
+export declare function loadSessionEntry(sessionKey: string, opts?: {
+    agentId?: string;
+}): {
     cfg: OpenClawConfig;
     storePath: string;
     store: Record<string, SessionEntry>;
@@ -80,6 +88,7 @@ export declare function listAgentsForGateway(cfg: OpenClawConfig): {
 export declare function resolveGatewaySessionStoreTarget(params: {
     cfg: OpenClawConfig;
     key: string;
+    agentId?: string;
     scanLegacyKeys?: boolean;
     store?: Record<string, SessionEntry>;
 }): {
@@ -150,6 +159,7 @@ export declare function loadGatewaySessionRow(sessionKey: string, options?: {
     transcriptUsageMaxBytes?: number;
 }): GatewaySessionRow | null;
 export declare function filterAndSortSessionEntries(params: {
+    cfg: OpenClawConfig;
     store: Record<string, SessionEntry>;
     opts: import("./protocol/index.js").SessionsListParams;
     now: number;

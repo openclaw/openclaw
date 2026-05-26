@@ -1,5 +1,5 @@
 import { Type, type TSchema } from "typebox";
-import { type DeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { type AnyAgentTool } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 export declare const CronToolSchema: Type.TObject<{

@@ -1,5 +1,5 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { PartialReplyPayload } from "../auto-reply/get-reply-options.types.js";
+import type { PartialReplyPayload, SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,6 +21,7 @@ export type SubscribeEmbeddedPiSessionParams = {
     toolProgressDetail?: ToolProgressDetailMode;
     shouldEmitToolResult?: () => boolean;
     shouldEmitToolOutput?: () => boolean;
+    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
     onReasoningStream?: (payload: {
         text?: string;
@@ -46,6 +47,7 @@ export type SubscribeEmbeddedPiSessionParams = {
         data: Record<string, unknown>;
         sessionKey?: string;
     }) => void | Promise<void>;
+    terminalLifecyclePhase?: "end" | "finishing";
     /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     enforceFinalTag?: boolean;

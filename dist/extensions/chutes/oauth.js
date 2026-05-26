@@ -1,2 +1,2 @@
-import { t as loginChutes } from "../../oauth-D_nzdz-Z.js";
+import { t as loginChutes } from "../../oauth-DdpHSKGs.js";
 export { loginChutes };

@@ -13,6 +13,7 @@ export declare function createCronRunDiagnosticsFromError(source: CronRunDiagnos
 export declare function createCronRunDiagnosticsFromExecDetails(details: unknown, opts?: {
     nowMs?: () => number;
     toolName?: string;
+    finalStatus?: "ok" | "error" | "skipped";
 }): CronRunDiagnostics | undefined;
 export declare function createCronRunDiagnosticsFromToolPayload(payload: unknown, opts?: {
     nowMs?: () => number;

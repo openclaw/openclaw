@@ -9,9 +9,18 @@ type StreamingCompatEntry = {
     blockStreamingCoalesce?: unknown;
     nativeStreaming?: unknown;
 };
-export declare const DEFAULT_PROGRESS_DRAFT_LABELS: readonly ["Thinking...", "Shelling...", "Scuttling...", "Clawing...", "Pinching...", "Molting...", "Bubbling...", "Tiding...", "Reefing...", "Cracking...", "Sifting...", "Brining...", "Nautiling...", "Krilling...", "Barnacling...", "Lobstering...", "Tidepooling...", "Pearling...", "Snapping...", "Surfacing..."];
+export declare const DEFAULT_PROGRESS_DRAFT_LABELS: readonly ["Working", "Shelling", "Scuttling", "Clawing", "Pinching", "Molting", "Bubbling", "Tiding", "Reefing", "Cracking", "Sifting", "Brining", "Nautiling", "Krilling", "Barnacling", "Lobstering", "Tidepooling", "Pearling", "Snapping", "Surfacing"];
 export declare const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5000;
 export declare function isChannelProgressDraftWorkToolName(name: string | null | undefined): boolean;
+export declare function isPotentialTruncatedFinal(finalText: string): boolean;
+export declare function selectLongerFinalText(params: {
+    finalText: string;
+    candidateTexts: readonly (string | undefined)[];
+}): string | undefined;
+export declare function resolveTranscriptBackedChannelFinalText(params: {
+    finalText: string;
+    resolveCandidateText: () => Promise<string | undefined>;
+}): Promise<string>;
 export type ChannelProgressLineOptions = {
     markdown?: boolean;
     detailMode?: "explain" | "raw";
@@ -25,6 +34,7 @@ export type ChannelProgressDraftLineInput = {
     args?: Record<string, unknown>;
 } | {
     event: "item";
+    itemId?: string;
     itemKind?: string;
     title?: string;
     name?: string;
@@ -65,6 +75,7 @@ export type ChannelProgressDraftLineInput = {
 };
 export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 export type ChannelProgressDraftLine = {
+    id?: string;
     kind: ChannelProgressDraftLineKind;
     text: string;
     label: string;
@@ -97,6 +108,8 @@ export declare function resolveChannelStreamingBlockCoalesce(entry: StreamingCom
 export declare function resolveChannelStreamingPreviewChunk(entry: StreamingCompatEntry | null | undefined): BlockStreamingChunkConfig | undefined;
 export declare function resolveChannelStreamingPreviewToolProgress(entry: StreamingCompatEntry | null | undefined, defaultValue?: boolean): boolean;
 export declare function resolveChannelStreamingPreviewCommandText(entry: StreamingCompatEntry | null | undefined, defaultValue?: ChannelStreamingCommandTextMode): ChannelStreamingCommandTextMode;
+export declare function resolveChannelStreamingPreviewNativeToolProgress(entry: StreamingCompatEntry | null | undefined, defaultValue?: boolean): boolean;
+export declare function resolveChannelStreamingPreviewNativeToolProgressAllowFrom(entry: StreamingCompatEntry | null | undefined): Array<string | number> | undefined;
 export declare function resolveChannelStreamingSuppressDefaultToolProgressMessages(entry: StreamingCompatEntry | null | undefined, options?: {
     draftStreamActive?: boolean;
     previewToolProgressEnabled?: boolean;
@@ -111,7 +124,12 @@ export declare function resolveChannelProgressDraftLabel(params: {
     random?: () => number;
 }): string | undefined;
 export declare function resolveChannelProgressDraftMaxLines(entry: StreamingCompatEntry | null | undefined, defaultValue?: number): number;
+export declare function resolveChannelProgressDraftMaxLineChars(entry: StreamingCompatEntry | null | undefined, defaultValue?: number): number;
 export declare function resolveChannelProgressDraftRender(entry: StreamingCompatEntry | null | undefined, defaultValue?: ChannelProgressDraftRenderMode): ChannelProgressDraftRenderMode;
+export declare function normalizeChannelProgressDraftLineIdentity(line: string | ChannelProgressDraftLine | undefined): string;
+export declare function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(lines: TLine[], line: TLine, params: {
+    maxLines: number;
+}): TLine[];
 export declare function formatChannelProgressDraftText(params: {
     entry?: StreamingCompatEntry | null;
     lines: Array<string | ChannelProgressDraftLine>;

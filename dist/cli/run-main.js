@@ -1,30 +1,67 @@
-import { a as normalizeLowercaseStringOrEmpty, c as normalizeOptionalString, s as normalizeOptionalLowercaseString } from "../string-coerce-LndEvhRk.js";
-import { i as normalizeEnv, t as isTruthyEnvValue } from "../env-DL0trrAI.js";
-import { h as getSubCliEntries, v as getCoreCliCommandNames } from "../argv-BHL8kwwH.js";
-import { v as resolveStateDir } from "../paths-Cnwfh6dH.js";
-import { t as isMainModule } from "../is-main-myFrAEl9.js";
-import { t as resolveCliArgvInvocation } from "../argv-invocation-Bmipv42U.js";
-import { i as parseCliContainerArgs, n as parseCliProfileArgs, r as maybeRunCliInContainer, t as applyCliProfileEnv } from "../profile-BTKSg8nb.js";
-import { t as normalizeWindowsArgv } from "../windows-argv-sXr0YSON.js";
-import { n as resolveManifestCommandAliasOwnerInRegistry, r as resolveManifestToolOwnerInRegistry } from "../manifest-command-aliases-BFWl4mXS.js";
-import { t as assertSupportedRuntime } from "../runtime-guard-BuMdLq1N.js";
-import { t as ensureOpenClawCliOnPath } from "../path-env-BbHiAieT.js";
-import { a as shouldSkipPluginCommandRegistration, r as shouldRegisterPrimaryCommandOnly, t as isReservedNonPluginCommandRoot } from "../command-registration-policy-BjvNLrSK.js";
-import { a as consumeGatewayFastPathRootOptionToken, n as resolveCliNetworkProxyPolicy, o as consumeGatewayRunOptionToken, t as resolveCliCommandPathPolicy } from "../command-path-policy-Bk_Rxblh.js";
+import { a as normalizeLowercaseStringOrEmpty, c as normalizeOptionalString, s as normalizeOptionalLowercaseString } from "../string-coerce-DyL154ka.js";
+import { i as normalizeEnv, t as isTruthyEnvValue } from "../env-Dhqok4CP.js";
+import { E as consumeRootOptionToken, c as hasFlag, g as getSubCliParentDefaultHelpCommands, h as getSubCliEntries, x as getCoreCliParentDefaultHelpCommands, y as getCoreCliCommandNames } from "../argv-j42r4Rb7.js";
+import { y as resolveStateDir } from "../paths-Cw7f9XhU.js";
+import { t as isMainModule } from "../is-main-DoKHeRG7.js";
+import { t as resolveCliArgvInvocation } from "../argv-invocation-C7Tq1otP.js";
+import { i as parseCliContainerArgs, n as parseCliProfileArgs, r as maybeRunCliInContainer, t as applyCliProfileEnv } from "../profile-9JBJfDom.js";
+import { t as normalizeWindowsArgv } from "../windows-argv-CVkWOV9N.js";
+import { n as resolveManifestCommandAliasOwnerInRegistry, r as resolveManifestToolOwnerInRegistry } from "../manifest-command-aliases-BaxKypWl.js";
+import { t as assertSupportedRuntime } from "../runtime-guard-DLdnBLFm.js";
+import { t as ensureOpenClawCliOnPath } from "../path-env-BY1Xr76b.js";
+import { a as shouldSkipPluginCommandRegistration, r as shouldRegisterPrimaryCommandOnly, t as isReservedNonPluginCommandRoot } from "../command-registration-policy-DlYhvFmN.js";
+import { a as consumeGatewayFastPathRootOptionToken, n as resolveCliNetworkProxyPolicy, o as consumeGatewayRunOptionToken, t as resolveCliCommandPathPolicy } from "../command-path-policy-Dc5x3coi.js";
+import { n as withConsoleLogsRoutedToStderrForJson, t as hasJsonOutputFlag } from "../json-output-mode-23bE_bfg.js";
 import process$1 from "node:process";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import path from "node:path";
 //#region src/cli/run-main-policy.ts
 const ROOT_HELP_ALIASES = new Set(["tools"]);
-const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
-	"approvals",
-	"channels",
-	"cron",
-	"devices",
-	"mcp",
+const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set([
+	"setup",
+	"onboard",
+	"configure"
+]);
+const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set([
+	"doctor",
+	"gateway",
+	"models",
 	"plugins"
 ]);
+const HELP_FLAGS = new Set(["-h", "--help"]);
+const VERSION_FLAGS = new Set(["-V", "--version"]);
+const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([...getCoreCliParentDefaultHelpCommands(), ...getSubCliParentDefaultHelpCommands()]);
+function hasHelpFlag(argv) {
+	return hasFlag(argv, "-h") || hasFlag(argv, "--help");
+}
+function resolveStrictPrecomputedSubcommandHelpCommand(argv) {
+	const args = argv.slice(2);
+	let commandName = null;
+	let sawHelp = false;
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index];
+		if (!arg || arg === "--") return null;
+		if (VERSION_FLAGS.has(arg)) return null;
+		if (!commandName) {
+			const consumed = consumeRootOptionToken(args, index);
+			if (consumed > 0) {
+				index += consumed - 1;
+				continue;
+			}
+			if (arg.startsWith("-")) return null;
+			if (!PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.has(arg)) return null;
+			commandName = arg;
+			continue;
+		}
+		if (HELP_FLAGS.has(arg)) {
+			sawHelp = true;
+			continue;
+		}
+		return null;
+	}
+	return commandName && sawHelp ? commandName : null;
+}
 function isBareParentDefaultHelpArgv(argv) {
 	const invocation = resolveCliArgvInvocation(argv);
 	const [primary, extra] = invocation.commandPath;
@@ -49,7 +86,26 @@ function shouldUseRootHelpFastPath(argv, env = process.env) {
 function shouldUseBrowserHelpFastPath(argv, env = process.env) {
 	if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") return false;
 	const invocation = resolveCliArgvInvocation(argv);
-	return invocation.commandPath.length === 1 && invocation.commandPath[0] === "browser" && invocation.hasHelpOrVersion;
+	return invocation.commandPath.length === 1 && invocation.commandPath[0] === "browser" && hasHelpFlag(argv);
+}
+function shouldUseSecretsHelpFastPath(argv, env = process.env) {
+	if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") return false;
+	const invocation = resolveCliArgvInvocation(argv);
+	return invocation.commandPath.length === 1 && invocation.commandPath[0] === "secrets" && hasHelpFlag(argv);
+}
+function shouldUseNodesHelpFastPath(argv, env = process.env) {
+	if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") return false;
+	const invocation = resolveCliArgvInvocation(argv);
+	return invocation.commandPath.length === 1 && invocation.commandPath[0] === "nodes" && hasHelpFlag(argv);
+}
+function shouldUseSetupOnboardConfigureHelpFastPath(argv, env = process.env) {
+	if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") return false;
+	const invocation = resolveCliArgvInvocation(argv);
+	return invocation.commandPath.length === 1 && SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS.has(invocation.commandPath[0] ?? "") && invocation.hasHelpOrVersion;
+}
+function resolvePrecomputedSubcommandHelpFastPath(argv, env = process.env) {
+	if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") return null;
+	return resolveStrictPrecomputedSubcommandHelpCommand(argv);
 }
 function shouldStartCrestodianForBareRoot(argv) {
 	const invocation = resolveCliArgvInvocation(argv);
@@ -189,18 +245,15 @@ function isGatewayRunFastPathArgv(argv) {
 	}
 	return sawGateway;
 }
-function hasJsonOutputFlag(argv) {
-	return argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
-}
 async function tryRunGatewayRunFastPath(argv, startupTrace) {
 	if (!isGatewayRunFastPathArgv(argv)) return false;
 	const [{ Command }, { addGatewayRunCommand }, { VERSION }, { emitCliBanner }, { resolveCliStartupPolicy }, { enableConsoleCapture }] = await startupTrace.measure("gateway-run-imports", () => Promise.all([
 		import("commander"),
-		import("../run-ui1dSFfH.js"),
-		import("../version-C1-6jjhw.js"),
-		import("../banner-DPyKVokt.js"),
-		import("../command-startup-policy-Dm8r7RC9.js"),
-		import("../logging-CrItnenW.js")
+		import("../run-command-C_CdKl2E.js"),
+		import("../version-DADH-5s2.js"),
+		import("../banner-CxFkn4tt.js"),
+		import("../command-startup-policy-BAjGWpeM.js"),
+		import("../logging-CKRdrKW_.js")
 	]));
 	if (!resolveCliStartupPolicy({
 		commandPath: resolveCliArgvInvocation(argv).commandPath,
@@ -229,16 +282,27 @@ async function closeCliMemoryManagers() {
 	try {
 		const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
 		if (!hasMemoryRuntime()) return;
-		const { closeActiveMemorySearchManagers } = await import("../memory-runtime-D8mg_9Ye.js");
+		const { closeActiveMemorySearchManagers } = await import("../memory-runtime-BQefnzY0.js");
 		await closeActiveMemorySearchManagers();
 	} catch {}
 }
 async function disposeCliAgentHarnesses() {
 	try {
-		const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } = await import("../registry-B37DOvn5.js");
+		const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } = await import("../registry-CIIp2udg.js");
 		if (listAgentHarnessIds().length === 0) return;
 		await disposeRegisteredAgentHarnesses();
 	} catch {}
+}
+const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+function isUnconfiguredConfigSnapshot(snapshot) {
+	if (!snapshot.exists) return true;
+	if (!snapshot.valid) return false;
+	return Object.keys(snapshot.sourceConfig).every((key) => UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key));
+}
+async function shouldStartOnboardingForFreshInstall(argv) {
+	if (!shouldStartCrestodianForBareRoot(argv)) return false;
+	const { readConfigFileSnapshot } = await import("../config/config.js");
+	return isUnconfiguredConfigSnapshot(await readConfigFileSnapshot());
 }
 function pauseNonTtyStdinForCliExit() {
 	const stdin = process$1.stdin;
@@ -261,9 +325,9 @@ function isCommanderParseExit(error) {
 }
 async function ensureCliEnvProxyDispatcher() {
 	try {
-		const { hasEnvHttpProxyAgentConfigured } = await import("../proxy-env-DJyXvm4j.js");
+		const { hasEnvHttpProxyAgentConfigured } = await import("../proxy-env-B4yhLzkH.js");
 		if (!hasEnvHttpProxyAgentConfigured()) return;
-		const { ensureGlobalUndiciEnvProxyDispatcher } = await import("../undici-global-dispatcher-CayWmy9H.js");
+		const { ensureGlobalUndiciEnvProxyDispatcher } = await import("../undici-global-dispatcher-BD_3g4dv.js");
 		ensureGlobalUndiciEnvProxyDispatcher();
 	} catch {}
 }
@@ -279,7 +343,7 @@ function isKnownBuiltInCommandRoot(primary) {
 }
 async function isPluginCliRoot(params) {
 	try {
-		const { resolvePluginCliRootOwnerIds } = await import("../cli-registry-loader-C-OOvhnL.js");
+		const { resolvePluginCliRootOwnerIds } = await import("../cli-registry-loader-D6fIR-ch.js");
 		const ownerIds = await resolvePluginCliRootOwnerIds({
 			cfg: params.config,
 			env: process$1.env,
@@ -301,7 +365,7 @@ function createAllowlistAgnosticCliLookupConfig(config) {
 	};
 }
 async function resolveCliCommandSurfaceOwner(params) {
-	const { resolveManifestCliCommandSurfaceOwner } = await import("../manifest-command-aliases.runtime-CHbmJ-Xl.js");
+	const { resolveManifestCliCommandSurfaceOwner } = await import("../manifest-command-aliases.runtime-b7e5h3eY.js");
 	const manifestOwner = resolveManifestCliCommandSurfaceOwner({
 		command: params.primary,
 		config: params.config,
@@ -309,7 +373,7 @@ async function resolveCliCommandSurfaceOwner(params) {
 	});
 	if (manifestOwner) return manifestOwner;
 	try {
-		const { resolvePluginCliRootOwnerIds } = await import("../cli-registry-loader-C-OOvhnL.js");
+		const { resolvePluginCliRootOwnerIds } = await import("../cli-registry-loader-D6fIR-ch.js");
 		return (await resolvePluginCliRootOwnerIds({
 			cfg: createAllowlistAgnosticCliLookupConfig(params.config),
 			env: process$1.env,
@@ -330,7 +394,7 @@ async function resolveUnownedCliPrimary(params) {
 	return primary;
 }
 async function resolveUnownedCliPrimaryMessage(params) {
-	const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } = await import("../manifest-command-aliases.runtime-CHbmJ-Xl.js");
+	const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } = await import("../manifest-command-aliases.runtime-b7e5h3eY.js");
 	const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
 	return resolveMissingPluginCommandMessage$1(params.primary, params.config, {
 		resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
@@ -339,7 +403,7 @@ async function resolveUnownedCliPrimaryMessage(params) {
 	}) ?? `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`;
 }
 async function bootstrapCliProxyCaptureAndDispatcher(startupTrace, options = {}) {
-	const [{ initializeDebugProxyCapture, finalizeDebugProxyCapture }, { maybeWarnAboutDebugProxyCoverage }] = await startupTrace.measure("proxy-imports", () => Promise.all([import("../runtime-4AdLFVW0.js"), import("../coverage-BTiR2x9V.js")]));
+	const [{ initializeDebugProxyCapture, finalizeDebugProxyCapture }, { maybeWarnAboutDebugProxyCoverage }] = await startupTrace.measure("proxy-imports", () => Promise.all([import("../runtime-E8EXVYTM.js"), import("../coverage-C96hP0Yo.js")]));
 	initializeDebugProxyCapture("cli");
 	process$1.once("exit", () => {
 		finalizeDebugProxyCapture();
@@ -365,7 +429,7 @@ async function runCli(argv = process$1.argv) {
 	const isHelpOrVersionInvocation = resolveCliArgvInvocation(normalizedArgv).hasHelpOrVersion;
 	startupTrace.mark("argv");
 	if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) await startupTrace.measure("dotenv", async () => {
-		const { loadCliDotEnv } = await import("../dotenv-BDitZkPt.js");
+		const { loadCliDotEnv } = await import("../dotenv-BsI4rP_k.js");
 		loadCliDotEnv({ quiet: true });
 	});
 	normalizeEnv();
@@ -374,14 +438,14 @@ async function runCli(argv = process$1.argv) {
 	let proxyHandle = null;
 	let bestEffortConfigPromise = null;
 	const readBestEffortCliConfig = async () => {
-		if (!bestEffortConfigPromise) bestEffortConfigPromise = import("../io-BSAA__0L.js").then(({ readBestEffortConfig }) => readBestEffortConfig());
+		if (!bestEffortConfigPromise) bestEffortConfigPromise = import("../io-Dwi3-bMk.js").then(({ readBestEffortConfig }) => readBestEffortConfig());
 		return await bestEffortConfigPromise;
 	};
 	const stopStartedProxy = async () => {
 		const handle = proxyHandle;
 		proxyHandle = null;
 		if (handle) {
-			const { stopProxy } = await import("../proxy-lifecycle-DGc1VdHm.js");
+			const { stopProxy } = await import("../proxy-lifecycle-DIZ7hzzR.js");
 			await stopProxy(handle);
 		}
 	};
@@ -400,7 +464,7 @@ async function runCli(argv = process$1.argv) {
 			primary: unownedPrimary,
 			config
 		}));
-		const { startProxy } = await import("../proxy-lifecycle-DGc1VdHm.js");
+		const { startProxy } = await import("../proxy-lifecycle-DIZ7hzzR.js");
 		proxyHandle = await startProxy(config?.proxy ?? void 0);
 	}
 	let onSigterm = null;
@@ -423,28 +487,61 @@ async function runCli(argv = process$1.argv) {
 	}
 	try {
 		if (shouldUseRootHelpFastPath(normalizedArgv)) {
-			const { outputPrecomputedRootHelpText } = await import("../root-help-metadata-D5HVG9Rt.js");
-			if (!outputPrecomputedRootHelpText()) {
-				const { outputRootHelp } = await import("../root-help-DftDbAaL.js");
-				await outputRootHelp();
+			const { loadRootHelpRenderOptionsForConfigSensitivePlugins } = await import("../root-help-live-config-3vxSmcK6.js");
+			const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(process$1.env);
+			if (!liveRootHelpOptions) {
+				const { outputPrecomputedRootHelpText } = await import("../root-help-metadata-BihbOLGR.js");
+				if (outputPrecomputedRootHelpText()) return;
 			}
+			const { outputRootHelp } = await import("../root-help-CxFRRMAh.js");
+			await outputRootHelp(liveRootHelpOptions ?? void 0);
 			return;
 		}
 		if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
-			const { outputPrecomputedBrowserHelpText } = await import("../root-help-metadata-D5HVG9Rt.js");
+			const { outputPrecomputedBrowserHelpText } = await import("../root-help-metadata-BihbOLGR.js");
 			if (outputPrecomputedBrowserHelpText()) return;
+		}
+		if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
+			const { tryOutputSetupOnboardConfigureHelp } = await import("../setup-onboard-configure-help-fast-path-C80wiT1P.js");
+			if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) return;
+		}
+		if (shouldUseSecretsHelpFastPath(normalizedArgv)) {
+			const { outputPrecomputedSecretsHelpText } = await import("../root-help-metadata-BihbOLGR.js");
+			if (outputPrecomputedSecretsHelpText()) return;
+		}
+		const precomputedSubcommandHelp = resolvePrecomputedSubcommandHelpFastPath(normalizedArgv);
+		if (precomputedSubcommandHelp) {
+			const { outputPrecomputedSubcommandHelpText } = await import("../root-help-metadata-BihbOLGR.js");
+			if (outputPrecomputedSubcommandHelpText(precomputedSubcommandHelp)) return;
+		}
+		if (shouldUseNodesHelpFastPath(normalizedArgv)) {
+			const { loadRootHelpRenderOptionsForConfigSensitivePlugins } = await import("../root-help-live-config-3vxSmcK6.js");
+			if (!await loadRootHelpRenderOptionsForConfigSensitivePlugins(process$1.env)) {
+				const { outputPrecomputedNodesHelpText } = await import("../root-help-metadata-BihbOLGR.js");
+				if (outputPrecomputedNodesHelpText()) return;
+			}
 		}
 		const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
 		const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
 		if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) await ensureCliEnvProxyDispatcher();
 		if (shouldRunBareRootCrestodian) {
+			if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+				if (!process$1.stdin.isTTY || !process$1.stdout.isTTY) {
+					console.error("Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.");
+					process$1.exitCode = 1;
+					return;
+				}
+				const { setupWizardCommand } = await import("../onboard-CePsejdX.js");
+				await setupWizardCommand({});
+				return;
+			}
 			if (!process$1.stdin.isTTY || !process$1.stdout.isTTY) {
 				console.error("Crestodian needs an interactive TTY. Use `openclaw crestodian --message \"status\"` for one command.");
 				process$1.exitCode = 1;
 				return;
 			}
 			const { runCrestodian } = await import("../crestodian/crestodian.js");
-			const { createCliProgress } = await import("../progress-Cnt_GBE9.js");
+			const { createCliProgress } = await import("../progress-DI8gGVuX.js");
 			const progress = createCliProgress({
 				label: "Starting Crestodian…",
 				indeterminate: true,
@@ -480,14 +577,13 @@ async function runCli(argv = process$1.argv) {
 		if (!bootstrapProxyBeforeFastPath && await tryRunGatewayRunFastPath(normalizedArgv, startupTrace)) return;
 		if (!isHelpOrVersionInvocation) await bootstrapCliProxyCaptureAndDispatcher(startupTrace, { ensureDispatcher: shouldUseCliEnvProxy });
 		if (bootstrapProxyBeforeFastPath && await tryRunGatewayRunFastPath(normalizedArgv, startupTrace)) return;
-		const { tryRouteCli } = await startupTrace.measure("route-import", () => import("../route-8VjeOL2m.js"));
+		const { tryRouteCli } = await startupTrace.measure("route-import", () => import("../route-BUmtmhVP.js"));
 		if (await startupTrace.measure("route", () => tryRouteCli(normalizedArgv))) return;
-		const { createCliProgress } = await import("../progress-Cnt_GBE9.js");
+		const { createCliProgress } = await import("../progress-DI8gGVuX.js");
 		const startupProgress = createCliProgress({
 			label: "Loading OpenClaw CLI…",
 			indeterminate: true,
-			delayMs: 0,
-			fallback: "none"
+			delayMs: 0
 		});
 		let startupProgressStopped = false;
 		const stopStartupProgress = () => {
@@ -496,15 +592,15 @@ async function runCli(argv = process$1.argv) {
 			startupProgress.done();
 		};
 		try {
-			const { enableConsoleCapture } = await import("../logging-CrItnenW.js");
+			const { enableConsoleCapture } = await import("../logging-CKRdrKW_.js");
 			enableConsoleCapture();
 			const [{ buildProgram }, { formatUncaughtError }, { formatCliFailureLines }, { runFatalErrorHooks }, { installUnhandledRejectionHandler, isBenignUncaughtExceptionError, isUncaughtExceptionHandled }, { restoreTerminalState }] = await startupTrace.measure("core-imports", () => Promise.all([
-				import("../program-BEHJLtfN.js"),
+				import("../program-CUNqgr2S.js"),
 				import("../infra/errors.js"),
-				import("../failure-output-C82IjkY4.js"),
-				import("../fatal-error-hooks-OpvTaRMW.js"),
-				import("../unhandled-rejections-IrSMZa1P.js"),
-				import("../restore-BkofA_rZ.js")
+				import("../failure-output-DpvzkRSd.js"),
+				import("../fatal-error-hooks-BJYnE1yM.js"),
+				import("../unhandled-rejections-Cm-8hORL.js"),
+				import("../restore-x0u7-53p.js")
 			]));
 			const program = await startupTrace.measure("build-program", () => buildProgram());
 			installUnhandledRejectionHandler();
@@ -529,13 +625,13 @@ async function runCli(argv = process$1.argv) {
 			const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
 			const { primary } = resolveCliArgvInvocation(parseArgv);
 			if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) await startupTrace.measure("register-primary", async () => {
-				const { getProgramContext } = await import("../program-context-DxBjoX0T.js");
+				const { getProgramContext } = await import("../program-context-WiPANL-_.js");
 				const ctx = getProgramContext(program);
 				if (ctx) {
-					const { registerCoreCliByName } = await import("../command-registry-tTv_8By1.js");
+					const { registerCoreCliByName } = await import("../command-registry-Bb-4juAN.js");
 					await registerCoreCliByName(program, ctx, primary, parseArgv);
 				}
-				const { registerSubCliByName } = await import("../register.subclis-vYqa4uDW.js");
+				const { registerSubCliByName } = await import("../register.subclis-BaWaiq5d.js");
 				await registerSubCliByName(program, primary, parseArgv);
 			});
 			if (!shouldSkipPluginCommandRegistration({
@@ -544,15 +640,15 @@ async function runCli(argv = process$1.argv) {
 				hasBuiltinPrimary: primary !== null && program.commands.some((command) => command.name() === primary || command.aliases().includes(primary))
 			})) {
 				const config = await startupTrace.measure("register-plugin-commands", async () => {
-					const { registerPluginCliCommandsFromValidatedConfig } = await import("../cli-BtYfaaei.js");
-					return await registerPluginCliCommandsFromValidatedConfig(program, void 0, void 0, {
+					const { registerPluginCliCommandsFromValidatedConfig } = await import("../cli-BsRJL3n0.js");
+					return await withConsoleLogsRoutedToStderrForJson(parseArgv, () => registerPluginCliCommandsFromValidatedConfig(program, void 0, void 0, {
 						mode: "lazy",
 						primary
-					});
+					}));
 				});
 				if (config) {
 					if (primary && !program.commands.some((command) => command.name() === primary || command.aliases().includes(primary))) {
-						const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } = await import("../manifest-command-aliases.runtime-CHbmJ-Xl.js");
+						const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } = await import("../manifest-command-aliases.runtime-b7e5h3eY.js");
 						const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
 							primary,
 							config
@@ -590,4 +686,4 @@ function isCliMainModule() {
 	return isMainModule({ currentFile: fileURLToPath(import.meta.url) });
 }
 //#endregion
-export { isCliMainModule, isGatewayRunFastPathArgv, resolveMissingPluginCommandMessage, rewriteUpdateFlagArgv, runCli, shouldEnsureCliPath, shouldStartCrestodianForBareRoot, shouldStartCrestodianForModernOnboard, shouldStartProxyForCli, shouldUseBrowserHelpFastPath, shouldUseRootHelpFastPath };
+export { isCliMainModule, isGatewayRunFastPathArgv, resolveMissingPluginCommandMessage, resolvePrecomputedSubcommandHelpFastPath, rewriteUpdateFlagArgv, runCli, shouldEnsureCliPath, shouldStartCrestodianForBareRoot, shouldStartCrestodianForModernOnboard, shouldStartOnboardingForFreshInstall, shouldStartProxyForCli, shouldUseBrowserHelpFastPath, shouldUseNodesHelpFastPath, shouldUseRootHelpFastPath, shouldUseSecretsHelpFastPath, shouldUseSetupOnboardConfigureHelpFastPath };

@@ -3,11 +3,16 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
+export { buildTtsSupplementMediaPayload, getReplyPayloadTtsSupplement, isReplyPayloadTtsSupplement, markReplyPayloadAsTtsSupplement, } from "../auto-reply/reply-payload.js";
 export type OutboundReplyPayload = {
     text?: string;
     mediaUrls?: string[];
     mediaUrl?: string;
     presentation?: InternalReplyPayload["presentation"];
+    /**
+     * @deprecated Use presentation. Runtime support remains for legacy producers.
+     */
     interactive?: InternalReplyPayload["interactive"];
     channelData?: InternalReplyPayload["channelData"];
     sensitiveMedia?: boolean;

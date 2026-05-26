@@ -104,7 +104,7 @@ export declare function buildCompactAnnounceStatsLine(params: {
     startedAt?: number;
     endedAt?: number;
 }): Promise<string>;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>): void;
 };
-export {};
+export { testing as __testing };

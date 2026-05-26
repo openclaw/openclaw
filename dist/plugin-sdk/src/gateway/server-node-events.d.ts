@@ -8,5 +8,6 @@ export type NodeEventHandleResult = {
 export declare function resetNodeEventDeduplicationForTests(): void;
 export declare function getRecentNodePresencePersistCountForTests(): number;
 export declare const handleNodeEvent: (ctx: NodeEventContext, nodeId: string, evt: NodeEvent, opts?: {
+    connId?: string;
     deviceId?: string;
 }) => Promise<NodeEventHandleResult | undefined>;

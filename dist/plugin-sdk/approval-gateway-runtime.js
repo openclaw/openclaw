@@ -1,2 +1,3 @@
-import { t as resolveApprovalOverGateway } from "../approval-gateway-runtime-C33N9zkP.js";
+import { t as resolveApprovalOverGateway } from "../approval-gateway-resolver-BLIao43o.js";
+import "../approval-gateway-runtime-BvjTnuLJ.js";
 export { resolveApprovalOverGateway };

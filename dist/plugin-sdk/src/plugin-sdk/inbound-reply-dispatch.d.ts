@@ -3,21 +3,31 @@ import { type DispatchFromConfigResult } from "../auto-reply/reply/dispatch-from
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import { hasFinalChannelTurnDispatch, hasVisibleChannelTurnDispatch, deliverInboundReplyWithMessageSendContext, resolveChannelTurnDispatchCounts } from "../channels/turn/kernel.js";
-import type { DurableInboundReplyDeliveryOptions } from "../channels/turn/kernel.js";
+import { hasFinalChannelTurnDispatch, hasVisibleChannelTurnDispatch, deliverInboundReplyWithMessageSendContext, resolveChannelTurnDispatchCounts, recordDroppedChannelTurnHistory } from "../channels/turn/kernel.js";
+import type { ChannelTurnResult, DispatchedChannelTurnResult, DurableInboundReplyDeliveryOptions } from "../channels/turn/kernel.js";
 import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
-export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
+export type { ChannelTurnDroppedHistoryOptions, ChannelTurnRecordOptions, } from "../channels/turn/types.js";
 export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
+export type { ChannelBotLoopProtectionFacts } from "../channels/turn/kernel.js";
+export { recordChannelBotPairLoopAndCheckSuppression } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type OutboundReplyPayload } from "./reply-payload.js";
 type ReplyOptionsWithoutModelSelected = Omit<Omit<GetReplyOptions, "onBlockReply">, "onModelSelected">;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
 /** Run an already assembled channel turn through shared session-record + dispatch ordering. */
-export declare function runPreparedInboundReplyTurn<TDispatchResult>(params: PreparedChannelTurn<TDispatchResult>): Promise<import("../channels/turn/types.js").DispatchedChannelTurnResult<TDispatchResult>>;
+type PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult> = PreparedChannelTurn<TDispatchResult> & {
+    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
+};
+type PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult> = Omit<PreparedChannelTurn<TDispatchResult>, "botLoopProtection"> & {
+    botLoopProtection?: undefined;
+};
+export declare function runPreparedInboundReplyTurn<TDispatchResult>(params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
+export declare function runPreparedInboundReplyTurn<TDispatchResult>(params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
+export declare function runPreparedInboundReplyTurn<TDispatchResult>(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
 /** Run a channel turn through shared ingest, record, dispatch, and finalize ordering. */
-export declare function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(params: RunChannelTurnParams<TRaw, TDispatchResult>): Promise<import("../channels/turn/types.js").ChannelTurnResult<TDispatchResult>>;
-export { hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch, hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch, deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload, deliverInboundReplyWithMessageSendContext, resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts, };
+export declare function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(params: RunChannelTurnParams<TRaw, TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
+export { hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch, hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch, deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload, deliverInboundReplyWithMessageSendContext, recordDroppedChannelTurnHistory, resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts, };
 /** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export declare function dispatchReplyFromConfigWithSettledDispatcher(params: {
     cfg: OpenClawConfig;

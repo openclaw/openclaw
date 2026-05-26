@@ -1,6 +1,6 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { t as contributeGroqResolvedModelCompat } from "../../api-C3mgum2F.js";
-import { t as groqMediaUnderstandingProvider } from "../../media-understanding-provider-CyD9nkyA.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as contributeGroqResolvedModelCompat } from "../../api-DXgCLjP0.js";
+import { t as groqMediaUnderstandingProvider } from "../../media-understanding-provider-B8fhZs6b2.js";
 //#region extensions/groq/index.ts
 var groq_default = definePluginEntry({
 	id: "groq",

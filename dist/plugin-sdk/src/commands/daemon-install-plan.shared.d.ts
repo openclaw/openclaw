@@ -18,3 +18,16 @@ export declare function emitDaemonInstallRuntimeWarning(params: {
     title: string;
 }): Promise<void>;
 export declare function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined;
+export declare function resolveDaemonOpenClawBinDir(params?: {
+    argv?: string[];
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    existsSync?: (path: string) => boolean;
+    realpathSync?: (path: string) => string;
+}): string[] | undefined;
+export declare function resolveDaemonServicePathDirs(params: {
+    nodePath?: string;
+    argv?: string[];
+    env?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+}): string[] | undefined;

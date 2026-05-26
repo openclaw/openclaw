@@ -1,2 +1,2 @@
-import { t as geminiMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-BNp2cZcU.js";
+import { t as geminiMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-VWurseVT.js";
 export { geminiMemoryEmbeddingProviderAdapter };

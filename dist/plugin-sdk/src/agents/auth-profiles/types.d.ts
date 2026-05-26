@@ -13,11 +13,6 @@ export type OAuthCredentials = {
     chatgptPlanType?: string;
     idToken?: string;
 };
-export type OAuthCredentialRef = {
-    source: "openclaw-credentials";
-    provider: "openai-codex";
-    id: string;
-};
 export type ApiKeyCredential = {
     type: "api_key";
     provider: string;
@@ -57,7 +52,6 @@ export type OAuthCredential = OAuthCredentials & {
     copyToAgents?: boolean;
     email?: string;
     displayName?: string;
-    oauthRef?: OAuthCredentialRef;
 };
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
 export type AuthProfileFailureReason = "auth" | "auth_permanent" | "format" | "overloaded" | "rate_limit" | "billing" | "timeout" | "model_not_found" | "session_expired" | "empty_response" | "no_error_details" | "unclassified" | "unknown";

@@ -22,6 +22,7 @@ export declare function splitPromptAndAttachmentRefs(params: {
     prompt: string;
     refs: DetectedImageRef[];
     imageOrder?: PromptImageOrderEntry[];
+    existingImageCount?: number;
 }): {
     promptRefs: DetectedImageRef[];
     attachmentRefs: DetectedImageRef[];

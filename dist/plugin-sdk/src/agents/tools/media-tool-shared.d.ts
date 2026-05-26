@@ -51,6 +51,7 @@ export declare function isCapabilityProviderConfigured<T extends CapabilityProvi
     provider?: T;
     providerId?: string;
     cfg?: OpenClawConfig;
+    workspaceDir?: string;
     agentDir?: string;
     authStore?: AuthProfileStore;
 }): boolean;
@@ -62,6 +63,7 @@ export declare function resolveSelectedCapabilityProvider<T extends CapabilityPr
 }): T | undefined;
 export declare function resolveCapabilityModelConfigForTool(params: {
     cfg?: OpenClawConfig;
+    workspaceDir?: string;
     agentDir?: string;
     authStore?: AuthProfileStore;
     modelConfig?: AgentModelConfig;

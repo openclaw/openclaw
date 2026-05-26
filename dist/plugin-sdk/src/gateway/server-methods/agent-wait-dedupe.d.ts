@@ -1,3 +1,4 @@
+import { type AgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 import type { DedupeEntry } from "../server-shared.js";
 export type AgentWaitTerminalSnapshot = {
     status: "ok" | "error" | "timeout";
@@ -7,6 +8,8 @@ export type AgentWaitTerminalSnapshot = {
     stopReason?: string;
     livenessState?: string;
     yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
 };
 export declare function readTerminalSnapshotFromGatewayDedupe(params: {
     dedupe: Map<string, DedupeEntry>;
@@ -25,7 +28,8 @@ export declare function setGatewayDedupeEntry(params: {
     key: string;
     entry: DedupeEntry;
 }): void;
-export declare const __testing: {
+export declare const testing: {
     getWaiterCount(runId?: string): number;
     resetWaiters(): void;
 };
+export { testing as __testing };

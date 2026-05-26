@@ -1,4 +1,4 @@
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+import type { AgentPromptSurfaceKind, OpenClawPluginCommandDefinition } from "./types.js";
 export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
     pluginId: string;
     pluginName?: string;
@@ -11,5 +11,8 @@ export declare function clearPluginCommands(): void;
 export declare function clearPluginCommandsForPlugin(pluginId: string): void;
 export declare function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean;
 export declare function listRegisteredPluginCommands(): RegisteredPluginCommand[];
-export declare function listRegisteredPluginAgentPromptGuidance(): string[];
+export declare function listRegisteredPluginAgentPromptGuidance(params?: {
+    surface?: AgentPromptSurfaceKind;
+    includeLegacyGlobalGuidance?: boolean;
+}): string[];
 export declare function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void;

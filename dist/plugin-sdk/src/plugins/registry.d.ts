@@ -4,6 +4,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { type OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
+import { type EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { type PluginAgentEventSubscriptionRegistration, type PluginControlUiDescriptor, type PluginRuntimeLifecycleRegistration, type PluginSessionActionRegistration, type PluginSessionSchedulerJobRegistration, type PluginSessionExtensionRegistration, type PluginToolMetadataRegistration, type PluginTrustedToolPolicyRegistration } from "./host-hooks.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration, PluginRecord, PluginRegistryParams, PluginTextTransformsRegistration } from "./registry-types.js";
@@ -43,6 +44,7 @@ export declare function createPluginRegistry(registryParams: PluginRegistryParam
     registerAgentHarness: (record: PluginRecord, harness: AgentHarness) => void;
     registerCliBackend: (record: PluginRecord, backend: CliBackendPlugin) => void;
     registerTextTransforms: (record: PluginRecord, transforms: PluginTextTransformsRegistration["transforms"]) => void;
+    registerEmbeddingProvider: (record: PluginRecord, adapter: EmbeddingProviderAdapter) => void;
     registerSpeechProvider: (record: PluginRecord, provider: SpeechProviderPlugin) => void;
     registerRealtimeTranscriptionProvider: (record: PluginRecord, provider: RealtimeTranscriptionProviderPlugin) => void;
     registerRealtimeVoiceProvider: (record: PluginRecord, provider: RealtimeVoiceProviderPlugin) => void;

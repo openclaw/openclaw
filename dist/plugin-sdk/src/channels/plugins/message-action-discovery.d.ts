@@ -54,7 +54,7 @@ export declare function resolveChannelMessageToolSchemaProperties(params: Channe
 export declare function resolveChannelMessageToolMediaSourceParamKeys(params: ChannelMessageToolMediaSourceParamKeyInput): string[];
 export declare function channelSupportsMessageCapability(cfg: OpenClawConfig, capability: ChannelMessageCapability): boolean;
 export declare function channelSupportsMessageCapabilityForChannel(params: ChannelMessageActionDiscoveryParams, capability: ChannelMessageCapability): boolean;
-export declare const __testing: {
+export declare const testing: {
     resetLoggedMessageActionErrors(): void;
 };
-export {};
+export { testing as __testing };

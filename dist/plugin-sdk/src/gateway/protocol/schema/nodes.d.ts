@@ -27,6 +27,7 @@ export declare const NodePairRequestParamsSchema: Type.TObject<{
     modelIdentifier: Type.TOptional<Type.TString>;
     caps: Type.TOptional<Type.TArray<Type.TString>>;
     commands: Type.TOptional<Type.TArray<Type.TString>>;
+    permissions: Type.TOptional<Type.TRecord<"^.*$", Type.TBoolean>>;
     remoteIp: Type.TOptional<Type.TString>;
     silent: Type.TOptional<Type.TBoolean>;
 }>;

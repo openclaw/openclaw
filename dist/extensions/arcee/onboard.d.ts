@@ -1,2 +1,2 @@
-import { i as applyArceeOpenRouterConfig, n as ARCEE_OPENROUTER_DEFAULT_MODEL_REF, r as applyArceeConfig, t as ARCEE_DEFAULT_MODEL_REF } from "../../onboard-b2oifyB7.js";
+import { i as applyArceeOpenRouterConfig, n as ARCEE_OPENROUTER_DEFAULT_MODEL_REF, r as applyArceeConfig, t as ARCEE_DEFAULT_MODEL_REF } from "../../onboard-K7gOlqwz.js";
 export { ARCEE_DEFAULT_MODEL_REF, ARCEE_OPENROUTER_DEFAULT_MODEL_REF, applyArceeConfig, applyArceeOpenRouterConfig };

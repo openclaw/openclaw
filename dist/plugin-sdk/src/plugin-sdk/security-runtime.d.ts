@@ -13,7 +13,7 @@ export * from "./channel-access-compat.js";
 export { ACCESS_GROUP_ALLOW_FROM_PREFIX, expandAllowFromWithAccessGroups, parseAccessGroupAllowFromEntry, resolveAccessGroupAllowFromMatches, resolveAccessGroupAllowFromState, type AccessGroupMembershipResolver, type AccessGroupMembershipLookup, type ResolvedAccessGroupAllowFromState, } from "./access-groups.js";
 export * from "../security/external-content.js";
 export * from "../security/safe-regex.js";
-export { appendRegularFile, appendRegularFileSync, FsSafeError, FsSafeError as SafeOpenError, openLocalFileSafely, pathExists, pathExistsSync, readRegularFile, resolveLocalPathFromRootsSync, readRegularFileSync, resolveRegularFileAppendFlags, root, statRegularFileSync, writeExternalFileWithinRoot, withTimeout, type ExternalFileWriteOptions, type ExternalFileWriteResult, type FsSafeErrorCode as SafeOpenErrorCode, } from "../infra/fs-safe.js";
+export { appendRegularFile, appendRegularFileSync, FsSafeError, FsSafeError as SafeOpenError, openLocalFileSafely, pathExists, pathExistsSync, readRegularFile, resolveLocalPathFromRootsSync, readRegularFileSync, resolveRegularFileAppendFlags, root, statRegularFile, statRegularFileSync, writeExternalFileWithinRoot, withTimeout, type ExternalFileWriteOptions, type ExternalFileWriteResult, type FsSafeErrorCode as SafeOpenErrorCode, } from "../infra/fs-safe.js";
 export declare function openFileWithinRoot(params: {
     rootDir: string;
     relativePath: string;

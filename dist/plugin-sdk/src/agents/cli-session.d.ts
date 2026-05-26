@@ -12,6 +12,7 @@ export declare function resolveCliSessionReuse(params: {
     authEpoch?: string;
     authEpochVersion: number;
     extraSystemPromptHash?: string;
+    promptToolNamesHash?: string;
     mcpConfigHash?: string;
     mcpResumeHash?: string;
 }): {

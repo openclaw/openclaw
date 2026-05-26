@@ -1,4 +1,4 @@
-import { i as provider_auth_runtime_exports } from "../../provider-auth-runtime-CNBotkGP.js";
+import { a as provider_auth_runtime_exports } from "../../provider-auth-runtime-COV17c31.js";
 import { expect, vi } from "vitest";
 //#region extensions/comfy/test-helpers.ts
 function buildComfyConfig(config) {

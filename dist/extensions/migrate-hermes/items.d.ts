@@ -1,4 +1,4 @@
-import { a as MigrationItem } from "../../types-lCXG2pW_.js";
+import { l as MigrationItem } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/migrate-hermes/items.d.ts
 declare const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
 declare const HERMES_REASON_DEFAULT_MODEL_CONFIGURED = "default model already configured";

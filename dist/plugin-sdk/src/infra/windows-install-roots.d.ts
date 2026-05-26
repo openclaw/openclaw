@@ -20,8 +20,8 @@ declare function getWindowsRegExeCandidates(): readonly string[];
 declare function locateWindowsRegExe(): string | null;
 export declare function getWindowsInstallRoots(env?: Record<string, string | undefined>): WindowsInstallRoots;
 export declare function getWindowsProgramFilesRoots(env?: Record<string, string | undefined>): readonly string[];
-export declare function _resetWindowsInstallRootsForTests(overrides?: WindowsInstallRootsTestOverrides): void;
-export declare const _private: {
+export declare function resetWindowsInstallRootsForTests(overrides?: WindowsInstallRootsTestOverrides): void;
+export declare const privateTestApi: {
     getWindowsRegExeCandidates: typeof getWindowsRegExeCandidates;
     locateWindowsRegExe: typeof locateWindowsRegExe;
 };

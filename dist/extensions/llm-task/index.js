@@ -1,13 +1,13 @@
-import { c as normalizeOptionalString } from "../../string-coerce-LndEvhRk.js";
-import { n as resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir-C5ctwRKD.js";
-import { r as withTempWorkspace } from "../../private-temp-workspace-CS7i2diZ.js";
-import { t as validateJsonSchemaValue } from "../../schema-validator-Cf8K6s7f.js";
-import { b as resolveModelRefFromString, i as buildModelAliasIndex } from "../../model-selection-shared-Dh1KrVmr.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../json-schema-runtime-ChD6ubGI.js";
-import "../../agent-runtime-C0lBBqMR.js";
-import "../../api-tFe0R5q1.js";
+import { c as normalizeOptionalString } from "../../string-coerce-DyL154ka.js";
+import { n as resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir-C60hWKdY.js";
+import { r as withTempWorkspace } from "../../private-temp-workspace-DgditT3G.js";
+import { t as validateJsonSchemaValue } from "../../schema-validator-CoHaB3Uu.js";
+import { i as buildModelAliasIndex, x as resolveModelRefFromString } from "../../model-selection-shared-ClxdEp4X.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import "../../json-schema-runtime-CiJf509Z.js";
+import "../../agent-runtime-Lc7H-PlR.js";
+import { t as defineToolPlugin } from "../../tool-plugin-ZQFurxQq.js";
+import "../../api-DsM59Pht.js";
 import path from "node:path";
 import { Type } from "typebox";
 //#region extensions/llm-task/src/llm-task-tool.ts
@@ -56,6 +56,23 @@ function resolveLlmTaskModelRef(params) {
 	};
 	return resolved.ref;
 }
+const llmTaskToolDefinition = {
+	name: "llm-task",
+	label: "LLM Task",
+	description: "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
+	parameters: Type.Object({
+		prompt: Type.String({ description: "Task instruction for the LLM." }),
+		input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
+		schema: Type.Optional(Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." })),
+		provider: Type.Optional(Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." })),
+		model: Type.Optional(Type.String({ description: "Model id override." })),
+		thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
+		authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
+		temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
+		maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
+		timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." }))
+	})
+};
 function formatThinkingPolicy(policy) {
 	return policy.levels.map((level) => level.label).join(", ");
 }
@@ -64,21 +81,7 @@ function supportsThinkingPolicyLevel(policy, level) {
 }
 function createLlmTaskTool(api) {
 	return {
-		name: "llm-task",
-		label: "LLM Task",
-		description: "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
-		parameters: Type.Object({
-			prompt: Type.String({ description: "Task instruction for the LLM." }),
-			input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),
-			schema: Type.Optional(Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." })),
-			provider: Type.Optional(Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." })),
-			model: Type.Optional(Type.String({ description: "Model id override." })),
-			thinking: Type.Optional(Type.String({ description: "Thinking level override." })),
-			authProfileId: Type.Optional(Type.String({ description: "Auth profile override." })),
-			temperature: Type.Optional(Type.Number({ description: "Best-effort temperature override." })),
-			maxTokens: Type.Optional(Type.Number({ description: "Best-effort maxTokens override." })),
-			timeoutMs: Type.Optional(Type.Number({ description: "Timeout for the LLM run." }))
-		}),
+		...llmTaskToolDefinition,
 		async execute(_id, params) {
 			const prompt = typeof params.prompt === "string" ? params.prompt : "";
 			if (!prompt.trim()) throw new Error("prompt required");
@@ -190,13 +193,23 @@ function createLlmTaskTool(api) {
 }
 //#endregion
 //#region extensions/llm-task/index.ts
-var llm_task_default = definePluginEntry({
+var llm_task_default = defineToolPlugin({
 	id: "llm-task",
 	name: "LLM Task",
-	description: "Optional tool for structured subtask execution",
-	register(api) {
-		api.registerTool(createLlmTaskTool(api), { optional: true });
-	}
+	description: "Generic JSON-only LLM tool for structured tasks callable from workflows.",
+	configSchema: Type.Object({
+		defaultProvider: Type.Optional(Type.String()),
+		defaultModel: Type.Optional(Type.String()),
+		defaultAuthProfileId: Type.Optional(Type.String()),
+		allowedModels: Type.Optional(Type.Array(Type.String(), { description: "Allowlist of provider/model keys like openai-codex/gpt-5.2." })),
+		maxTokens: Type.Optional(Type.Number()),
+		timeoutMs: Type.Optional(Type.Number())
+	}, { additionalProperties: false }),
+	tools: (tool) => [tool({
+		...llmTaskToolDefinition,
+		optional: true,
+		factory: ({ api }) => createLlmTaskTool(api)
+	})]
 });
 //#endregion
 export { llm_task_default as default };

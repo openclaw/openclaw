@@ -1,16 +1,16 @@
-import { i as PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "../../provider-model-shared-D-slKnZa.js";
-import { i as isProxyReasoningUnsupported, n as createOpenRouterSystemCacheWrapper, r as createOpenRouterWrapper } from "../../proxy-stream-wrappers-CIFovY1X.js";
-import { a as readConfiguredProviderCatalogEntries } from "../../provider-catalog-shared-4kkagm5f.js";
-import { t as defineSingleProviderPluginEntry } from "../../provider-entry-CDwzUX_P.js";
-import "../../provider-stream-Cx3vdp_v.js";
-import { r as DEEPINFRA_DEFAULT_MODEL_REF } from "../../provider-models-CgkEaU1x.js";
-import { t as buildDeepInfraImageGenerationProvider } from "../../image-generation-provider-SdF1kyMG.js";
-import { t as deepinfraMediaUnderstandingProvider } from "../../media-understanding-provider-CUOpfh5b.js";
-import { t as deepinfraMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-CFAmpsnp.js";
-import { t as applyDeepInfraConfig } from "../../onboard-DsRwrgkE.js";
-import { n as buildStaticDeepInfraProvider, t as buildDeepInfraProvider } from "../../provider-catalog-lMFYC8pK.js";
-import { t as buildDeepInfraSpeechProvider } from "../../speech-provider-jf5PN_iE.js";
-import { t as buildDeepInfraVideoGenerationProvider } from "../../video-generation-provider-CP8BBzhE.js";
+import { i as isProxyReasoningUnsupported, n as createOpenRouterSystemCacheWrapper, r as createOpenRouterWrapper } from "../../proxy-stream-wrappers-B-pawBvX.js";
+import { i as PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "../../provider-model-shared-DtsPmvDx.js";
+import { a as readConfiguredProviderCatalogEntries } from "../../provider-catalog-shared-BLp5nwNN.js";
+import { t as defineSingleProviderPluginEntry } from "../../provider-entry-DYbqN6AQ.js";
+import "../../provider-stream-B32dNOmb.js";
+import { r as DEEPINFRA_DEFAULT_MODEL_REF } from "../../provider-models-wxUkQkYA.js";
+import { t as buildDeepInfraImageGenerationProvider } from "../../image-generation-provider-BoUYT2BT.js";
+import { t as deepinfraMediaUnderstandingProvider } from "../../media-understanding-provider-C1TOpU4F.js";
+import { t as deepinfraMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-Bkwnvqe_.js";
+import { t as applyDeepInfraConfig } from "../../onboard-D1GPWxrm.js";
+import { n as buildStaticDeepInfraProvider, t as buildDeepInfraProvider } from "../../provider-catalog-B7aWjOKh.js";
+import { t as buildDeepInfraSpeechProvider } from "../../speech-provider-D13Xmst8.js";
+import { t as buildDeepInfraVideoGenerationProvider } from "../../video-generation-provider-kg6_md7H.js";
 //#region extensions/deepinfra/index.ts
 const PROVIDER_ID = "deepinfra";
 var deepinfra_default = defineSingleProviderPluginEntry({

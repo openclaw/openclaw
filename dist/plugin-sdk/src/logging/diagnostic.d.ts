@@ -58,6 +58,30 @@ export declare function logMessageQueued(params: {
     channel?: string;
     source: string;
 }): void;
+export declare function logMessageReceived(params: {
+    sessionId?: string;
+    sessionKey?: string;
+    channel?: string;
+    messageId?: number | string;
+    chatId?: number | string;
+    source: string;
+}): void;
+export declare function logMessageDispatchStarted(params: {
+    sessionId?: string;
+    sessionKey?: string;
+    channel?: string;
+    source: string;
+}): void;
+export declare function logMessageDispatchCompleted(params: {
+    sessionId?: string;
+    sessionKey?: string;
+    channel?: string;
+    source: string;
+    durationMs: number;
+    outcome: "completed" | "skipped" | "error";
+    reason?: string;
+    error?: string;
+}): void;
 export declare function logMessageProcessed(params: {
     channel: string;
     messageId?: number | string;
@@ -68,6 +92,14 @@ export declare function logMessageProcessed(params: {
     outcome: "completed" | "skipped" | "error";
     reason?: string;
     error?: string;
+}): void;
+export declare function logSessionTurnCreated(params: {
+    runId: string;
+    sessionId?: string;
+    sessionKey?: string;
+    agentId?: string;
+    channel?: string;
+    trigger: "user" | "heartbeat";
 }): void;
 export declare function logSessionStateChange(params: SessionRef & {
     state: SessionStateValue;

@@ -1,2 +1,2 @@
-import { t as buildOpenAIImageGenerationProvider } from "../../image-generation-provider-B27rK5IY.js";
+import { t as buildOpenAIImageGenerationProvider } from "../../image-generation-provider-DyUnxpyv.js";
 export { buildOpenAIImageGenerationProvider };

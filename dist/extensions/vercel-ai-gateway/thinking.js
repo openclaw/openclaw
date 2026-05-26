@@ -1,2 +1,2 @@
-import { t as resolveVercelAiGatewayThinkingProfile } from "../../thinking-g5SXuPio.js";
+import { t as resolveVercelAiGatewayThinkingProfile } from "../../thinking-vSDdP6G_.js";
 export { resolveVercelAiGatewayThinkingProfile };

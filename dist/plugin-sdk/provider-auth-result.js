@@ -1,2 +1,2 @@
-import { t as buildOauthProviderAuthResult } from "../provider-auth-result-Bwa-OosX.js";
+import { t as buildOauthProviderAuthResult } from "../provider-auth-result-qR7142tf.js";
 export { buildOauthProviderAuthResult };

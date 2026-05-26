@@ -11,7 +11,10 @@ export declare const ensureFlagCompatibility: (opts: {
 export declare const formatTokenK: (value?: number | null) => string;
 export declare const formatMs: (value?: number | null) => string;
 export declare function loadValidConfigOrThrow(): Promise<OpenClawConfig>;
-export declare function updateConfig(mutator: (cfg: OpenClawConfig) => OpenClawConfig): Promise<OpenClawConfig>;
+export type UpdateConfigContext = {
+    runtimeConfig: OpenClawConfig;
+};
+export declare function updateConfig(mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig): Promise<OpenClawConfig>;
 export declare function resolveModelTarget(params: {
     raw: string;
     cfg: OpenClawConfig;
@@ -42,6 +45,7 @@ export declare function mergePrimaryFallbackConfig(existing: PrimaryFallbackConf
 }): PrimaryFallbackConfig;
 export declare function applyDefaultModelPrimaryUpdate(params: {
     cfg: OpenClawConfig;
+    resolveCfg?: OpenClawConfig;
     modelRaw: string;
     field: "model" | "imageModel";
 }): OpenClawConfig;

@@ -1,2 +1,2 @@
-import { n as applyFireworksConfig, t as FIREWORKS_DEFAULT_MODEL_REF } from "../../onboard-BHyhLk8f.js";
+import { n as applyFireworksConfig, t as FIREWORKS_DEFAULT_MODEL_REF } from "../../onboard-CvtqbvNe.js";
 export { FIREWORKS_DEFAULT_MODEL_REF, applyFireworksConfig };

@@ -15,6 +15,7 @@ export declare function mergeFactoryPolicyList(...lists: Array<string[] | undefi
 export declare function resolveImageToolFactoryAvailable(params: {
     config?: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     modelHasVision?: boolean;
     authStore?: AuthProfileStore;
 }): boolean;

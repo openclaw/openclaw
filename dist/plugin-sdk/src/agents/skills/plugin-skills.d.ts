@@ -19,10 +19,10 @@ declare function resolvePluginSkillLinkType(platform?: NodeJS.Platform): PluginS
 declare function publishPluginSkills(skillDirs: string[], opts?: {
     pluginSkillsDir?: string;
 }): void;
-declare function isGeneratedPluginSkillEntry(entry: fs.Dirent): boolean;
-export declare const __testing: {
+declare function isGeneratedPluginSkillEntry(entry: Pick<fs.Dirent, "isDirectory" | "isSymbolicLink">): boolean;
+export declare const testing: {
     isGeneratedPluginSkillEntry: typeof isGeneratedPluginSkillEntry;
     publishPluginSkills: typeof publishPluginSkills;
     resolvePluginSkillLinkType: typeof resolvePluginSkillLinkType;
 };
-export {};
+export { testing as __testing };

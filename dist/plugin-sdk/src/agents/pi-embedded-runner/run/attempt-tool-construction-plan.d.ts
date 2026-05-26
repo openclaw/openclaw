@@ -6,10 +6,14 @@ export declare function applyEmbeddedAttemptToolsAllow<T extends {
         pluginId: string;
     } | undefined;
 }): T[];
+export declare function mergeForcedEmbeddedAttemptToolsAllow(toolsAllow: string[] | undefined, params: {
+    forceMessageTool?: boolean;
+}): string[] | undefined;
 export declare function resolveEmbeddedAttemptToolConstructionPlan(params: {
     disableTools?: boolean;
     isRawModelRun?: boolean;
     toolsAllow?: string[];
+    forceMessageTool?: boolean;
 }): {
     constructTools: boolean;
     includeCoreTools: boolean;

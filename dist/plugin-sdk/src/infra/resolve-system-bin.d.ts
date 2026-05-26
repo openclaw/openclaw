@@ -21,7 +21,7 @@ export declare function resolveSystemBin(name: string, opts?: {
     extraDirs?: readonly string[];
 }): string | null;
 /** Visible for tests: the computed trusted directories. */
-export declare function _getTrustedDirs(trust?: SystemBinTrust): readonly string[];
+export declare function getTrustedDirsForTest(trust?: SystemBinTrust): readonly string[];
 /** Reset cache and optionally override the executable-check function (for tests). */
-export declare function _resetResolveSystemBin(overrideIsExecutable?: (p: string) => boolean): void;
+export declare function resetResolveSystemBin(overrideIsExecutable?: (p: string) => boolean): void;
 export {};

@@ -4,6 +4,7 @@ export type MarkdownStyleSpan = {
     start: number;
     end: number;
     style: MarkdownStyle;
+    language?: string;
 };
 export type MarkdownLinkSpan = {
     start: number;

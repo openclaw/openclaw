@@ -15,6 +15,10 @@ export declare function emitDiagnosticMemorySample(options?: {
     uptimeMs?: number;
     thresholds?: DiagnosticMemoryThresholds;
     emitSample?: boolean;
+    writeCriticalBundle?: boolean;
+    stateDir?: string;
+    sessionStorePaths?: string[];
+    resolveSessionStorePaths?: () => string[] | undefined;
 }): DiagnosticMemoryUsage;
 export declare function resetDiagnosticMemoryForTest(): void;
 export {};

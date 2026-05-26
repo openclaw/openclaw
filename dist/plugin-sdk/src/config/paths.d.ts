@@ -17,6 +17,7 @@ export declare function resolveNewStateDir(homedir?: () => string): string;
  * Default: ~/.openclaw
  */
 export declare function resolveStateDir(env?: NodeJS.ProcessEnv, homedir?: () => string): string;
+export declare function normalizeStateDirEnv(env?: NodeJS.ProcessEnv): void;
 /**
  * Optional allowlist of directories that `$include` directives may resolve
  * outside the config directory. Set via `OPENCLAW_INCLUDE_ROOTS` as a

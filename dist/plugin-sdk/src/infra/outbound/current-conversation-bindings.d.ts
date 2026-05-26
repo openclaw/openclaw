@@ -9,11 +9,11 @@ export declare function resolveGenericCurrentConversationBinding(ref: Conversati
 export declare function listGenericCurrentConversationBindingsBySession(targetSessionKey: string): SessionBindingRecord[];
 export declare function touchGenericCurrentConversationBinding(bindingId: string, at?: number): void;
 export declare function unbindGenericCurrentConversationBindings(input: SessionBindingUnbindInput): Promise<SessionBindingRecord[]>;
-export declare const __testing: {
+export declare const testing: {
     resetCurrentConversationBindingsForTests(params?: {
         deletePersistedFile?: boolean;
         env?: NodeJS.ProcessEnv;
     }): void;
     resolveBindingsFilePath: typeof resolveBindingsFilePath;
 };
-export {};
+export { testing as __testing };

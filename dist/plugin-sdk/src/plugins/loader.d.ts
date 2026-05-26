@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { type PluginActivationConfigSource } from "./config-state.js";
+import { type PluginDiscoveryResult } from "./discovery.js";
 import { toSafeImportPath } from "./import-specifier.js";
 import { shouldLoadChannelPluginInSetupRuntime } from "./loader-channel-setup.js";
 import { type PluginManifestRegistry } from "./manifest-registry.js";
@@ -18,12 +19,16 @@ export type PluginLoadOptions = {
     activationSourceConfig?: OpenClawConfig;
     autoEnabledReasons?: Readonly<Record<string, string[]>>;
     workspaceDir?: string;
+    installRecords?: Record<string, PluginInstallRecord>;
     env?: NodeJS.ProcessEnv;
     logger?: PluginLogger;
     coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
     coreGatewayMethodNames?: readonly string[];
     hostServices?: PluginRegistryParams["hostServices"];
     runtimeOptions?: CreatePluginRuntimeOptions;
+    startupTrace?: {
+        detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+    };
     pluginSdkResolution?: PluginSdkResolutionPreference;
     cache?: boolean;
     mode?: "full" | "validate";
@@ -46,6 +51,7 @@ export type PluginLoadOptions = {
     loadModules?: boolean;
     throwOnLoadError?: boolean;
     manifestRegistry?: PluginManifestRegistry;
+    discovery?: PluginDiscoveryResult;
 };
 export declare class PluginLoadFailureError extends Error {
     readonly pluginIds: string[];
@@ -60,7 +66,7 @@ declare function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
     close: () => void;
 };
 declare function runPluginRegisterSync(register: NonNullable<OpenClawPluginDefinition["register"]>, api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0]): void;
-export declare const __testing: {
+export declare const testing: {
     buildPluginLoaderJitiOptions: typeof buildPluginLoaderJitiOptions;
     buildPluginLoaderAliasMap: typeof buildPluginLoaderAliasMap;
     listPluginSdkAliasCandidates: typeof listPluginSdkAliasCandidates;
@@ -110,3 +116,4 @@ export declare function isPluginRegistryLoadInFlight(options?: PluginLoadOptions
 export declare function resolveCompatibleRuntimePluginRegistry(options?: PluginLoadOptions): PluginRegistry | undefined;
 export declare function loadOpenClawPlugins(options?: PluginLoadOptions): PluginRegistry;
 export declare function loadOpenClawPluginCliRegistry(options?: PluginLoadOptions): Promise<PluginRegistry>;
+export { testing as __testing };

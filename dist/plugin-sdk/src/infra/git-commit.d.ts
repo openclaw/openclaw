@@ -9,6 +9,7 @@ export declare const resolveCommitHash: (options?: {
     moduleUrl?: string;
     readers?: CommitMetadataReaders;
 }) => string | null;
-export declare const __testing: {
+export declare const testing: {
     clearCachedGitCommits: () => void;
 };
+export { testing as __testing };

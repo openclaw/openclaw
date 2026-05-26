@@ -27,6 +27,13 @@ export type NodeEventContext = {
         includeSensitive?: boolean;
     }) => Promise<HealthSummary>;
     loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+    authorizeNodeSystemRunEvent: (params: {
+        nodeId: string;
+        connId?: string;
+        runId?: string;
+        sessionKey: string;
+        terminal: boolean;
+    }) => boolean;
     logGateway: {
         warn: (msg: string) => void;
     };

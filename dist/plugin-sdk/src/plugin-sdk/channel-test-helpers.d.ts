@@ -4,7 +4,7 @@ export { expectChannelPluginContract, installChannelActionsContractSuite, instal
 export { addTestHook, createEmptyPluginRegistry, createOutboundTestPlugin, createTestRegistry, initializeGlobalHookRunner, releasePinnedPluginChannelRegistry, resetGlobalHookRunner, setActivePluginRegistry, type PluginHookRegistration, } from "./test-helpers/outbound-delivery.js";
 /** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
 export { deliverOutboundPayloads } from "./test-helpers/outbound-delivery.js";
-export { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
+export { createPluginRuntimeMediaMock, createPluginRuntimeMock, type PluginRuntimeMediaMock, } from "./test-helpers/plugin-runtime-mock.js";
 export { createSendCfgThreadingRuntime, expectProvidedCfgSkipsRuntimeLoad, expectRuntimeCfgFallback, } from "./test-helpers/send-config.js";
 export { createStartAccountContext } from "./test-helpers/start-account-context.js";
 export { abortStartedAccount, expectLifecyclePatch, expectPendingUntilAbort, expectStopPendingUntilAbort, startAccountAndTrackLifecycle, waitForStartedMocks, } from "./test-helpers/start-account-lifecycle.js";

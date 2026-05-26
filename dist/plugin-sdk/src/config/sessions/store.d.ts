@@ -6,7 +6,8 @@ import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries, t
 import { type SessionEntry } from "./types.js";
 export { clearSessionStoreCacheForTest, drainSessionStoreWriterQueuesForTest, getSessionStoreWriterQueueSizeForTest, } from "./store-writer-state.js";
 export { withSessionStoreWriterForTest } from "./store-writer.js";
-export { loadSessionStore } from "./store-load.js";
+export { loadSessionStore, readSessionEntries, readSessionEntry, readSessionStoreSnapshot, } from "./store-load.js";
+export type { SessionStoreSnapshot, SessionStoreSnapshotEntries, SessionStoreSnapshotEntry, } from "./store-cache.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 export declare function readSessionUpdatedAt(params: {
     storePath: string;
@@ -42,6 +43,18 @@ type SaveSessionStoreOptions = {
     /** Fully resolved maintenance settings when the caller already has config loaded. */
     maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
+type SessionEntryWorkflowOptions = {
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+    storePath?: string;
+};
+export declare function getSessionEntry(options: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+}): SessionEntry | undefined;
+export declare function listSessionEntries(options?: SessionEntryWorkflowOptions): Array<{
+    sessionKey: string;
+    entry: SessionEntry;
+}>;
 export declare function saveSessionStore(storePath: string, store: Record<string, SessionEntry>, opts?: SaveSessionStoreOptions): Promise<void>;
 export declare function updateSessionStore<T>(storePath: string, mutator: (store: Record<string, SessionEntry>) => Promise<T> | T, opts?: SaveSessionStoreOptions): Promise<T>;
 export declare function runQuotaSuspensionMaintenance(params: {
@@ -62,6 +75,18 @@ export declare function updateSessionStoreEntry(params: {
     sessionKey: string;
     update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null>;
+export declare function patchSessionEntry(params: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+    fallbackEntry?: SessionEntry;
+    preserveActivity?: boolean;
+    replaceEntry?: boolean;
+    update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+}): Promise<SessionEntry | null>;
+export declare function upsertSessionEntry(params: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+    entry: SessionEntry;
+    allowDropAcpMeta?: boolean;
+}): Promise<void>;
 export declare function recordSessionMetaFromInbound(params: {
     storePath: string;
     sessionKey: string;
@@ -76,6 +101,7 @@ export declare function updateLastRoute(params: {
     to?: string;
     accountId?: string;
     threadId?: string | number;
+    route?: SessionEntry["route"];
     deliveryContext?: DeliveryContext;
     ctx?: MsgContext;
     groupResolution?: import("./types.js").GroupKeyResolution | null;

@@ -45,10 +45,12 @@ export declare function authorizeScopedGatewayHttpRequestOrReply(params: {
 }): Promise<{
     cfg: OpenClawConfig;
     requestAuth: AuthorizedGatewayHttpRequest;
+    operatorScopes: string[];
 } | null>;
 export declare function isGatewayBearerHttpRequest(req: IncomingMessage, auth?: SharedSecretGatewayAuth): boolean;
 export declare function resolveTrustedHttpOperatorScopes(req: IncomingMessage, authOrRequest?: SharedSecretGatewayAuth | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">): string[];
 export declare function resolveOpenAiCompatibleHttpOperatorScopes(req: IncomingMessage, requestAuth: AuthorizedGatewayHttpRequest): string[];
+export declare function resolveSharedSecretHttpOperatorScopes(req: IncomingMessage, requestAuth: AuthorizedGatewayHttpRequest): string[];
 export declare function resolveHttpSenderIsOwner(req: IncomingMessage, authOrRequest?: SharedSecretGatewayAuth | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">): boolean;
 export declare function resolveOpenAiCompatibleHttpSenderIsOwner(req: IncomingMessage, requestAuth: AuthorizedGatewayHttpRequest): boolean;
 export {};

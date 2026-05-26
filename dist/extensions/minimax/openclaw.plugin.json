@@ -29,6 +29,10 @@
       "MINIMAX_API_KEY"
     ]
   },
+  "providerAuthAliases": {
+    "minimax-cn": "minimax",
+    "minimax-portal-cn": "minimax-portal"
+  },
   "providerAuthChoices": [
     {
       "provider": "minimax-portal",

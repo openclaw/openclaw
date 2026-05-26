@@ -30,6 +30,7 @@ export declare function createOpenAITextVerbosityWrapper(baseStreamFn: StreamFn 
 export declare function createCodexNativeWebSearchWrapper(baseStreamFn: StreamFn | undefined, params: {
     config?: OpenClawConfig;
     agentDir?: string;
+    codeModeToolSurfaceEnabled?: boolean;
 }): StreamFn;
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export declare function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn;

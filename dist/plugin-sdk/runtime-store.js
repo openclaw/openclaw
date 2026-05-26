@@ -1,2 +1,2 @@
-import { t as createPluginRuntimeStore } from "../runtime-store-Cigg_Veg.js";
+import { t as createPluginRuntimeStore } from "../runtime-store-Cezm5nT2.js";
 export { createPluginRuntimeStore };

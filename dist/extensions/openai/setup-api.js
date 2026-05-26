@@ -1,6 +1,5 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { t as buildOpenAICodexCliBackend } from "../../cli-backend-D4q7sZcK.js";
-import { a as OPENAI_CHATGPT_DEVICE_PAIRING_LABEL, c as OPENAI_CODEX_API_KEY_BACKUP_HINT, d as OPENAI_CODEX_DEVICE_PAIRING_LABEL, f as OPENAI_CODEX_LOGIN_HINT, i as OPENAI_CHATGPT_DEVICE_PAIRING_HINT, l as OPENAI_CODEX_API_KEY_BACKUP_LABEL, m as OPENAI_CODEX_WIZARD_GROUP, n as OPENAI_API_KEY_LABEL, o as OPENAI_CHATGPT_LOGIN_HINT, p as OPENAI_CODEX_LOGIN_LABEL, s as OPENAI_CHATGPT_LOGIN_LABEL, t as OPENAI_ACCOUNT_WIZARD_GROUP, u as OPENAI_CODEX_DEVICE_PAIRING_HINT } from "../../auth-choice-copy-C74Tw01v.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { a as OPENAI_CHATGPT_DEVICE_PAIRING_LABEL, c as OPENAI_CODEX_API_KEY_BACKUP_HINT, d as OPENAI_CODEX_DEVICE_PAIRING_LABEL, f as OPENAI_CODEX_LOGIN_HINT, i as OPENAI_CHATGPT_DEVICE_PAIRING_HINT, l as OPENAI_CODEX_API_KEY_BACKUP_LABEL, m as OPENAI_CODEX_WIZARD_GROUP, n as OPENAI_API_KEY_LABEL, o as OPENAI_CHATGPT_LOGIN_HINT, p as OPENAI_CODEX_LOGIN_LABEL, s as OPENAI_CHATGPT_LOGIN_LABEL, t as OPENAI_ACCOUNT_WIZARD_GROUP, u as OPENAI_CODEX_DEVICE_PAIRING_HINT } from "../../auth-choice-copy-CI2uePXw.js";
 //#region extensions/openai/setup-api.ts
 async function runOpenAIProviderAuthMethod(methodId, ctx) {
 	const { buildOpenAIProvider } = await import("./openai-provider.js");
@@ -31,6 +30,7 @@ function buildOpenAISetupProvider() {
 					choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
 					choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
 					assistantPriority: -40,
+					assistantVisibility: "manual-only",
 					...OPENAI_ACCOUNT_WIZARD_GROUP
 				},
 				run: async (ctx) => runOpenAICodexProviderAuthMethod("oauth", ctx)
@@ -45,6 +45,7 @@ function buildOpenAISetupProvider() {
 					choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
 					choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
 					assistantPriority: -10,
+					assistantVisibility: "manual-only",
 					...OPENAI_ACCOUNT_WIZARD_GROUP
 				},
 				run: async (ctx) => runOpenAICodexProviderAuthMethod("device-code", ctx)
@@ -82,6 +83,7 @@ function buildOpenAICodexSetupProvider() {
 					choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
 					choiceHint: OPENAI_CODEX_LOGIN_HINT,
 					assistantPriority: -30,
+					onboardingFeatured: true,
 					...OPENAI_CODEX_WIZARD_GROUP
 				},
 				run: async (ctx) => runOpenAICodexProviderAuthMethod("oauth", ctx)
@@ -110,6 +112,7 @@ function buildOpenAICodexSetupProvider() {
 					choiceLabel: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
 					choiceHint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
 					assistantPriority: 5,
+					assistantVisibility: "manual-only",
 					...OPENAI_CODEX_WIZARD_GROUP
 				},
 				run: async (ctx) => runOpenAICodexProviderAuthMethod("api-key", ctx)
@@ -124,7 +127,6 @@ var setup_api_default = definePluginEntry({
 	register(api) {
 		api.registerProvider(buildOpenAISetupProvider());
 		api.registerProvider(buildOpenAICodexSetupProvider());
-		api.registerCliBackend(buildOpenAICodexCliBackend());
 	}
 });
 //#endregion

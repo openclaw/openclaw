@@ -29,6 +29,16 @@ export declare function resolveStatusGatewayHealthSafe(params: {
 }): Promise<HealthSummary | {
     error: string;
 }>;
+export declare function resolveStatusGatewayDiagnosticsSafe(params: {
+    config: OpenClawConfig;
+    timeoutMs?: number;
+    gatewayReachable: boolean;
+    callOverrides?: {
+        url: string;
+        token?: string;
+        password?: string;
+    };
+}): Promise<unknown>;
 export declare function resolveStatusLastHeartbeat(params: {
     config: OpenClawConfig;
     timeoutMs?: number;

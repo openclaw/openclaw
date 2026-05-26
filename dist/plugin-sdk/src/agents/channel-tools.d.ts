@@ -13,7 +13,6 @@ type ChannelMessageActionDiscoveryParams = {
     sessionId?: string | null;
     agentId?: string | null;
     requesterSenderId?: string | null;
-    senderIsOwner?: boolean;
 };
 export declare function getChannelAgentToolMeta(tool: ChannelAgentTool): ChannelAgentToolMeta | undefined;
 export declare function copyChannelAgentToolMeta(source: ChannelAgentTool, target: ChannelAgentTool): void;
@@ -49,7 +48,7 @@ export declare function resolveChannelReactionGuidance(params: {
     level: "minimal" | "extensive";
     channel: string;
 } | undefined;
-export declare const __testing: {
+export declare const testing: {
     resetLoggedListActionErrors(): void;
 };
-export {};
+export { testing as __testing };

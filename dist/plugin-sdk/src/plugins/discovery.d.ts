@@ -1,6 +1,6 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
-import { type PluginManifest, type OpenClawPackageManifest } from "./manifest.js";
+import { type PluginManifest, type OpenClawPackageManifest, type PackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { type PluginDependencySpecMap } from "./status-dependencies.js";
 export type PluginCandidate = {
@@ -21,6 +21,7 @@ export type PluginCandidate = {
     packageOptionalDependencies?: PluginDependencySpecMap;
     bundledManifest?: PluginManifest;
     bundledManifestPath?: string;
+    rawPackageManifest?: PackageManifest;
 };
 export type PluginDiscoveryResult = {
     candidates: PluginCandidate[];

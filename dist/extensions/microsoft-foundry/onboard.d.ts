@@ -1,6 +1,6 @@
-import { yt as ProviderAuthContext } from "../../types-lCXG2pW_.js";
-import { d as FoundrySelection, i as AzDeploymentSummary, l as FoundryProviderApi, n as AzAccount, u as FoundryResourceOption } from "../../shared-CCYmSZ1p.js";
-import { c as listSubscriptions } from "../../cli-CoY4Igv-.js";
+import { wt as ProviderAuthContext } from "../../types-Vx7Jq4_-2.js";
+import { d as FoundrySelection, i as AzDeploymentSummary, l as FoundryProviderApi, n as AzAccount, u as FoundryResourceOption } from "../../shared-FgR3yAtS.js";
+import { c as listSubscriptions } from "../../cli-CPHayYhI.js";
 
 //#region extensions/microsoft-foundry/onboard.d.ts
 declare function listResourceDeployments(resource: FoundryResourceOption, subscriptionId?: string): AzDeploymentSummary[];

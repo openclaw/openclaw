@@ -1,11 +1,11 @@
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { m as ensureModelAllowlistEntry } from "../../provider-onboard-DhuPxzG7.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { n as buildDoubaoProvider, t as buildDoubaoCodingProvider } from "../../provider-catalog-DX3b7tze.js";
-import { i as DOUBAO_MODEL_CATALOG, r as DOUBAO_CODING_MODEL_CATALOG } from "../../models-DwYKKoVM.js";
-import { n as applyVolcengineToolSchemaCompat } from "../../api-DXPlJ40U.js";
-import { t as buildVolcengineSpeechProvider } from "../../speech-provider-CnslInTE.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import { m as ensureModelAllowlistEntry } from "../../provider-onboard-MLXAQX8H.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { n as buildDoubaoProvider, t as buildDoubaoCodingProvider } from "../../provider-catalog-wn341Uo6.js";
+import { i as DOUBAO_MODEL_CATALOG, r as DOUBAO_CODING_MODEL_CATALOG } from "../../models-DafvOE9o.js";
+import { n as applyVolcengineToolSchemaCompat } from "../../api-CuOxlP51.js";
+import { t as buildVolcengineSpeechProvider } from "../../speech-provider-Cd_jJU48.js";
 //#region extensions/volcengine/index.ts
 const PROVIDER_ID = "volcengine";
 const VOLCENGINE_DEFAULT_MODEL_REF = "volcengine-plan/ark-code-latest";

@@ -1,4 +1,5 @@
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
@@ -11,7 +12,9 @@ import { assertRequiredParams, getToolParamsRecord, wrapToolParamValidation } fr
 import { cleanToolSchemaForGemini } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import { type ToolSearchCatalogRef, type ToolSearchCatalogToolExecutor } from "./tool-search.js";
+import type { MediaGenerateAsyncStartCallback } from "./tools/media-generate-background-shared.js";
 export declare function resolveProcessToolScopeKey(params: {
     scopeKey?: string;
     sessionKey?: string;
@@ -23,12 +26,14 @@ declare function applyModelProviderToolPolicy(tools: AnyAgentTool[], params?: {
     modelProvider?: string;
     modelApi?: string;
     modelId?: string;
+    agentId?: string;
+    sessionKey?: string;
     agentDir?: string;
     modelCompat?: ModelCompatConfig;
     suppressManagedWebSearch?: boolean;
 }): AnyAgentTool[];
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
-export declare const __testing: {
+export declare const testing: {
     readonly cleanToolSchemaForGemini: typeof cleanToolSchemaForGemini;
     readonly getToolParamsRecord: typeof getToolParamsRecord;
     readonly wrapToolParamValidation: typeof wrapToolParamValidation;
@@ -80,6 +85,8 @@ export declare function createOpenClawCodingTools(options?: {
     spawnWorkspaceDir?: string;
     config?: OpenClawConfig;
     abortSignal?: AbortSignal;
+    /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
+    emitBeforeToolCallDiagnostics?: boolean;
     /**
      * Provider of the currently selected model (used for provider-specific tool quirks).
      * Example: "anthropic", "openai", "google", "openai-codex".
@@ -102,6 +109,8 @@ export declare function createOpenClawCodingTools(options?: {
     modelAuthMode?: ModelAuthMode;
     /** Current channel ID for auto-threading (Slack). */
     currentChannelId?: string;
+    /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
+    hookChannelId?: string;
     /** Current thread timestamp for auto-threading (Slack). */
     currentThreadTs?: string;
     /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -136,6 +145,7 @@ export declare function createOpenClawCodingTools(options?: {
     requireExplicitMessageTarget?: boolean;
     /** Visible source replies must be sent through the message tool when set to message_tool_only. */
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    inboundEventKind?: InboundEventKind;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** Keep the message tool available even when the selected profile omits it. */
@@ -154,19 +164,19 @@ export declare function createOpenClawCodingTools(options?: {
     toolSearchCatalogRef?: ToolSearchCatalogRef;
     /** Limits which tool families are materialized before the shared policy pipeline runs. */
     toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
-    /** Whether the sender is an owner (required for owner-only tools). */
+    /** Trusted sender identity bit for command/channel-action auth; does not filter model tools. */
     senderIsOwner?: boolean;
-    /**
-     * Additional owner-only tools authorized by a server-side runtime grant.
-     * Keep this narrowly scoped; it is not a replacement for sender ownership.
-     */
-    ownerOnlyToolAllowlist?: string[];
     /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
     authProfileStore?: AuthProfileStore;
     /** Callback invoked when sessions_yield tool is called. */
     onYield?: (message: string) => Promise<void> | void;
+    /** Callback invoked when a media tool starts async background work. */
+    onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
     /** Optional instrumentation callback for tool preparation stage timing. */
     recordToolPrepStage?: (name: string) => void;
     /** Live observer called after wrapped tool outcomes are recorded. */
     onToolOutcome?: ToolOutcomeObserver;
+    /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
+    skillsSnapshot?: SkillSnapshot;
 }): AnyAgentTool[];
+export { testing as __testing };

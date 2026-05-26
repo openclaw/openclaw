@@ -4,6 +4,7 @@ export type BundledPluginContractSnapshot = {
     cliBackendIds: string[];
     providerIds: string[];
     providerAuthEnvVars: Record<string, string[]>;
+    embeddingProviderIds: string[];
     speechProviderIds: string[];
     realtimeTranscriptionProviderIds: string[];
     realtimeVoiceProviderIds: string[];

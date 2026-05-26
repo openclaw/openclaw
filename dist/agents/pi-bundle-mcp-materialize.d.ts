@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../types.openclaw-DIZy8jcb.js";
-import { n as SessionMcpRuntime, t as BundleMcpToolRuntime } from "../pi-bundle-mcp-types-CojEojLY.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { n as SessionMcpRuntime, t as BundleMcpToolRuntime } from "../pi-bundle-mcp-types-CatnStso.js";
 
 //#region src/agents/pi-bundle-mcp-materialize.d.ts
 declare function materializeBundleMcpToolsForRun(params: {

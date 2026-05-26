@@ -7,3 +7,4 @@ export declare function resolveUndiciAutoSelectFamilyConnectOptions(): {
     autoSelectFamily: boolean;
     autoSelectFamilyAttemptTimeout: number;
 } | undefined;
+export declare function withTemporaryUndiciAutoSelectFamily<T>(autoSelectFamily: boolean | undefined, run: () => T): T;

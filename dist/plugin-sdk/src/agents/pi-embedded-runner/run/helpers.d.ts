@@ -26,7 +26,7 @@ export declare function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig
 export declare function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number;
 export declare function scrubAnthropicRefusalMagic(prompt: string): string;
 export declare function createCompactionDiagId(): string;
-export declare function resolveMaxRunRetryIterations(profileCandidateCount: number): number;
+export declare function resolveMaxRunRetryIterations(profileCandidateCount: number, cfg?: OpenClawConfig, agentId?: string): number;
 export declare function resolveActiveErrorContext(params: {
     provider: string;
     model: string;
@@ -63,6 +63,7 @@ export declare function buildUsageAgentMetaFields(params: {
  */
 export declare function buildErrorAgentMeta(params: {
     sessionId: string;
+    sessionFile?: string;
     provider: string;
     model: string;
     contextTokens?: number;

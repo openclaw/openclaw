@@ -1,2 +1,2 @@
-import { n as normalizeOpencodeGoBaseUrl, r as resolveOpencodeGoSupplementalModel, t as listOpencodeGoSupplementalModelCatalogEntries } from "../../provider-catalog-NgyBPZfo.js";
-export { listOpencodeGoSupplementalModelCatalogEntries, normalizeOpencodeGoBaseUrl, resolveOpencodeGoSupplementalModel };
+import { a as resolveOpencodeGoSupplementalModel, i as normalizeOpencodeGoResolvedModel, n as listOpencodeGoSupplementalModelCatalogEntries, r as normalizeOpencodeGoBaseUrl, t as isOpencodeGoKimiNoReasoningModelId } from "../../provider-catalog-CPLia89-.js";
+export { isOpencodeGoKimiNoReasoningModelId, listOpencodeGoSupplementalModelCatalogEntries, normalizeOpencodeGoBaseUrl, normalizeOpencodeGoResolvedModel, resolveOpencodeGoSupplementalModel };

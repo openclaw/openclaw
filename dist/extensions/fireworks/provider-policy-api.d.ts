@@ -1,4 +1,4 @@
-import { t as resolveFireworksThinkingProfile } from "../../thinking-policy-Dre42-nm.js";
+import { t as resolveFireworksThinkingProfile } from "../../thinking-policy-Ak8sHpsc.js";
 
 //#region extensions/fireworks/provider-policy-api.d.ts
 declare function resolveThinkingProfile(params: {

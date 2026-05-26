@@ -10,6 +10,7 @@ type ConfigClobberSnapshotFs = {
         stat(path: string): Promise<{
             mtimeMs?: number;
         } | null>;
+        unlink(path: string): Promise<unknown>;
         writeFile(path: string, data: string, options?: {
             encoding?: BufferEncoding;
             mode?: number;
@@ -27,6 +28,7 @@ type ConfigClobberSnapshotFs = {
     }): {
         mtimeMs?: number;
     } | null;
+    unlinkSync(path: string): unknown;
     writeFileSync(path: string, data: string, options?: {
         encoding?: BufferEncoding;
         mode?: number;

@@ -1,10 +1,11 @@
-import { a as buildProviderReplayFamilyHooks } from "../../provider-model-shared-D-slKnZa.js";
-import { a as readConfiguredProviderCatalogEntries } from "../../provider-catalog-shared-4kkagm5f.js";
-import { t as defineSingleProviderPluginEntry } from "../../provider-entry-CDwzUX_P.js";
-import { t as buildDeepSeekProvider } from "../../provider-catalog-jbSIuQVe.js";
-import { t as createDeepSeekV4ThinkingWrapper } from "../../stream-Dv178rrZ.js";
-import { n as applyDeepSeekConfig, t as DEEPSEEK_DEFAULT_MODEL_REF } from "../../onboard-DWUXeFML.js";
-import { t as resolveDeepSeekV4ThinkingProfile } from "../../thinking-8WGKXmoW.js";
+import { n as buildProviderToolCompatFamilyHooks } from "../../provider-tools-D8Ja_oUH.js";
+import { a as buildProviderReplayFamilyHooks } from "../../provider-model-shared-DtsPmvDx.js";
+import { a as readConfiguredProviderCatalogEntries } from "../../provider-catalog-shared-BLp5nwNN.js";
+import { t as defineSingleProviderPluginEntry } from "../../provider-entry-DYbqN6AQ.js";
+import { t as buildDeepSeekProvider } from "../../provider-catalog-gNsEYitN.js";
+import { t as createDeepSeekV4ThinkingWrapper } from "../../stream-BQ9hyEa2.js";
+import { n as applyDeepSeekConfig, t as DEEPSEEK_DEFAULT_MODEL_REF } from "../../onboard-gz9Ya_HO.js";
+import { t as resolveDeepSeekV4ThinkingProfile } from "../../thinking-DpufZF19.js";
 //#region extensions/deepseek/index.ts
 const PROVIDER_ID = "deepseek";
 var deepseek_default = defineSingleProviderPluginEntry({
@@ -42,6 +43,7 @@ var deepseek_default = defineSingleProviderPluginEntry({
 			family: "openai-compatible",
 			dropReasoningFromHistory: false
 		}),
+		...buildProviderToolCompatFamilyHooks("deepseek"),
 		wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
 		resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
 		isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId))

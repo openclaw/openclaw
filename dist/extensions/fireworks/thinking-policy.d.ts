@@ -1,2 +1,2 @@
-import { t as resolveFireworksThinkingProfile } from "../../thinking-policy-Dre42-nm.js";
+import { t as resolveFireworksThinkingProfile } from "../../thinking-policy-Ak8sHpsc.js";
 export { resolveFireworksThinkingProfile };

@@ -14,12 +14,19 @@ export type ConfigSchemaLookupChild = {
     type?: string | string[];
     required: boolean;
     hasChildren: boolean;
+    reloadKind?: ConfigSchemaReloadKind;
     hint?: ConfigUiHint;
     hintPath?: string;
 };
+export type ConfigSchemaReloadKind = "restart" | "hot" | "none";
+export type ConfigSchemaReloadMetadata = {
+    kind: ConfigSchemaReloadKind;
+};
+export type ConfigSchemaReloadMetadataResolver = (path: string) => ConfigSchemaReloadMetadata | null | undefined;
 export type ConfigSchemaLookupResult = {
     path: string;
     schema: JsonSchemaNode;
+    reloadKind?: ConfigSchemaReloadKind;
     hint?: ConfigUiHint;
     hintPath?: string;
     children: ConfigSchemaLookupChild[];
@@ -43,4 +50,4 @@ export declare function buildConfigSchema(params?: {
     channels?: ChannelUiMetadata[];
     cache?: boolean;
 }): ConfigSchemaResponse;
-export declare function lookupConfigSchema(response: ConfigSchemaResponse, path: string): ConfigSchemaLookupResult | null;
+export declare function lookupConfigSchema(response: ConfigSchemaResponse, path: string, resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver): ConfigSchemaLookupResult | null;

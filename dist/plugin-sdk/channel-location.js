@@ -1,3 +1,3 @@
-import { n as toLocationContext, t as formatLocationText } from "../location-BxmI6Y1t.js";
-import "../channel-location-Cf_s2qPf.js";
+import { n as toLocationContext, t as formatLocationText } from "../location-B0jdizlz.js";
+import "../channel-location-la_KkjCS.js";
 export { formatLocationText, toLocationContext };

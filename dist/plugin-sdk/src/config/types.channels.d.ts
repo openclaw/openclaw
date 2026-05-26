@@ -1,4 +1,5 @@
 import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
+import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type { ChannelHealthMonitorConfig, ChannelHeartbeatVisibilityConfig } from "./types.channel-health.js";
 import type { DiscordConfig } from "./types.discord.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
@@ -10,11 +11,14 @@ import type { SlackConfig } from "./types.slack.js";
 import type { TelegramConfig } from "./types.telegram.js";
 import type { WhatsAppConfig } from "./types.whatsapp.js";
 export type { ChannelHealthMonitorConfig, ChannelHeartbeatVisibilityConfig, } from "./types.channel-health.js";
+export type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 export type ChannelDefaultsConfig = {
     groupPolicy?: GroupPolicy;
     contextVisibility?: ContextVisibilityMode;
     /** Default heartbeat visibility for all channels. */
     heartbeat?: ChannelHeartbeatVisibilityConfig;
+    /** Default pair loop guard settings for channels that support bot loop protection. */
+    botLoopProtection?: ChannelBotLoopProtectionConfig;
 };
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 export type ExtensionNestedPolicyConfig = {
@@ -57,6 +61,7 @@ export type ExtensionChannelConfig = {
         /** @deprecated Use spawnSessions instead. */
         spawnSubagentSessions?: boolean;
     };
+    botLoopProtection?: ChannelBotLoopProtectionConfig;
     spawnSubagentSessions?: boolean;
     dangerouslyAllowPrivateNetwork?: boolean;
     accounts?: Record<string, unknown>;

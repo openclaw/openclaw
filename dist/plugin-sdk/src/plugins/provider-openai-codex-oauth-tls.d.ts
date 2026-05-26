@@ -8,6 +8,10 @@ export type OpenAIOAuthTlsPreflightResult = {
     code?: string;
     message: string;
 };
+export declare function shouldRunOpenAIOAuthTlsPrerequisites(params: {
+    cfg: OpenClawConfig;
+    deep?: boolean;
+}): boolean;
 export declare function runOpenAIOAuthTlsPreflight(options?: {
     timeoutMs?: number;
     fetchImpl?: typeof fetch;

@@ -9,7 +9,7 @@ export declare function resolveWebSearchEnabled(params: {
     sandboxed?: boolean;
 }): boolean;
 export declare function isWebSearchProviderConfigured(params: {
-    provider: Pick<PluginWebSearchProviderEntry, "credentialPath" | "id" | "envVars" | "getConfiguredCredentialValue" | "getConfiguredCredentialFallback" | "getCredentialValue" | "requiresCredential">;
+    provider: Pick<PluginWebSearchProviderEntry, "credentialPath" | "id" | "authProviderId" | "envVars" | "getConfiguredCredentialValue" | "getConfiguredCredentialFallback" | "getCredentialValue" | "requiresCredential">;
     config?: OpenClawConfig;
 }): boolean;
 export declare function listWebSearchProviders(params?: {
@@ -21,6 +21,7 @@ export declare function listConfiguredWebSearchProviders(params?: {
 export declare function resolveWebSearchProviderId(params: {
     search?: WebSearchConfig;
     config?: OpenClawConfig;
+    agentDir?: string;
     providers?: PluginWebSearchProviderEntry[];
 }): string;
 declare function resolveExplicitWebSearchProviderId(params: {
@@ -48,7 +49,7 @@ declare function hasExplicitWebSearchSelection(params: {
     providers?: PluginWebSearchProviderEntry[];
 }): boolean;
 export declare function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult>;
-export declare const __testing: {
+export declare const testing: {
     resolveSearchConfig: typeof resolveSearchConfig;
     resolveSearchProvider: typeof resolveWebSearchProviderId;
     resolveWebSearchProviderId: typeof resolveWebSearchProviderId;
@@ -57,3 +58,4 @@ export declare const __testing: {
     resolveExplicitWebSearchProviderPluginIds: typeof resolveExplicitWebSearchProviderPluginIds;
     hasExplicitWebSearchSelection: typeof hasExplicitWebSearchSelection;
 };
+export { testing as __testing };

@@ -11,6 +11,6 @@ type LoadGatewayModelCatalogParams = {
     readOnly?: boolean;
 };
 export declare function markGatewayModelCatalogStaleForReload(): void;
-export declare function __resetModelCatalogCacheForTest(): Promise<void>;
+export declare function resetModelCatalogCacheForTest(): Promise<void>;
 export declare function loadGatewayModelCatalog(params?: LoadGatewayModelCatalogParams): Promise<GatewayModelChoice[]>;
 export {};

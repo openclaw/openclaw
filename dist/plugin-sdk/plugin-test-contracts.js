@@ -1,11 +1,11 @@
-import { t as loadPluginManifestRegistry } from "../manifest-registry-Dgt5v-vG.js";
-import { a as parseSemver, n as isAtLeast } from "../runtime-guard-BuMdLq1N.js";
-import { n as parseMinHostVersionRequirement } from "../min-host-version-W1db37pp.js";
-import { t as pluginRegistrationContractRegistry } from "../registry-nHNSI2ck.js";
-import { x as requireRegisteredProvider, y as registerProviderPlugins } from "../plugin-setup-wizard-D4ENJ6Y0.js";
-import "../testing-DrTSJhfM.js";
-import { n as assertUniqueValues, t as BUNDLED_RUNTIME_SIDECAR_PATHS } from "../runtime-sidecar-paths-0TZ16jwT.js";
-import { a as registerTestPlugin, c as assertNoImportTimeSideEffects, i as createPluginRegistryFixture, n as loadBundledPluginPublicSurfaceSync, o as registerVirtualTestPlugin, r as resolveWorkspacePackagePublicModuleUrl, s as uniqueSortedStrings, t as loadBundledPluginPublicSurface } from "../public-surface-loader-CZrNHpNl.js";
+import { t as loadPluginManifestRegistry } from "../manifest-registry-Cy1cBr1u.js";
+import { a as parseSemver, n as isAtLeast } from "../runtime-guard-DLdnBLFm.js";
+import { n as parseMinHostVersionRequirement } from "../min-host-version-Ceo2xu29.js";
+import { t as pluginRegistrationContractRegistry } from "../registry-BlbU2sIq.js";
+import { x as requireRegisteredProvider, y as registerProviderPlugins } from "../plugin-setup-wizard-DsSNbhuh.js";
+import "../testing-C7rXcZLa.js";
+import { n as assertUniqueValues, t as BUNDLED_RUNTIME_SIDECAR_PATHS } from "../runtime-sidecar-paths-Blgi5sh-.js";
+import { a as registerTestPlugin, c as assertNoImportTimeSideEffects, i as createPluginRegistryFixture, n as loadBundledPluginPublicSurfaceSync, o as registerVirtualTestPlugin, r as resolveWorkspacePackagePublicModuleUrl, s as uniqueSortedStrings, t as loadBundledPluginPublicSurface } from "../public-surface-loader-B8tgO8c-.js";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
@@ -113,7 +113,8 @@ const pluginRegistrationContractCases = {
 	fal: {
 		pluginId: "fal",
 		providerIds: ["fal"],
-		imageGenerationProviderIds: ["fal"]
+		imageGenerationProviderIds: ["fal"],
+		musicGenerationProviderIds: ["fal"]
 	},
 	firecrawl: {
 		pluginId: "firecrawl",
@@ -189,6 +190,7 @@ const pluginRegistrationContractCases = {
 		providerIds: ["openrouter"],
 		mediaUnderstandingProviderIds: ["openrouter"],
 		imageGenerationProviderIds: ["openrouter"],
+		musicGenerationProviderIds: ["openrouter"],
 		videoGenerationProviderIds: ["openrouter"],
 		requireDescribeImages: true,
 		requireGenerateImage: true,

@@ -1,6 +1,6 @@
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 export type ToolModelConfig = {
     primary?: string;
     fallbacks?: string[];
@@ -16,9 +16,25 @@ export declare function hasAuthForProvider(params: {
     agentDir?: string;
     authStore?: AuthProfileStore;
 }): boolean;
-export declare function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig;
+export declare function hasAuthProfileForProvider(params: {
+    provider: string;
+    agentDir?: string;
+    authStore?: AuthProfileStore;
+    includeExternalCli?: boolean;
+    type?: AuthProfileCredential["type"];
+}): boolean;
+export declare function hasProviderAuthForTool(params: {
+    provider: string;
+    cfg?: OpenClawConfig;
+    workspaceDir?: string;
+    agentDir?: string;
+    authStore?: AuthProfileStore;
+}): boolean;
+export declare function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig;
 export declare function buildToolModelConfigFromCandidates(params: {
     explicit: ToolModelConfig;
+    cfg?: OpenClawConfig;
+    workspaceDir?: string;
     agentDir?: string;
     authStore?: AuthProfileStore;
     candidates: Array<string | null | undefined>;

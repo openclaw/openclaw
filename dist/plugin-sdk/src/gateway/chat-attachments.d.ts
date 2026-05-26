@@ -47,6 +47,7 @@ export declare function parseMessageWithAttachments(message: string, attachments
     supportsInlineImages?: boolean;
     acceptNonImage?: boolean;
 }): Promise<ParsedMessageWithImages>;
+export declare function resolveChatAttachmentLooksLikeImage(attachment: ChatAttachment, index?: number): Promise<boolean>;
 /**
  * @deprecated Use parseMessageWithAttachments instead.
  * This function converts images to markdown data URLs which Claude API cannot process as images.

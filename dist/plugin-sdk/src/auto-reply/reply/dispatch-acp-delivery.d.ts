@@ -38,4 +38,5 @@ export declare function createAcpDispatchDeliveryCoordinator(params: {
     originatingChannel?: string;
     originatingTo?: string;
     onReplyStart?: () => Promise<void> | void;
+    abortSignal?: AbortSignal;
 }): AcpDispatchDeliveryCoordinator;

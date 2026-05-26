@@ -30,6 +30,11 @@ export type ResolveWindowsSpawnProgramParams = {
     allowShellFallback?: boolean;
 };
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<ResolveWindowsSpawnProgramParams, "allowShellFallback">;
+export type WindowsSpawnCommandInlineArgs = {
+    executable: string;
+    arguments: string;
+};
+export declare function detectWindowsSpawnCommandInlineArgs(command: string): WindowsSpawnCommandInlineArgs | null;
 /** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
 export declare function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string;
 /** Resolve the safest direct spawn candidate for Windows wrappers, scripts, and binaries. */

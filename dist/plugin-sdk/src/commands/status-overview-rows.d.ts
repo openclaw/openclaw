@@ -30,12 +30,14 @@ export declare function buildStatusCommandOverviewRows(params: {
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
 } & StatusMemoryStateResolvers): import("./status-all/format.ts").StatusOverviewRow[];
 export declare function buildStatusAllOverviewRows(params: {
     surface: StatusOverviewSurface;
     osLabel: string;
     configPath: string;
     secretDiagnosticsCount: number;
+    updateRestartValue?: string | null;
     agentStatus: {
         bootstrapPendingCount: number;
         totalSessions: number;

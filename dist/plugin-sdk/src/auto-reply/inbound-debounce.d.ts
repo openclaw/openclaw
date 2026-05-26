@@ -10,10 +10,13 @@ export type InboundDebounceCreateParams<T> = {
     buildKey: (item: T) => string | null | undefined;
     shouldDebounce?: (item: T) => boolean;
     resolveDebounceMs?: (item: T) => number | undefined;
+    serializeImmediate?: boolean;
     onFlush: (items: T[]) => Promise<void>;
     onError?: (err: unknown, items: T[]) => void;
+    onCancel?: (items: T[]) => void;
 };
 export declare function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>): {
     enqueue: (item: T) => Promise<void>;
     flushKey: (key: string) => Promise<void>;
+    cancelKey: (key: string) => boolean;
 };

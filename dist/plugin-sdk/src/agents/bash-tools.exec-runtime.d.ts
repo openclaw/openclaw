@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { type EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { type ExecHost, type ExecApprovalDecision, type ExecTarget } from "../infra/exec-approvals.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -93,6 +94,7 @@ export declare function emitExecSystemEvent(text: string, opts: {
     /** `session.scope` from the runtime config; needed so global-scope
      *  agents route cron-run events to the "global" queue. */
     sessionScope?: "per-sender" | "global";
+    eventRouting?: EventSessionRoutingPolicy;
 }): void;
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 export declare function formatExecFailureReason(params: {
@@ -116,6 +118,7 @@ export declare function runExecProcess(opts: {
     execCommand?: string;
     workdir: string;
     env: Record<string, string>;
+    pathPrepend?: string[];
     sandbox?: BashSandboxConfig;
     containerWorkdir?: string | null;
     usePty: boolean;
@@ -135,6 +138,8 @@ export declare function runExecProcess(opts: {
      *  `mainKey` so the cron-run remap can route global-scope agents to
      *  the "global" queue instead of agent-main. */
     sessionScope?: "per-sender" | "global";
+    /** Start-time routing policy for detached exec system events. */
+    eventRouting?: EventSessionRoutingPolicy;
     notifyDeliveryContext?: DeliveryContext;
     timeoutSec: number | null;
     onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;

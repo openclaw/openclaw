@@ -1,21 +1,24 @@
-import { c as normalizeOptionalString } from "../../string-coerce-LndEvhRk.js";
-import { n as ensureAuthProfileStore } from "../../store-a4exFSck.js";
-import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CrCOUFln.js";
-import { n as listProfilesForProvider } from "../../profile-list-1dJMPDMe.js";
-import { a as upsertAuthProfile } from "../../profiles-Bj_dclxz.js";
-import { i as normalizeApiKeyInput, n as ensureApiKeyFromOptionEnvOrPrompt, s as validateApiKeyInput } from "../../provider-auth-input-BB3v7mkT.js";
-import { n as buildApiKeyCredential, t as applyAuthProfileConfig } from "../../provider-auth-helpers-Hp3hWZu2.js";
-import "../../provider-auth-D5QGE8z6.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { n as CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../models-Cu5ZjJIJ.js";
-import { t as buildCloudflareAiGatewayCatalogProvider } from "../../catalog-provider-CMLtkcKc.js";
-import { r as buildCloudflareAiGatewayConfigPatch, t as applyCloudflareAiGatewayConfig } from "../../onboard-CKkqO4a8.js";
-import { r as wrapCloudflareAiGatewayProviderStream } from "../../stream-wrappers-DpuUHMio.js";
+import { c as normalizeOptionalString } from "../../string-coerce-DyL154ka.js";
+import { n as ensureAuthProfileStore } from "../../store-BMQkMM4l.js";
+import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CsdRhsMj.js";
+import { n as listProfilesForProvider } from "../../profile-list-C0HtPlut.js";
+import { s as upsertAuthProfileWithLock } from "../../profiles-9GB1thhi.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { i as normalizeApiKeyInput, n as ensureApiKeyFromOptionEnvOrPrompt, s as validateApiKeyInput } from "../../provider-auth-input-DMNIEm93.js";
+import { n as buildApiKeyCredential, t as applyAuthProfileConfig } from "../../provider-auth-helpers-BZ5Z8RV6.js";
+import "../../provider-auth-BtRKd5us.js";
+import { n as CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../models-CuqyJ_Cc.js";
+import { t as buildCloudflareAiGatewayCatalogProvider } from "../../catalog-provider-f5YYO5YZ.js";
+import { r as buildCloudflareAiGatewayConfigPatch, t as applyCloudflareAiGatewayConfig } from "../../onboard-B5XN6DVp.js";
+import { r as wrapCloudflareAiGatewayProviderStream } from "../../stream-wrappers-IZBZyl_j.js";
 //#region extensions/cloudflare-ai-gateway/index.ts
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
+async function upsertAuthProfileWithLockOrThrow(params) {
+	if (!await upsertAuthProfileWithLock(params)) throw new Error("Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.");
+}
 function readRequiredTextInput(value) {
 	return typeof value === "string" ? value.trim() : "";
 }
@@ -128,7 +131,7 @@ var cloudflare_ai_gateway_default = definePluginEntry({
 							}
 						});
 						if (!credential) return null;
-						upsertAuthProfile({
+						await upsertAuthProfileWithLockOrThrow({
 							profileId: PROFILE_ID,
 							credential,
 							agentDir: ctx.agentDir

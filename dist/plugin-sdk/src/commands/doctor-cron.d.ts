@@ -4,6 +4,10 @@ type CrontabReader = () => Promise<{
     stdout?: unknown;
     stderr?: unknown;
 }>;
+export declare function collectLegacyWhatsAppCrontabHealthWarning(params?: {
+    platform?: NodeJS.Platform;
+    readCrontab?: CrontabReader;
+}): Promise<string | null>;
 export declare function noteLegacyWhatsAppCrontabHealthCheck(params?: {
     platform?: NodeJS.Platform;
     readCrontab?: CrontabReader;

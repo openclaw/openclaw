@@ -16,9 +16,9 @@ type NodeWakeState = {
 export declare const nodeWakeById: Map<string, NodeWakeState>;
 export declare const nodeWakeNudgeById: Map<string, number>;
 export declare function clearNodeWakeState(nodeId: string): void;
-export declare const __testing: {
+export declare const testing: {
     getNodeWakeByIdSize(): number;
     hasNodeWakeEntry(nodeId: string): boolean;
     resetWakeState(): void;
 };
-export {};
+export { testing as __testing };

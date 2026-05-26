@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { T as OpenClawPluginDefinition, w as OpenClawPluginConfigSchema } from "../../types-lCXG2pW_.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { A as OpenClawPluginDefinition, k as OpenClawPluginConfigSchema } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/active-memory/index.d.ts
 type ActiveMemoryQmdSearchMode = "inherit" | "search" | "vsearch" | "query";
 type ResolvedActiveRecallPluginConfig = {
@@ -121,4 +121,4 @@ declare const testing: {
   getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined;
 };
 //#endregion
-export { testing as __testing, _default as default };
+export { testing as __testing, testing, _default as default };

@@ -8,7 +8,7 @@ export declare function cleanupLegacyPluginDependencyState(params: {
     changes: string[];
     warnings: string[];
 }>;
-export declare const __testing: {
+export declare const testing: {
     collectLegacyPluginDependencyTargets: typeof collectLegacyPluginDependencyTargets;
 };
-export {};
+export { testing as __testing };

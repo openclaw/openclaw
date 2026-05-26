@@ -1,4 +1,5 @@
 import { z } from "zod";
+export declare const NativeExecApprovalEnableModeSchema: z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<"auto">]>;
 export declare const ApprovalsSchema: z.ZodOptional<z.ZodObject<{
     exec: z.ZodOptional<z.ZodObject<{
         enabled: z.ZodOptional<z.ZodBoolean>;

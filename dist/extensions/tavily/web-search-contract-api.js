@@ -1,4 +1,4 @@
-import { t as createWebSearchProviderContractFields } from "../../provider-web-search-contract-DsxDQUS3.js";
+import { t as createWebSearchProviderContractFields } from "../../provider-web-search-contract-DRFQdeKY.js";
 //#region extensions/tavily/web-search-contract-api.ts
 function createTavilyWebSearchProvider() {
 	const credentialPath = "plugins.entries.tavily.config.webSearch.apiKey";

@@ -4,6 +4,8 @@ import type { SpawnedToolContext } from "../spawned-context.js";
 import type { AnyAgentTool } from "./common.js";
 export declare function createSessionsSpawnTool(opts?: {
     agentSessionKey?: string;
+    /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
+    completionOwnerKey?: string;
     agentChannel?: GatewayMessageChannel;
     agentAccountId?: string;
     agentTo?: string;

@@ -4,13 +4,11 @@ export type SystemEvent = {
     ts: number;
     contextKey?: string | null;
     deliveryContext?: DeliveryContext;
-    trusted?: boolean;
 };
 type SystemEventOptions = {
     sessionKey: string;
     contextKey?: string | null;
     deliveryContext?: DeliveryContext;
-    trusted?: boolean;
 };
 export declare function isSystemEventContextChanged(sessionKey: string, contextKey?: string | null): boolean;
 export declare function enqueueSystemEvent(text: string, options: SystemEventOptions): boolean;

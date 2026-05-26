@@ -1,2 +1,2 @@
-import { n as buildStaticDeepInfraProvider, t as buildDeepInfraProvider } from "../../provider-catalog-lMFYC8pK.js";
+import { n as buildStaticDeepInfraProvider, t as buildDeepInfraProvider } from "../../provider-catalog-B7aWjOKh.js";
 export { buildDeepInfraProvider, buildStaticDeepInfraProvider };

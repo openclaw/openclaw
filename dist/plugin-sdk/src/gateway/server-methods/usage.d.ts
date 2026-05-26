@@ -23,6 +23,7 @@ type DiscoveredSessionWithAgent = DiscoveredSession & {
 };
 declare function discoverAllSessionsForUsage(params: {
     config: OpenClawConfig;
+    agentId?: string;
     startMs: number;
     endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]>;
@@ -31,7 +32,7 @@ declare function loadCostUsageSummaryCached(params: {
     endMs: number;
     config: OpenClawConfig;
 }): Promise<CostUsageSummary>;
-export declare const __test: {
+export declare const testApi: {
     parseDateParts: (raw: unknown) => {
         year: number;
         monthIndex: number;
@@ -57,5 +58,6 @@ export declare const __test: {
     loadCostUsageSummaryCached: typeof loadCostUsageSummaryCached;
     costUsageCache: Map<string, CostUsageCacheEntry>;
 };
+export { testApi as __test };
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 export declare const usageHandlers: GatewayRequestHandlers;

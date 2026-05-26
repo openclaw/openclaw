@@ -5,8 +5,10 @@ import type { MediaUnderstandingDecision, MediaUnderstandingOutput, MediaUnderst
 export type RunMediaUnderstandingFileParams = {
     capability: "image" | "audio" | "video";
     filePath: string;
+    mediaUrl?: string;
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     mime?: string;
     activeModel?: ActiveMediaModel;
     prompt?: string;
@@ -21,8 +23,10 @@ export type RunMediaUnderstandingFileResult = {
 };
 export type DescribeImageFileParams = {
     filePath: string;
+    mediaUrl?: string;
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     mime?: string;
     activeModel?: ActiveMediaModel;
     prompt?: string;
@@ -30,8 +34,10 @@ export type DescribeImageFileParams = {
 };
 export type DescribeImageFileWithModelParams = {
     filePath: string;
+    mediaUrl?: string;
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     mime?: string;
     provider: string;
     model: string;
@@ -61,6 +67,7 @@ export type DescribeVideoFileParams = {
     filePath: string;
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     mime?: string;
     activeModel?: ActiveMediaModel;
 };
@@ -68,6 +75,7 @@ export type TranscribeAudioFileParams = {
     filePath: string;
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     mime?: string;
     activeModel?: ActiveMediaModel;
     language?: string;

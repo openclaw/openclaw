@@ -11,6 +11,7 @@ export type HeartbeatDeps = OutboundSendDeps & ChannelHeartbeatDeps & {
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
+    isReplyRunActive?: (sessionKey: string) => boolean;
     nowMs?: () => number;
 };
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };

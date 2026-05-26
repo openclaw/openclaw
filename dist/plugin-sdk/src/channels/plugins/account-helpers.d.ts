@@ -3,11 +3,17 @@ import type { ChannelAccountSnapshot } from "./types.core.js";
 export declare function createAccountListHelpers(channelKey: string, options?: {
     normalizeAccountId?: (id: string) => string;
     allowUnlistedDefaultAccount?: boolean;
+    implicitDefaultAccount?: {
+        channelKeys?: readonly string[];
+        envVars?: readonly string[];
+    };
+    hasImplicitDefaultAccount?: (cfg: OpenClawConfig) => boolean;
 }): {
     listConfiguredAccountIds: (cfg: OpenClawConfig) => string[];
     listAccountIds: (cfg: OpenClawConfig) => string[];
     resolveDefaultAccountId: (cfg: OpenClawConfig) => string;
 };
+export declare function hasConfiguredAccountValue(value: unknown): boolean;
 export declare function listCombinedAccountIds(params: {
     configuredAccountIds: Iterable<string>;
     additionalAccountIds?: Iterable<string>;

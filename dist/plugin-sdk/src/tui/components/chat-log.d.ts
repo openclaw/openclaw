@@ -8,19 +8,27 @@ export declare class ChatLog extends Container {
     private toolById;
     private streamingRuns;
     private pendingUsers;
+    private pendingSystemNotices;
     private btwMessage;
     private toolsExpanded;
+    private repeatableSystemMessage;
     constructor(maxComponents?: number);
     private dropComponentReferences;
     private pruneOverflow;
     private append;
+    private appendNonSystem;
     clearAll(opts?: {
         preservePendingUsers?: boolean;
     }): void;
     restorePendingUsers(): void;
     clearPendingUsers(): void;
+    private formatRepeatedSystemText;
     private createSystemMessage;
-    addSystem(text: string): void;
+    addSystem(text: string, opts?: {
+        coalesceConsecutive?: boolean;
+    }): void;
+    addPendingSystem(runId: string, text: string): void;
+    dismissPendingSystem(runId: string): boolean;
     addUser(text: string): void;
     addPendingUser(runId: string, text: string, createdAt?: number): UserMessageComponent;
     commitPendingUser(runId: string): boolean;

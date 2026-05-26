@@ -37,6 +37,7 @@ export declare const ConnectParamsSchema: Type.TObject<{
         bootstrapToken: Type.TOptional<Type.TString>;
         deviceToken: Type.TOptional<Type.TString>;
         password: Type.TOptional<Type.TString>;
+        approvalRuntimeToken: Type.TOptional<Type.TString>;
     }>>;
     locale: Type.TOptional<Type.TString>;
     userAgent: Type.TOptional<Type.TString>;

@@ -1,37 +1,38 @@
-import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-LndEvhRk.js";
-import { t as resolveConfiguredSecretInputString } from "../../resolve-configured-secret-input-string-B2xxb-Rp.js";
-import { t as safeEqualSecret } from "../../secret-equal-BjEkmWAa.js";
-import { g as resolveRequestClientIp } from "../../net-Gkm1Cz9b.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../security-runtime-JcBeOGgV.js";
-import { a as createFixedWindowRateLimiter, r as WEBHOOK_RATE_LIMIT_DEFAULTS } from "../../webhook-ingress-T_7zkgKq.js";
-import { a as createWebhookInFlightLimiter, n as WEBHOOK_IN_FLIGHT_DEFAULTS, s as readJsonWebhookBodyOrReject } from "../../webhook-request-guards-CHYlKcg-.js";
-import { t as normalizeWebhookPath } from "../../webhook-path-Cv5O9eKW.js";
-import { l as withResolvedWebhookRequestPipeline, o as resolveWebhookTargetWithAuthOrReject } from "../../webhook-targets-Bq1eDk6l.js";
-import "../../api-D_6Bo5kV.js";
-import "../../runtime-api-BdOvMd_s.js";
-import { z } from "zod";
+import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-DyL154ka.js";
+import { At as boolean, Bt as discriminatedUnion, Et as array, Nn as record, Rn as string, St as _null, Tn as object, Xn as union, dn as literal, un as lazy, wn as number, yt as _enum } from "../../schemas-Del5uzR8.js";
+import { n as ZodIssueCode } from "../../compat-bCpUj7Jq.js";
+import { t as resolveConfiguredSecretInputString } from "../../resolve-configured-secret-input-string-DuewGZmy.js";
+import { t as safeEqualSecret } from "../../secret-equal-DDhtiQsP.js";
+import { _ as resolveRequestClientIp } from "../../net-DCUMtgJy.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../security-runtime-CcSekjBd.js";
+import { a as createFixedWindowRateLimiter, r as WEBHOOK_RATE_LIMIT_DEFAULTS } from "../../webhook-ingress-R0qMwT4u.js";
+import { a as createWebhookInFlightLimiter, n as WEBHOOK_IN_FLIGHT_DEFAULTS, s as readJsonWebhookBodyOrReject } from "../../webhook-request-guards-iMi786D5.js";
+import { t as normalizeWebhookPath } from "../../webhook-path-rjz7yuUD.js";
+import { l as withResolvedWebhookRequestPipeline, o as resolveWebhookTargetWithAuthOrReject } from "../../webhook-targets-gc0zD_lY.js";
+import "../../api-BCNIVTRJ.js";
+import "../../runtime-api-CmUj1MUW.js";
 //#region extensions/webhooks/src/config.ts
-const secretRefSchema = z.object({
-	source: z.enum([
+const secretRefSchema = object({
+	source: _enum([
 		"env",
 		"file",
 		"exec"
 	]),
-	provider: z.string().trim().min(1),
-	id: z.string().trim().min(1)
+	provider: string().trim().min(1),
+	id: string().trim().min(1)
 }).strict();
-const secretInputSchema = z.union([z.string().trim().min(1), secretRefSchema]);
-const webhookRouteConfigSchema = z.object({
-	enabled: z.boolean().optional().default(true),
-	path: z.string().trim().min(1).optional(),
-	sessionKey: z.string().trim().min(1),
+const secretInputSchema = union([string().trim().min(1), secretRefSchema]);
+const webhookRouteConfigSchema = object({
+	enabled: boolean().optional().default(true),
+	path: string().trim().min(1).optional(),
+	sessionKey: string().trim().min(1),
 	secret: secretInputSchema,
-	controllerId: z.string().trim().min(1).optional(),
-	description: z.string().trim().min(1).optional()
+	controllerId: string().trim().min(1).optional(),
+	description: string().trim().min(1).optional()
 }).strict();
-const webhooksPluginConfigSchema = z.object({ routes: z.record(z.string().trim().min(1), webhookRouteConfigSchema).default({}) }).strict();
+const webhooksPluginConfigSchema = object({ routes: record(string().trim().min(1), webhookRouteConfigSchema).default({}) }).strict();
 function resolveWebhooksPluginConfig(params) {
 	const parsed = webhooksPluginConfigSchema.parse(params.pluginConfig ?? {});
 	const configuredRoutes = [];
@@ -55,131 +56,118 @@ function resolveWebhooksPluginConfig(params) {
 }
 //#endregion
 //#region extensions/webhooks/src/http.ts
-const jsonValueSchema = z.lazy(() => z.union([
-	z.null(),
-	z.boolean(),
-	z.number().finite(),
-	z.string(),
-	z.array(jsonValueSchema),
-	z.record(z.string(), jsonValueSchema)
+const jsonValueSchema = lazy(() => union([
+	_null(),
+	boolean(),
+	number().finite(),
+	string(),
+	array(jsonValueSchema),
+	record(string(), jsonValueSchema)
 ]));
-const nullableStringSchema = z.string().trim().min(1).nullable().optional();
-const createFlowRequestSchema = z.object({
-	action: z.literal("create_flow"),
-	controllerId: z.string().trim().min(1).optional(),
-	goal: z.string().trim().min(1),
-	status: z.enum([
-		"queued",
-		"running",
-		"waiting",
-		"blocked"
-	]).optional(),
-	notifyPolicy: z.enum([
-		"done_only",
-		"state_changes",
-		"silent"
-	]).optional(),
-	currentStep: nullableStringSchema,
-	stateJson: jsonValueSchema.nullable().optional(),
-	waitJson: jsonValueSchema.nullable().optional()
-}).strict();
-const getFlowRequestSchema = z.object({
-	action: z.literal("get_flow"),
-	flowId: z.string().trim().min(1)
-}).strict();
-const listFlowsRequestSchema = z.object({ action: z.literal("list_flows") }).strict();
-const findLatestFlowRequestSchema = z.object({ action: z.literal("find_latest_flow") }).strict();
-const resolveFlowRequestSchema = z.object({
-	action: z.literal("resolve_flow"),
-	token: z.string().trim().min(1)
-}).strict();
-const getTaskSummaryRequestSchema = z.object({
-	action: z.literal("get_task_summary"),
-	flowId: z.string().trim().min(1)
-}).strict();
-const setWaitingRequestSchema = z.object({
-	action: z.literal("set_waiting"),
-	flowId: z.string().trim().min(1),
-	expectedRevision: z.number().int().nonnegative(),
-	currentStep: nullableStringSchema,
-	stateJson: jsonValueSchema.nullable().optional(),
-	waitJson: jsonValueSchema.nullable().optional(),
-	blockedTaskId: nullableStringSchema,
-	blockedSummary: nullableStringSchema
-}).strict();
-const resumeFlowRequestSchema = z.object({
-	action: z.literal("resume_flow"),
-	flowId: z.string().trim().min(1),
-	expectedRevision: z.number().int().nonnegative(),
-	status: z.enum(["queued", "running"]).optional(),
-	currentStep: nullableStringSchema,
-	stateJson: jsonValueSchema.nullable().optional()
-}).strict();
-const finishFlowRequestSchema = z.object({
-	action: z.literal("finish_flow"),
-	flowId: z.string().trim().min(1),
-	expectedRevision: z.number().int().nonnegative(),
-	stateJson: jsonValueSchema.nullable().optional()
-}).strict();
-const failFlowRequestSchema = z.object({
-	action: z.literal("fail_flow"),
-	flowId: z.string().trim().min(1),
-	expectedRevision: z.number().int().nonnegative(),
-	stateJson: jsonValueSchema.nullable().optional(),
-	blockedTaskId: nullableStringSchema,
-	blockedSummary: nullableStringSchema
-}).strict();
-const requestCancelRequestSchema = z.object({
-	action: z.literal("request_cancel"),
-	flowId: z.string().trim().min(1),
-	expectedRevision: z.number().int().nonnegative()
-}).strict();
-const cancelFlowRequestSchema = z.object({
-	action: z.literal("cancel_flow"),
-	flowId: z.string().trim().min(1)
-}).strict();
-const runTaskRequestSchema = z.object({
-	action: z.literal("run_task"),
-	flowId: z.string().trim().min(1),
-	runtime: z.enum(["subagent", "acp"]),
-	sourceId: z.string().trim().min(1).optional(),
-	childSessionKey: z.string().trim().min(1).optional(),
-	parentTaskId: z.string().trim().min(1).optional(),
-	agentId: z.string().trim().min(1).optional(),
-	runId: z.string().trim().min(1).optional(),
-	label: z.string().trim().min(1).optional(),
-	task: z.string().trim().min(1),
-	preferMetadata: z.boolean().optional(),
-	notifyPolicy: z.enum([
-		"done_only",
-		"state_changes",
-		"silent"
-	]).optional(),
-	status: z.enum(["queued", "running"]).optional(),
-	startedAt: z.number().int().nonnegative().optional(),
-	lastEventAt: z.number().int().nonnegative().optional(),
-	progressSummary: nullableStringSchema
-}).strict().superRefine((value, ctx) => {
-	if (value.status !== "running" && (value.startedAt !== void 0 || value.lastEventAt !== void 0 || value.progressSummary !== void 0)) ctx.addIssue({
-		code: z.ZodIssueCode.custom,
-		message: "status must be running when startedAt, lastEventAt, or progressSummary is provided",
-		path: ["status"]
-	});
-});
-const webhookActionSchema = z.discriminatedUnion("action", [
-	createFlowRequestSchema,
-	getFlowRequestSchema,
-	listFlowsRequestSchema,
-	findLatestFlowRequestSchema,
-	resolveFlowRequestSchema,
-	getTaskSummaryRequestSchema,
-	setWaitingRequestSchema,
-	resumeFlowRequestSchema,
-	finishFlowRequestSchema,
-	failFlowRequestSchema,
-	requestCancelRequestSchema,
-	cancelFlowRequestSchema,
-	runTaskRequestSchema
+const nullableStringSchema = string().trim().min(1).nullable().optional();
+const webhookActionSchema = discriminatedUnion("action", [
+	object({
+		action: literal("create_flow"),
+		controllerId: string().trim().min(1).optional(),
+		goal: string().trim().min(1),
+		status: _enum([
+			"queued",
+			"running",
+			"waiting",
+			"blocked"
+		]).optional(),
+		notifyPolicy: _enum([
+			"done_only",
+			"state_changes",
+			"silent"
+		]).optional(),
+		currentStep: nullableStringSchema,
+		stateJson: jsonValueSchema.nullable().optional(),
+		waitJson: jsonValueSchema.nullable().optional()
+	}).strict(),
+	object({
+		action: literal("get_flow"),
+		flowId: string().trim().min(1)
+	}).strict(),
+	object({ action: literal("list_flows") }).strict(),
+	object({ action: literal("find_latest_flow") }).strict(),
+	object({
+		action: literal("resolve_flow"),
+		token: string().trim().min(1)
+	}).strict(),
+	object({
+		action: literal("get_task_summary"),
+		flowId: string().trim().min(1)
+	}).strict(),
+	object({
+		action: literal("set_waiting"),
+		flowId: string().trim().min(1),
+		expectedRevision: number().int().nonnegative(),
+		currentStep: nullableStringSchema,
+		stateJson: jsonValueSchema.nullable().optional(),
+		waitJson: jsonValueSchema.nullable().optional(),
+		blockedTaskId: nullableStringSchema,
+		blockedSummary: nullableStringSchema
+	}).strict(),
+	object({
+		action: literal("resume_flow"),
+		flowId: string().trim().min(1),
+		expectedRevision: number().int().nonnegative(),
+		status: _enum(["queued", "running"]).optional(),
+		currentStep: nullableStringSchema,
+		stateJson: jsonValueSchema.nullable().optional()
+	}).strict(),
+	object({
+		action: literal("finish_flow"),
+		flowId: string().trim().min(1),
+		expectedRevision: number().int().nonnegative(),
+		stateJson: jsonValueSchema.nullable().optional()
+	}).strict(),
+	object({
+		action: literal("fail_flow"),
+		flowId: string().trim().min(1),
+		expectedRevision: number().int().nonnegative(),
+		stateJson: jsonValueSchema.nullable().optional(),
+		blockedTaskId: nullableStringSchema,
+		blockedSummary: nullableStringSchema
+	}).strict(),
+	object({
+		action: literal("request_cancel"),
+		flowId: string().trim().min(1),
+		expectedRevision: number().int().nonnegative()
+	}).strict(),
+	object({
+		action: literal("cancel_flow"),
+		flowId: string().trim().min(1)
+	}).strict(),
+	object({
+		action: literal("run_task"),
+		flowId: string().trim().min(1),
+		runtime: _enum(["subagent", "acp"]),
+		sourceId: string().trim().min(1).optional(),
+		childSessionKey: string().trim().min(1).optional(),
+		parentTaskId: string().trim().min(1).optional(),
+		agentId: string().trim().min(1).optional(),
+		runId: string().trim().min(1).optional(),
+		label: string().trim().min(1).optional(),
+		task: string().trim().min(1),
+		preferMetadata: boolean().optional(),
+		notifyPolicy: _enum([
+			"done_only",
+			"state_changes",
+			"silent"
+		]).optional(),
+		status: _enum(["queued", "running"]).optional(),
+		startedAt: number().int().nonnegative().optional(),
+		lastEventAt: number().int().nonnegative().optional(),
+		progressSummary: nullableStringSchema
+	}).strict().superRefine((value, ctx) => {
+		if (value.status !== "running" && (value.startedAt !== void 0 || value.lastEventAt !== void 0 || value.progressSummary !== void 0)) ctx.addIssue({
+			code: ZodIssueCode.custom,
+			message: "status must be running when startedAt, lastEventAt, or progressSummary is provided",
+			path: ["status"]
+		});
+	})
 ]);
 function pickOptionalFields(source, keys) {
 	const result = {};

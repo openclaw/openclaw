@@ -1,6 +1,7 @@
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
-import type { SecurityAuditFinding, SecurityAuditReport } from "./audit.types.js";
+import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
+import type { SecurityAuditFinding, SecurityAuditReport, SecurityAuditSuppressedFinding } from "./audit.types.js";
 import type { ExecFn } from "./windows-acl.js";
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
@@ -64,6 +65,10 @@ export type AuditExecutionContext = {
         password?: string;
     };
     workspaceDir?: string;
+};
+export declare function applySecurityAuditSuppressions(findings: SecurityAuditFinding[], suppressions: SecurityAuditSuppression[] | undefined): {
+    findings: SecurityAuditFinding[];
+    suppressedFindings: SecurityAuditSuppressedFinding[];
 };
 export declare function collectFilesystemFindings(params: {
     stateDir: string;

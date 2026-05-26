@@ -28,11 +28,13 @@ export declare function resolveEmbeddedAgentStreamFn(params: {
     signal?: AbortSignal;
     model: EmbeddedRunAttemptParams["model"];
     resolvedApiKey?: string;
+    authProfileId?: string;
     authStorage?: {
         getApiKey(provider: string): Promise<string | undefined>;
     };
 }): StreamFn;
-export declare const __testing: {
+export declare const testing: {
     setPiNativeCodexResponsesStreamFnForTest(streamFn: StreamFn | undefined): void;
     resetPiNativeCodexResponsesStreamFnForTest(): void;
 };
+export { testing as __testing };

@@ -1,4 +1,4 @@
-import { l as ImageGenerationProvider } from "../../types-C-TYaOW6.js";
+import { l as ImageGenerationProvider } from "../../types-BaGDaXQN.js";
 //#region extensions/vydra/image-generation-provider.d.ts
 declare function buildVydraImageGenerationProvider(): ImageGenerationProvider;
 //#endregion

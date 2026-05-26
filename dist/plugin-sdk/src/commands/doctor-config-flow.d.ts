@@ -14,6 +14,7 @@ export declare function loadAndMaybeMigrateDoctorConfig(params: {
     path: string;
     shouldWriteConfig: boolean;
     sourceConfigValid: boolean;
+    preservedLegacyRootKeys: string[];
     sourceLastTouchedVersion?: string | undefined;
     skipPluginValidationOnWrite?: boolean | undefined;
 }>;

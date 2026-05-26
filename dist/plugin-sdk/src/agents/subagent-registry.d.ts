@@ -8,7 +8,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
-import { getSubagentRunsSnapshotForRead, persistSubagentRunsToDisk, restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
+import { getSubagentRunsSnapshotForRead, persistSubagentRunsToDisk, persistSubagentRunsToDiskOrThrow, restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -22,6 +22,7 @@ type SubagentRegistryDeps = {
     getRuntimeConfig: typeof getRuntimeConfig;
     onAgentEvent: typeof onAgentEvent;
     persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
+    persistSubagentRunsToDiskOrThrow: typeof persistSubagentRunsToDiskOrThrow;
     resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
     restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
     runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
@@ -46,7 +47,7 @@ export declare function registerSubagentRun(params: RegisterSubagentRunParams): 
 export declare function resetSubagentRegistryForTests(opts?: {
     persist?: boolean;
 }): void;
-export declare const __testing: {
+export declare const testing: {
     readonly sweepOnceForTests: () => Promise<void>;
     readonly setDepsForTest: (overrides?: Partial<SubagentRegistryDeps>) => void;
 };
@@ -82,3 +83,4 @@ export declare function getSubagentRunByChildSessionKey(childSessionKey: string)
 export declare function getLatestSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null;
 export declare function initSubagentRegistry(): void;
 export { listSessionMaintenanceProtectedSubagentSessionKeys } from "./subagent-registry-maintenance.js";
+export { testing as __testing };

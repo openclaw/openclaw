@@ -1,2 +1,2 @@
-import { n as buildMinimaxVideoGenerationProvider, t as buildMinimaxPortalVideoGenerationProvider } from "../../video-generation-provider-CeYppKSl.js";
+import { n as buildMinimaxVideoGenerationProvider, t as buildMinimaxPortalVideoGenerationProvider } from "../../video-generation-provider-Cd2cCE-M.js";
 export { buildMinimaxPortalVideoGenerationProvider, buildMinimaxVideoGenerationProvider };

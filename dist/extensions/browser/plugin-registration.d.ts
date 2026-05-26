@@ -1,4 +1,4 @@
-import { K as OpenClawPluginSecurityAuditCollector, L as OpenClawPluginNodeHostCommand, v as OpenClawPluginApi } from "../../types-lCXG2pW_.js";
+import { C as OpenClawPluginApi, H as OpenClawPluginNodeHostCommand, Z as OpenClawPluginSecurityAuditCollector } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/browser/plugin-registration.d.ts
 declare const browserPluginReload: {
   restartPrefixes: string[];

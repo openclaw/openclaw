@@ -1,4 +1,4 @@
-import { v as OpenClawPluginApi } from "../../types-lCXG2pW_.js";
-import { n as PluginRuntime } from "../../types-DtDIgr2k.js";
-import { t as definePluginEntry } from "../../plugin-entry-wssl6UOG.js";
+import { C as OpenClawPluginApi } from "../../types-Vx7Jq4_-2.js";
+import { n as PluginRuntime } from "../../types-DpjQFFwi.js";
+import { t as definePluginEntry } from "../../plugin-entry-CHgWqp8b.js";
 export { type OpenClawPluginApi, type PluginRuntime, definePluginEntry };

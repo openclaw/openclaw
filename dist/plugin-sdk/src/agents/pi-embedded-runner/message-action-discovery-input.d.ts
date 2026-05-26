@@ -10,7 +10,7 @@ export declare function buildEmbeddedMessageActionDiscoveryInput(params: {
     sessionId?: string | null;
     agentId?: string | null;
     senderId?: string | null;
-    senderIsOwner?: boolean;
+    senderIsOwner?: boolean | null;
 }): {
     cfg: OpenClawConfig | undefined;
     channel: string;

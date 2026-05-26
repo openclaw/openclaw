@@ -93,6 +93,10 @@ export type MemoryPluginRuntime = {
         cfg: OpenClawConfig;
         agentId: string;
     }): MemoryRuntimeBackendConfig;
+    closeMemorySearchManager?(params: {
+        cfg: OpenClawConfig;
+        agentId: string;
+    }): Promise<void>;
     closeAllMemorySearchManagers?(): Promise<void>;
 };
 export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";
@@ -156,5 +160,5 @@ export declare function listActiveMemoryPublicArtifacts(params: {
 }): Promise<MemoryPluginPublicArtifact[]>;
 export declare function restoreMemoryPluginState(state: MemoryPluginState): void;
 export declare function clearMemoryPluginState(): void;
-export declare const _resetMemoryPluginState: typeof clearMemoryPluginState;
+export declare const resetMemoryPluginState: typeof clearMemoryPluginState;
 export {};

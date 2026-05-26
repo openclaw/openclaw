@@ -12,9 +12,9 @@ type SetupCliBackendRuntimeLookupParams = {
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
 };
-export declare const __testing: {
+export declare const testing: {
     resetRuntimeState(): void;
     setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void;
 };
 export declare function resolvePluginSetupCliBackendRuntime(params: SetupCliBackendRuntimeLookupParams): SetupCliBackendRuntimeEntry | undefined;
-export {};
+export { testing as __testing };

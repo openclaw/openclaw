@@ -1,4 +1,4 @@
-import type { SessionEntry } from "../../config/sessions.js";
+import { type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { GetReplyOptions } from "../types.js";
 import { type FollowupRun } from "./queue.js";
@@ -13,4 +13,5 @@ export declare function createFollowupRunner(params: {
     storePath?: string;
     defaultModel: string;
     agentCfgContextTokens?: number;
+    toolProgressDetail?: "explain" | "raw";
 }): (queued: FollowupRun) => Promise<void>;

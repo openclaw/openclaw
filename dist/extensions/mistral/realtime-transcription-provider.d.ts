@@ -1,2 +1,2 @@
-import { n as buildMistralRealtimeTranscriptionProvider, t as __testing } from "../../realtime-transcription-provider-D5l8CZ0x.js";
-export { __testing, buildMistralRealtimeTranscriptionProvider };
+import { n as testing, t as buildMistralRealtimeTranscriptionProvider } from "../../realtime-transcription-provider-CiPg61Rq.js";
+export { testing as __testing, testing, buildMistralRealtimeTranscriptionProvider };

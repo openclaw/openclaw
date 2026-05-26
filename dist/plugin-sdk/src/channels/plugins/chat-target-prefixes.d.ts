@@ -29,6 +29,7 @@ export type ChatSenderAllowParams = {
     chatId?: number | null;
     chatGuid?: string | null;
     chatIdentifier?: string | null;
+    allowConversationTargets?: boolean | null;
 };
 export declare function isAllowedParsedChatSender(params: {
     allowFrom: Array<string | number>;
@@ -36,6 +37,7 @@ export declare function isAllowedParsedChatSender(params: {
     chatId?: number | null;
     chatGuid?: string | null;
     chatIdentifier?: string | null;
+    allowConversationTargets?: boolean | null;
     normalizeSender: (sender: string) => string;
     parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean;
@@ -90,5 +92,6 @@ export declare function resolveServicePrefixedOrChatAllowTarget<TAllowTarget ext
 export declare function createAllowedChatSenderMatcher(params: {
     normalizeSender: (sender: string) => string;
     parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
+    allowConversationTargets?: boolean;
 }): (input: ChatSenderAllowParams) => boolean;
 export declare function parseChatAllowTargetPrefixes(params: ChatTargetPrefixesParams): ParsedChatTarget | null;

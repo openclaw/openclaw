@@ -2,7 +2,7 @@ import { buildAnthropicReplayPolicyForModel, buildGoogleGeminiReplayPolicy, buil
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderThinkingProfile } from "./plugin-entry.js";
 import { normalizeAntigravityPreviewModelId, normalizeGooglePreviewModelId } from "./provider-model-id-normalize.js";
-export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
+export type { ModelApi, ModelProviderDeclarationConfig as ModelProviderConfig, } from "../config/types.models.js";
 export type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind, UnifiedModelCatalogSource, } from "../model-catalog/types.js";
 export type { BedrockDiscoveryConfig, ModelCompatConfig, ModelDefinitionConfig, } from "../config/types.models.js";
 export type { ProviderEndpointClass, ProviderEndpointResolution, } from "../agents/provider-attribution.js";

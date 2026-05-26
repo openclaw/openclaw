@@ -8,7 +8,21 @@ export declare function buildCliSessionHistoryPrompt(params: {
     prompt: string;
     maxHistoryChars?: number;
 }): string | undefined;
+export declare function hasCliSessionTranscript(params: {
+    sessionId: string;
+    sessionFile: string;
+    sessionKey?: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+}): Promise<boolean>;
 export declare function loadCliSessionHistoryMessages(params: {
+    sessionId: string;
+    sessionFile: string;
+    sessionKey?: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+}): Promise<unknown[]>;
+export declare function loadCliSessionContextEngineMessages(params: {
     sessionId: string;
     sessionFile: string;
     sessionKey?: string;

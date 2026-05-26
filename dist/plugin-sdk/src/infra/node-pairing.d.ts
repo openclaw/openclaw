@@ -1,6 +1,8 @@
 import { type NodeApprovalScope } from "./node-pairing-authz.js";
 type NodeDeclaredSurface = {
     nodeId: string;
+    clientId?: string;
+    clientMode?: string;
     displayName?: string;
     platform?: string;
     version?: string;
@@ -21,6 +23,13 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
     requestId: string;
     silent?: boolean;
     ts: number;
+};
+export type NodePairingSupersededRequest = Pick<NodePairingPendingRequest, "requestId" | "nodeId">;
+export type RequestNodePairingResult = {
+    status: "pending";
+    request: NodePairingPendingRequest;
+    created: boolean;
+    superseded?: NodePairingSupersededRequest[];
 };
 type NodePairingPendingEntry = NodePairingPendingRequest & {
     requiredApproveScopes: NodeApprovalScope[];
@@ -49,11 +58,7 @@ type ForbiddenNodePairingResult = {
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 export declare function listNodePairing(baseDir?: string): Promise<NodePairingList>;
 export declare function getPairedNode(nodeId: string, baseDir?: string): Promise<NodePairingPairedNode | null>;
-export declare function requestNodePairing(req: NodePairingRequestInput, baseDir?: string): Promise<{
-    status: "pending";
-    request: NodePairingPendingRequest;
-    created: boolean;
-}>;
+export declare function requestNodePairing(req: NodePairingRequestInput, baseDir?: string): Promise<RequestNodePairingResult>;
 export declare function approveNodePairing(requestId: string, options: {
     callerScopes?: readonly string[];
 }, baseDir?: string): Promise<ApproveNodePairingResult>;

@@ -87,6 +87,8 @@ export declare function resolveReplyDirectives(params: {
     aliasIndex: ModelAliasIndex;
     provider: string;
     model: string;
+    hasOneTurnModelOverride?: boolean;
+    skipStoredModelOverride?: boolean;
     hasResolvedHeartbeatModelOverride: boolean;
     typing: TypingController;
     opts?: GetReplyOptions;

@@ -1,4 +1,5 @@
-import { o as ImageMetadata } from "../../local-media-access-hSs5CPXE.js";
+import { n as ImageMetadata } from "../../image-ops-xNaOYvkf.js";
+
 //#region extensions/media-understanding-core/image-ops.d.ts
 type ResizeToJpegParams = {
   buffer: Buffer;

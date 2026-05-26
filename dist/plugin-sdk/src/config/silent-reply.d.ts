@@ -8,8 +8,6 @@ type ResolveSilentReplyParams = {
 };
 export declare function resolveSilentReplySettings(params: ResolveSilentReplyParams): {
     policy: SilentReplyPolicy;
-    rewrite: boolean;
 };
 export declare function resolveSilentReplyPolicy(params: ResolveSilentReplyParams): SilentReplyPolicy;
-export declare function resolveSilentReplyRewriteEnabled(params: ResolveSilentReplyParams): boolean;
 export {};

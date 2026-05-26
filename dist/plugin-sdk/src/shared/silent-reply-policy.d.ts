@@ -1,9 +1,7 @@
 export type SilentReplyPolicy = "allow" | "disallow";
 export type SilentReplyConversationType = "direct" | "group" | "internal";
-export type SilentReplyPolicyShape = Partial<Record<SilentReplyConversationType, SilentReplyPolicy>>;
-export type SilentReplyRewriteShape = Partial<Record<SilentReplyConversationType, boolean>>;
+export type SilentReplyPolicyShape = Partial<Record<Exclude<SilentReplyConversationType, "direct">, SilentReplyPolicy>>;
 export declare const DEFAULT_SILENT_REPLY_POLICY: Record<SilentReplyConversationType, SilentReplyPolicy>;
-export declare const DEFAULT_SILENT_REPLY_REWRITE: Record<SilentReplyConversationType, boolean>;
 export declare function classifySilentReplyConversationType(params: {
     sessionKey?: string;
     surface?: string;
@@ -14,11 +12,3 @@ export declare function resolveSilentReplyPolicyFromPolicies(params: {
     defaultPolicy?: SilentReplyPolicyShape;
     surfacePolicy?: SilentReplyPolicyShape;
 }): SilentReplyPolicy;
-export declare function resolveSilentReplyRewriteFromPolicies(params: {
-    conversationType: SilentReplyConversationType;
-    defaultRewrite?: SilentReplyRewriteShape;
-    surfaceRewrite?: SilentReplyRewriteShape;
-}): boolean;
-export declare function resolveSilentReplyRewriteText(params: {
-    seed?: string;
-}): string;

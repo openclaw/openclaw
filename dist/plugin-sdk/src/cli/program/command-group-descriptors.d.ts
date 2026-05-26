@@ -3,6 +3,7 @@ export type NamedCommandDescriptor = {
     name: string;
     description: string;
     hasSubcommands: boolean;
+    parentDefaultHelp?: boolean;
 };
 export type CommandGroupDescriptorSpec<TRegister> = {
     commandNames: readonly string[];

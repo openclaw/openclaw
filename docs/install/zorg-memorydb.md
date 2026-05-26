@@ -50,6 +50,14 @@ sudo env ZORG_INSTALL_MODE=first-run "$(npm root -g)/openclaw/zorg/install-zorg-
 
 Direct global npm also fails closed when a host-side `openclaw` binary already exists. That command would be an upgrade, not a first-run install. Use the first-run installer on clean hosts, or opt into an existing repair with `ZORG_INSTALL_MODE=existing ZORG_ALLOW_EXISTING_UPGRADE=1` only when that is the intended scope.
 
+For an intentional direct GitHub npm upgrade over an existing host OpenClaw install, use the explicit existing-upgrade environment guard:
+
+```bash
+ZORG_INSTALL_MODE=existing ZORG_ALLOW_EXISTING_UPGRADE=1 npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+```
+
+This preserves the first-run safety gate while allowing a deliberate additive overlay refresh on a host that already has OpenClaw installed.
+
 If direct GitHub npm is rerun over an existing global install, npm may fail during its git-dependency preparation before package lifecycle scripts can print the clearer guard. The common signature is:
 
 ```text
@@ -69,7 +77,7 @@ If direct npm has already repaired Node or failed once on an old host, verify th
 node --version
 npm --version
 sudo npm cache clean --force
-sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo env ZORG_INSTALL_MODE=existing ZORG_ALLOW_EXISTING_UPGRADE=1 npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 If Node is still below v22.19.0 after the failed direct npm attempt, use the first-run installer instead of repeating direct npm:

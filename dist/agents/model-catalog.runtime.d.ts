@@ -1,2 +1,2 @@
-import { r as loadModelCatalog } from "../model-catalog-emnrbzQV.js";
+import { n as loadModelCatalog } from "../model-catalog-BzrX8YRt.js";
 export { loadModelCatalog };

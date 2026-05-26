@@ -6,6 +6,9 @@ type CodexThreadConfigValue = string | number | boolean | null | CodexThreadConf
 type CodexThreadConfigObject = {
     [key: string]: CodexThreadConfigValue;
 };
+type CodexUserMcpServersProjectionOptions = {
+    agentId?: string;
+};
 export declare function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpConfig): string[];
 /**
  * Codex app-server runtime (extensions/codex) receives its thread config as a
@@ -19,7 +22,7 @@ export declare function injectCodexMcpConfigArgs(args: string[] | undefined, con
  * curated app-server apps are already attached separately through the codex
  * plugin thread-config `apps` patch, so they must not be re-projected here.
  */
-export declare function buildCodexUserMcpServersThreadConfigPatch(cfg: OpenClawConfig | undefined): {
+export declare function buildCodexUserMcpServersThreadConfigPatch(cfg: OpenClawConfig | undefined, options?: CodexUserMcpServersProjectionOptions): {
     mcp_servers: CodexThreadConfigObject;
 } | undefined;
 export {};

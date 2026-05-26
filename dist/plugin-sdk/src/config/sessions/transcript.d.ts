@@ -1,5 +1,5 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionEntry } from "./types.js";
 export type SessionTranscriptAppendResult = {
     ok: true;
@@ -43,7 +43,7 @@ export declare function appendAssistantMessageToSessionTranscript(params: {
     /** Optional override for store path (mostly for tests). */
     storePath?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    config?: SessionWriteLockAcquireTimeoutConfig;
+    config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult>;
 export declare function appendExactAssistantMessageToSessionTranscript(params: {
     agentId?: string;
@@ -52,6 +52,6 @@ export declare function appendExactAssistantMessageToSessionTranscript(params: {
     idempotencyKey?: string;
     storePath?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    config?: SessionWriteLockAcquireTimeoutConfig;
+    config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult>;
 export {};

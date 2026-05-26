@@ -1,6 +1,15 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 export declare function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[];
 export declare function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[];
+export type DoctorPreviewNotes = {
+    infoNotes: string[];
+    warningNotes: string[];
+};
+export declare function collectDoctorPreviewNotes(params: {
+    cfg: OpenClawConfig;
+    doctorFixCommand: string;
+    env?: NodeJS.ProcessEnv;
+}): Promise<DoctorPreviewNotes>;
 export declare function collectDoctorPreviewWarnings(params: {
     cfg: OpenClawConfig;
     doctorFixCommand: string;

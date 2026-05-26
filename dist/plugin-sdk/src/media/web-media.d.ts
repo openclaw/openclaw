@@ -1,7 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type MediaKind } from "./constants.js";
-import { optimizeImageToPng } from "./image-ops.js";
 import { getDefaultLocalRoots, LocalMediaAccessError, type LocalMediaAccessErrorCode } from "./local-media-access.js";
+import { optimizeImageToPng } from "./media-services.js";
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 export type WebMediaResult = {
@@ -17,6 +17,7 @@ type WebMediaOptions = {
     proxyUrl?: string;
     fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     requestInit?: RequestInit;
+    readIdleTimeoutMs?: number;
     trustExplicitProxyDns?: boolean;
     workspaceDir?: string;
     /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */

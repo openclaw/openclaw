@@ -2,6 +2,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 export type SessionTranscriptHitIdentity = {
     stem: string;
+    liveStem?: string;
     ownerAgentId?: string;
     archived: boolean;
 };
@@ -22,4 +23,5 @@ export declare function resolveTranscriptStemToSessionKeys(params: {
     store: Record<string, SessionEntry>;
     stem: string;
     archivedOwnerAgentId?: string;
+    allowQmdSlugFallback?: boolean;
 }): string[];

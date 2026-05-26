@@ -35,6 +35,13 @@ type ChannelIssueLike = {
     message: string;
     fix?: string;
 };
+type AgentStatusLike = {
+    totalSessions: number;
+    agents: Array<{
+        id: string;
+        lastActiveAgeMs?: number | null;
+    }>;
+};
 export declare function appendStatusAllDiagnosis(params: {
     lines: string[];
     progress: ProgressReporter;
@@ -59,6 +66,8 @@ export declare function appendStatusAllDiagnosis(params: {
     pluginCompatibility: PluginCompatibilityNotice[];
     channelsStatus: unknown;
     channelIssues: ChannelIssueLike[];
+    deliveryDiagnostics: unknown;
+    agentStatus?: AgentStatusLike;
     gatewayReachable: boolean;
     health: unknown;
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;

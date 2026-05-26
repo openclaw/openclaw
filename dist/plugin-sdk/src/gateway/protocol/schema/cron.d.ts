@@ -136,6 +136,9 @@ export declare const CronJobStateSchema: Type.TObject<{
     lastDelivered: Type.TOptional<Type.TBoolean>;
     lastDeliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
     lastDeliveryError: Type.TOptional<Type.TString>;
+    lastFailureNotificationDelivered: Type.TOptional<Type.TBoolean>;
+    lastFailureNotificationDeliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
+    lastFailureNotificationDeliveryError: Type.TOptional<Type.TString>;
     lastFailureAlertAtMs: Type.TOptional<Type.TInteger>;
 }>;
 export declare const CronJobSchema: Type.TObject<{
@@ -253,6 +256,9 @@ export declare const CronJobSchema: Type.TObject<{
         lastDelivered: Type.TOptional<Type.TBoolean>;
         lastDeliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
         lastDeliveryError: Type.TOptional<Type.TString>;
+        lastFailureNotificationDelivered: Type.TOptional<Type.TBoolean>;
+        lastFailureNotificationDeliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
+        lastFailureNotificationDeliveryError: Type.TOptional<Type.TString>;
         lastFailureAlertAtMs: Type.TOptional<Type.TInteger>;
     }>;
 }>;
@@ -431,6 +437,9 @@ export declare const CronJobPatchSchema: Type.TObject<{
         lastDelivered: Type.TOptional<Type.TBoolean>;
         lastDeliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
         lastDeliveryError: Type.TOptional<Type.TString>;
+        lastFailureNotificationDelivered: Type.TOptional<Type.TBoolean>;
+        lastFailureNotificationDeliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
+        lastFailureNotificationDeliveryError: Type.TOptional<Type.TString>;
         lastFailureAlertAtMs: Type.TOptional<Type.TInteger>;
     }>>;
 }>;
@@ -453,6 +462,7 @@ export declare const CronRunsParamsSchema: Type.TObject<{
     scope: Type.TOptional<Type.TUnion<[Type.TLiteral<"job">, Type.TLiteral<"all">]>>;
     id: Type.TOptional<Type.TString>;
     jobId: Type.TOptional<Type.TString>;
+    runId: Type.TOptional<Type.TString>;
     limit: Type.TOptional<Type.TInteger>;
     offset: Type.TOptional<Type.TInteger>;
     statuses: Type.TOptional<Type.TArray<Type.TUnion<[Type.TLiteral<"ok">, Type.TLiteral<"error">, Type.TLiteral<"skipped">]>>>;
@@ -484,6 +494,11 @@ export declare const CronRunLogEntrySchema: Type.TObject<{
     delivered: Type.TOptional<Type.TBoolean>;
     deliveryStatus: Type.TOptional<Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>>;
     deliveryError: Type.TOptional<Type.TString>;
+    failureNotificationDelivery: Type.TOptional<Type.TObject<{
+        delivered: Type.TOptional<Type.TBoolean>;
+        status: Type.TUnion<[Type.TLiteral<"delivered">, Type.TLiteral<"not-delivered">, Type.TLiteral<"unknown">, Type.TLiteral<"not-requested">]>;
+        error: Type.TOptional<Type.TString>;
+    }>>;
     sessionId: Type.TOptional<Type.TString>;
     sessionKey: Type.TOptional<Type.TString>;
     runId: Type.TOptional<Type.TString>;

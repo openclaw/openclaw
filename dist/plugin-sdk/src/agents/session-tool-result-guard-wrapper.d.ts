@@ -22,8 +22,14 @@ export declare function guardSessionManager(sessionManager: SessionManager, opts
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
     suppressNextUserMessagePersistence?: boolean;
+    suppressTranscriptOnlyAssistantPersistence?: boolean;
+    suppressAssistantErrorPersistence?: boolean;
     onUserMessagePersisted?: (message: Extract<AgentMessage, {
         role: "user";
+    }>) => void | Promise<void>;
+    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    onAssistantErrorMessagePersisted?: (message: Extract<AgentMessage, {
+        role: "assistant";
     }>) => void | Promise<void>;
 }): GuardedSessionManager;
 export {};

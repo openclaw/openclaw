@@ -1,6 +1,6 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { Tt as ProviderAuthResult } from "../../types-lCXG2pW_.js";
-import { n as readClaudeCliCredentialsForSetup } from "../../cli-auth-seam-4MxhY2qj.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { At as ProviderAuthResult } from "../../types-Vx7Jq4_-2.js";
+import { n as readClaudeCliCredentialsForSetup } from "../../cli-auth-seam-C4YfOvuK.js";
 //#region extensions/anthropic/cli-migration.d.ts
 type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 declare function hasClaudeCliAuth(options?: {

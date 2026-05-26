@@ -1,4 +1,4 @@
-import { T as OpenClawPluginDefinition, v as OpenClawPluginApi, w as OpenClawPluginConfigSchema } from "../../types-lCXG2pW_.js";
+import { A as OpenClawPluginDefinition, C as OpenClawPluginApi, k as OpenClawPluginConfigSchema } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/skill-workshop/src/types.d.ts
 type SkillWorkshopStatus = "pending" | "applied" | "rejected" | "quarantined";
 type SkillChange = {

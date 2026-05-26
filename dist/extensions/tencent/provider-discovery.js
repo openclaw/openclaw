@@ -1,4 +1,4 @@
-import { t as buildTokenHubProvider } from "../../provider-catalog-u6q2gnHx.js";
+import { t as buildTokenHubProvider } from "../../provider-catalog-BJVFoaeo.js";
 //#region extensions/tencent/provider-discovery.ts
 const tencentProviderDiscovery = {
 	id: "tencent-tokenhub",

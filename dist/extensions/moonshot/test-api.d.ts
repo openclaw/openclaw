@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { n as moonshotMediaUnderstandingProvider } from "../../media-understanding-provider-DOv8_4l_.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { n as moonshotMediaUnderstandingProvider } from "../../media-understanding-provider-DfQNGUCx.js";
 
 //#region extensions/moonshot/src/kimi-web-search-provider.runtime.d.ts
 type KimiConfig = {
@@ -38,7 +38,7 @@ declare function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClaw
 declare function extractKimiCitations(data: KimiSearchResponse): string[];
 declare function hasKimiSearchResults(data: KimiSearchResponse): boolean;
 declare function extractKimiToolResultContent(toolCall: KimiToolCall): string | undefined;
-declare const __testing: {
+declare const testing: {
   readonly resolveKimiApiKey: typeof resolveKimiApiKey;
   readonly resolveKimiModel: typeof resolveKimiModel;
   readonly resolveKimiBaseUrl: typeof resolveKimiBaseUrl;
@@ -47,4 +47,4 @@ declare const __testing: {
   readonly extractKimiToolResultContent: typeof extractKimiToolResultContent;
 };
 //#endregion
-export { __testing, moonshotMediaUnderstandingProvider };
+export { testing as __testing, testing, moonshotMediaUnderstandingProvider };

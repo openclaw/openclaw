@@ -1,2 +1,2 @@
-import { n as transcribeDeepInfraAudio, t as deepinfraMediaUnderstandingProvider } from "../../media-understanding-provider-BOF9cH-N.js";
+import { n as transcribeDeepInfraAudio, t as deepinfraMediaUnderstandingProvider } from "../../media-understanding-provider-BZCyNoFc.js";
 export { deepinfraMediaUnderstandingProvider, transcribeDeepInfraAudio };

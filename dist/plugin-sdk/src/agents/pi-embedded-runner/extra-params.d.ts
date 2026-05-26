@@ -10,7 +10,7 @@ declare const defaultProviderRuntimeDeps: {
     resolveProviderExtraParamsForTransport: typeof resolveProviderExtraParamsForTransportRuntime;
     wrapProviderStreamFn: typeof wrapProviderStreamFnRuntime;
 };
-export declare const __testing: {
+export declare const testing: {
     setProviderRuntimeDepsForTest(deps: Partial<typeof defaultProviderRuntimeDeps> | undefined): void;
     resetProviderRuntimeDepsForTest(): void;
 };
@@ -62,4 +62,4 @@ export declare function applyExtraParamsToAgent(agent: {
 }): {
     effectiveExtraParams: Record<string, unknown>;
 };
-export {};
+export { testing as __testing };

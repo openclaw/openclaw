@@ -8,6 +8,7 @@ export type OAuthCallbackResult = {
     code: string;
     state: string;
 };
+export declare function buildOAuthCallbackOriginResolver(allowedHosts: readonly string[] | undefined): (originHeader: string | string[] | undefined) => string | undefined;
 export declare function generateOAuthState(): string;
 export declare function parseOAuthCallbackInput(input: string, messages?: {
     missingState?: string;
@@ -25,6 +26,7 @@ export declare function waitForLocalOAuthCallback(params: {
     progressMessage?: string;
     hostname?: string;
     onProgress?: (message: string) => void;
+    corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type GetRuntimeAuthForModel = typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModel;

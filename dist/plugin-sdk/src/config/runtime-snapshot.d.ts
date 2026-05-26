@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "./types.js";
-export type RuntimeConfigSnapshotRefreshParams = {
+export type RuntimeConfigSnapshotRefreshOptions = {
+    includeAuthStoreRefs?: boolean;
+};
+export type RuntimeConfigSnapshotRefreshParams = RuntimeConfigSnapshotRefreshOptions & {
     sourceConfig: OpenClawConfig;
 };
 export type ConfigWriteAfterWrite = {
@@ -74,6 +77,7 @@ export declare function notifyRuntimeConfigWriteListeners(event: RuntimeConfigWr
 export declare function loadPinnedRuntimeConfig(loadFresh: () => OpenClawConfig): OpenClawConfig;
 export declare function finalizeRuntimeSnapshotWrite(params: {
     nextSourceConfig: OpenClawConfig;
+    refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
     hadRuntimeSnapshot: boolean;
     hadBothSnapshots: boolean;
     loadFreshConfig: () => OpenClawConfig;

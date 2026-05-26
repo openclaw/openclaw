@@ -1,5 +1,5 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { t as buildMicrosoftFoundryProvider } from "../../provider-BvB6wN9Y.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as buildMicrosoftFoundryProvider } from "../../provider-B2ZrEFCp.js";
 //#region extensions/microsoft-foundry/index.ts
 var microsoft_foundry_default = definePluginEntry({
 	id: "microsoft-foundry",

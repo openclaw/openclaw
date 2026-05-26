@@ -1,4 +1,4 @@
-import { n as buildBytePlusProvider, t as buildBytePlusCodingProvider } from "../../provider-catalog-BBD8udus.js";
+import { n as buildBytePlusProvider, t as buildBytePlusCodingProvider } from "../../provider-catalog-DF5v1UBj.js";
 //#region extensions/byteplus/provider-discovery.ts
 const bytePlusProviderDiscovery = [{
 	id: "byteplus",

@@ -8,6 +8,7 @@ export type SessionStoreTarget = {
     agentId: string;
     storePath: string;
 };
+export declare function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[];
 export declare function resolveAllAgentSessionStoreTargetsSync(cfg: OpenClawConfig, params?: {
     env?: NodeJS.ProcessEnv;
 }): SessionStoreTarget[];

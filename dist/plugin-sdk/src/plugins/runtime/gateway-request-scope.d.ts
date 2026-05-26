@@ -5,6 +5,7 @@ export type PluginRuntimeGatewayRequestScope = {
     isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
     pluginId?: string;
     pluginSource?: string;
+    gatewayMethodDispatchAllowed?: boolean;
 };
 export type PluginRuntimePluginScope = {
     pluginId: string;

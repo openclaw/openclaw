@@ -2,7 +2,9 @@ import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
 export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema, } from "../config/zod-schema.core.js";
 type FacadeModule = TtsRuntimeFacade;
 export declare function prewarmTtsRuntimeFacade(): void;
-export declare const _test: FacadeModule["_test"];
+export declare const testApi: FacadeModule["testApi"];
+/** @deprecated Use `testApi`. */
+export { testApi as _test };
 export declare const buildTtsSystemPromptHint: FacadeModule["buildTtsSystemPromptHint"];
 export declare const getLastTtsAttempt: FacadeModule["getLastTtsAttempt"];
 export declare const getResolvedSpeechProviderConfig: FacadeModule["getResolvedSpeechProviderConfig"];

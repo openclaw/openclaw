@@ -16,8 +16,8 @@ export declare function suspendSession(params: {
     summary?: string;
     ttlMs?: number;
 }): Promise<void>;
-export declare const __testing: {
+export declare const testing: {
     readonly resolveLaneResumeConcurrency: typeof resolveLaneResumeConcurrency;
     readonly resolveSessionSuspensionReason: typeof resolveSessionSuspensionReason;
 };
-export {};
+export { testing as __testing };

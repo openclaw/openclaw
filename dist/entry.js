@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-import { i as normalizeEnv, t as isTruthyEnvValue } from "./env-DL0trrAI.js";
-import { d as isRootHelpInvocation, f as isRootVersionInvocation, r as getCommandPositionalsWithRootOptions } from "./argv-BHL8kwwH.js";
-import { t as isMainModule } from "./is-main-myFrAEl9.js";
-import { t as resolveCliArgvInvocation } from "./argv-invocation-Bmipv42U.js";
-import { a as resolveCliContainerTarget, i as parseCliContainerArgs, n as parseCliProfileArgs, t as applyCliProfileEnv } from "./profile-BTKSg8nb.js";
-import { t as normalizeWindowsArgv } from "./windows-argv-sXr0YSON.js";
-import { t as attachChildProcessBridge } from "./child-process-bridge-F26FvTxb.js";
-import { t as resolveNodeStartupTlsEnvironment } from "./node-startup-env-Cez_rmhp.js";
-import { t as ensureOpenClawExecMarkerOnProcess } from "./openclaw-exec-env-m4y29Ewl.js";
-import { t as installProcessWarningFilter } from "./warning-filter-BGICq60U.js";
+import { i as normalizeEnv, t as isTruthyEnvValue } from "./env-Dhqok4CP.js";
+import { c as hasFlag, d as isRootHelpInvocation, f as isRootVersionInvocation, n as getCommandPathWithRootOptions, r as getCommandPositionalsWithRootOptions } from "./argv-j42r4Rb7.js";
+import { t as isMainModule } from "./is-main-DoKHeRG7.js";
+import { t as resolveCliArgvInvocation } from "./argv-invocation-C7Tq1otP.js";
+import { a as resolveCliContainerTarget, i as parseCliContainerArgs, n as parseCliProfileArgs, t as applyCliProfileEnv } from "./profile-9JBJfDom.js";
+import { t as normalizeWindowsArgv } from "./windows-argv-CVkWOV9N.js";
+import { t as attachChildProcessBridge } from "./child-process-bridge-Lz6wlGQK.js";
+import { t as resolveNodeStartupTlsEnvironment } from "./node-startup-env-DaD2c6bt.js";
+import { t as ensureOpenClawExecMarkerOnProcess } from "./openclaw-exec-env-CjxcymgO.js";
+import { t as installProcessWarningFilter } from "./warning-filter-Ek98bF5R.js";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import process$1 from "node:process";
 import { fileURLToPath } from "node:url";
@@ -334,7 +334,7 @@ function tryHandleRootVersionFastPath(argv, deps = {}) {
 		process.exitCode = 1;
 	});
 	(deps.resolveVersion ?? (async () => {
-		const [{ VERSION }, { resolveCommitHash }] = await Promise.all([import("./version-C1-6jjhw.js"), import("./git-commit-vNwDPLRm.js")]);
+		const [{ VERSION }, { resolveCommitHash }] = await Promise.all([import("./version-DADH-5s2.js"), import("./git-commit-D1sXRBUZ.js")]);
 		return {
 			VERSION,
 			resolveCommitHash
@@ -447,27 +447,50 @@ async function tryHandleRootHelpFastPath(argv, deps = {}) {
 		process$1.exitCode = 1;
 	});
 	try {
-		if (deps.outputRootHelp) {
-			await deps.outputRootHelp();
-			return true;
+		const liveRootHelpOptions = await (deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ?? (await import("./root-help-live-config-3vxSmcK6.js")).loadRootHelpRenderOptionsForConfigSensitivePlugins)(deps.env);
+		if (!liveRootHelpOptions) {
+			if ((deps.outputPrecomputedRootHelpText ?? (await import("./root-help-metadata-BihbOLGR.js")).outputPrecomputedRootHelpText)()) return true;
 		}
-		if (!(deps.outputPrecomputedRootHelpText ?? (await import("./root-help-metadata-D5HVG9Rt.js")).outputPrecomputedRootHelpText)()) {
-			const { outputRootHelp } = await import("./root-help-DftDbAaL.js");
-			await outputRootHelp();
-		}
+		await (deps.outputRootHelp ?? (await import("./root-help-CxFRRMAh.js")).outputRootHelp)(liveRootHelpOptions ?? void 0);
 		return true;
 	} catch (error) {
 		handleError(error);
 		return true;
 	}
 }
+function resolvePrecomputedCommandHelpName(argv) {
+	if (!hasFlag(argv, "--help") && !hasFlag(argv, "-h")) return null;
+	const commandPath = getCommandPathWithRootOptions(argv, 2);
+	if (commandPath.length !== 1) return null;
+	const [commandName] = commandPath;
+	if (commandName === "browser" || commandName === "secrets" || commandName === "nodes") return commandName;
+	return null;
+}
+async function tryHandlePrecomputedCommandHelpFastPath(argv, deps = {}) {
+	const env = deps.env ?? process$1.env;
+	if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") return false;
+	if (resolveCliContainerTarget(argv, env)) return false;
+	const commandName = resolvePrecomputedCommandHelpName(argv);
+	if (!commandName) return false;
+	try {
+		if (commandName === "nodes") {
+			if (await (deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ?? (await import("./root-help-live-config-3vxSmcK6.js")).loadRootHelpRenderOptionsForConfigSensitivePlugins)(env)) return false;
+		}
+		if (commandName === "browser") return (deps.outputPrecomputedBrowserHelpText ?? (await import("./root-help-metadata-BihbOLGR.js")).outputPrecomputedBrowserHelpText)();
+		if (commandName === "secrets") return (deps.outputPrecomputedSecretsHelpText ?? (await import("./root-help-metadata-BihbOLGR.js")).outputPrecomputedSecretsHelpText)();
+		return (deps.outputPrecomputedNodesHelpText ?? (await import("./root-help-metadata-BihbOLGR.js")).outputPrecomputedNodesHelpText)();
+	} catch {
+		return false;
+	}
+}
 async function runMainOrRootHelp(argv) {
 	if (await tryHandleRootHelpFastPath(argv)) return;
+	if (await tryHandlePrecomputedCommandHelpFastPath(argv)) return;
 	try {
 		const { runCli } = await gatewayEntryStartupTrace.measure("run-main-import", () => import("./cli/run-main.js"));
 		await runCli(argv);
 	} catch (error) {
-		const { formatCliFailureLines } = await import("./failure-output-C82IjkY4.js");
+		const { formatCliFailureLines } = await import("./failure-output-DpvzkRSd.js");
 		for (const line of formatCliFailureLines({
 			title: "Could not start the CLI.",
 			error,
@@ -477,4 +500,4 @@ async function runMainOrRootHelp(argv) {
 	}
 }
 //#endregion
-export { tryHandleRootHelpFastPath };
+export { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath };

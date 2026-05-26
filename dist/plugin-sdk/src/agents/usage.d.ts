@@ -14,6 +14,14 @@ export type UsageLike = {
     completion_tokens?: number;
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
+    reasoningTokens?: number;
+    reasoning_tokens?: number;
+    completion_tokens_details?: {
+        reasoning_tokens?: number;
+    };
+    output_tokens_details?: {
+        reasoning_tokens?: number;
+    };
     cached_tokens?: number;
     input_tokens_details?: {
         cached_tokens?: number;
@@ -37,6 +45,7 @@ export type NormalizedUsage = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
 };
 export type AssistantUsageSnapshot = {
@@ -69,6 +78,9 @@ export declare function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | un
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
+    completion_tokens_details?: {
+        reasoning_tokens: number;
+    };
 };
 export declare function derivePromptTokens(usage?: {
     input?: number;

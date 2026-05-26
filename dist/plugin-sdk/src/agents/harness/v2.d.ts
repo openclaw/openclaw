@@ -1,9 +1,11 @@
+import { type ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import type { AgentHarness, AgentHarnessAttemptParams, AgentHarnessAttemptResult, AgentHarnessCompactParams, AgentHarnessCompactResult, AgentHarnessResetParams, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
 type AgentHarnessV2RunBase = {
     harnessId: string;
     label: string;
     pluginId?: string;
     params: AgentHarnessAttemptParams;
+    contextEngineHost?: ContextEngineHostSupport;
 };
 export type AgentHarnessV2PreparedRun = AgentHarnessV2RunBase & {
     lifecycleState: "prepared";

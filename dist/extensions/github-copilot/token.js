@@ -1,3 +1,3 @@
-import { c as deriveCopilotApiBaseUrlFromToken, f as resolveCopilotApiToken, o as DEFAULT_COPILOT_API_BASE_URL } from "../../provider-auth-D5QGE8z6.js";
-import "../../token-BpN4oWFq.js";
+import { n as deriveCopilotApiBaseUrlFromToken, o as resolveCopilotApiToken, t as DEFAULT_COPILOT_API_BASE_URL } from "../../provider-auth-BtRKd5us.js";
+import "../../token-DhBIY8GB.js";
 export { DEFAULT_COPILOT_API_BASE_URL, deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken };

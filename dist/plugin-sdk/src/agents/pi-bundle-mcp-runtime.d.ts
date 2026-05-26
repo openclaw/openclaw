@@ -37,10 +37,10 @@ export declare function retireSessionMcpRuntimeForSessionKey(params: {
     onError?: (error: unknown, sessionId: string, reason: string) => void;
 }): Promise<boolean>;
 export declare function disposeAllSessionMcpRuntimes(): Promise<void>;
-export declare const __testing: {
+export declare const testing: {
     createSessionMcpRuntimeManager: typeof createSessionMcpRuntimeManager;
     resetSessionMcpRuntimeManager(): Promise<void>;
     getCachedSessionIds(): string[];
     resolveSessionMcpRuntimeIdleTtlMs: typeof resolveSessionMcpRuntimeIdleTtlMs;
 };
-export {};
+export { testing as __testing };

@@ -1,2 +1,2 @@
-import { t as anthropicMediaUnderstandingProvider } from "../../media-understanding-provider-BZXujeG-.js";
+import { t as anthropicMediaUnderstandingProvider } from "../../media-understanding-provider-DmvCODu2.js";
 export { anthropicMediaUnderstandingProvider };

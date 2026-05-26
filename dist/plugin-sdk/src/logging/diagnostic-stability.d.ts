@@ -48,11 +48,18 @@ export type DiagnosticStabilityEventRecord = {
     ageMs?: number;
     queueDepth?: number;
     queueSize?: number;
+    queueLength?: number;
     waitMs?: number;
     failureKind?: string;
     active?: number;
     waiting?: number;
     queued?: number;
+    droppedEvents?: number;
+    droppedTrustedEvents?: number;
+    droppedUntrustedEvents?: number;
+    droppedPriorityEvents?: number;
+    maxQueueLength?: number;
+    drainBatchSize?: number;
     webhooks?: {
         received: number;
         processed: number;

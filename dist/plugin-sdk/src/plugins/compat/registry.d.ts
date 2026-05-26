@@ -14,6 +14,20 @@ export declare const PLUGIN_COMPAT_RECORDS: readonly [{
     readonly tests: readonly ["src/plugins/status.test.ts", "src/plugins/contracts/shape.contract.test.ts"];
     readonly releaseNote: "Legacy `before_agent_start` hook compatibility remains wired while plugins migrate to modern hook stages.";
 }, {
+    readonly code: "legacy-deactivate-hook-alias";
+    readonly status: "deprecated";
+    readonly owner: "sdk";
+    readonly introduced: "2026-05-16";
+    readonly deprecated: "2026-05-16";
+    readonly warningStarts: "2026-05-16";
+    readonly removeAfter: "2026-08-16";
+    readonly replacement: "`gateway_stop` hook";
+    readonly docsPath: "/plugins/hooks#upcoming-deprecations";
+    readonly surfaces: readonly ["api.on(\"deactivate\", ...)", "plugin typed hook registration"];
+    readonly diagnostics: readonly ["plugin runtime compatibility warning"];
+    readonly tests: readonly ["src/plugins/loader.test.ts"];
+    readonly releaseNote: "`api.on(\"deactivate\", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.";
+}, {
     readonly code: "hook-only-plugin-shape";
     readonly status: "active";
     readonly owner: "sdk";

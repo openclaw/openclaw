@@ -1,3 +1,4 @@
-import { n as buildFalImageGenerationProvider } from "../../image-generation-provider-CHmW1Elt.js";
-import { n as buildFalVideoGenerationProvider } from "../../video-generation-provider-Clt74XZo.js";
-export { buildFalImageGenerationProvider, buildFalVideoGenerationProvider };
+import { t as buildFalImageGenerationProvider } from "../../image-generation-provider-BkOEY9Au.js";
+import { t as buildFalMusicGenerationProvider } from "../../music-generation-provider-M061uWRi.js";
+import { t as buildFalVideoGenerationProvider } from "../../video-generation-provider-CmxsDRCF.js";
+export { buildFalImageGenerationProvider, buildFalMusicGenerationProvider, buildFalVideoGenerationProvider };

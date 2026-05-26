@@ -1,4 +1,4 @@
-import { a as listDevicePairing } from "../../device-bootstrap-BkYJw8Oy.js";
+import { a as listDevicePairing } from "../../device-bootstrap-CDEAV7q3.js";
 //#region extensions/device-pair/pair-command-approve.d.ts
 type PendingPairingEntry = Awaited<ReturnType<typeof listDevicePairing>>["pending"][number];
 declare function selectPendingApprovalRequest(params: {

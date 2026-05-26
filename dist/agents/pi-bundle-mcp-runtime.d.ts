@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../types.openclaw-DIZy8jcb.js";
-import { n as SessionMcpRuntime, r as SessionMcpRuntimeManager } from "../pi-bundle-mcp-types-CojEojLY.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { n as SessionMcpRuntime, r as SessionMcpRuntimeManager } from "../pi-bundle-mcp-types-CatnStso.js";
 import { jsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/types.js";
 
 //#region src/agents/pi-bundle-mcp-runtime.d.ts
@@ -39,11 +39,11 @@ declare function retireSessionMcpRuntimeForSessionKey(params: {
   onError?: (error: unknown, sessionId: string, reason: string) => void;
 }): Promise<boolean>;
 declare function disposeAllSessionMcpRuntimes(): Promise<void>;
-declare const __testing: {
+declare const testing: {
   createSessionMcpRuntimeManager: typeof createSessionMcpRuntimeManager;
   resetSessionMcpRuntimeManager(): Promise<void>;
   getCachedSessionIds(): string[];
   resolveSessionMcpRuntimeIdleTtlMs: typeof resolveSessionMcpRuntimeIdleTtlMs;
 };
 //#endregion
-export { __testing, createBundleMcpJsonSchemaValidator, createSessionMcpRuntime, disposeAllSessionMcpRuntimes, disposeSessionMcpRuntime, getOrCreateSessionMcpRuntime, getSessionMcpRuntimeManager, retireSessionMcpRuntime, retireSessionMcpRuntimeForSessionKey };
+export { testing as __testing, testing, createBundleMcpJsonSchemaValidator, createSessionMcpRuntime, disposeAllSessionMcpRuntimes, disposeSessionMcpRuntime, getOrCreateSessionMcpRuntime, getSessionMcpRuntimeManager, retireSessionMcpRuntime, retireSessionMcpRuntimeForSessionKey };

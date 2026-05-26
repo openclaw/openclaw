@@ -1,16 +1,16 @@
-import { m as resolveSessionAgentIds } from "../../agent-scope-C1Fl7gAf.js";
-import { n as parseNonNegativeByteSize } from "../../zod-schema-C6VV4etB.js";
-import { n as SILENT_REPLY_TOKEN } from "../../tokens-CUA96vf1.js";
-import "../../pi-settings-DM7yYbel.js";
-import { l as jsonResult } from "../../common-V7-zd73S.js";
-import { n as resolveCronStyleNow } from "../../current-time-DuuID261.js";
-import { t as resolveMemorySearchConfig } from "../../memory-search-Dn2Ao10S.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../memory-core-host-runtime-core-COswmgfJ.js";
-import { t as resolveMemoryBackendConfig } from "../../backend-config-D_DPuEOF.js";
-import "../../memory-core-host-runtime-files-BogSYjdG.js";
-import { t as registerShortTermPromotionDreaming } from "../../dreaming-Bcq88x3v.js";
-import { i as registerBuiltInMemoryEmbeddingProviders } from "../../provider-adapters-BtTQAcih.js";
+import { v as resolveSessionAgentIds } from "../../agent-scope-CtLXGcWm.js";
+import { n as parseNonNegativeByteSize } from "../../zod-schema-Dsy5tXpj.js";
+import { n as SILENT_REPLY_TOKEN } from "../../tokens-CFv3Qu_v.js";
+import { c as jsonResult } from "../../common-E9YpX7pB.js";
+import "../../pi-settings-3KMJpQrg.js";
+import { n as resolveCronStyleNow } from "../../current-time-DEwZwyQB.js";
+import { t as resolveMemorySearchConfig } from "../../memory-search-BEQRq9yG.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../memory-core-host-runtime-core-CkZUvQ_1.js";
+import { t as resolveMemoryBackendConfig } from "../../backend-config-9Mpek5eW.js";
+import "../../memory-core-host-runtime-files-DO0lUO6j.js";
+import { t as registerShortTermPromotionDreaming } from "../../dreaming-tnHCUW-G.js";
+import { i as registerBuiltInMemoryEmbeddingProviders } from "../../provider-adapters-DLvfgy7S.js";
 const MEMORY_FLUSH_TARGET_HINT = "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
 const MEMORY_FLUSH_APPEND_ONLY_HINT = "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
 const MEMORY_FLUSH_READ_ONLY_HINT = "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
@@ -113,11 +113,11 @@ const buildPromptSection = ({ availableTools, citationsMode }) => {
 let memoryToolsModulePromise;
 let runtimeProviderModulePromise;
 function loadMemoryToolsModule() {
-	memoryToolsModulePromise ??= import("../../tools-Bu6mk-dQ.js");
+	memoryToolsModulePromise ??= import("../../tools-CYnPl55e.js");
 	return memoryToolsModulePromise;
 }
 function loadRuntimeProviderModule() {
-	runtimeProviderModulePromise ??= import("../../runtime-provider-DqEpYR7V.js");
+	runtimeProviderModulePromise ??= import("../../runtime-provider-BI3ORPic.js");
 	return runtimeProviderModulePromise;
 }
 function getToolConfig(options) {
@@ -234,6 +234,10 @@ const memoryRuntime = {
 	async closeAllMemorySearchManagers() {
 		const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
 		await runtime.closeAllMemorySearchManagers?.();
+	},
+	async closeMemorySearchManager(params) {
+		const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
+		await runtime.closeMemorySearchManager?.(params);
 	}
 };
 var memory_core_default = definePluginEntry({
@@ -249,7 +253,7 @@ var memory_core_default = definePluginEntry({
 			flushPlanResolver: buildMemoryFlushPlan,
 			runtime: memoryRuntime,
 			publicArtifacts: { async listArtifacts(params) {
-				const { listMemoryCorePublicArtifacts } = await import("../../public-artifacts-6GujWdJO.js");
+				const { listMemoryCorePublicArtifacts } = await import("../../public-artifacts-DMRAFDSy.js");
 				return await listMemoryCorePublicArtifacts(params);
 			} }
 		});
@@ -260,12 +264,12 @@ var memory_core_default = definePluginEntry({
 			description: "Enable or disable memory dreaming.",
 			acceptsArgs: true,
 			handler: async (ctx) => {
-				const { handleDreamingCommand } = await import("../../dreaming-command-BmS-RW4s.js");
+				const { handleDreamingCommand } = await import("../../dreaming-command-H1Y83PIm.js");
 				return await handleDreamingCommand(api, ctx);
 			}
 		});
 		api.registerCli(async ({ program }) => {
-			const { registerMemoryCli } = await import("../../cli-DNcaCLn_.js");
+			const { registerMemoryCli } = await import("./cli.js");
 			registerMemoryCli(program);
 		}, { descriptors: [{
 			name: "memory",

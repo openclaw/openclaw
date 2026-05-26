@@ -30,7 +30,7 @@ type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.j
 declare const defaultProviderAuthChoiceDeps: {
     loadPluginProviderRuntime: () => Promise<ProviderAuthChoiceRuntime>;
 };
-export declare const __testing: {
+export declare const testing: {
     resetDepsForTest(): void;
     setDepsForTest(deps: Partial<typeof defaultProviderAuthChoiceDeps>): void;
 };
@@ -53,4 +53,4 @@ export declare function runProviderPluginAuthMethod(params: {
 }>;
 export declare function applyAuthChoiceLoadedPluginProvider(params: ApplyProviderAuthChoiceParams): Promise<ApplyProviderAuthChoiceResult | null>;
 export declare function applyAuthChoicePluginProvider(params: ApplyProviderAuthChoiceParams, options: PluginProviderAuthChoiceOptions): Promise<ApplyProviderAuthChoiceResult | null>;
-export {};
+export { testing as __testing };

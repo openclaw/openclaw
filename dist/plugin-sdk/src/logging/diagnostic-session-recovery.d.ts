@@ -1,4 +1,4 @@
-import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+import type { DiagnosticSessionActiveWorkKind, DiagnosticSessionState } from "../infra/diagnostic-events.js";
 export type DiagnosticSessionRecoveryStatus = "aborted" | "released" | "skipped" | "noop" | "failed";
 export type DiagnosticSessionRecoverySkipReason = "active_embedded_run" | "active_reply_work" | "active_lane_task" | "already_in_flight" | "missing_session_ref" | "stale_session_state";
 export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
@@ -8,6 +8,7 @@ export type StuckSessionRecoveryRequest = {
     ageMs: number;
     queueDepth?: number;
     allowActiveAbort?: boolean;
+    expectedState?: DiagnosticSessionState;
     stateGeneration?: number;
 };
 type DiagnosticSessionRecoveryBaseOutcome = {
@@ -24,6 +25,7 @@ export type StuckSessionRecoveryOutcome = (DiagnosticSessionRecoveryBaseOutcome 
     drained: boolean;
     forceCleared: boolean;
     released: number;
+    queuedCount?: number;
 }) | (DiagnosticSessionRecoveryBaseOutcome & {
     status: "released";
     action: "release_lane";
@@ -45,6 +47,7 @@ export type StuckSessionRecoveryOutcome = (DiagnosticSessionRecoveryBaseOutcome 
     error: string;
 });
 export declare function recoveryOutcomeMutatesSessionState(outcome: StuckSessionRecoveryOutcome | undefined): boolean;
+export declare function recoveryOutcomeClearsQueuedSessionState(outcome: StuckSessionRecoveryOutcome): boolean;
 export declare function recoveryOutcomeReleasedCount(outcome: StuckSessionRecoveryOutcome): number;
 export declare function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): string;
 export {};

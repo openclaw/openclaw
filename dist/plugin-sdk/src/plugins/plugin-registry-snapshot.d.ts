@@ -1,9 +1,10 @@
 import { type InstalledPluginIndexStoreInspection, type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store.js";
 import { type InstalledPluginIndex, type InstalledPluginIndexRecord, type LoadInstalledPluginIndexParams, type RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
+import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
 export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
-export type PluginRegistrySnapshotSource = "provided" | "persisted" | "derived";
+export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 export type PluginRegistrySnapshotDiagnosticCode = "persisted-registry-disabled" | "persisted-registry-missing" | "persisted-registry-stale-policy" | "persisted-registry-stale-source";
 export type PluginRegistrySnapshotDiagnostic = {
     level: "info" | "warn";

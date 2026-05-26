@@ -1,2 +1,2 @@
-import { n as runGitHubCopilotDeviceFlow, t as githubCopilotLoginCommand } from "../../login-C3plglwR.js";
-export { githubCopilotLoginCommand, runGitHubCopilotDeviceFlow };
+import { n as runGitHubCopilotDeviceFlow, r as setGitHubCopilotDeviceFlowFetchGuardForTesting, t as githubCopilotLoginCommand } from "../../login-kXsjhOGy.js";
+export { githubCopilotLoginCommand, runGitHubCopilotDeviceFlow, setGitHubCopilotDeviceFlowFetchGuardForTesting };

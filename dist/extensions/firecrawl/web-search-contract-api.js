@@ -1,7 +1,8 @@
-import { t as createWebSearchProviderContractFields } from "../../provider-web-search-contract-DsxDQUS3.js";
+import { t as createWebSearchProviderContractFields } from "../../provider-web-search-contract-DRFQdeKY.js";
 //#region extensions/firecrawl/web-search-contract-api.ts
 function createFirecrawlWebSearchProvider() {
 	const credentialPath = "plugins.entries.firecrawl.config.webSearch.apiKey";
+	const fetchCredentialPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
 	return {
 		id: "firecrawl",
 		label: "Firecrawl Search",
@@ -23,6 +24,13 @@ function createFirecrawlWebSearchProvider() {
 			configuredCredential: { pluginId: "firecrawl" },
 			selectionPluginId: "firecrawl"
 		}),
+		getConfiguredCredentialFallback: (config) => {
+			const apiKey = (config?.plugins?.entries?.firecrawl?.config)?.webFetch?.apiKey;
+			return apiKey === void 0 ? void 0 : {
+				path: fetchCredentialPath,
+				value: apiKey
+			};
+		},
 		createTool: () => null
 	};
 }

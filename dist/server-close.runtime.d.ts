@@ -1,5 +1,6 @@
-import { i as OpenClawConfig } from "./types.openclaw-DIZy8jcb.js";
-import { t as ChannelId } from "./channel-id.types-Bpcqw8ci.js";
+import { i as OpenClawConfig } from "./types.openclaw-BLF4DJTX.js";
+import { t as ChannelId } from "./channel-id.types-ClK6B_QE.js";
+import { _ as ChatRunState, g as ChatAbortControllerEntry } from "./types-BMFYBAxt.js";
 import { WebSocketServer } from "ws";
 import { Server } from "node:http";
 
@@ -12,6 +13,11 @@ type HeartbeatRunner = {
 //#region src/plugins/services.d.ts
 type PluginServicesHandle = {
   stop: () => Promise<void>;
+};
+//#endregion
+//#region src/gateway/server-startup-post-attach.d.ts
+type GatewayPostReadySidecarHandle = {
+  stop: () => void;
 };
 //#endregion
 //#region src/gateway/server-close.d.ts
@@ -38,6 +44,7 @@ declare function createGatewayCloseHandler(params: {
   channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
+  postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
   disposeSessionMcpRuntimes?: () => Promise<void>;
   disposeBundleLspRuntimes?: () => Promise<void>;
   cron: {
@@ -58,9 +65,15 @@ declare function createGatewayCloseHandler(params: {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  chatRunState: {
-    clear: () => void;
-  };
+  chatRunState: ChatRunState;
+  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  removeChatRun: (sessionId: string, clientRunId: string, sessionKey?: string) => {
+    sessionKey: string;
+    clientRunId: string;
+  } | undefined;
+  agentRunSeq: Map<string, number>;
+  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  getPendingReplyCount?: () => number;
   clients: Set<{
     socket: {
       close: (code: number, reason: string) => void;
@@ -82,6 +95,7 @@ declare function createGatewayCloseHandler(params: {
 }): (opts?: {
   reason?: string;
   restartExpectedMs?: number | null;
+  drainTimeoutMs?: number | null;
 }) => Promise<ShutdownResult>;
 //#endregion
 //#region src/gateway/session-reset-service.d.ts

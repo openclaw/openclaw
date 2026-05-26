@@ -32,6 +32,8 @@ export type SpawnAcpContext = {
     /** Trusted provider role ids for the requester in this group turn. */
     agentMemberRoleIds?: string[];
     sandboxed?: boolean;
+    inheritedToolAllowlist?: string[];
+    inheritedToolDenylist?: string[];
 };
 export declare const ACP_SPAWN_ERROR_CODES: readonly ["acp_disabled", "requester_session_required", "runtime_policy", "resume_forbidden", "subagent_policy", "thread_required", "target_agent_required", "runtime_agent_mismatch", "agent_forbidden", "cwd_resolution_failed", "thread_binding_invalid", "spawn_failed", "dispatch_failed"];
 export type SpawnAcpErrorCode = (typeof ACP_SPAWN_ERROR_CODES)[number];

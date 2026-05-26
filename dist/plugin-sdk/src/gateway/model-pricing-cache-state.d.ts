@@ -44,8 +44,8 @@ export declare function getGatewayModelPricingCacheMeta(): {
     size: number;
 };
 export declare function getGatewayModelPricingCacheFingerprint(): string;
-export declare function __resetGatewayModelPricingCacheForTest(): void;
-export declare function __setGatewayModelPricingForTest(entries: Array<{
+export declare function resetGatewayModelPricingCacheForTest(): void;
+export declare function setGatewayModelPricingForTest(entries: Array<{
     provider: string;
     model: string;
     pricing: CachedModelPricing;

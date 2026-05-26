@@ -2,7 +2,7 @@ import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 export declare function normalizeChannelTargetInput(raw: string): string;
 declare function resetTargetNormalizerCacheForTests(): void;
-export declare const __testing: {
+export declare const testing: {
     readonly resetTargetNormalizerCacheForTests: typeof resetTargetNormalizerCacheForTests;
 };
 export declare function normalizeTargetForProvider(provider: string, raw?: string): string | undefined;
@@ -31,4 +31,4 @@ export declare function maybeResolvePluginMessagingTarget(params: {
     requireIdLike?: boolean;
 }): Promise<ResolvedPluginMessagingTarget | undefined>;
 export declare function buildTargetResolverSignature(channel: ChannelId): string;
-export {};
+export { testing as __testing };

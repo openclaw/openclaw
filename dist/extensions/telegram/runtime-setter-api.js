@@ -1,2 +1,2 @@
-import { n as setTelegramRuntime } from "../../runtime-D_DhIHtY.js";
+import { n as setTelegramRuntime } from "../../runtime-CgUUiBzP.js";
 export { setTelegramRuntime };

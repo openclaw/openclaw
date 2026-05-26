@@ -4,5 +4,6 @@ export declare function transformTransportMessages(messages: Context["messages"]
     api: Api;
     model: string;
 }) => string, options?: {
+    normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
 }): Context["messages"];

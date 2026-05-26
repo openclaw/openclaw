@@ -1,19 +1,21 @@
-import "../../defaults-BGwElg4C.js";
-import { i as PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "../../provider-model-shared-D-slKnZa.js";
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { l as getOpenRouterModelCapabilities, u as loadOpenRouterModelCapabilities } from "../../provider-stream-Cx3vdp_v.js";
-import "../../provider-stream-family-Bt76y7tu.js";
-import { i as normalizeOpenRouterBaseUrl, n as buildOpenrouterProvider, r as isOpenRouterProxyReasoningUnsupportedModel, t as OPENROUTER_BASE_URL } from "../../provider-catalog-tLFRKrNL.js";
-import { t as buildOpenRouterImageGenerationProvider } from "../../image-generation-provider-BPxGvCDa.js";
-import { t as openrouterMediaUnderstandingProvider } from "../../media-understanding-provider-D86uF-di.js";
-import { n as applyOpenrouterConfig, t as OPENROUTER_DEFAULT_MODEL_REF } from "../../onboard-BJHopBVm.js";
-import { t as buildOpenRouterSpeechProvider } from "../../speech-provider-DETyJ83G.js";
-import { t as wrapOpenRouterProviderStream } from "../../stream-BNYvU4J1.js";
-import { n as supportsOpenRouterXHighThinking, t as resolveOpenRouterThinkingProfile } from "../../thinking-policy-Bc8LI8vp.js";
-import { t as listOpenRouterVideoModelCatalog } from "../../video-model-catalog-DpWBwVJS.js";
-import { t as buildOpenRouterVideoGenerationProvider } from "../../video-generation-provider-0esa6y2N.js";
+import "../../defaults-mDjiWzE5.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { i as PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "../../provider-model-shared-DtsPmvDx.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { l as getOpenRouterModelCapabilities, u as loadOpenRouterModelCapabilities } from "../../provider-stream-B32dNOmb.js";
+import "../../provider-stream-family-CGsj5YYd.js";
+import { i as normalizeOpenRouterBaseUrl, n as buildOpenrouterProvider, r as isOpenRouterProxyReasoningUnsupportedModel, t as OPENROUTER_BASE_URL } from "../../provider-catalog-Dya4CIwt.js";
+import { t as buildOpenRouterImageGenerationProvider } from "../../image-generation-provider-BHJ3PjM9.js";
+import { t as openrouterMediaUnderstandingProvider } from "../../media-understanding-provider-CE_1sBNq.js";
+import { t as buildOpenRouterMusicGenerationProvider } from "../../music-generation-provider-sQLdUXyJ.js";
+import { n as applyOpenrouterConfig, t as OPENROUTER_DEFAULT_MODEL_REF } from "../../onboard-yL44OwpH.js";
+import { t as resolveOpenRouterExtraParamsForTransport } from "../../provider-routing-CWlreKFG.js";
+import { t as buildOpenRouterSpeechProvider } from "../../speech-provider-CzjDYJsj.js";
+import { t as wrapOpenRouterProviderStream } from "../../stream-Bu31b0Th.js";
+import { n as supportsOpenRouterXHighThinking, t as resolveOpenRouterThinkingProfile } from "../../thinking-policy-Bjn1m0Ez.js";
+import { t as listOpenRouterVideoModelCatalog } from "../../video-model-catalog-DnqoQ11X.js";
+import { t as buildOpenRouterVideoGenerationProvider } from "../../video-generation-provider-DttQjZ2L.js";
 //#region extensions/openrouter/index.ts
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -85,7 +87,8 @@ var openrouter_default = definePluginEntry({
 					choiceLabel: "OpenRouter API key",
 					groupId: "openrouter",
 					groupLabel: "OpenRouter",
-					groupHint: "API key"
+					groupHint: "API key",
+					onboardingScopes: ["text-inference", "music-generation"]
 				}
 			})],
 			catalog: {
@@ -127,11 +130,13 @@ var openrouter_default = definePluginEntry({
 			supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
 			resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
 			isModernModelRef: () => true,
+			extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
 			wrapStreamFn: wrapOpenRouterProviderStream,
 			isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId)
 		});
 		api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
 		api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+		api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
 		api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
 		api.registerModelCatalogProvider({
 			provider: PROVIDER_ID,

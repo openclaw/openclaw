@@ -11,6 +11,8 @@ export declare function resolveModelFallbackOptions(run: FollowupRun["run"], con
     provider: string;
     model: string;
     agentDir: string;
+    agentId: string;
+    sessionKey: string | undefined;
     fallbacksOverride: string[] | undefined;
 };
 export declare function buildEmbeddedRunBaseParams(params: {

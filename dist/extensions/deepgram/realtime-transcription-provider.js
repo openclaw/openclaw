@@ -1,2 +1,2 @@
-import { n as buildDeepgramRealtimeTranscriptionProvider, t as __testing } from "../../realtime-transcription-provider-CULfGEaR.js";
-export { __testing, buildDeepgramRealtimeTranscriptionProvider };
+import { n as testing, t as buildDeepgramRealtimeTranscriptionProvider } from "../../realtime-transcription-provider-DCSD1iHV.js";
+export { testing as __testing, testing, buildDeepgramRealtimeTranscriptionProvider };

@@ -1,4 +1,4 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
 //#region extensions/web-readability/index.ts
 var web_readability_default = definePluginEntry({
 	id: "web-readability",

@@ -5,7 +5,6 @@ import type { OpenClawPluginToolContext } from "./types.js";
 export type CachedPluginToolDescriptor = {
     descriptor: ToolDescriptor;
     displaySummary?: string;
-    ownerOnly?: boolean;
     optional: boolean;
 };
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;

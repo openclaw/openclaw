@@ -34,7 +34,8 @@ export declare class SaveMediaSourceError extends Error {
     constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions);
 }
 export declare function saveMediaSource(source: string, headers?: Record<string, string>, subdir?: string, maxBytes?: number): Promise<SavedMedia>;
-export declare function saveMediaBuffer(buffer: Buffer, contentType?: string, subdir?: string, maxBytes?: number, originalFilename?: string): Promise<SavedMedia>;
+export declare function saveMediaBuffer(buffer: Buffer, contentType?: string, subdir?: string, maxBytes?: number, originalFilename?: string, detectionFilePathHint?: string): Promise<SavedMedia>;
+export declare function saveMediaStream(stream: AsyncIterable<unknown>, contentType?: string, subdir?: string, maxBytes?: number, originalFilename?: string, detectionFilePathHint?: string): Promise<SavedMedia>;
 /**
  * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
  *

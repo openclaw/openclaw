@@ -1,9 +1,11 @@
-import { i as formatErrorMessage } from "../../errors-VfATXfah.js";
-import "../../error-runtime-BnVeBNYa.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../api-ekaUDXqw.js";
-import { A as lintMemoryWikiVault, B as parseWikiMarkdown, C as resolveMemoryWikiStatus, D as runObsidianDaily, E as runObsidianCommand, F as getMemoryWikiPage, I as readQueryableWikiPages, L as searchMemoryWiki, M as applyMemoryWikiMutation, N as normalizeMemoryWikiMutationInput, O as runObsidianOpen, P as WIKI_SEARCH_MODES, R as compileMemoryWikiVault, S as renderMemoryWikiStatus, T as probeObsidianCli, j as ingestMemoryWikiSource, k as runObsidianSearch, t as registerWikiCli, w as syncMemoryWikiImportedSources, x as buildMemoryWikiDoctorReport, z as initializeMemoryWikiVault } from "../../cli-BVxCx4ft.js";
-import { d as resolveMemoryWikiConfig, l as memoryWikiConfigSchema, o as WIKI_SEARCH_BACKENDS, s as WIKI_SEARCH_CORPORA } from "../../config-6yRXYBWW.js";
+import { i as formatErrorMessage } from "../../errors-b3ZrCRlt.js";
+import { c as resolveDefaultAgentId } from "../../agent-scope-config-CMp71_27.js";
+import "../../error-runtime-DGHc7DZw.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../memory-host-core-BsjFNwCJ.js";
+import "../../api-DPrhLRY7.js";
+import { A as lintMemoryWikiVault, B as parseWikiMarkdown, C as resolveMemoryWikiStatus, D as runObsidianDaily, E as runObsidianCommand, F as getMemoryWikiPage, I as readQueryableWikiPages, L as searchMemoryWiki, M as applyMemoryWikiMutation, N as normalizeMemoryWikiMutationInput, O as runObsidianOpen, P as WIKI_SEARCH_MODES, R as compileMemoryWikiVault, S as renderMemoryWikiStatus, T as probeObsidianCli, j as ingestMemoryWikiSource, k as runObsidianSearch, t as registerWikiCli, w as syncMemoryWikiImportedSources, x as buildMemoryWikiDoctorReport, z as initializeMemoryWikiVault } from "../../cli-DEGawZSi.js";
+import { d as resolveMemoryWikiConfig, l as memoryWikiConfigSchema, o as WIKI_SEARCH_BACKENDS, s as WIKI_SEARCH_CORPORA } from "../../config-B8Wtke0B.js";
 import fs from "node:fs";
 import path from "node:path";
 import fs$1 from "node:fs/promises";
@@ -441,6 +443,9 @@ function respondError(respond, error) {
 		message: formatErrorMessage(error)
 	});
 }
+function resolveGatewayAgentId(requestParams, appConfig) {
+	return readStringParam(requestParams, "agentId") ?? (appConfig ? resolveDefaultAgentId(appConfig) : void 0);
+}
 async function syncImportedSourcesIfNeeded$1(config, appConfig) {
 	await syncMemoryWikiImportedSources({
 		config,
@@ -554,14 +559,21 @@ function registerMemoryWikiGatewayMethods(params) {
 	api.registerGatewayMethod("wiki.search", async ({ params: requestParams, respond }) => {
 		try {
 			await syncImportedSourcesIfNeeded$1(config, appConfig);
+			const query = readStringParam(requestParams, "query", { required: true });
+			const maxResults = readNumberParam(requestParams, "maxResults");
+			const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
+			const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
+			const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
+			const agentId = resolveGatewayAgentId(requestParams, appConfig);
 			respond(true, await searchMemoryWiki({
 				config,
 				appConfig,
-				query: readStringParam(requestParams, "query", { required: true }),
-				maxResults: readNumberParam(requestParams, "maxResults"),
-				searchBackend: readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS),
-				searchCorpus: readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA),
-				mode: readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES)
+				...agentId ? { agentId } : {},
+				query,
+				maxResults,
+				searchBackend,
+				searchCorpus,
+				mode
 			}));
 		} catch (error) {
 			respondError(respond, error);
@@ -581,14 +593,21 @@ function registerMemoryWikiGatewayMethods(params) {
 	api.registerGatewayMethod("wiki.get", async ({ params: requestParams, respond }) => {
 		try {
 			await syncImportedSourcesIfNeeded$1(config, appConfig);
+			const lookup = readStringParam(requestParams, "lookup", { required: true });
+			const fromLine = readNumberParam(requestParams, "fromLine");
+			const lineCount = readNumberParam(requestParams, "lineCount");
+			const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
+			const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
+			const agentId = resolveGatewayAgentId(requestParams, appConfig);
 			respond(true, await getMemoryWikiPage({
 				config,
 				appConfig,
-				lookup: readStringParam(requestParams, "lookup", { required: true }),
-				fromLine: readNumberParam(requestParams, "fromLine"),
-				lineCount: readNumberParam(requestParams, "lineCount"),
-				searchBackend: readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS),
-				searchCorpus: readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA)
+				...agentId ? { agentId } : {},
+				lookup,
+				fromLine,
+				lineCount,
+				searchBackend,
+				searchCorpus
 			}));
 		} catch (error) {
 			respondError(respond, error);
@@ -741,6 +760,13 @@ function createWikiPromptSectionBuilder(config) {
 }
 //#endregion
 //#region extensions/memory-wiki/src/tool.ts
+function formatWikiToolReportPath(config, reportPath) {
+	const vaultRoot = path.resolve(config.vault.path);
+	const resolvedReportPath = path.resolve(reportPath);
+	const relativeReportPath = path.relative(vaultRoot, resolvedReportPath);
+	if (!relativeReportPath || relativeReportPath.startsWith("..") || path.isAbsolute(relativeReportPath)) return reportPath;
+	return relativeReportPath.replace(/\\/g, "/");
+}
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
 const WikiSearchBackendSchema = Type.Union(WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)));
@@ -870,6 +896,7 @@ function createWikiLintTool(config, appConfig) {
 			const provenance = result.issuesByCategory.provenance.length;
 			const errors = result.issues.filter((issue) => issue.severity === "error").length;
 			const warnings = result.issues.filter((issue) => issue.severity === "warning").length;
+			const reportPath = formatWikiToolReportPath(config, result.reportPath);
 			return {
 				content: [{
 					type: "text",
@@ -878,10 +905,15 @@ function createWikiLintTool(config, appConfig) {
 						`Contradictions: ${contradictions}`,
 						`Open questions: ${openQuestions}`,
 						`Provenance gaps: ${provenance}`,
-						`Report: ${result.reportPath}`
+						`Report: ${reportPath}`
 					].join("\n")
 				}],
-				details: result
+				details: {
+					issueCount: result.issueCount,
+					issues: result.issues,
+					issuesByCategory: result.issuesByCategory,
+					reportPath
+				}
 			};
 		}
 	};

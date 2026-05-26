@@ -4,12 +4,14 @@ export type UsageAccumulator = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    reasoningTokens: number;
     total: number;
     /** Exact usage snapshot from the most recent API call. */
     lastInput: number;
     lastOutput: number;
     lastCacheRead: number;
     lastCacheWrite: number;
+    lastReasoningTokens: number;
     lastTotal: number;
 };
 export declare const createUsageAccumulator: () => UsageAccumulator;

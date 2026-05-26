@@ -1,11 +1,11 @@
-import { _ as readStringParam, h as readStringArrayParam, l as jsonResult, p as readNumberParam } from "../../common-V7-zd73S.js";
-import { r as optionalStringEnum } from "../../typebox-B_Peztf1.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../channel-actions-BDOLVWJN.js";
-import "../../provider-web-search-D2KY-StD.js";
-import { a as runFirecrawlSearch, i as runFirecrawlScrape } from "../../firecrawl-client-Ct8udGz4.js";
-import { t as createFirecrawlWebFetchProvider } from "../../firecrawl-fetch-provider-CmWEE9vm.js";
-import { t as createFirecrawlWebSearchProvider } from "../../firecrawl-search-provider-Cy80Uq6a.js";
+import { r as optionalStringEnum } from "../../typebox-CjEaoMel.js";
+import { c as jsonResult, f as readNumberParam, g as readStringParam, m as readStringArrayParam } from "../../common-E9YpX7pB.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../channel-actions-DMN7G5RZ.js";
+import "../../provider-web-search-DNIStESL.js";
+import { i as runFirecrawlSearch, r as runFirecrawlScrape } from "../../firecrawl-client-C_C8qfe7.js";
+import { t as createFirecrawlWebFetchProvider } from "../../firecrawl-fetch-provider-CxwHa5XX.js";
+import { t as createFirecrawlWebSearchProvider } from "../../firecrawl-search-provider-BRxGTvit.js";
 import { Type } from "typebox";
 //#region extensions/firecrawl/src/firecrawl-scrape-tool.ts
 const FirecrawlScrapeToolSchema = Type.Object({

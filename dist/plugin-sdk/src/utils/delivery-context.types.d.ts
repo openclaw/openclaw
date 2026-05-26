@@ -1,4 +1,4 @@
-import type { ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
+import type { ChannelRouteRef, ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
 export type DeliveryIntentRef = {
     id: string;
     kind: "outbound_queue";
@@ -12,6 +12,7 @@ export type DeliveryContext = Pick<ChannelRouteTargetInput, "accountId" | "chann
     deliveryIntent?: DeliveryIntentRef;
 };
 export type DeliveryContextSessionSource = {
+    route?: ChannelRouteRef;
     channel?: string;
     lastChannel?: string;
     lastTo?: string;

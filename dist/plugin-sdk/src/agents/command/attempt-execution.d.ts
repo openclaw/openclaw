@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
+import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -55,9 +56,7 @@ export declare function runAgentAttempt(params: {
     fastMode?: boolean;
     timeoutMs: number;
     runId: string;
-    opts: AgentCommandOpts & {
-        senderIsOwner: boolean;
-    };
+    opts: AgentCommandOpts;
     runContext: ReturnType<typeof resolveAgentRunContext>;
     spawnedBy: string | undefined;
     messageChannel: ReturnType<typeof resolveMessageChannel>;
@@ -69,6 +68,7 @@ export declare function runAgentAttempt(params: {
         data?: Record<string, unknown>;
         sessionKey?: string;
     }) => void;
+    deferTerminalLifecycleEnd?: boolean;
     authProfileProvider: string;
     sessionStore?: Record<string, SessionEntry>;
     storePath?: string;
@@ -96,6 +96,16 @@ export declare function buildAcpResult(params: {
 export declare function emitAcpLifecycleStart(params: {
     runId: string;
     startedAt: number;
+}): void;
+export declare function emitAcpPromptSubmitted(params: {
+    runId: string;
+    sessionKey?: string;
+    at: number;
+}): void;
+export declare function emitAcpRuntimeEvent(params: {
+    runId: string;
+    event: AcpRuntimeEvent;
+    sessionKey?: string;
 }): void;
 export declare function emitAcpLifecycleEnd(params: {
     runId: string;

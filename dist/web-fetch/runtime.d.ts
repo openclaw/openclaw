@@ -1,6 +1,6 @@
-import { i as OpenClawConfig } from "../types.openclaw-DIZy8jcb.js";
-import { O as PluginWebFetchProviderEntry, P as WebFetchProviderToolDefinition } from "../types-core-CxmUEffr.js";
-import { t as RuntimeWebFetchMetadata } from "../runtime-web-tools.types-Bu0PnsN5.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { M as PluginWebFetchProviderEntry, R as WebFetchProviderToolDefinition } from "../types-core-DxqEkbXr.js";
+import { t as RuntimeWebFetchMetadata } from "../runtime-web-tools.types-Co2KBj4w.js";
 //#region src/web-fetch/runtime.d.ts
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web ? Web extends {
   fetch?: infer Fetch;
@@ -17,7 +17,7 @@ declare function resolveWebFetchEnabled(params: {
   sandboxed?: boolean;
 }): boolean;
 declare function isWebFetchProviderConfigured(params: {
-  provider: Pick<PluginWebFetchProviderEntry, "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential">;
+  provider: Pick<PluginWebFetchProviderEntry, "envVars" | "getConfiguredCredentialFallback" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential">;
   config?: OpenClawConfig;
 }): boolean;
 declare function listWebFetchProviders(params?: {

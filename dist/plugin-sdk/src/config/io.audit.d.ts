@@ -174,6 +174,32 @@ type ConfigAuditAppendContext = {
 type ConfigAuditAppendParams = ConfigAuditAppendContext & ({
     record: ConfigAuditRecord;
 } | ConfigAuditRecord);
+export type ConfigAuditScrubResult = {
+    scanned: number;
+    rewritten: number;
+    skipped: number;
+    aborted: boolean;
+};
+type ConfigAuditScrubFs = {
+    promises: {
+        readFile(path: string, encoding: "utf-8"): Promise<string>;
+        stat(path: string): Promise<{
+            size: number;
+        }>;
+        writeFile(path: string, data: string, options?: {
+            encoding?: BufferEncoding;
+            mode?: number;
+        }): Promise<unknown>;
+        rename(oldPath: string, newPath: string): Promise<unknown>;
+        unlink(path: string): Promise<unknown>;
+    };
+};
+export declare function scrubConfigAuditLog(params: {
+    fs: ConfigAuditScrubFs;
+    env: NodeJS.ProcessEnv;
+    homedir: () => string;
+    dryRun?: boolean;
+}): Promise<ConfigAuditScrubResult>;
 export declare function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void>;
 export declare function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void;
 export {};

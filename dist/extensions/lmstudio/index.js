@@ -1,13 +1,13 @@
-import { t as createSubsystemLogger } from "../../subsystem-DLRoKDlF.js";
-import { t as CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers-UDEQVW7W.js";
-import { n as parseStandalonePlainTextToolCallBlocks } from "../../tool-payload-7BJfgmNg.js";
-import { _ as ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../ssrf-CYoLqc2K.js";
-import "../../provider-auth-D5QGE8z6.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../ssrf-runtime-B7YsbRmp.js";
-import "../../logging-core-CvQ6nJJA.js";
-import { F as LMSTUDIO_PROVIDER_LABEL, P as LMSTUDIO_PROVIDER_ID, c as resolveLmstudioRuntimeApiKey, f as shouldUseLmstudioSyntheticAuth, g as normalizeLmstudioConfiguredCatalogEntries, n as ensureLmstudioModelLoaded, o as resolveLmstudioProviderHeaders, v as normalizeLmstudioProviderConfig, w as LMSTUDIO_DEFAULT_API_KEY_ENV_VAR, y as resolveLmstudioInferenceBase } from "../../models.fetch-BZ2wrpum.js";
-import { t as lmstudioMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-cjPUOG5h.js";
+import { t as createSubsystemLogger } from "../../subsystem-DSPWLoK5.js";
+import { t as CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers-Cf78z2Zm.js";
+import { n as parseStandalonePlainTextToolCallBlocks } from "../../tool-payload-Gp3uQTKH.js";
+import { y as ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../ssrf-DdDeGa5L.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../provider-auth-BtRKd5us.js";
+import "../../ssrf-runtime-Be2o3zD7.js";
+import "../../logging-core-DwEC9Ajh.js";
+import { F as LMSTUDIO_PROVIDER_LABEL, P as LMSTUDIO_PROVIDER_ID, c as resolveLmstudioRuntimeApiKey, f as shouldUseLmstudioSyntheticAuth, g as normalizeLmstudioConfiguredCatalogEntries, n as ensureLmstudioModelLoaded, o as resolveLmstudioProviderHeaders, v as normalizeLmstudioProviderConfig, w as LMSTUDIO_DEFAULT_API_KEY_ENV_VAR, y as resolveLmstudioInferenceBase } from "../../models.fetch-BJryONkH.js";
+import { t as lmstudioMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-7qtHxZMB.js";
 import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 //#region extensions/lmstudio/src/plain-text-tool-calls.ts

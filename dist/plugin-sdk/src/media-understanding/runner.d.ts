@@ -15,11 +15,13 @@ export declare function buildProviderRegistry(overrides?: Record<string, MediaUn
 export declare function resolveMediaAttachmentLocalRoots(params: {
     cfg: OpenClawConfig;
     ctx: MsgContext;
+    workspaceDir?: string;
 }): readonly string[];
 export declare function clearMediaUnderstandingBinaryCacheForTests(): void;
 export declare function resolveAutoImageModel(params: {
     cfg: OpenClawConfig;
     agentDir?: string;
+    workspaceDir?: string;
     activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null>;
 export declare function runCapability(params: {
@@ -29,6 +31,7 @@ export declare function runCapability(params: {
     attachments: MediaAttachmentCache;
     media: MediaAttachment[];
     agentDir?: string;
+    workspaceDir?: string;
     providerRegistry: ProviderRegistry;
     config?: MediaUnderstandingConfig;
     activeModel?: ActiveMediaModel;

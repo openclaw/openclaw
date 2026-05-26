@@ -11,6 +11,7 @@ export type RestartAuditInfo = {
     changedPaths?: string[];
 };
 export type GatewayRestartIntent = {
+    reason?: string;
     force?: boolean;
     waitMs?: number;
 };
@@ -18,6 +19,7 @@ export declare function writeGatewayRestartIntentSync(opts: {
     env?: NodeJS.ProcessEnv;
     targetPid?: number;
     intent?: GatewayRestartIntent;
+    reason?: string;
 }): boolean;
 export declare function clearGatewayRestartIntentSync(env?: NodeJS.ProcessEnv): void;
 export declare function consumeGatewayRestartIntentPayloadSync(env?: NodeJS.ProcessEnv, now?: number): GatewayRestartIntent | null;
@@ -90,6 +92,7 @@ export declare function scheduleGatewaySigusr1Restart(opts?: {
     skipDeferral?: boolean;
     skipCooldown?: boolean;
 }): ScheduledRestart;
-export declare const __testing: {
+export declare const testing: {
     resetSigusr1State(): void;
 };
+export { testing as __testing };

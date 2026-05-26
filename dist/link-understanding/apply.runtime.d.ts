@@ -1,5 +1,5 @@
-import { i as OpenClawConfig } from "../types.openclaw-DIZy8jcb.js";
-import { n as MsgContext } from "../templating-BcdAlwzB.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { n as MsgContext } from "../templating-DbSpLCuR.js";
 
 //#region src/link-understanding/apply.d.ts
 type ApplyLinkUnderstandingResult = {

@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ChannelId, ChannelMessageActionName, ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
@@ -33,6 +34,7 @@ export type RunMessageActionParams = {
     sandboxRoot?: string;
     dryRun?: boolean;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    inboundEventKind?: InboundEventKind;
     abortSignal?: AbortSignal;
 };
 export type MessageActionRunResult = {

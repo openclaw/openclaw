@@ -1,3 +1,4 @@
+import { type AutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -14,7 +15,7 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 export declare function resolvePromptSilentReplyConversationType(params: {
-    ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "SessionKey">;
+    ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey">;
     inboundSessionKey?: string;
 }): SilentReplyConversationType | undefined;
 export declare function resolvePromptSessionContextForSystemEvent(params: {
@@ -82,6 +83,10 @@ type RunPreparedReplyParams = {
     storePath?: string;
     workspaceDir: string;
     abortedLastRun: boolean;
+    hasAppliedImageModelOverride?: boolean;
+    imageModelOverrideBaseProvider?: string;
+    imageModelFallbacksOverride?: string[];
+    autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
 };
 export declare function runPreparedReply(params: RunPreparedReplyParams): Promise<ReplyPayload | ReplyPayload[] | undefined>;
 export {};

@@ -29,11 +29,11 @@ type ToolsInvokeOutcome = {
 export declare function invokeGatewayTool(params: {
     cfg: OpenClawConfig;
     input: ToolsInvokeInput;
-    senderIsOwner: boolean;
     messageChannel?: string;
     accountId?: string;
     agentTo?: string;
     agentThreadId?: string;
+    senderIsOwner?: boolean;
     toolCallIdPrefix: string;
     approvalMode?: "request" | "report";
 }): Promise<ToolsInvokeOutcome>;

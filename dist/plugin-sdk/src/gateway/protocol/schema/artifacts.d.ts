@@ -3,11 +3,13 @@ export declare const ArtifactQueryParamsSchema: Type.TObject<{
     sessionKey: Type.TOptional<Type.TString>;
     runId: Type.TOptional<Type.TString>;
     taskId: Type.TOptional<Type.TString>;
+    agentId: Type.TOptional<Type.TString>;
 }>;
 export declare const ArtifactGetParamsSchema: Type.TObject<{
     sessionKey: Type.TOptional<Type.TString>;
     runId: Type.TOptional<Type.TString>;
     taskId: Type.TOptional<Type.TString>;
+    agentId: Type.TOptional<Type.TString>;
     artifactId: Type.TString;
 }>;
 export declare const ArtifactSummarySchema: Type.TObject<{
@@ -29,6 +31,7 @@ export declare const ArtifactsListParamsSchema: Type.TObject<{
     sessionKey: Type.TOptional<Type.TString>;
     runId: Type.TOptional<Type.TString>;
     taskId: Type.TOptional<Type.TString>;
+    agentId: Type.TOptional<Type.TString>;
 }>;
 export declare const ArtifactsListResultSchema: Type.TObject<{
     artifacts: Type.TArray<Type.TObject<{
@@ -51,6 +54,7 @@ export declare const ArtifactsGetParamsSchema: Type.TObject<{
     sessionKey: Type.TOptional<Type.TString>;
     runId: Type.TOptional<Type.TString>;
     taskId: Type.TOptional<Type.TString>;
+    agentId: Type.TOptional<Type.TString>;
     artifactId: Type.TString;
 }>;
 export declare const ArtifactsGetResultSchema: Type.TObject<{
@@ -74,6 +78,7 @@ export declare const ArtifactsDownloadParamsSchema: Type.TObject<{
     sessionKey: Type.TOptional<Type.TString>;
     runId: Type.TOptional<Type.TString>;
     taskId: Type.TOptional<Type.TString>;
+    agentId: Type.TOptional<Type.TString>;
     artifactId: Type.TString;
 }>;
 export declare const ArtifactsDownloadResultSchema: Type.TObject<{

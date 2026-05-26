@@ -1,11 +1,11 @@
-import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CrCOUFln.js";
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import "../../provider-auth-D5QGE8z6.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { c as buildSingleProviderApiKeyCatalog } from "../../provider-catalog-shared-4kkagm5f.js";
-import { i as applyLitellmConfig, r as LITELLM_DEFAULT_MODEL_REF } from "../../onboard-CgrMTdbN.js";
-import { t as buildLitellmImageGenerationProvider } from "../../image-generation-provider-CZWl9KuL.js";
-import { t as buildLitellmProvider } from "../../provider-catalog-D2yOuctU.js";
+import { t as normalizeOptionalSecretInput } from "../../normalize-secret-input-CsdRhsMj.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import "../../provider-auth-BtRKd5us.js";
+import { c as buildSingleProviderApiKeyCatalog } from "../../provider-catalog-shared-BLp5nwNN.js";
+import { i as applyLitellmConfig, r as LITELLM_DEFAULT_MODEL_REF } from "../../onboard-K9C9_InP.js";
+import { t as buildLitellmImageGenerationProvider } from "../../image-generation-provider-DqvPTPte.js";
+import { t as buildLitellmProvider } from "../../provider-catalog-BkJSISie.js";
 //#region extensions/litellm/index.ts
 const PROVIDER_ID = "litellm";
 function applyCustomBaseUrlForNonInteractiveSetup(cfg, customBaseUrl) {

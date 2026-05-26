@@ -14,9 +14,10 @@ export declare function runAgentStep(params: {
     sourceChannel?: string;
     sourceTool?: string;
 }): Promise<string | undefined>;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<{
         agentCommandFromIngress: AgentCommandRunner;
         callGateway: GatewayCaller;
     }>): void;
 };
+export { testing as __testing };

@@ -6,6 +6,7 @@ export type ToolPolicyPipelineStep = {
     stripPluginOnlyAllowlist?: boolean;
     suppressUnavailableCoreToolWarning?: boolean;
     suppressUnavailableCoreToolWarningAllowlist?: string[];
+    unavailableCoreToolReason?: string;
 };
 export declare function buildDefaultToolPolicyPipelineSteps(params: {
     profilePolicy?: ToolPolicyLike;
@@ -21,6 +22,7 @@ export declare function buildDefaultToolPolicyPipelineSteps(params: {
     groupPolicy?: ToolPolicyLike;
     senderPolicy?: ToolPolicyLike;
     agentId?: string;
+    unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[];
 export declare function applyToolPolicyPipeline(params: {
     tools: AnyAgentTool[];

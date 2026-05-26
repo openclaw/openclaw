@@ -14,6 +14,13 @@ type ReadOnlyChannelPluginResolution = {
     plugins: ChannelPlugin[];
     configuredChannelIds: string[];
     missingConfiguredChannelIds: string[];
+    loadFailures: ReadOnlyChannelPluginLoadFailure[];
+};
+export type ReadOnlyChannelPluginLoadFailure = {
+    channelId: string;
+    pluginId: string;
+    message: string;
+    source?: string;
 };
 export { resolveReadOnlyChannelCommandDefaults };
 export declare function listReadOnlyChannelPluginsForConfig(cfg: OpenClawConfig, options?: ReadOnlyChannelPluginOptions): ChannelPlugin[];

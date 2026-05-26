@@ -1,10 +1,8 @@
-import { r as makeProxyFetch } from "./proxy-fetch-Bt2vOwKb.js";
-import { t as resolveTelegramAllowedUpdates } from "./allowed-updates-DHbbTS0P.js";
-import { o as normalizeTelegramApiRoot, r as resolveTelegramTransport } from "./fetch-CX6QcbV_.js";
-import { t as isRecoverableTelegramNetworkError } from "./network-errors-eWehYGa6.js";
-import { t as TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts-BU8iWn9a.js";
-import { i as writeTelegramSpooledUpdate } from "./telegram-ingress-spool-Cbo6obJB.js";
-import { r as writeTelegramUpdateOffset } from "./update-offset-store-DDo2NizR.js";
+import { r as makeProxyFetch } from "./proxy-fetch-B02LTFkt.js";
+import { t as resolveTelegramAllowedUpdates } from "./allowed-updates-C8V4-A3j.js";
+import { o as normalizeTelegramApiRoot, r as resolveTelegramTransport } from "./fetch-Dy1LisTE.js";
+import { a as isRecoverableTelegramNetworkError, n as resolveTelegramLongPollTimeoutSeconds, t as TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts-CnvnuqEE.js";
+import { u as writeTelegramSpooledUpdate } from "./telegram-ingress-spool-mviSjVIC.js";
 import { parentPort, workerData } from "node:worker_threads";
 //#region extensions/telegram/src/telegram-ingress-worker.runtime.ts
 const options = workerData;
@@ -14,9 +12,7 @@ const retryMaxMs = 3e4;
 let stopped = false;
 let activeController;
 function post(message) {
-	const port = parentPort;
-	if (port === null) return;
-	port["postMessage"](message);
+	parentPort?.postMessage(message);
 }
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,7 +55,7 @@ async function main() {
 	const transport = resolveTelegramTransport(options.proxy ? makeProxyFetch(options.proxy) : void 0, { network: options.network });
 	const fetchImpl = transport.fetch ?? globalThis.fetch;
 	const getUpdatesUrl = `${normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org")}/bot${options.token}/getUpdates`;
-	const pollTimeoutSeconds = typeof options.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds) ? Math.max(1, Math.floor(options.timeoutSeconds)) : 30;
+	const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
 	let lastUpdateId = options.initialUpdateId;
 	let failures = 0;
 	try {
@@ -89,14 +85,7 @@ async function main() {
 						spoolDir: options.spoolDir,
 						update
 					});
-					if (lastUpdateId === null || updateId > lastUpdateId) {
-						lastUpdateId = updateId;
-						await writeTelegramUpdateOffset({
-							accountId: options.accountId,
-							botToken: options.token,
-							updateId
-						});
-					}
+					if (lastUpdateId === null || updateId > lastUpdateId) lastUpdateId = updateId;
 					post({
 						type: "spooled",
 						updateId,
@@ -126,13 +115,16 @@ async function main() {
 		await transport.close();
 	}
 }
-main().then(() => void 0).catch((err) => {
+main().then(() => {
+	parentPort?.close();
+}).catch((err) => {
 	post({
 		type: "poll-error",
 		message: formatErrorMessage(err),
 		finishedAt: Date.now()
 	});
-	process.exitCode = 1;
+	parentPort?.close();
+	process.exitCode = stopped ? 0 : 1;
 });
 //#endregion
 export {};

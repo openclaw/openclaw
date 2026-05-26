@@ -36,6 +36,7 @@ export declare function buildTalkRealtimeConfig(config: OpenClawConfig, requeste
     mode: string | undefined;
     transport: string | undefined;
     brain: string | undefined;
+    consultRouting: string | undefined;
 };
 export declare function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedProvider?: string): {
     provider: string | undefined;

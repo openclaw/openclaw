@@ -9,6 +9,11 @@ type ConfigPatchOptions = {
     json?: boolean | undefined;
     replacePath?: string[] | undefined;
 };
+type ConfigUnsetOptions = {
+    dryRun?: boolean | undefined;
+    allowExec?: boolean | undefined;
+    json?: boolean | undefined;
+};
 export declare function runConfigSet(opts: {
     path?: string;
     value?: string;
@@ -26,6 +31,7 @@ export declare function runConfigGet(opts: {
 }): Promise<void>;
 export declare function runConfigUnset(opts: {
     path: string;
+    cliOptions?: ConfigUnsetOptions;
     runtime?: RuntimeEnv;
 }): Promise<void>;
 export declare function runConfigFile(opts: {

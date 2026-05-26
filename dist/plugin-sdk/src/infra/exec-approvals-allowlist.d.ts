@@ -19,7 +19,7 @@ export type ExecAllowlistEvaluation = {
     segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
     segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
-export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "skills" | "skillPrelude" | null;
+export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "inlineChain" | "skills" | null;
 export type SkillBinTrustEntry = {
     name: string;
     resolvedPath: string;

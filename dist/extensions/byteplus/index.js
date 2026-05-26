@@ -1,10 +1,10 @@
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { m as ensureModelAllowlistEntry } from "../../provider-onboard-DhuPxzG7.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { a as BYTEPLUS_MODEL_CATALOG, r as BYTEPLUS_CODING_MODEL_CATALOG } from "../../models-BI8i8cTC.js";
-import { n as buildBytePlusProvider, t as buildBytePlusCodingProvider } from "../../provider-catalog-BBD8udus.js";
-import { t as buildBytePlusVideoGenerationProvider } from "../../video-generation-provider-B5jFfriL.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import { m as ensureModelAllowlistEntry } from "../../provider-onboard-MLXAQX8H.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { a as BYTEPLUS_MODEL_CATALOG, r as BYTEPLUS_CODING_MODEL_CATALOG } from "../../models-DL20u8f1.js";
+import { n as buildBytePlusProvider, t as buildBytePlusCodingProvider } from "../../provider-catalog-DF5v1UBj.js";
+import { t as buildBytePlusVideoGenerationProvider } from "../../video-generation-provider-DRyrvnDn.js";
 //#region extensions/byteplus/index.ts
 const PROVIDER_ID = "byteplus";
 const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";

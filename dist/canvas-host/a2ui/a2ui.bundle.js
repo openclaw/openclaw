@@ -3883,7 +3883,8 @@ const TextFieldSchema = objectType({
 		"shortText",
 		"number",
 		"date",
-		"longText"
+		"longText",
+		"obscured"
 	]).optional(),
 	validationRegexp: stringType().optional().describe("A regex string to validate the input.")
 });
@@ -5271,39 +5272,41 @@ function createComputed(computation) {
 const UNSET = /* @__PURE__ */ Symbol("UNSET");
 const COMPUTING = /* @__PURE__ */ Symbol("COMPUTING");
 const ERRORED = /* @__PURE__ */ Symbol("ERRORED");
-const COMPUTED_NODE = {
-	...REACTIVE_NODE,
-	value: UNSET,
-	dirty: true,
-	error: null,
-	equal: defaultEquals,
-	producerMustRecompute(node) {
-		return node.value === UNSET || node.value === COMPUTING;
-	},
-	producerRecomputeValue(node) {
-		if (node.value === COMPUTING) throw new Error("Detected cycle in computations.");
-		const oldValue = node.value;
-		node.value = COMPUTING;
-		const prevConsumer = consumerBeforeComputation(node);
-		let newValue;
-		let wasEqual = false;
-		try {
-			newValue = node.computation.call(node.wrapper);
-			wasEqual = oldValue !== UNSET && oldValue !== ERRORED && node.equal.call(node.wrapper, oldValue, newValue);
-		} catch (err) {
-			newValue = ERRORED;
-			node.error = err;
-		} finally {
-			consumerAfterComputation(node, prevConsumer);
+const COMPUTED_NODE = /* @__PURE__ */ (() => {
+	return {
+		...REACTIVE_NODE,
+		value: UNSET,
+		dirty: true,
+		error: null,
+		equal: defaultEquals,
+		producerMustRecompute(node) {
+			return node.value === UNSET || node.value === COMPUTING;
+		},
+		producerRecomputeValue(node) {
+			if (node.value === COMPUTING) throw new Error("Detected cycle in computations.");
+			const oldValue = node.value;
+			node.value = COMPUTING;
+			const prevConsumer = consumerBeforeComputation(node);
+			let newValue;
+			let wasEqual = false;
+			try {
+				newValue = node.computation.call(node.wrapper);
+				wasEqual = oldValue !== UNSET && oldValue !== ERRORED && node.equal.call(node.wrapper, oldValue, newValue);
+			} catch (err) {
+				newValue = ERRORED;
+				node.error = err;
+			} finally {
+				consumerAfterComputation(node, prevConsumer);
+			}
+			if (wasEqual) {
+				node.value = oldValue;
+				return;
+			}
+			node.value = newValue;
+			node.version++;
 		}
-		if (wasEqual) {
-			node.value = oldValue;
-			return;
-		}
-		node.value = newValue;
-		node.version++;
-	}
-};
+	};
+})();
 /**
 * @license
 * Copyright Google LLC All Rights Reserved.
@@ -5346,11 +5349,13 @@ function signalSetFn(node, newValue) {
 		signalValueChanged(node);
 	}
 }
-const SIGNAL_NODE = {
-	...REACTIVE_NODE,
-	equal: defaultEquals,
-	value: void 0
-};
+const SIGNAL_NODE = /* @__PURE__ */ (() => {
+	return {
+		...REACTIVE_NODE,
+		equal: defaultEquals,
+		value: void 0
+	};
+})();
 function signalValueChanged(node) {
 	node.version++;
 	producerIncrementEpoch();
@@ -6171,8 +6176,7 @@ const t$6 = globalThis, i$8 = (t) => t, s$8 = t$6.trustedTypes, e$11 = s$8 ? s$8
 	_$litType$: t,
 	strings: i,
 	values: s
-}), b = x(1);
-const E = Symbol.for("lit-noChange"), A = Symbol.for("lit-nothing"), C = /* @__PURE__ */ new WeakMap(), P = l$3.createTreeWalker(l$3, 129);
+}), b = x(1), E = Symbol.for("lit-noChange"), A = Symbol.for("lit-nothing"), C = /* @__PURE__ */ new WeakMap(), P = l$3.createTreeWalker(l$3, 129);
 function V(t, i) {
 	if (!u$2(t) || !t.hasOwnProperty("raw")) throw Error("invalid template strings array");
 	return void 0 !== e$11 ? e$11.createHTML(i) : i;
@@ -6418,7 +6422,7 @@ const j$1 = {
 	B: I,
 	F: Z
 }, B = t$6.litHtmlPolyfillSupport;
-B?.(S, k), (t$6.litHtmlVersions ??= []).push("3.3.2");
+B?.(S, k), (t$6.litHtmlVersions ??= []).push("3.3.3");
 const D = (t, i, s) => {
 	const e = s?.renderBefore ?? i;
 	let h = e._$litPart$;
@@ -6585,7 +6589,7 @@ const e$10 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decor
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
- /**
+/**
 * @license
 * Copyright 2023 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
@@ -6794,7 +6798,8 @@ const n$4 = new Signal.subtle.Watcher(async () => {
 * @license
 * Copyright 2023 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ Signal.State;
+*/
+Signal.State;
 Signal.Computed;
 /**
 * @license
@@ -6920,7 +6925,7 @@ var i$2 = class extends s$1 {
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
- /**
+/**
 * @license
 * Copyright 2022 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
@@ -7690,7 +7695,7 @@ let Root = (() => {
 * @license
 * Copyright 2018 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ const n$2 = "important", i$1 = " !" + n$2, o$2 = e$6(class extends i$5 {
+*/ const n$2 = "important", i$1 = " !important", o$2 = e$6(class extends i$5 {
 	constructor(t) {
 		if (super(t), t.type !== t$3.ATTRIBUTE || "style" !== t.name || t.strings?.length > 2) throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");
 	}
@@ -8464,43 +8469,43 @@ var __runInitializers$14 = function(thisArg, initializers, value) {
         height: 100%;
       }
 
-      :host([alignment="start"]) section {
+      :host([alignment='start']) section {
         align-items: start;
       }
 
-      :host([alignment="center"]) section {
+      :host([alignment='center']) section {
         align-items: center;
       }
 
-      :host([alignment="end"]) section {
+      :host([alignment='end']) section {
         align-items: end;
       }
 
-      :host([alignment="stretch"]) section {
+      :host([alignment='stretch']) section {
         align-items: stretch;
       }
 
-      :host([distribution="start"]) section {
+      :host([distribution='start']) section {
         justify-content: start;
       }
 
-      :host([distribution="center"]) section {
+      :host([distribution='center']) section {
         justify-content: center;
       }
 
-      :host([distribution="end"]) section {
+      :host([distribution='end']) section {
         justify-content: end;
       }
 
-      :host([distribution="spaceBetween"]) section {
+      :host([distribution='spaceBetween']) section {
         justify-content: space-between;
       }
 
-      :host([distribution="spaceAround"]) section {
+      :host([distribution='spaceAround']) section {
         justify-content: space-around;
       }
 
-      :host([distribution="spaceEvenly"]) section {
+      :host([distribution='spaceEvenly']) section {
         justify-content: space-evenly;
       }
     `];
@@ -8721,12 +8726,8 @@ var __runInitializers$13 = function(thisArg, initializers, value) {
 			this.processor.setData(this.component, this.value.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value) {
-			return b`<section
-      class=${e$2(this.theme.components.DateTimeInput.container)}
-    >
-      <label
-        for="data"
-        class=${e$2(this.theme.components.DateTimeInput.label)}
+			return b`<section class=${e$2(this.theme.components.DateTimeInput.container)}>
+      <label for="data" class=${e$2(this.theme.components.DateTimeInput.label)}
         >${this.#getPlaceholderText()}</label
       >
       <input
@@ -8984,7 +8985,6 @@ var __runInitializers$11 = function(thisArg, initializers, value) {
         display: block;
         flex: var(--weight);
         min-height: 0;
-
       }
 
       .g-icon {
@@ -9383,11 +9383,11 @@ var __runInitializers$9 = function(thisArg, initializers, value) {
         overflow: auto;
       }
 
-      :host([direction="vertical"]) section {
+      :host([direction='vertical']) section {
         display: grid;
       }
 
-      :host([direction="horizontal"]) section {
+      :host([direction='horizontal']) section {
         display: flex;
         max-width: 100%;
         overflow-x: scroll;
@@ -9848,7 +9848,7 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
       }
 
       .chip.selected:hover {
-         background: var(--md-sys-color-secondary-container-high);
+        background: var(--md-sys-color-secondary-container-high);
       }
 
       .chip-icon {
@@ -9863,8 +9863,14 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
       }
 
       @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(-8px); }
-        to { opacity: 1; transform: translateY(0); }
+        from {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
     `];
 		}
@@ -9889,7 +9895,7 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
 		#renderCheckIcon() {
 			return b`
       <svg class="chip-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960">
-        <path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z"/>
+        <path d="M382-240 154-468l57-57 171 171 367-367 57 57-424 424Z" />
       </svg>
     `;
 		}
@@ -9917,41 +9923,48 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
 				return extractStringValue(option.label, this.component, this.processor, this.surfaceId).toLowerCase().includes(this.filterText.toLowerCase());
 			});
 			if (this.variant === "chips") return b`
-          <div class="container">
-            ${this.description ? b`<div class="header-text" style="margin-bottom: 8px;">${this.description}</div>` : A}
-            ${this.filterable ? this.#renderFilter() : A}
-            <div class="chips-container">
-              ${filteredOptions.map((option) => {
+        <div class="container">
+          ${this.description ? b`<div class="header-text" style="margin-bottom: 8px;">${this.description}</div>` : A}
+          ${this.filterable ? this.#renderFilter() : A}
+          <div class="chips-container">
+            ${filteredOptions.map((option) => {
 				const label = extractStringValue(option.label, this.component, this.processor, this.surfaceId);
 				const isSelected = currentSelections.includes(option.value);
 				return b`
-                  <div
-                    class="chip ${isSelected ? "selected" : ""}"
-                    @click=${(e) => {
+                <div
+                  class="chip ${isSelected ? "selected" : ""}"
+                  @click=${(e) => {
 					e.stopPropagation();
 					this.toggleSelection(option.value);
 				}}
-                  >
-                    ${isSelected ? this.#renderCheckIcon() : A}
-                    <span>${label}</span>
-                  </div>
-                `;
+                >
+                  ${isSelected ? this.#renderCheckIcon() : A}
+                  <span>${label}</span>
+                </div>
+              `;
 			})}
-            </div>
-             ${filteredOptions.length === 0 ? b`<div style="padding: 8px; font-style: italic; color: var(--md-sys-color-outline);">No options found</div>` : A}
           </div>
-        `;
+          ${filteredOptions.length === 0 ? b`<div
+                style="padding: 8px; font-style: italic; color: var(--md-sys-color-outline);"
+              >
+                No options found
+              </div>` : A}
+        </div>
+      `;
 			const count = currentSelections.length;
 			return b`
       <div class="container">
-        <div
-          class="dropdown-header"
-          @click=${() => this.isOpen = !this.isOpen}
-        >
+        <div class="dropdown-header" @click=${() => this.isOpen = !this.isOpen}>
           <span class="header-text">${count > 0 ? `${count} Selected` : this.description ?? "Select items"}</span>
           <span class="chevron ${this.isOpen ? "open" : ""}">
-            <svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24" fill="currentColor">
-              <path d="M480-345 240-585l56-56 184 184 184-184 56 56-240 240Z"/>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              height="24"
+              viewBox="0 -960 960 960"
+              width="24"
+              fill="currentColor"
+            >
+              <path d="M480-345 240-585l56-56 184 184 184-184 56 56-240 240Z" />
             </svg>
           </span>
         </div>
@@ -9976,7 +9989,11 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
                 </div>
               `;
 			})}
-             ${filteredOptions.length === 0 ? b`<div style="padding: 16px; text-align: center; color: var(--md-sys-color-outline);">No options found</div>` : A}
+            ${filteredOptions.length === 0 ? b`<div
+                  style="padding: 16px; text-align: center; color: var(--md-sys-color-outline);"
+                >
+                  No options found
+                </div>` : A}
           </div>
         </div>
       </div>
@@ -9996,16 +10013,17 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
 * @license
 * Copyright 2020 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
+*/
+const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
 	render(i) {
 		return A;
 	}
 	update(i, [s]) {
 		const e = s !== this.G;
-		return e && void 0 !== this.G && this.rt(void 0), (e || this.lt !== this.ct) && (this.G = s, this.ht = i.options?.host, this.rt(this.ct = i.element)), A;
+		return e && this.rt(void 0), (e || this.lt !== this.ct) && (this.G = s, this.ht = i.options?.host, this.rt(this.ct = i.element)), A;
 	}
 	rt(t) {
-		if (this.isConnected || (t = void 0), "function" == typeof this.G) {
+		if (void 0 !== this.G) if (this.isConnected || (t = void 0), "function" == typeof this.G) {
 			const i = this.ht ?? globalThis;
 			let s = o$1.get(i);
 			void 0 === s && (s = /* @__PURE__ */ new WeakMap(), o$1.set(i, s)), void 0 !== s.get(this.G) && this.G.call(this.ht, void 0), s.set(this.G, t), void 0 !== t && this.G.call(this.ht, t);
@@ -10380,43 +10398,43 @@ var __runInitializers$6 = function(thisArg, initializers, value) {
         min-height: 100%;
       }
 
-      :host([alignment="start"]) section {
+      :host([alignment='start']) section {
         align-items: start;
       }
 
-      :host([alignment="center"]) section {
+      :host([alignment='center']) section {
         align-items: center;
       }
 
-      :host([alignment="end"]) section {
+      :host([alignment='end']) section {
         align-items: end;
       }
 
-      :host([alignment="stretch"]) section {
+      :host([alignment='stretch']) section {
         align-items: stretch;
       }
 
-      :host([distribution="start"]) section {
+      :host([distribution='start']) section {
         justify-content: start;
       }
 
-      :host([distribution="center"]) section {
+      :host([distribution='center']) section {
         justify-content: center;
       }
 
-      :host([distribution="end"]) section {
+      :host([distribution='end']) section {
         justify-content: end;
       }
 
-      :host([distribution="spaceBetween"]) section {
+      :host([distribution='spaceBetween']) section {
         justify-content: space-between;
       }
 
-      :host([distribution="spaceAround"]) section {
+      :host([distribution='spaceAround']) section {
         justify-content: space-around;
       }
 
-      :host([distribution="spaceEvenly"]) section {
+      :host([distribution='spaceEvenly']) section {
         justify-content: space-evenly;
       }
     `];
@@ -10629,9 +10647,7 @@ var __runInitializers$5 = function(thisArg, initializers, value) {
 			this.processor.setData(this.component, this.value.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value) {
-			return b`<section
-      class=${e$2(this.theme.components.Slider.container)}
-    >
+			return b`<section class=${e$2(this.theme.components.Slider.container)}>
       ${this.label ? b`<label class=${e$2(this.theme.components.Slider.label)} for="data">
             ${extractStringValue(this.label, this.component, this.processor, this.surfaceId)}
           </label>` : A}
@@ -11113,10 +11129,7 @@ var __runInitializers$3 = function(thisArg, initializers, value) {
 		}
 		#renderTabs() {
 			if (!this.titles) return A;
-			return b`<div
-      id="buttons"
-      class=${e$2(this.theme.components.Tabs.element)}
-    >
+			return b`<div id="buttons" class=${e$2(this.theme.components.Tabs.element)}>
       ${c$1(this.titles, (title, idx) => {
 				let titleString = "";
 				if ("literalString" in title && title.literalString) titleString = title.literalString;
@@ -11366,12 +11379,8 @@ var __runInitializers$2 = function(thisArg, initializers, value) {
 			this.processor.setData(this.component, this.text.path, value, this.surfaceId ?? A2uiMessageProcessor.DEFAULT_SURFACE_ID);
 		}
 		#renderField(value, label) {
-			return b` <section
-      class=${e$2(this.theme.components.TextField.container)}
-    >
-      ${label && label !== "" ? b`<label
-            class=${e$2(this.theme.components.TextField.label)}
-            for="data"
+			return b` <section class=${e$2(this.theme.components.TextField.container)}>
+      ${label && label !== "" ? b`<label class=${e$2(this.theme.components.TextField.label)} for="data"
             >${label}</label
           >` : A}
       <input
@@ -12404,7 +12413,7 @@ var OpenClawA2UIHost = class extends i$7 {
 			timestamp: (/* @__PURE__ */ new Date()).toISOString(),
 			...Object.keys(context).length ? { context } : {}
 		};
-		globalThis.__openclawLastA2UIAction = userAction;
+		globalThis["__openclawLastA2UIAction"] = userAction;
 		const handler = globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ?? globalThis.openclawCanvasA2UIAction;
 		if (handler?.postMessage) try {
 			if (handler === globalThis.openclawCanvasA2UIAction) postNativeMessage(handler, JSON.stringify({ userAction }));

@@ -81,8 +81,9 @@ export declare function resolveVisibleSessionReference(params: {
     visibilitySessionKey: string;
 }): Promise<VisibleSessionReferenceResolution>;
 export declare const normalizeOptionalKey: (value?: string) => string | undefined;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<{
         callGateway: GatewayCaller;
     }>): void;
 };
+export { testing as __testing };

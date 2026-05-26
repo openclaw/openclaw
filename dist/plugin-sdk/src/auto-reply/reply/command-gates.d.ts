@@ -3,7 +3,7 @@ import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 export declare function rejectUnauthorizedCommand(params: HandleCommandsParams, commandLabel: string): CommandHandlerResult | null;
 export declare function rejectNonOwnerCommand(params: HandleCommandsParams, commandLabel: string): CommandHandlerResult | null;
-export declare function requireGatewayClientScopeForInternalChannel(params: HandleCommandsParams, config: {
+export declare function requireGatewayClientScope(params: HandleCommandsParams, config: {
     label: string;
     allowedScopes: string[];
     missingText: string;

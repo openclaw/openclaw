@@ -1,4 +1,4 @@
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
 //#region extensions/bonjour/index.ts
 function formatBonjourInstanceName(displayName) {
 	const trimmed = displayName.trim();
@@ -14,12 +14,13 @@ var bonjour_default = definePluginEntry({
 		api.registerGatewayDiscoveryService({
 			id: "bonjour",
 			advertise: async (ctx) => {
-				const [{ startGatewayBonjourAdvertiser }, { registerUncaughtExceptionHandler, registerUnhandledRejectionHandler }] = await Promise.all([import("../../advertiser-TLtW3ToY.js"), import("../../plugin-sdk/runtime.js")]);
+				const [{ startGatewayBonjourAdvertiser }, { registerUncaughtExceptionHandler, registerUnhandledRejectionHandler }] = await Promise.all([import("../../advertiser-DjgV5_k-.js"), import("../../plugin-sdk/runtime.js")]);
 				return { stop: (await startGatewayBonjourAdvertiser({
 					instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
 					gatewayPort: ctx.gatewayPort,
 					gatewayTlsEnabled: ctx.gatewayTlsEnabled,
 					gatewayTlsFingerprintSha256: ctx.gatewayTlsFingerprintSha256,
+					gatewayDirectReachable: ctx.gatewayDirectReachable,
 					canvasPort: ctx.canvasPort,
 					sshPort: ctx.sshPort,
 					tailnetDns: ctx.tailnetDns,

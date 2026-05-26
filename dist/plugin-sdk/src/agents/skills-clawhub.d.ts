@@ -58,4 +58,5 @@ export declare function updateSkillsFromClawHub(params: {
     logger?: Logger;
 }): Promise<UpdateClawHubSkillResult[]>;
 export declare function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]>;
+export declare function untrackClawHubSkill(workspaceDir: string, slug: string): Promise<void>;
 export {};

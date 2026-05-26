@@ -14,9 +14,10 @@ type OpenAICompletionsCompatDefaults = {
     supportsReasoningEffort: boolean;
     supportsUsageInStreaming: boolean;
     maxTokensField: "max_completion_tokens" | "max_tokens";
-    thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
+    thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
     visibleReasoningDetailTypes: string[];
     supportsStrictMode: boolean;
+    requiresReasoningContentOnAssistantMessages: boolean;
 };
 type DetectedOpenAICompletionsCompat = {
     capabilities: ProviderRequestCapabilities;

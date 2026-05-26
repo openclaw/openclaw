@@ -33,6 +33,7 @@ export type PluginSdkApiBaselineWriteResult = {
     statefilePath: string;
     hashPath: string;
 };
+export declare function normalizePluginSdkApiDeclarationText(repoRoot: string, value: string): string;
 export declare function renderPluginSdkApiBaseline(params?: {
     repoRoot?: string;
 }): Promise<PluginSdkApiBaselineRender>;

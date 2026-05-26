@@ -15,7 +15,7 @@ export type ProviderAttributionPolicy = {
 type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
-export type ProviderEndpointClass = "default" | "anthropic-public" | "cerebras-native" | "chutes-native" | "deepseek-native" | "github-copilot-native" | "groq-native" | "mistral-public" | "moonshot-native" | "modelstudio-native" | "openai-public" | "openai-codex" | "opencode-native" | "azure-openai" | "openrouter" | "xai-native" | "zai-native" | "google-generative-ai" | "google-vertex" | "local" | "custom" | "invalid";
+export type ProviderEndpointClass = "default" | "anthropic-public" | "cerebras-native" | "chutes-native" | "deepseek-native" | "github-copilot-native" | "groq-native" | "mistral-public" | "moonshot-native" | "modelstudio-native" | "nvidia-native" | "openai-public" | "openai-codex" | "opencode-native" | "azure-openai" | "openrouter" | "xai-native" | "xiaomi-native" | "zai-native" | "google-generative-ai" | "google-vertex" | "local" | "custom" | "invalid";
 export type ProviderEndpointResolution = {
     endpointClass: ProviderEndpointClass;
     hostname?: string;

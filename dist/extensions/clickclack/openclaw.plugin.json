@@ -143,9 +143,6 @@
               "type": "string"
             }
           },
-          "senderIsOwner": {
-            "type": "boolean"
-          },
           "defaultTo": {
             "type": "string"
           },
@@ -288,9 +285,6 @@
                   "items": {
                     "type": "string"
                   }
-                },
-                "senderIsOwner": {
-                  "type": "boolean"
                 },
                 "defaultTo": {
                   "type": "string"

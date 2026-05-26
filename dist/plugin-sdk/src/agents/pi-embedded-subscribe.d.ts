@@ -1,6 +1,7 @@
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 export type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 export declare function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams): {
     assistantTexts: string[];
@@ -8,6 +9,7 @@ export declare function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSe
         toolName?: string;
         meta?: string;
     }[];
+    getAcceptedSessionSpawns: () => import("./accepted-session-spawn.ts").AcceptedSessionSpawn[];
     runToolLifecycle: <T>(toolParams: {
         toolName: string;
         toolCallId: string;
@@ -20,12 +22,15 @@ export declare function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSe
         livenessState?: EmbeddedRunLivenessState;
         stopReason?: string;
         yielded?: boolean;
+        timeoutPhase?: AgentRunTimeoutPhase;
+        providerStarted?: boolean;
     }) => void;
     isCompacting: () => boolean;
     isCompactionInFlight: () => boolean;
     getMessagingToolSentTexts: () => string[];
     getMessagingToolSentMediaUrls: () => string[];
     getMessagingToolSentTargets: () => import("openclaw/plugin-sdk/agent-harness-runtime").MessagingToolSend[];
+    getMessagingToolSourceReplyPayloads: () => import("openclaw/plugin-sdk/agent-harness-runtime").MessagingToolSourceReplyPayload[];
     getHeartbeatToolResponse: () => {
         outcome: "blocked" | "done" | "needs_attention" | "no_change" | "progress";
         notify: boolean;
@@ -36,6 +41,7 @@ export declare function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSe
         nextCheck?: string;
     } | undefined;
     getPendingToolMediaReply: () => BlockReplyPayload | null;
+    getVisibleBlockReplyCount: () => number;
     getSuccessfulCronAdds: () => number;
     getReplayState: () => {
         replayInvalid: boolean;
@@ -46,8 +52,10 @@ export declare function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSe
     getLastToolError: () => {
         toolName: string;
         meta?: string;
+        errorCode?: string;
         error?: string;
         timedOut?: boolean;
+        middlewareError?: boolean;
         mutatingAction?: boolean;
         actionFingerprint?: string;
         fileTarget?: import("./tool-mutation.ts").FileTarget;
@@ -57,6 +65,7 @@ export declare function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSe
         output: number | undefined;
         cacheRead: number | undefined;
         cacheWrite: number | undefined;
+        reasoningTokens?: number | undefined;
         total: number | undefined;
     } | undefined;
     getCompactionCount: () => number;

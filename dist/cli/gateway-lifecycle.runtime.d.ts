@@ -1,9 +1,25 @@
-import { s as getRuntimeConfig } from "../io-BSzQQn6M.js";
-import { i as TaskRecord, l as TaskStatus } from "../task-registry.types-DRoZ8RRA.js";
-import { i as waitForActiveEmbeddedRuns, o as getActiveEmbeddedRunCount, t as abortEmbeddedPiRun } from "../runs-B3uAznCF.js";
-import { i as waitForActiveTasks, n as markGatewayDraining, r as resetAllLanes, t as getActiveTaskCount } from "../command-queue-Y7I5g9NL.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { l as getRuntimeConfig } from "../io-QWYwWbjN.js";
+import { i as TaskRecord, l as TaskStatus } from "../task-registry.types-CicKx6sv.js";
+import { x as DiagnosticMemoryUsage, y as DiagnosticMemoryPressureEvent } from "../diagnostic-events-C_Kyi8bL.js";
+import { a as waitForActiveEmbeddedRuns, c as listActiveEmbeddedRunSessionIds, l as listActiveEmbeddedRunSessionKeys, s as getActiveEmbeddedRunCount, t as abortEmbeddedPiRun } from "../runs-CcRxGsix.js";
+import { i as waitForActiveTasks, n as markGatewayDraining, r as resetAllLanes, t as getActiveTaskCount } from "../command-queue-CvXXfohG.js";
+import { t as reloadTaskRegistryFromStore } from "../runtime-internal-Do-5YMUX.js";
 import { ChildProcess } from "node:child_process";
 
+//#region src/agents/main-session-restart-recovery.d.ts
+declare function markRestartAbortedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  additionalCfgs?: Iterable<OpenClawConfig | undefined>;
+  stateDir?: string;
+  sessionKeys?: Iterable<string>;
+  sessionIds?: Iterable<string>;
+  reason?: string;
+}): Promise<{
+  marked: number;
+  skipped: number;
+}>;
+//#endregion
 //#region src/infra/process-respawn.d.ts
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 type GatewayRespawnResult = {
@@ -14,13 +30,17 @@ type GatewayRespawnResult = {
 type GatewayUpdateRespawnResult = GatewayRespawnResult & {
   child?: ChildProcess;
 };
+type GatewayRespawnOptions = {
+  env?: NodeJS.ProcessEnv;
+};
 /**
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
- * - otherwise: spawn detached child with current argv/execArgv, then caller exits
+ * - unmanaged environments: caller should keep in-process restart behavior so
+ *   custom supervisors keep tracking the same gateway PID
  */
-declare function restartGatewayProcessWithFreshPid(): GatewayRespawnResult;
+declare function restartGatewayProcessWithFreshPid(_opts?: GatewayRespawnOptions): GatewayRespawnResult;
 /**
  * Update restarts must replace the OS process so the new code runs from a
  * fresh module graph after package files have changed on disk.
@@ -29,7 +49,7 @@ declare function restartGatewayProcessWithFreshPid(): GatewayRespawnResult;
  * unmanaged Windows installs because there is no safe in-process fallback once
  * the installed package contents have been replaced.
  */
-declare function respawnGatewayProcessForUpdate(): GatewayUpdateRespawnResult;
+declare function respawnGatewayProcessForUpdate(opts?: GatewayRespawnOptions): GatewayUpdateRespawnResult;
 //#endregion
 //#region src/infra/restart.d.ts
 declare function resetGatewayRestartStateForInProcessRestart(): void;
@@ -40,6 +60,7 @@ type RestartAuditInfo = {
   changedPaths?: string[];
 };
 type GatewayRestartIntent = {
+  reason?: string;
   force?: boolean;
   waitMs?: number;
 };
@@ -95,6 +116,10 @@ type GatewayRestartHandoff = {
   source: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode: GatewayRestartHandoffSupervisorMode;
+  restartTrace?: {
+    startedAt: number;
+    lastAt: number;
+  };
 };
 declare function writeGatewayRestartHandoffSync(opts: {
   env?: NodeJS.ProcessEnv;
@@ -104,6 +129,7 @@ declare function writeGatewayRestartHandoffSync(opts: {
   source?: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
+  restartTrace?: GatewayRestartHandoff["restartTrace"];
   ttlMs?: number;
   createdAt?: number;
 }): GatewayRestartHandoff | null;
@@ -124,6 +150,7 @@ type RestartSentinelStep = {
 type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
@@ -164,6 +191,53 @@ type RespawnSupervisor = "launchd" | "systemd" | "schtasks";
 declare function detectRespawnSupervisor(env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform): RespawnSupervisor | null;
 //#endregion
 //#region src/logging/diagnostic-stability-bundle.d.ts
+type DiagnosticHeapSpaceSummary = {
+  spaceName: string;
+  spaceSizeBytes: number;
+  spaceUsedBytes: number;
+  spaceAvailableBytes: number;
+  physicalSpaceSizeBytes: number;
+};
+type DiagnosticHeapStatisticsSummary = {
+  totalHeapSizeBytes: number;
+  totalHeapSizeExecutableBytes: number;
+  totalPhysicalSizeBytes: number;
+  totalAvailableSizeBytes: number;
+  usedHeapSizeBytes: number;
+  heapSizeLimitBytes: number;
+  mallocedMemoryBytes: number;
+  externalMemoryBytes: number;
+};
+type DiagnosticActiveResourceSummary = {
+  total: number;
+  byType: Record<string, number>;
+};
+type DiagnosticCgroupMemorySummary = {
+  version: "v2";
+  values: Record<string, number | "max">;
+  events: Record<string, number>;
+};
+type DiagnosticSessionFileSummary = {
+  relativePath: string;
+  sizeBytes: number;
+  mtimeMs: number;
+};
+type DiagnosticMemoryPressureBundleEvidence = {
+  level: DiagnosticMemoryPressureEvent["level"];
+  reason: DiagnosticMemoryPressureEvent["reason"];
+  memory: DiagnosticMemoryUsage;
+  thresholdBytes?: number;
+  rssGrowthBytes?: number;
+  windowMs?: number;
+  heapStatistics?: DiagnosticHeapStatisticsSummary;
+  heapSpaces?: DiagnosticHeapSpaceSummary[];
+  cgroup?: DiagnosticCgroupMemorySummary;
+  activeResources?: DiagnosticActiveResourceSummary;
+  topSessionFiles?: DiagnosticSessionFileSummary[];
+};
+type DiagnosticStabilityBundleEvidence = {
+  memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
+};
 type WriteDiagnosticStabilityBundleOptions = {
   reason: string;
   error?: unknown;
@@ -173,6 +247,7 @@ type WriteDiagnosticStabilityBundleOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   retention?: number;
+  evidence?: DiagnosticStabilityBundleEvidence;
 };
 type DiagnosticStabilityBundleFailureWriteOutcome = {
   status: "written";
@@ -189,9 +264,6 @@ type DiagnosticStabilityBundleFailureWriteOutcome = {
 type WriteDiagnosticStabilityBundleForFailureOptions = Omit<WriteDiagnosticStabilityBundleOptions, "error" | "includeEmpty" | "reason">;
 declare function writeDiagnosticStabilityBundleForFailureSync(reason: string, error?: unknown, options?: WriteDiagnosticStabilityBundleForFailureOptions): DiagnosticStabilityBundleFailureWriteOutcome;
 //#endregion
-//#region src/tasks/task-registry.d.ts
-declare function reloadTaskRegistryFromStore(): void;
-//#endregion
 //#region src/tasks/task-registry.maintenance.d.ts
 type ActiveTaskRestartBlocker = {
   taskId: string;
@@ -203,4 +275,4 @@ type ActiveTaskRestartBlocker = {
 };
 declare function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[];
 //#endregion
-export { abortEmbeddedPiRun, consumeGatewayRestartIntentPayloadSync, consumeGatewayRestartIntentSync, consumeGatewaySigusr1RestartAuthorization, detectRespawnSupervisor, getActiveEmbeddedRunCount, getActiveTaskCount, getInspectableActiveTaskRestartBlockers, getRuntimeConfig, isGatewaySigusr1RestartExternallyAllowed, markGatewayDraining, markGatewaySigusr1RestartHandled, markUpdateRestartSentinelFailure, peekGatewaySigusr1RestartReason, reloadTaskRegistryFromStore, resetAllLanes, resetGatewayRestartStateForInProcessRestart, resolveGatewayRestartDeferralTimeoutMs, respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid, scheduleGatewaySigusr1Restart, waitForActiveEmbeddedRuns, waitForActiveTasks, writeDiagnosticStabilityBundleForFailureSync, writeGatewayRestartHandoffSync };
+export { abortEmbeddedPiRun, consumeGatewayRestartIntentPayloadSync, consumeGatewayRestartIntentSync, consumeGatewaySigusr1RestartAuthorization, detectRespawnSupervisor, getActiveEmbeddedRunCount, getActiveTaskCount, getInspectableActiveTaskRestartBlockers, getRuntimeConfig, isGatewaySigusr1RestartExternallyAllowed, listActiveEmbeddedRunSessionIds, listActiveEmbeddedRunSessionKeys, markGatewayDraining, markGatewaySigusr1RestartHandled, markRestartAbortedMainSessions, markUpdateRestartSentinelFailure, peekGatewaySigusr1RestartReason, reloadTaskRegistryFromStore, resetAllLanes, resetGatewayRestartStateForInProcessRestart, resolveGatewayRestartDeferralTimeoutMs, respawnGatewayProcessForUpdate, restartGatewayProcessWithFreshPid, scheduleGatewaySigusr1Restart, waitForActiveEmbeddedRuns, waitForActiveTasks, writeDiagnosticStabilityBundleForFailureSync, writeGatewayRestartHandoffSync };

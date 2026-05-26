@@ -20,6 +20,7 @@ export type StatusArgs = {
     config?: OpenClawConfig;
     agent: AgentConfig;
     agentId?: string;
+    configuredDefaultModelLabel?: string;
     runtimeContextTokens?: number;
     explicitConfiguredContextTokens?: number;
     sessionEntry?: SessionEntry;

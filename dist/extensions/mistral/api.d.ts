@@ -1,6 +1,6 @@
-import { t as buildMistralProvider } from "../../provider-catalog-Ddhb0M_p.js";
-import { a as MISTRAL_DEFAULT_MODEL_ID, s as buildMistralModelDefinition, t as MISTRAL_BASE_URL } from "../../model-definitions-5kkoLtw5.js";
-import { n as applyMistralConfig, r as applyMistralProviderConfig, t as MISTRAL_DEFAULT_MODEL_REF } from "../../onboard-B64nPOBF.js";
+import { t as buildMistralProvider } from "../../provider-catalog-Cek8msK3.js";
+import { a as MISTRAL_DEFAULT_MODEL_ID, s as buildMistralModelDefinition, t as MISTRAL_BASE_URL } from "../../model-definitions-BhoAZUv4.js";
+import { n as applyMistralConfig, r as applyMistralProviderConfig, t as MISTRAL_DEFAULT_MODEL_REF } from "../../onboard-DjWoj-r1.js";
 
 //#region extensions/mistral/api.d.ts
 declare const MISTRAL_MODEL_TRANSPORT_PATCH: {

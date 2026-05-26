@@ -6,6 +6,7 @@ type ResolveApprovalOverGatewayParams = {
     decision: ExecApprovalDecision;
     senderId?: string | null;
     allowPluginFallback?: boolean;
+    resolveMethod?: "plugin";
     gatewayUrl?: string;
     clientDisplayName?: string;
 };

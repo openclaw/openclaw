@@ -20,6 +20,7 @@ export declare function commitGatewayConfigWrite(params: {
     disconnectSharedAuthClients?: boolean;
 }): Promise<{
     path: string;
+    config: OpenClawConfig;
     queueFollowUp: () => void;
 }>;
 export declare function resolveGatewayConfigRestartWriteResult(params: {

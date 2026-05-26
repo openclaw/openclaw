@@ -1,4 +1,4 @@
-import { C as resolveConfiguredModelNameHint, _ as buildFoundryProviderBaseUrl, o as CachedTokenEntry, p as TOKEN_REFRESH_MARGIN_MS, v as extractFoundryEndpoint, y as isFoundryProviderApi } from "../../shared-CCYmSZ1p.js";
+import { C as resolveConfiguredModelNameHint, _ as buildFoundryProviderBaseUrl, o as CachedTokenEntry, p as TOKEN_REFRESH_MARGIN_MS, v as extractFoundryEndpoint, y as isFoundryProviderApi } from "../../shared-FgR3yAtS.js";
 
 //#region extensions/microsoft-foundry/shared-runtime.d.ts
 declare function getFoundryTokenCacheKey(params?: {

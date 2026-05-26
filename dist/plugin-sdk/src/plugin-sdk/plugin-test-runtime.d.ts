@@ -10,6 +10,7 @@ export { resolveBundledExplicitWebFetchProvidersFromPublicArtifacts, resolveBund
 export { getActivePluginRegistry, releasePinnedPluginChannelRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry, } from "../plugins/runtime.js";
 export { listImportedBundledPluginFacadeIds, resetFacadeRuntimeStateForTest, } from "./facade-runtime.js";
 export { capturePluginRegistration } from "../plugins/captured-registration.js";
+export { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 export { runProviderCatalog } from "../plugins/provider-discovery.js";
 export { buildProviderPluginMethodChoice, resolveProviderModelPickerEntries, resolveProviderWizardOptions, setProviderWizardProvidersResolverForTest, } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";

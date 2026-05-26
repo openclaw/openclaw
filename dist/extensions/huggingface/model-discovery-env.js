@@ -1,2 +1,2 @@
-import { t as isHuggingfaceModelDiscoveryTestEnvironment } from "../../model-discovery-env-D4s5B_sc.js";
+import { t as isHuggingfaceModelDiscoveryTestEnvironment } from "../../model-discovery-env-80UUkp8S.js";
 export { isHuggingfaceModelDiscoveryTestEnvironment };

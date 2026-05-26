@@ -1,6 +1,6 @@
-import { t as defineSingleProviderPluginEntry } from "../../provider-entry-CDwzUX_P.js";
-import { n as applyCerebrasConfig, t as CEREBRAS_DEFAULT_MODEL_REF } from "../../onboard-C1OEjR65.js";
-import { t as buildCerebrasProvider } from "../../provider-catalog--iFzISwx.js";
+import { t as defineSingleProviderPluginEntry } from "../../provider-entry-DYbqN6AQ.js";
+import { n as applyCerebrasConfig, t as CEREBRAS_DEFAULT_MODEL_REF } from "../../onboard-B3SbdT5f.js";
+import { t as buildCerebrasProvider } from "../../provider-catalog-BT9k0Ubq.js";
 var cerebras_default = defineSingleProviderPluginEntry({
 	id: "cerebras",
 	name: "Cerebras Provider",

@@ -1,4 +1,4 @@
-import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import type { PluginHookAgentContext, PluginHookContextWindowSource } from "../../plugins/hook-types.js";
 export type AgentHarnessHookContext = {
     runId: string;
     jobId?: string;
@@ -11,5 +11,8 @@ export type AgentHarnessHookContext = {
     messageProvider?: string;
     trigger?: string;
     channelId?: string;
+    contextTokenBudget?: number;
+    contextWindowSource?: PluginHookContextWindowSource;
+    contextWindowReferenceTokens?: number;
 };
 export declare function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext;

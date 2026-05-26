@@ -27,6 +27,7 @@ export declare function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
     provider: string;
     harnessRuntime?: string;
     agentHarnessId?: string;
+    config?: OpenClawConfig;
 }): string[];
 export declare function resolveOpenAIRuntimeProviderForPi(params: {
     provider: string;
@@ -36,4 +37,17 @@ export declare function resolveOpenAIRuntimeProviderForPi(params: {
     authProfileId?: string;
     config?: OpenClawConfig;
     workspaceDir?: string;
+}): string;
+export declare function resolveSelectedOpenAIPiRuntimeProvider(params: {
+    provider: string;
+    harnessRuntime?: string;
+    agentHarnessId?: string;
+    authProfileProvider?: string;
+    authProfileId?: string;
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+}): string;
+export declare function resolveContextConfigProviderForRuntime(params: {
+    provider: string;
+    runtimeId?: string;
 }): string;

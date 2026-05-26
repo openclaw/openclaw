@@ -62,7 +62,9 @@ export declare function buildStatusAllReportData(params: {
         pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
         channelsStatus: StatusScanOverviewResult["channelsStatus"];
         channelIssues: StatusScanOverviewResult["channelIssues"];
+        agentStatus: StatusScanOverviewResult["agentStatus"];
         gatewayReachable: boolean;
+        deliveryDiagnostics: unknown;
         nodeOnlyGateway: NodeOnlyGatewayInfo | null;
         health: import("../health.types.ts").HealthSummary | {
             error: string;

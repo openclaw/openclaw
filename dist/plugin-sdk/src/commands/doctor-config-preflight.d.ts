@@ -4,6 +4,7 @@ export type DoctorConfigPreflightResult = {
     snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
     baseConfig: OpenClawConfig;
 };
+export declare function shouldSkipPluginValidationForDoctorConfigPreflight(env?: NodeJS.ProcessEnv): boolean;
 export declare function runDoctorConfigPreflight(options?: {
     migrateState?: boolean;
     migrateLegacyConfig?: boolean;

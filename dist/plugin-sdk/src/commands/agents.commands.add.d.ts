@@ -22,8 +22,8 @@ declare function formatSkippedOAuthProfilesMessage(params: {
 export declare function agentsAddCommand(opts: AgentsAddOptions, runtime?: RuntimeEnv, params?: {
     hasFlags?: boolean;
 }): Promise<void>;
-export declare const __testing: {
+export declare const testing: {
     copyPortableAuthProfiles: typeof copyPortableAuthProfiles;
     formatSkippedOAuthProfilesMessage: typeof formatSkippedOAuthProfilesMessage;
 };
-export {};
+export { testing as __testing };

@@ -41,7 +41,7 @@ export declare function createHookRunnerWithRegistry(hooks: Array<{
         runLlmInput: (event: import("./hook-types.ts").PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void>;
         runLlmOutput: (event: import("./hook-types.ts").PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) => Promise<void>;
         runBeforeAgentFinalize: (event: import("./hook-types.ts").PluginHookBeforeAgentFinalizeEvent, ctx: PluginHookAgentContext) => Promise<import("./hook-types.ts").PluginHookBeforeAgentFinalizeResult | undefined>;
-        runAgentEnd: (event: import("./hook-types.ts").PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void>;
+        runAgentEnd: (event: import("./hook-types.ts").PluginHookAgentEndEvent, ctx: PluginHookAgentContext, options?: import("./hooks.js").VoidHookRunOptions) => Promise<void>;
         runBeforeCompaction: (event: import("./hook-types.ts").PluginHookBeforeCompactionEvent, ctx: PluginHookAgentContext) => Promise<void>;
         runAfterCompaction: (event: import("./hook-types.ts").PluginHookAfterCompactionEvent, ctx: PluginHookAgentContext) => Promise<void>;
         runBeforeReset: (event: import("./hook-types.ts").PluginHookBeforeResetEvent, ctx: PluginHookAgentContext) => Promise<void>;

@@ -1,6 +1,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { CronAgentExecutionPhaseUpdate, CronAgentExecutionStarted, CronDeliveryStatus, CronDeliveryTrace, CronJob, CronJobCreate, CronJobPatch, CronRunDiagnostics, CronMessageChannel, CronRunOutcome, CronRunStatus, CronRunTelemetry, CronStoreFile } from "../types.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { CronAgentExecutionPhaseUpdate, CronAgentExecutionStarted, CronFailureNotificationDelivery, CronDeliveryStatus, CronDeliveryTrace, CronJob, CronJobCreate, CronJobPatch, CronRunDiagnostics, CronMessageChannel, CronRunOutcome, CronRunStatus, CronRunTelemetry, CronStoreFile } from "../types.js";
 export type CronEvent = {
     jobId: string;
     action: "added" | "updated" | "removed" | "started" | "finished";
@@ -15,6 +16,7 @@ export type CronEvent = {
     delivered?: boolean;
     deliveryStatus?: CronDeliveryStatus;
     deliveryError?: string;
+    failureNotificationDelivery?: CronFailureNotificationDelivery;
     delivery?: CronDeliveryTrace;
     sessionId?: string;
     sessionKey?: string;
@@ -61,7 +63,7 @@ export type CronServiceDeps = {
         agentId?: string;
         sessionKey?: string;
         contextKey?: string;
-        trusted?: boolean;
+        deliveryContext?: DeliveryContext;
     }) => void;
     requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
     runHeartbeatOnce?: (opts?: {
@@ -135,6 +137,11 @@ export type CronServiceState = {
      * single broken job does not spam the log on every scheduler cycle.
      */
     warnedMissingSessionTargetJobIds: Set<string>;
+    /**
+     * Persisted job rows with non-canonical storage shape are skipped in memory
+     * until doctor/fix or an explicit config write repairs the store.
+     */
+    warnedInvalidPersistedJobKeys: Set<string>;
     storeLoadedAtMs: number | null;
     storeFileMtimeMs: number | null;
 };

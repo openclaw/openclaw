@@ -3,11 +3,11 @@ export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export { getAcpRuntimeBackend, registerAcpRuntimeBackend, requireAcpRuntimeBackend, unregisterAcpRuntimeBackend, } from "../acp/runtime/registry.js";
-export type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeDoctorReport, AcpRuntimeEnsureInput, AcpRuntimeEvent, AcpRuntimeHandle, AcpRuntimeStatus, AcpRuntimeTurnAttachment, AcpRuntimeTurnInput, AcpSessionUpdateTag, } from "../acp/runtime/types.js";
+export type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeDoctorReport, AcpRuntimeEnsureInput, AcpRuntimeEvent, AcpRuntimeHandle, AcpRuntimeStatus, AcpRuntimeTurn, AcpRuntimeTurnAttachment, AcpRuntimeTurnInput, AcpRuntimeTurnResult, AcpRuntimeTurnResultError, AcpSessionUpdateTag, } from "../acp/runtime/types.js";
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
-export declare const __testing: {
+export declare const testing: {
     resetAcpSessionManagerForTests(): void;
     setAcpSessionManagerForTests(manager: unknown): void;
 } & {
@@ -16,3 +16,5 @@ export declare const __testing: {
         backendsById: Map<string, import("../acp/runtime/registry.js").AcpRuntimeBackend>;
     };
 };
+/** @deprecated Use `testing`. */
+export { testing as __testing };

@@ -1,12 +1,12 @@
-import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-LndEvhRk.js";
-import { t as applyModelCompatPatch } from "../../provider-model-compat-Dk5etUbu.js";
-import "../../provider-model-shared-D-slKnZa.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as defineSingleProviderPluginEntry } from "../../provider-entry-CDwzUX_P.js";
-import { n as VENICE_DEFAULT_MODEL_REF } from "../../models-Cym_n7AD.js";
-import { t as buildVeniceProvider } from "../../provider-catalog-CHigUh58.js";
-import { t as applyVeniceConfig } from "../../onboard-Dhgw3MoF.js";
-import { t as createVeniceDeepSeekV4Wrapper } from "../../stream-n60eyhlj.js";
+import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-DyL154ka.js";
+import { t as applyModelCompatPatch } from "../../provider-model-compat-CmPOKTzc.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import "../../provider-model-shared-DtsPmvDx.js";
+import { t as defineSingleProviderPluginEntry } from "../../provider-entry-DYbqN6AQ.js";
+import { n as VENICE_DEFAULT_MODEL_REF } from "../../models-BMwVknJE.js";
+import { t as buildVeniceProvider } from "../../provider-catalog-DbzAC_Pc.js";
+import { t as applyVeniceConfig } from "../../onboard-DcMXiKC_.js";
+import { t as createVeniceDeepSeekV4Wrapper } from "../../stream-vxng89oQ.js";
 //#region extensions/venice/index.ts
 const PROVIDER_ID = "venice";
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [

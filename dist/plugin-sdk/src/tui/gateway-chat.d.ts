@@ -1,4 +1,4 @@
-import { type HelloOk, type SessionsListParams, type SessionsPatchResult, type SessionsPatchParams } from "../gateway/protocol/index.js";
+import { type HelloOk, type CommandEntry, type CommandsListParams, type SessionsListParams, type SessionsPatchResult, type SessionsPatchParams } from "../gateway/protocol/index.js";
 import type { ChatSendOptions, TuiAgentsList, TuiBackend, TuiEvent, TuiModelChoice, TuiSessionList } from "./tui-backend.js";
 export type GatewayConnectionOptions = {
     url?: string;
@@ -54,6 +54,7 @@ export declare class GatewayChatClient implements TuiBackend {
     resetSession(key: string, reason?: "new" | "reset"): Promise<Record<string, unknown>>;
     getGatewayStatus(): Promise<Record<string, unknown>>;
     listModels(): Promise<GatewayModelChoice[]>;
+    listCommands(opts?: CommandsListParams): Promise<CommandEntry[]>;
 }
 export declare function resolveGatewayConnection(opts: GatewayConnectionOptions): Promise<ResolvedGatewayConnection>;
 export {};

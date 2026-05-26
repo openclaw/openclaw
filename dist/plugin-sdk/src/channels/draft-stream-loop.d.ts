@@ -10,4 +10,5 @@ export declare function createDraftStreamLoop(params: {
     throttleMs: number;
     isStopped: () => boolean;
     sendOrEditStreamMessage: (text: string) => Promise<void | boolean>;
+    onBackgroundFlushError?: (err: unknown) => void;
 }): DraftStreamLoop;

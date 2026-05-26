@@ -16,7 +16,8 @@ function createOpenrouterProvider() {
 				choiceLabel: "OpenRouter API key",
 				groupId: "openrouter",
 				groupLabel: "OpenRouter",
-				groupHint: "API key"
+				groupHint: "API key",
+				onboardingScopes: ["text-inference", "music-generation"]
 			}
 		}]
 	};

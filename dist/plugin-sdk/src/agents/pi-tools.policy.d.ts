@@ -6,6 +6,9 @@ export declare function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: 
 export declare function resolveSubagentToolPolicyForSession(cfg: OpenClawConfig | undefined, sessionKey: string, opts?: {
     store?: SessionCapabilityStore;
 }): SandboxToolPolicy;
+export declare function resolveInheritedToolPolicyForSession(cfg: OpenClawConfig | undefined, sessionKey: string | undefined | null, opts?: {
+    store?: SessionCapabilityStore;
+}): SandboxToolPolicy | undefined;
 export declare function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy): AnyAgentTool[];
 type ToolPolicyConfig = {
     allow?: string[];

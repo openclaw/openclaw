@@ -1,3 +1,4 @@
+import { type EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 export declare function resolveAcpSpawnStreamLogPath(params: {
     childSessionKey: string;
@@ -22,6 +23,7 @@ export declare function startAcpSpawnParentStreamRelay(params: {
      * Snapshotted with `mainKey` for the same start-time routing reason.
      */
     sessionScope?: "per-sender" | "global";
+    eventRouting?: EventSessionRoutingPolicy;
     logPath?: string;
     deliveryContext?: DeliveryContext;
     surfaceUpdates?: boolean;

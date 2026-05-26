@@ -18,5 +18,6 @@ export declare function resolveSubagentTargetPolicy(params: {
     targetAgentId: string;
     requestedAgentId?: string;
     allowAgents?: readonly string[];
+    configuredAgentIds?: readonly string[];
 }): SubagentTargetPolicyResult;
 export {};

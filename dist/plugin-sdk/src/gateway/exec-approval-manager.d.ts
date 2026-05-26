@@ -48,6 +48,7 @@ export declare class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> 
     awaitDecision(recordId: string): Promise<ExecApprovalDecision | null> | null;
     lookupApprovalId(input: string, opts?: {
         includeResolved?: boolean;
+        filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
     }): ExecApprovalIdLookupResult;
     lookupPendingId(input: string): ExecApprovalIdLookupResult;
 }

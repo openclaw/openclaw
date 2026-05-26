@@ -4,6 +4,12 @@ export type AgentModelConfig = string | {
     primary?: string;
     /** Per-agent model fallbacks (provider/model). */
     fallbacks?: string[];
+};
+export type AgentToolModelConfig = string | {
+    /** Primary model (provider/model). */
+    primary?: string;
+    /** Per-tool model fallbacks (provider/model). */
+    fallbacks?: string[];
     /** Optional provider request timeout in milliseconds for capabilities that support it. */
     timeoutMs?: number;
 };

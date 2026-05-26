@@ -2,6 +2,7 @@ import { completeSimple, type Api, type Model, type ThinkingLevel as SimpleCompl
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type ResolvedProviderAuth } from "./model-auth.js";
+import { resolveModelAsync } from "./pi-embedded-runner/model.js";
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 export type SimpleCompletionModelOptions = {
     maxTokens?: number;
@@ -48,6 +49,7 @@ export declare function prepareSimpleCompletionModel(params: {
     allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
     allowBundledStaticCatalogFallback?: boolean;
     skipPiDiscovery?: boolean;
+    modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel>;
 export declare function prepareSimpleCompletionModelForAgent(params: {
     cfg: OpenClawConfig;
@@ -57,6 +59,7 @@ export declare function prepareSimpleCompletionModelForAgent(params: {
     allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
     allowBundledStaticCatalogFallback?: boolean;
     skipPiDiscovery?: boolean;
+    modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent>;
 export declare function completeWithPreparedSimpleCompletionModel(params: {
     model: Model<Api>;

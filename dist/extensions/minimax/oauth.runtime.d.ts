@@ -1,2 +1,2 @@
-import { n as loginMiniMaxPortalOAuth } from "../../oauth-B7MnEF9n.js";
+import { n as loginMiniMaxPortalOAuth } from "../../oauth-BPXMcxzv.js";
 export { loginMiniMaxPortalOAuth };

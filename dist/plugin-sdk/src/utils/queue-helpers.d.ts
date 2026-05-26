@@ -39,6 +39,7 @@ export declare function applyQueueDropPolicy<T>(params: {
     queue: QueueState<T>;
     summarize: (item: T) => string;
     summaryLimit?: number;
+    onDrop?: (items: T[]) => void;
 }): boolean;
 export declare function waitForQueueDebounce(queue: {
     debounceMs: number;

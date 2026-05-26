@@ -101,7 +101,15 @@ declare const ModelCompatSchema: z.ZodOptional<z.ZodObject<{
     supportedReasoningEfforts: z.ZodOptional<z.ZodArray<z.ZodString>>;
     reasoningEffortMap: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
     maxTokensField: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"max_completion_tokens">, z.ZodLiteral<"max_tokens">]>>;
-    thinkingFormat: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"openai">, z.ZodLiteral<"openrouter">, z.ZodLiteral<"deepseek">, z.ZodLiteral<"qwen">, z.ZodLiteral<"qwen-chat-template">, z.ZodLiteral<"zai">]>>;
+    thinkingFormat: z.ZodOptional<z.ZodEnum<{
+        deepseek: "deepseek";
+        openai: "openai";
+        openrouter: "openrouter";
+        qwen: "qwen";
+        "qwen-chat-template": "qwen-chat-template";
+        together: "together";
+        zai: "zai";
+    }>>;
     requiresToolResultName: z.ZodOptional<z.ZodBoolean>;
     requiresAssistantAfterToolResult: z.ZodOptional<z.ZodBoolean>;
     requiresThinkingAsText: z.ZodOptional<z.ZodBoolean>;
@@ -115,10 +123,11 @@ declare const ModelCompatSchema: z.ZodOptional<z.ZodObject<{
 type AssertAssignable<_T extends U, U> = true;
 export type _ModelCompatSchemaAssignableToType = AssertAssignable<z.infer<typeof ModelCompatSchema>, ModelCompatConfig | undefined>;
 export type _ModelCompatTypeAssignableToSchema = AssertAssignable<ModelCompatConfig | undefined, z.infer<typeof ModelCompatSchema>>;
+export declare function isBuiltInModelProviderOverlayId(providerId: string): boolean;
 export declare const ModelsConfigSchema: z.ZodOptional<z.ZodObject<{
     mode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"merge">, z.ZodLiteral<"replace">]>>;
     providers: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
-        baseUrl: z.ZodString;
+        baseUrl: z.ZodOptional<z.ZodString>;
         apiKey: z.ZodOptional<z.ZodUnion<readonly [z.ZodString, z.ZodDiscriminatedUnion<[z.ZodObject<{
             source: z.ZodLiteral<"env">;
             provider: z.ZodString;
@@ -401,7 +410,7 @@ export declare const ModelsConfigSchema: z.ZodOptional<z.ZodObject<{
             }, z.core.$strict>>;
             allowPrivateNetwork: z.ZodOptional<z.ZodBoolean>;
         }, z.core.$strict>>;
-        models: z.ZodArray<z.ZodObject<{
+        models: z.ZodOptional<z.ZodArray<z.ZodObject<{
             id: z.ZodString;
             name: z.ZodString;
             api: z.ZodOptional<z.ZodEnum<{
@@ -453,7 +462,15 @@ export declare const ModelsConfigSchema: z.ZodOptional<z.ZodObject<{
                 supportedReasoningEfforts: z.ZodOptional<z.ZodArray<z.ZodString>>;
                 reasoningEffortMap: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
                 maxTokensField: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"max_completion_tokens">, z.ZodLiteral<"max_tokens">]>>;
-                thinkingFormat: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"openai">, z.ZodLiteral<"openrouter">, z.ZodLiteral<"deepseek">, z.ZodLiteral<"qwen">, z.ZodLiteral<"qwen-chat-template">, z.ZodLiteral<"zai">]>>;
+                thinkingFormat: z.ZodOptional<z.ZodEnum<{
+                    deepseek: "deepseek";
+                    openai: "openai";
+                    openrouter: "openrouter";
+                    qwen: "qwen";
+                    "qwen-chat-template": "qwen-chat-template";
+                    together: "together";
+                    zai: "zai";
+                }>>;
                 requiresToolResultName: z.ZodOptional<z.ZodBoolean>;
                 requiresAssistantAfterToolResult: z.ZodOptional<z.ZodBoolean>;
                 requiresThinkingAsText: z.ZodOptional<z.ZodBoolean>;
@@ -465,7 +482,7 @@ export declare const ModelsConfigSchema: z.ZodOptional<z.ZodObject<{
                 requiresOpenAiAnthropicToolPayload: z.ZodOptional<z.ZodBoolean>;
             }, z.core.$strict>>;
             metadataSource: z.ZodOptional<z.ZodLiteral<"models-add">>;
-        }, z.core.$strict>>;
+        }, z.core.$strict>>>;
     }, z.core.$strict>>>;
     pricing: z.ZodOptional<z.ZodObject<{
         enabled: z.ZodOptional<z.ZodBoolean>;
@@ -478,6 +495,10 @@ export declare const VisibleRepliesSchema: z.ZodUnion<readonly [z.ZodEnum<{
 export declare const GroupChatSchema: z.ZodOptional<z.ZodObject<{
     mentionPatterns: z.ZodOptional<z.ZodArray<z.ZodString>>;
     historyLimit: z.ZodOptional<z.ZodNumber>;
+    unmentionedInbound: z.ZodOptional<z.ZodEnum<{
+        room_event: "room_event";
+        user_request: "user_request";
+    }>>;
     visibleReplies: z.ZodOptional<z.ZodUnion<readonly [z.ZodEnum<{
         automatic: "automatic";
         message_tool: "message_tool";
@@ -730,18 +751,20 @@ export declare const RetryConfigSchema: z.ZodOptional<z.ZodObject<{
     jitter: z.ZodOptional<z.ZodNumber>;
 }, z.core.$strict>>;
 export declare const QueueSchema: z.ZodOptional<z.ZodObject<{
-    mode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
+    mode: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
     byChannel: z.ZodOptional<z.ZodObject<{
-        whatsapp: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        telegram: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        discord: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        irc: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        slack: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        mattermost: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        signal: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        imessage: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        msteams: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
-        webchat: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"steer-backlog">, z.ZodLiteral<"steer+backlog">, z.ZodLiteral<"queue">, z.ZodLiteral<"interrupt">]>>;
+        whatsapp: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        telegram: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        discord: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        irc: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        googlechat: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        slack: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        mattermost: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        signal: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        imessage: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        msteams: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        webchat: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
+        matrix: z.ZodOptional<z.ZodUnion<readonly [z.ZodLiteral<"steer">, z.ZodLiteral<"followup">, z.ZodLiteral<"collect">, z.ZodLiteral<"interrupt">]>>;
     }, z.core.$strict>>;
     debounceMs: z.ZodOptional<z.ZodNumber>;
     debounceMsByChannel: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodNumber>>;

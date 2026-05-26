@@ -38,6 +38,12 @@ export declare function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: 
     thinkingLevel: DeepSeekV4ThinkingLevel;
     shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
     resolveReasoningEffort?: (thinkingLevel: DeepSeekV4ThinkingLevel) => DeepSeekV4ReasoningEffort;
+    shouldBackfillAssistantReasoningContent?: (message: Record<string, unknown>) => boolean;
+}): StreamFn | undefined;
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
+export declare function createThinkingOnlyFinalTextWrapper(params: {
+    baseStreamFn: StreamFn | undefined;
+    shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
 }): StreamFn | undefined;
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";

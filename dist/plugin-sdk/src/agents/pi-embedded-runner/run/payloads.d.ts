@@ -15,6 +15,7 @@ export declare function buildEmbeddedRunPayloads(params: {
     assistantTexts: string[];
     toolMetas: ToolMetaEntry[];
     lastAssistant: AssistantMessage | undefined;
+    currentAssistant?: AssistantMessage | null;
     lastToolError?: ToolErrorSummary;
     config?: OpenClawConfig;
     isCronTrigger?: boolean;
@@ -32,6 +33,7 @@ export declare function buildEmbeddedRunPayloads(params: {
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     agentId?: string;
     runId?: string;
+    runAborted?: boolean;
     didSendDeterministicApprovalPrompt?: boolean;
     heartbeatToolResponse?: HeartbeatToolResponse;
 }): ReplyPayload[];

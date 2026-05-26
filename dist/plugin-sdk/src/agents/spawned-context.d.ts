@@ -12,6 +12,8 @@ export type SpawnedToolContext = {
     agentGroupSpace?: string | null;
     agentMemberRoleIds?: string[];
     workspaceDir?: string;
+    inheritedToolAllowlist?: string[];
+    inheritedToolDenylist?: string[];
 };
 type NormalizedSpawnedRunMetadata = {
     spawnedBy?: string;

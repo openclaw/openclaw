@@ -1,3 +1,4 @@
+import type { BufferedAgentEvent } from "./server-chat-state.js";
 export type ChatAbortControllerEntry = {
     controller: AbortController;
     sessionId: string;
@@ -6,6 +7,9 @@ export type ChatAbortControllerEntry = {
     expiresAtMs: number;
     ownerConnId?: string;
     ownerDeviceId?: string;
+    providerId?: string;
+    authProviderId?: string;
+    abortStopReason?: string;
     /**
      * Which RPC owns this registration. Absent (undefined) is treated as
      * `"chat-send"` so pre-existing callers that constructed entries without
@@ -34,6 +38,8 @@ export declare function registerChatAbortController(params: {
     timeoutMs: number;
     ownerConnId?: string;
     ownerDeviceId?: string;
+    providerId?: string;
+    authProviderId?: string;
     kind?: ChatAbortControllerEntry["kind"];
     now?: number;
     expiresAtMs?: number;
@@ -44,6 +50,8 @@ export type ChatAbortOps = {
     chatDeltaSentAt: Map<string, number>;
     chatDeltaLastBroadcastLen: Map<string, number>;
     chatDeltaLastBroadcastText: Map<string, string>;
+    agentDeltaSentAt: Map<string, number>;
+    bufferedAgentEvents: Map<string, BufferedAgentEvent>;
     chatAbortedRuns: Map<string, number>;
     removeChatRun: (sessionId: string, clientRunId: string, sessionKey?: string) => {
         sessionKey: string;
@@ -61,5 +69,16 @@ export declare function abortChatRunById(ops: ChatAbortOps, params: {
     stopReason?: string;
 }): {
     aborted: boolean;
+};
+export declare function updateChatRunProvider(chatAbortControllers: Map<string, ChatAbortControllerEntry>, params: {
+    runId: string;
+    providerId?: string;
+    authProviderId?: string;
+}): boolean;
+export declare function abortChatRunsForProvider(ops: ChatAbortOps, params: {
+    providerId: string;
+    stopReason?: string;
+}): {
+    runIds: string[];
 };
 export {};

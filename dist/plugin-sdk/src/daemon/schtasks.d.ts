@@ -8,10 +8,6 @@ export type ScheduledTaskInfo = {
     lastRunResult?: string;
 };
 export declare function parseSchtasksQuery(output: string): ScheduledTaskInfo;
-export declare function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
-    status: GatewayServiceRuntime["status"];
-    detail?: string;
-};
 export declare function stageScheduledTask({ stdout, ...args }: GatewayServiceInstallArgs): Promise<{
     scriptPath: string;
 }>;

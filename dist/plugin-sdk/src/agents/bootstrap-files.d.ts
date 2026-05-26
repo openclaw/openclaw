@@ -5,8 +5,8 @@ import { isWorkspaceBootstrapPending, type WorkspaceBootstrapFile } from "./work
 export type BootstrapContextMode = "full" | "lightweight";
 type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 export declare const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
-export declare function _resetBootstrapWarningCacheForTest(): void;
-export declare function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection;
+export declare function resetBootstrapWarningCacheForTest(): void;
+export declare function resolveContextInjectionMode(config?: OpenClawConfig, agentId?: string | null): AgentContextInjection;
 export declare function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean>;
 export declare function makeBootstrapWarn(params: {
     sessionLabel: string;
@@ -38,6 +38,7 @@ export declare function resolveBootstrapContextForRun(params: {
 }>;
 export declare function buildBootstrapContextForFiles(bootstrapFiles: WorkspaceBootstrapFile[], params: {
     config?: OpenClawConfig;
+    agentId?: string | null;
     warn?: (message: string) => void;
 }): EmbeddedContextFile[];
 export { isWorkspaceBootstrapPending };

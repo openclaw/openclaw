@@ -1,4 +1,4 @@
-import { n as PluginRuntime, t as CreatePluginRuntimeOptions } from "../../types-DtDIgr2k.js";
+import { n as PluginRuntime, t as CreatePluginRuntimeOptions } from "../../types-DpjQFFwi.js";
 
 //#region src/plugins/runtime/gateway-bindings.d.ts
 /**

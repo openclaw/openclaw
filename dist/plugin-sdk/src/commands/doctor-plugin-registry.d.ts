@@ -7,6 +7,7 @@ type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParam
     prompter: Pick<DoctorPrompter, "shouldRepair">;
 };
 export declare function maybeRepairStaleManagedNpmBundledPlugins(params: PluginRegistryDoctorRepairParams): boolean;
+export declare function maybeRepairStaleLocalBundledPluginInstallRecords(params: PluginRegistryDoctorRepairParams): Promise<string[]>;
 export declare function maybeRepairManagedNpmOpenClawPeerLinks(params: PluginRegistryDoctorRepairParams): Promise<boolean>;
 export declare function maybeRepairPluginRegistryState(params: PluginRegistryDoctorRepairParams): Promise<OpenClawConfig>;
 export {};

@@ -31,8 +31,6 @@ type FinalEffectiveToolPolicyParams = {
     senderName?: string | null;
     senderUsername?: string | null;
     senderE164?: string | null;
-    senderIsOwner?: boolean;
-    ownerOnlyToolAllowlist?: string[];
     warn: (message: string) => void;
 };
 export declare function applyFinalEffectiveToolPolicy(params: FinalEffectiveToolPolicyParams): AnyAgentTool[];

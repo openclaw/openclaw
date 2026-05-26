@@ -15,10 +15,20 @@ export type GatewayReloadPlan = {
     disposeMcpRuntimes: boolean;
     noopPaths: string[];
 };
+type ReloadRule = {
+    prefix: string;
+    kind: "restart" | "hot" | "none";
+    actions?: ReloadAction[];
+};
+export type ConfigReloadMetadata = {
+    kind: ReloadRule["kind"];
+};
+type ReloadAction = "reload-hooks" | "restart-gmail-watcher" | "restart-cron" | "restart-heartbeat" | "restart-health-monitor" | "reload-plugins" | "dispose-mcp-runtimes" | `restart-channel:${ChannelId}`;
 type GatewayReloadPlanOptions = {
     noopPaths?: Iterable<string>;
     forceChangedPaths?: Iterable<string>;
 };
+export declare function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata;
 export declare function listPluginInstallTimestampMetadataPaths(prevConfig: unknown, nextConfig: unknown): string[];
 export declare function listPluginInstallWholeRecordPaths(prevConfig: unknown, nextConfig: unknown): string[];
 export declare function buildGatewayReloadPlan(changedPaths: string[], options?: GatewayReloadPlanOptions): GatewayReloadPlan;

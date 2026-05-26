@@ -19,6 +19,9 @@ export type WritableTransportStream = {
 type TransportOutputShape = {
     stopReason: string;
     errorMessage?: string;
+    errorCode?: string;
+    errorType?: string;
+    errorBody?: string;
 };
 export declare function sanitizeTransportPayloadText(text: string): string;
 export declare function sanitizeNonEmptyTransportPayloadText(text: string, fallback?: string): string;
@@ -35,6 +38,13 @@ export declare function finalizeTransportStream(params: {
     output: TransportOutputShape;
     signal?: AbortSignal;
 }): void;
+type TransportErrorDetails = {
+    errorCode?: string;
+    errorType?: string;
+    errorBody?: string;
+};
+export declare function extractTransportErrorDetails(error: unknown): TransportErrorDetails;
+export declare function assignTransportErrorDetails(output: TransportOutputShape, error: unknown, signal?: AbortSignal): void;
 export declare function failTransportStream(params: {
     stream: WritableTransportStream;
     output: TransportOutputShape;

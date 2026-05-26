@@ -82,6 +82,8 @@ export declare function abortActiveReplyRuns(opts: {
 }): boolean;
 export declare function getActiveReplyRunCount(): number;
 export declare function listActiveReplyRunSessionIds(): string[];
-export declare const __testing: {
+export declare function listActiveReplyRunSessionKeys(): string[];
+export declare const testing: {
     resetReplyRunRegistry(): void;
 };
+export { testing as __testing };

@@ -3,6 +3,7 @@ export declare function findActiveSessionTask(params: {
     sessionKey?: string;
     runtime?: TaskRuntime;
     taskKind?: string;
+    task?: string;
     statuses?: ReadonlySet<TaskStatus>;
     sourceIdPrefix?: string;
 }): TaskRecord | undefined;

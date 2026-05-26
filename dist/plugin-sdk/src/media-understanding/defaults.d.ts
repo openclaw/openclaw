@@ -7,6 +7,7 @@ export declare function resolveDefaultMediaModel(params: {
     cfg?: OpenClawConfig;
     workspaceDir?: string;
     providerRegistry?: Map<string, MediaUnderstandingProvider>;
+    includeConfiguredImageModels?: boolean;
 }): string | undefined;
 export declare function resolveAutoMediaKeyProviders(params: {
     capability: MediaUnderstandingCapability;

@@ -1,7 +1,7 @@
-import { i as OpenClawConfig } from "../types.openclaw-DIZy8jcb.js";
-import { d as MediaUnderstandingOutput, f as MediaUnderstandingProvider, u as MediaUnderstandingDecision } from "../types-Dp_Bsq2N.js";
-import { n as MsgContext } from "../templating-BcdAlwzB.js";
-import { t as ActiveMediaModel } from "../active-model.types-1apCVI9r.js";
+import { i as OpenClawConfig } from "../types.openclaw-BLF4DJTX.js";
+import { d as MediaUnderstandingOutput, f as MediaUnderstandingProvider, u as MediaUnderstandingDecision } from "../types-ByzWuf9L.js";
+import { n as MsgContext } from "../templating-DbSpLCuR.js";
+import { t as ActiveMediaModel } from "../active-model.types-DCiq_ik4.js";
 
 //#region src/media-understanding/apply.d.ts
 type ApplyMediaUnderstandingResult = {
@@ -16,6 +16,7 @@ declare function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
 }): Promise<ApplyMediaUnderstandingResult>;

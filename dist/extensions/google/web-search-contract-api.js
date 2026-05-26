@@ -1,2 +1,2 @@
-import { t as createGeminiWebSearchProvider } from "../../gemini-web-search-provider-BHxxLJg4.js";
+import { t as createGeminiWebSearchProvider } from "../../gemini-web-search-provider-DiEiFq04.js";
 export { createGeminiWebSearchProvider };

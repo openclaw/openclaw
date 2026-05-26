@@ -1,23 +1,23 @@
-import { i as resolveAgentModelPrimaryValue, r as resolveAgentModelFallbackValues } from "../model-input-B9p-bobB.js";
-import { t as createNonExitingRuntime } from "../runtime-DDH_zqCr.js";
-import { t as clearRuntimeAuthProfileStoreSnapshots } from "../store-a4exFSck.js";
-import { i as runProviderCatalog } from "../provider-discovery-iY3YbLCR.js";
-import { o as listSupportedMusicGenerationModes } from "../openclaw-tools-BfDU2PXL.js";
-import { r as createCapturedPluginRegistration } from "../bundled-capability-runtime-B0u9YoU0.js";
-import { a as resolveWebFetchProviderContractEntriesForPluginId, i as resolveProviderContractProvidersForPluginIds, n as providerContractLoadError, o as resolveWebSearchProviderContractEntriesForPluginId, s as resolveBundledExplicitProviderContractsFromPublicArtifacts, t as pluginRegistrationContractRegistry } from "../registry-nHNSI2ck.js";
-import { i as resolveBundledExplicitWebSearchProvidersFromPublicArtifacts, r as resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit-D_7sUix5.js";
-import { r as listSupportedVideoGenerationModes } from "../duration-support-BkcVUqlK.js";
-import "../provider-onboard-DhuPxzG7.js";
-import "../runtime-B82zl-7p.js";
-import "../agent-runtime-C0lBBqMR.js";
-import { b as registerSingleProviderPlugin, v as registerProviderPlugin, x as requireRegisteredProvider, y as registerProviderPlugins } from "../plugin-setup-wizard-D4ENJ6Y0.js";
-import { a as expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55, i as expectCodexMissingAuthHint, o as expectedOpenaiPluginCodexCatalogEntriesWithGpt55, r as expectAugmentedCodexCatalog } from "../testing-DrTSJhfM.js";
-import { i as resolveProviderWizardOptions, n as resolveProviderModelPickerEntries, o as setProviderWizardProvidersResolverForTest, t as buildProviderPluginMethodChoice } from "../provider-wizard-CL7aBVWm.js";
-import { r as resolveProviderPluginChoice } from "../provider-auth-choice.runtime-BQo-zNWY.js";
-import { i as makeResponse, r as createProviderUsageFetch } from "../frozen-time-qpEZlO-o.js";
-import { n as loadBundledPluginPublicSurfaceSync, t as loadBundledPluginPublicSurface } from "../public-surface-loader-CZrNHpNl.js";
-import "../plugin-test-runtime-CIezMow8.js";
-import "../test-env-xAY6Bv44.js";
+import { i as resolveAgentModelPrimaryValue, r as resolveAgentModelFallbackValues } from "../model-input-ChW9XXsQ.js";
+import { t as createNonExitingRuntime } from "../runtime-yzlkhCoS.js";
+import { t as clearRuntimeAuthProfileStoreSnapshots } from "../store-BMQkMM4l.js";
+import { i as runProviderCatalog } from "../provider-discovery-CP1SEcge.js";
+import { s as listSupportedMusicGenerationModes } from "../openclaw-tools-QeySpphx.js";
+import { r as createCapturedPluginRegistration } from "../bundled-capability-runtime-DUjDEDJd.js";
+import { a as resolveWebFetchProviderContractEntriesForPluginId, i as resolveProviderContractProvidersForPluginIds, n as providerContractLoadError, o as resolveWebSearchProviderContractEntriesForPluginId, s as resolveBundledExplicitProviderContractsFromPublicArtifacts, t as pluginRegistrationContractRegistry } from "../registry-BlbU2sIq.js";
+import { i as resolveBundledExplicitWebSearchProvidersFromPublicArtifacts, r as resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../web-provider-public-artifacts.explicit-BwvGaIk_.js";
+import { r as listSupportedVideoGenerationModes } from "../duration-support-0igMBB1p.js";
+import "../provider-onboard-MLXAQX8H.js";
+import "../runtime-DA0ehWyx.js";
+import "../agent-runtime-Lc7H-PlR.js";
+import { b as registerSingleProviderPlugin, v as registerProviderPlugin, x as requireRegisteredProvider, y as registerProviderPlugins } from "../plugin-setup-wizard-DsSNbhuh.js";
+import { a as expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55, i as expectCodexMissingAuthHint, o as expectedOpenaiPluginCodexCatalogEntriesWithGpt55, r as expectAugmentedCodexCatalog } from "../testing-C7rXcZLa.js";
+import { i as resolveProviderWizardOptions, n as resolveProviderModelPickerEntries, o as setProviderWizardProvidersResolverForTest, t as buildProviderPluginMethodChoice } from "../provider-wizard-CXwE9_rc.js";
+import { r as resolveProviderPluginChoice } from "../provider-auth-choice.runtime-CHcmr6A-.js";
+import { i as makeResponse, r as createProviderUsageFetch } from "../frozen-time-Cc9frCkh.js";
+import { n as loadBundledPluginPublicSurfaceSync, t as loadBundledPluginPublicSurface } from "../public-surface-loader-B8tgO8c-.js";
+import "../plugin-test-runtime-DRl7L9pX.js";
+import "../test-env-CV5wTKy5.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -568,6 +568,10 @@ function installDiscoveryHooks(state, options) {
 					...metadata ? { metadata } : {}
 				}),
 				buildOauthProviderAuthResult: vi.fn(),
+				buildCopilotIdeHeaders: vi.fn(() => ({
+					"Editor-Version": "vscode/1.96.2",
+					"User-Agent": "GitHubCopilotChat/0.26.7"
+				})),
 				coerceSecretRef: (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null,
 				ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
 				ensureAuthProfileStore: ensureAuthProfileStoreMock,

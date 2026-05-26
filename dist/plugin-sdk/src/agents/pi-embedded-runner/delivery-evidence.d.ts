@@ -8,6 +8,7 @@ export type AgentDeliveryEvidence = {
     messagingToolSentTexts?: unknown;
     messagingToolSentMediaUrls?: unknown;
     messagingToolSentTargets?: unknown;
+    acceptedSessionSpawns?: unknown;
     successfulCronAdds?: unknown;
     meta?: {
         toolSummary?: {
@@ -15,6 +16,9 @@ export type AgentDeliveryEvidence = {
         };
     };
 };
+export declare function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[];
+export declare function collectMessagingToolDeliveredMediaUrls(result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">): string[];
+export declare function hasDeliveredExpectedMedia(result: AgentDeliveryEvidence, expectedMediaUrls: readonly string[]): boolean;
 export declare function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null;
 export declare function hasVisibleAgentPayload(result: Pick<AgentDeliveryEvidence, "payloads">, options?: {
     includeErrorPayloads?: boolean;

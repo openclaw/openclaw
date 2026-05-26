@@ -8,6 +8,7 @@ export declare function resolveOpenClawPackageRootSync(opts: {
     argv1?: string;
     moduleUrl?: string;
 }): string | null;
-export declare const __testing: {
+export declare const testing: {
     clearOpenClawPackageRootCaches(): void;
 };
+export { testing as __testing };

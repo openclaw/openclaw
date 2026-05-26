@@ -1,6 +1,7 @@
 import { type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
+export declare function resetResolvedSkillsCacheForTests(): void;
 export declare function ensureSkillSnapshot(params: {
     sessionEntry?: SessionEntry;
     sessionStore?: Record<string, SessionEntry>;

@@ -7,7 +7,9 @@ export type ModelApi = (typeof MODEL_APIS)[number];
 type SupportedOpenAICompatFields = Pick<OpenAICompletionsCompat, "supportsStore" | "supportsDeveloperRole" | "supportsReasoningEffort" | "supportsUsageInStreaming" | "supportsStrictMode" | "maxTokensField" | "requiresToolResultName" | "requiresAssistantAfterToolResult" | "requiresThinkingAsText" | "openRouterRouting" | "vercelGatewayRouting" | "zaiToolStream" | "cacheControlFormat" | "sendSessionAffinityHeaders" | "supportsLongCacheRetention">;
 type SupportedOpenAIResponsesCompatFields = Pick<OpenAIResponsesCompat, "sendSessionIdHeader" | "supportsLongCacheRetention">;
 type SupportedAnthropicMessagesCompatFields = Pick<AnthropicMessagesCompat, "supportsEagerToolInputStreaming" | "supportsLongCacheRetention">;
-type SupportedThinkingFormat = NonNullable<OpenAICompletionsCompat["thinkingFormat"]> | "deepseek" | "openrouter";
+export type SupportedThinkingFormat = NonNullable<OpenAICompletionsCompat["thinkingFormat"]> | "deepseek" | "openrouter" | "together";
+export declare const MODEL_THINKING_FORMATS: readonly ["openai", "openrouter", "deepseek", "together", "qwen", "qwen-chat-template", "zai"];
+export declare function isModelThinkingFormat(value: string): value is SupportedThinkingFormat;
 export type ModelCompatConfig = SupportedOpenAICompatFields & SupportedOpenAIResponsesCompatFields & SupportedAnthropicMessagesCompatFields & {
     thinkingFormat?: SupportedThinkingFormat;
     supportedReasoningEfforts?: string[];
@@ -96,6 +98,10 @@ export type ModelProviderConfig = {
     request?: ConfiguredModelProviderRequest;
     models: ModelDefinitionConfig[];
 };
+export type ModelProviderDeclarationConfig = ModelProviderConfig;
+export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
+    models?: ModelDefinitionConfig[];
+};
 export type BedrockDiscoveryConfig = {
     enabled?: boolean;
     region?: string;
@@ -134,5 +140,8 @@ export type ModelsConfig = {
      * older configs until migration completes.
      */
     ollamaDiscovery?: DiscoveryToggleConfig;
+};
+export type ModelsConfigInput = Omit<ModelsConfig, "providers"> & {
+    providers?: Record<string, ModelProviderConfigInput>;
 };
 export {};

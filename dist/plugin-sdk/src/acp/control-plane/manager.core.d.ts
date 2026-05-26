@@ -83,6 +83,7 @@ export declare class AcpSessionManager {
     private getCachedRuntimeState;
     private setCachedRuntimeState;
     private clearCachedRuntimeState;
+    private closeCachedRuntimeState;
     private clearCachedRuntimeStateIfHandleMatches;
     private runtimeHandlesMatch;
     private runtimeHandleMatchesMeta;

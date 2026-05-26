@@ -1,6 +1,6 @@
 type OriginCheckResult = {
     ok: true;
-    matchedBy: "allowlist" | "host-header-fallback" | "local-loopback";
+    matchedBy: "allowlist" | "host-header-fallback" | "private-same-origin" | "local-loopback";
 } | {
     ok: false;
     reason: string;

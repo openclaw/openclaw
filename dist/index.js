@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { a as formatUncaughtError } from "./errors-VfATXfah.js";
-import { t as formatCliFailureLines } from "./failure-output-BxgFgPpa.js";
-import { r as runFatalErrorHooks } from "./fatal-error-hooks-B_YrxIgH.js";
-import { t as isMainModule } from "./is-main-myFrAEl9.js";
-import { c as isUncaughtExceptionHandled, r as isBenignUncaughtExceptionError, t as installUnhandledRejectionHandler } from "./unhandled-rejections-BtmpQ7E_.js";
+import { a as formatUncaughtError } from "./errors-b3ZrCRlt.js";
+import { t as formatCliFailureLines } from "./failure-output-BQkxuveX.js";
+import { r as runFatalErrorHooks } from "./fatal-error-hooks-gDVRMZSa.js";
+import { t as isMainModule } from "./is-main-DoKHeRG7.js";
+import { c as isUncaughtExceptionHandled, r as isBenignUncaughtExceptionError, t as installUnhandledRejectionHandler } from "./unhandled-rejections-Km9wbHjh.js";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 //#region src/index.ts
@@ -36,9 +36,9 @@ async function runLegacyCliEntry(argv = process.argv, deps) {
 	await runCli(argv);
 }
 const isMain = isMainModule({ currentFile: fileURLToPath(import.meta.url) });
-if (!isMain) ({applyTemplate, createDefaultDeps, deriveSessionKey, describePortOwner, ensureBinary, ensurePortAvailable, getReplyFromConfig, handlePortError, loadConfig, loadSessionStore, monitorWebChannel, normalizeE164, PortInUseError, promptYesNo, resolveSessionKey, resolveStorePath, runCommandWithTimeout, runExec, saveSessionStore, waitForever} = await import("./library-f3QG8KNw.js"));
+if (!isMain) ({applyTemplate, createDefaultDeps, deriveSessionKey, describePortOwner, ensureBinary, ensurePortAvailable, getReplyFromConfig, handlePortError, loadConfig, loadSessionStore, monitorWebChannel, normalizeE164, PortInUseError, promptYesNo, resolveSessionKey, resolveStorePath, runCommandWithTimeout, runExec, saveSessionStore, waitForever} = await import("./library-CKtKtP0e.js"));
 if (isMain) {
-	const { restoreTerminalState } = await import("./restore-BkofA_rZ.js");
+	const { restoreTerminalState } = await import("./restore-x0u7-53p.js");
 	installUnhandledRejectionHandler();
 	process.on("uncaughtException", (error) => {
 		if (isUncaughtExceptionHandled(error)) return;

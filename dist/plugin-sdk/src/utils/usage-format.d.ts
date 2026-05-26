@@ -47,4 +47,4 @@ export declare function estimateUsageCost(params: {
     usage?: NormalizedUsage | UsageTotals | null;
     cost?: ModelCostConfig;
 }): number | undefined;
-export declare function __resetUsageFormatCachesForTest(): void;
+export declare function resetUsageFormatCachesForTest(): void;

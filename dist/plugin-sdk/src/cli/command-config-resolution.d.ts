@@ -7,6 +7,8 @@ export declare function resolveCommandConfigWithSecrets<TConfig extends OpenClaw
     targetIds: Set<string>;
     mode?: CommandSecretResolutionMode;
     allowedPaths?: Set<string>;
+    forcedActivePaths?: Set<string>;
+    optionalActivePaths?: Set<string>;
     runtime?: RuntimeEnv;
     autoEnable?: boolean;
     env?: NodeJS.ProcessEnv;

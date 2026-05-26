@@ -1,25 +1,27 @@
-import { l as jsonResult } from "../../common-V7-zd73S.js";
-import { r as OPENAI_COMPATIBLE_REPLAY_HOOKS } from "../../provider-model-shared-D-slKnZa.js";
-import { s as defaultToolStreamExtraParams } from "../../provider-stream-shared-BMzmRA_f.js";
-import { t as defineSingleProviderPluginEntry } from "../../provider-entry-CDwzUX_P.js";
-import "../../provider-web-search-D2KY-StD.js";
-import { a as normalizeNativeXaiModelId, o as resolveXaiModelCompatPatch } from "../../model-compat-TbJYnPAX.js";
-import { t as buildXaiProvider } from "../../provider-catalog-BX5BIgsD.js";
-import { n as applyXaiConfig, t as XAI_DEFAULT_MODEL_REF } from "../../onboard-cA7-mBVb.js";
-import { t as buildXaiImageGenerationProvider } from "../../image-generation-provider-DJOEvmCQ.js";
-import { t as applyXaiRuntimeModelCompat } from "../../runtime-model-compat-CGE6fRZs.js";
-import { n as resolveXaiForwardCompatModel, t as isModernXaiModel } from "../../provider-models-B6wSJQy7.js";
-import { i as shouldContributeXaiCompat, r as resolveXaiTransport } from "../../api-CX2NWiFV.js";
-import { t as resolveThinkingProfile } from "../../provider-policy-api-BPnzGG86.js";
-import { t as buildXaiRealtimeTranscriptionProvider } from "../../realtime-transcription-provider-DrUcK6Qp.js";
-import { t as buildXaiSpeechProvider } from "../../speech-provider-BHZo8BTJ.js";
-import { n as resolveFallbackXaiAuth, t as isXaiToolEnabled } from "../../tool-auth-shared-CLxDQ-nU.js";
-import { t as resolveEffectiveXSearchConfig } from "../../x-search-config-DjrZLBsF.js";
-import { r as wrapXaiProviderStream } from "../../stream-XhQtOJDT.js";
-import { n as buildXaiMediaUnderstandingProvider } from "../../stt-BHNkjNBH.js";
-import { t as buildXaiVideoGenerationProvider } from "../../video-generation-provider-C-0Bk5yk.js";
-import { t as createXaiWebSearchProvider } from "../../web-search-C0uIAYMT.js";
-import { n as createXSearchToolDefinition, t as buildMissingXSearchApiKeyPayload } from "../../x-search-tool-shared-CJRabjCs.js";
+import { c as jsonResult } from "../../common-E9YpX7pB.js";
+import { c as defaultToolStreamExtraParams } from "../../provider-stream-shared-jI_a6bxx.js";
+import { r as OPENAI_COMPATIBLE_REPLAY_HOOKS } from "../../provider-model-shared-DtsPmvDx.js";
+import { t as defineSingleProviderPluginEntry } from "../../provider-entry-DYbqN6AQ.js";
+import "../../provider-web-search-DNIStESL.js";
+import { t as normalizeXaiModelId } from "../../model-id-BRM_wbb3.js";
+import { a as resolveXaiModelCompatPatch } from "../../model-compat-BZh9v7o3.js";
+import { t as buildXaiProvider } from "../../provider-catalog-DuUHw45U.js";
+import { n as applyXaiConfig, t as XAI_DEFAULT_MODEL_REF } from "../../onboard-BuIjeN1A.js";
+import { t as buildXaiImageGenerationProvider } from "../../image-generation-provider-DX0Yg9hH.js";
+import { t as applyXaiRuntimeModelCompat } from "../../runtime-model-compat-BW-NP6_x.js";
+import { n as resolveXaiForwardCompatModel, t as isModernXaiModel } from "../../provider-models-DXKRcnCv.js";
+import { i as shouldContributeXaiCompat, r as resolveXaiTransport } from "../../api-D1MlRYzF.js";
+import { t as resolveThinkingProfile } from "../../provider-policy-api-DFQuINfH.js";
+import { t as buildXaiRealtimeTranscriptionProvider } from "../../realtime-transcription-provider-pxjLHCVi.js";
+import { t as buildXaiSpeechProvider } from "../../speech-provider-BQE7tcxh.js";
+import { n as resolveFallbackXaiAuth, t as isXaiToolEnabled } from "../../tool-auth-shared-1307P-Z2.js";
+import { t as resolveEffectiveXSearchConfig } from "../../x-search-config-BhpqeUob.js";
+import { r as wrapXaiProviderStream } from "../../stream-NhjNyzYw.js";
+import { n as buildXaiMediaUnderstandingProvider } from "../../stt-Ba_Lqv0h.js";
+import { t as buildXaiVideoGenerationProvider } from "../../video-generation-provider-WSlRr3eA.js";
+import { t as createXaiWebSearchProvider } from "../../web-search-Cqsq1FlR.js";
+import { n as createXSearchToolDefinition, t as buildMissingXSearchApiKeyPayload } from "../../x-search-tool-shared-CZWnGcJ7.js";
+import { S as refreshXaiOAuthCredential, _ as createXaiOAuthAuthMethod, g as createXaiDeviceCodeAuthMethod } from "../../xai-oauth-DWgSDlfQ.js";
 import { Type } from "typebox";
 //#region extensions/xai/index.ts
 const PROVIDER_ID = "xai";
@@ -68,7 +70,7 @@ function createLazyCodeExecutionTool(ctx) {
 			});
 			if (!tool) return jsonResult({
 				error: "missing_xai_api_key",
-				message: "code_execution needs an xAI API key. Run openclaw onboard --auth-choice xai-api-key, set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+				message: "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
 				docs: "https://docs.openclaw.ai/tools/code-execution"
 			});
 			return await tool.execute(toolCallId, args);
@@ -108,6 +110,7 @@ var xai_default = defineSingleProviderPluginEntry({
 			applyConfig: (cfg) => applyXaiConfig(cfg),
 			wizard: { groupLabel: "xAI (Grok)" }
 		}],
+		extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
 		catalog: { buildProvider: buildXaiProvider },
 		...OPENAI_COMPATIBLE_REPLAY_HOOKS,
 		prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
@@ -131,11 +134,12 @@ var xai_default = defineSingleProviderPluginEntry({
 			modelId,
 			model
 		}) ? resolveXaiModelCompatPatch() : void 0,
-		normalizeModelId: ({ modelId }) => normalizeNativeXaiModelId(modelId),
+		normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
 		resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({
 			providerId: PROVIDER_ID,
 			ctx
 		}),
+		refreshOAuth: refreshXaiOAuthCredential,
 		resolveThinkingProfile,
 		isModernModelRef: ({ modelId }) => isModernXaiModel(modelId)
 	},

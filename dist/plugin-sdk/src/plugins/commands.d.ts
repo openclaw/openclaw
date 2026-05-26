@@ -6,10 +6,10 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginCommands, clearPluginCommandsForPlugin, registerPluginCommand, validateCommandName, validatePluginCommandDefinition } from "./command-registration.js";
-import { type RegisteredPluginCommand } from "./command-registry-state.js";
+import { listRegisteredPluginAgentPromptGuidance, type RegisteredPluginCommand } from "./command-registry-state.js";
 import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
-export { clearPluginCommands, clearPluginCommandsForPlugin, getPluginCommandSpecs, listProviderPluginCommandSpecs, registerPluginCommand, validateCommandName, validatePluginCommandDefinition, };
+export { clearPluginCommands, clearPluginCommandsForPlugin, getPluginCommandSpecs, listProviderPluginCommandSpecs, listRegisteredPluginAgentPromptGuidance, registerPluginCommand, validateCommandName, validatePluginCommandDefinition, };
 /**
  * Check if a command body matches a registered plugin command.
  * Returns the command definition and parsed args if matched.
@@ -80,6 +80,7 @@ export declare function listPluginCommands(): Array<{
     pluginId: string;
     acceptsArgs: boolean;
 }>;
-export declare const __testing: {
+export declare const testing: {
     resolveBindingConversationFromCommand: typeof resolveBindingConversationFromCommand;
 };
+export { testing as __testing };

@@ -1,4 +1,4 @@
-import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+import { type FollowupRun, type QueueDropPolicy, type QueueMode, type QueueSettings } from "./types.js";
 export type FollowupQueueState = {
     items: FollowupRun[];
     draining: boolean;
@@ -9,6 +9,7 @@ export type FollowupQueueState = {
     dropPolicy: QueueDropPolicy;
     droppedCount: number;
     summaryLines: string[];
+    summarySources: FollowupRun[];
     lastRun?: FollowupRun["run"];
 };
 export declare const DEFAULT_QUEUE_DEBOUNCE_MS = 500;

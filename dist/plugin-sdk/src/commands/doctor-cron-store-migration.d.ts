@@ -1,4 +1,4 @@
-type CronStoreIssueKey = "jobId" | "missingId" | "nonStringId" | "legacyScheduleString" | "legacyScheduleCron" | "legacyPayloadKind" | "legacyPayloadCodexModel" | "legacyPayloadProvider" | "legacyTopLevelPayloadFields" | "legacyTopLevelDeliveryFields" | "legacyDeliveryMode";
+type CronStoreIssueKey = "jobId" | "missingId" | "nonStringId" | "legacyScheduleString" | "legacyScheduleCron" | "legacyPayloadKind" | "legacyPayloadCodexModel" | "legacyPayloadProvider" | "legacyTopLevelPayloadFields" | "legacyTopLevelDeliveryFields" | "legacyDeliveryMode" | "invalidSchedule" | "invalidPayload";
 type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
 type NormalizeCronStoreJobsResult = {
     issues: CronStoreIssues;

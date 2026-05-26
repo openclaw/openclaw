@@ -1,4 +1,4 @@
-import { a as MigrationItem, u as MigrationProviderContext } from "../../types-lCXG2pW_.js";
+import { l as MigrationItem, m as MigrationProviderContext } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/migrate-hermes/config.d.ts
 declare function buildConfigItems(params: {
   ctx: MigrationProviderContext;

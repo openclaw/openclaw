@@ -35,6 +35,7 @@ export declare function createPluginRegistryFixture(config?: OpenClawConfig, par
         registerAgentHarness: (record: PluginRecord, harness: import("../plugin-entry.js").AgentHarness) => void;
         registerCliBackend: (record: PluginRecord, backend: import("openclaw/plugin-sdk").CliBackendPlugin) => void;
         registerTextTransforms: (record: PluginRecord, transforms: import("../../plugins/registry-types.js").PluginTextTransformsRegistration["transforms"]) => void;
+        registerEmbeddingProvider: (record: PluginRecord, adapter: import("../embedding-providers.ts").EmbeddingProviderAdapter) => void;
         registerSpeechProvider: (record: PluginRecord, provider: import("../plugin-entry.js").SpeechProviderPlugin) => void;
         registerRealtimeTranscriptionProvider: (record: PluginRecord, provider: import("../plugin-entry.js").RealtimeTranscriptionProviderPlugin) => void;
         registerRealtimeVoiceProvider: (record: PluginRecord, provider: import("../plugin-runtime.ts").RealtimeVoiceProviderPlugin) => void;

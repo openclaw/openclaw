@@ -1,2 +1,2 @@
-import { n as rewriteCopilotResponsePayloadConnectionBoundIds, t as rewriteCopilotConnectionBoundResponseIds } from "../../connection-bound-ids-8i8TfAew.js";
-export { rewriteCopilotConnectionBoundResponseIds, rewriteCopilotResponsePayloadConnectionBoundIds };
+import { i as sanitizeCopilotReplayResponsePayloadIds, n as rewriteCopilotResponsePayloadConnectionBoundIds, r as sanitizeCopilotReplayResponseIds, t as rewriteCopilotConnectionBoundResponseIds } from "../../connection-bound-ids-YXfg5ePk.js";
+export { rewriteCopilotConnectionBoundResponseIds, rewriteCopilotResponsePayloadConnectionBoundIds, sanitizeCopilotReplayResponseIds, sanitizeCopilotReplayResponsePayloadIds };

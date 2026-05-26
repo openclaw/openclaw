@@ -1,4 +1,5 @@
-import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+import type { CurrentInboundPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 export declare function buildReplyPromptBodies(params: {
     ctx: MsgContext;
@@ -8,6 +9,7 @@ export declare function buildReplyPromptBodies(params: {
     transcriptBody?: string;
     threadContextNote?: string;
     systemEventBlocks?: string[];
+    inboundEventKind?: InboundEventKind;
 }): {
     mediaNote?: string;
     mediaReplyHint?: string;
@@ -22,7 +24,7 @@ export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
     /** User-visible body persisted to transcript before media/inter-session annotation. */
     transcriptBody: string;
     /** Runtime-only user context for backends that can carry it outside transcript text. */
-    currentTurnContext?: CurrentTurnPromptContext;
+    currentInboundContext?: CurrentInboundPromptContext;
 };
 export type ReplyPromptEnvelopeBase = {
     /** Model-visible body before media, thread context, and inter-session annotation are applied. */
@@ -30,7 +32,7 @@ export type ReplyPromptEnvelopeBase = {
     /** User-visible body persisted to transcript before media/inter-session annotation. */
     transcriptBody: string;
     /** Runtime-only user context for backends that can carry it outside transcript text. */
-    currentTurnContext?: CurrentTurnPromptContext;
+    currentInboundContext?: CurrentInboundPromptContext;
 };
 type ReplyPromptEnvelopeBaseParams = {
     ctx: MsgContext;
@@ -38,12 +40,13 @@ type ReplyPromptEnvelopeBaseParams = {
     baseBody: string;
     hasUserBody: boolean;
     inboundUserContext: string;
-    inboundUserContextPromptJoiner?: CurrentTurnPromptContext["promptJoiner"];
+    inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
     isBareSessionReset: boolean;
     startupAction: ReplyPromptEnvelopeStartupAction;
     startupContextPrelude?: string | null;
     softResetTail?: string;
     isHeartbeat?: boolean;
+    inboundEventKind?: InboundEventKind;
 };
 export declare function buildReplyPromptEnvelopeBase(params: ReplyPromptEnvelopeBaseParams): ReplyPromptEnvelopeBase;
 export declare function buildReplyPromptEnvelope(params: ReplyPromptEnvelopeBaseParams & {

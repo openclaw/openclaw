@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { type PluginManifestRecord } from "./manifest-registry.js";
 import type { LoadPluginMetadataSnapshotParams, PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+export declare function clearLoadPluginMetadataSnapshotMemo(): void;
 export type { LoadPluginMetadataSnapshotParams, PluginMetadataManifestView, PluginMetadataRegistryView, PluginMetadataSnapshot, PluginMetadataSnapshotMetrics, PluginMetadataSnapshotOwnerMaps, PluginMetadataSnapshotRegistryDiagnostic, } from "./plugin-metadata-snapshot.types.js";
 export declare function isPluginMetadataSnapshotCompatible(params: {
     snapshot: Pick<PluginMetadataSnapshot, "configFingerprint" | "index" | "policyHash" | "workspaceDir">;

@@ -330,6 +330,7 @@ export type PluginManifestContracts = {
      * plugin instead of every provider plugin.
      */
     externalAuthProviders?: string[];
+    embeddingProviders?: string[];
     memoryEmbeddingProviders?: string[];
     speechProviders?: string[];
     realtimeTranscriptionProviders?: string[];
@@ -343,6 +344,7 @@ export type PluginManifestContracts = {
     webFetchProviders?: string[];
     webSearchProviders?: string[];
     migrationProviders?: string[];
+    gatewayMethodDispatch?: string[];
     tools?: string[];
 };
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
@@ -379,6 +381,7 @@ export type PluginManifestCapabilityProviderMetadata = {
     authProviders?: string[];
     authSignals?: PluginManifestCapabilityProviderAuthSignal[];
     configSignals?: PluginManifestCapabilityProviderConfigSignal[];
+    referenceAudioInputs?: boolean;
 };
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
     optional?: boolean;
@@ -419,7 +422,7 @@ export type PluginManifestProviderAuthChoice = {
      */
     onboardingScopes?: PluginManifestOnboardingScope[];
 };
-export type PluginManifestOnboardingScope = "text-inference" | "image-generation";
+export type PluginManifestOnboardingScope = "text-inference" | "image-generation" | "music-generation";
 export type PluginManifestLoadResult = {
     ok: true;
     manifest: PluginManifest;
@@ -429,6 +432,7 @@ export type PluginManifestLoadResult = {
     error: string;
     manifestPath: string;
 };
+export declare function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined;
 export declare function resolvePluginManifestPath(rootDir: string): string;
 export declare function loadPluginManifest(rootDir: string, rejectHardlinks?: boolean, rootRealPath?: string): PluginManifestLoadResult;
 export type PluginPackageChannel = {
@@ -529,6 +533,10 @@ export type PackageExtensionResolution = {
 } | {
     status: "empty";
     entries: [];
+} | {
+    status: "invalid";
+    entries: [];
+    error: string;
 };
 export type ManifestKey = typeof MANIFEST_KEY;
 export type PackageManifest = {

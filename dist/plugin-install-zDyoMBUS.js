@@ -1,2 +1,0 @@
-import { i as reloadChannelSetupPluginRegistryForChannel, n as loadChannelSetupPluginRegistrySnapshotForChannel, r as reloadChannelSetupPluginRegistry, t as ensureChannelSetupPluginInstalled } from "./plugin-install-CMXj3WL8.js";
-export { ensureChannelSetupPluginInstalled, loadChannelSetupPluginRegistrySnapshotForChannel, reloadChannelSetupPluginRegistry, reloadChannelSetupPluginRegistryForChannel };

@@ -1,4 +1,4 @@
-import { t as HookHandler } from "../../hooks-q-OagO5h.js";
+import { t as HookHandler } from "../../hooks-C_m5FNAr.js";
 
 //#region src/hooks/bundled/command-logger/handler.d.ts
 /**

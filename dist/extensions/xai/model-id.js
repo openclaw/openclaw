@@ -1,2 +1,2 @@
-import { t as normalizeXaiModelId } from "../../model-id-BNFIY5AU.js";
+import { t as normalizeXaiModelId } from "../../model-id-BRM_wbb3.js";
 export { normalizeXaiModelId };

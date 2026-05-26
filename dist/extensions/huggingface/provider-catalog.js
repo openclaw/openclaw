@@ -1,2 +1,2 @@
-import { t as buildHuggingfaceProvider } from "../../provider-catalog-ZO7Ni3Y_.js";
+import { t as buildHuggingfaceProvider } from "../../provider-catalog-DILyU-la.js";
 export { buildHuggingfaceProvider };

@@ -1,2 +1,2 @@
-import { t as clickClackPlugin } from "../../channel-DnawiBvE.js";
+import { t as clickClackPlugin } from "../../channel-BmDkIUrL.js";
 export { clickClackPlugin };

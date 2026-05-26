@@ -1,11 +1,6 @@
-import { T as OpenClawPluginDefinition, w as OpenClawPluginConfigSchema } from "../../types-lCXG2pW_.js";
+import { n as DefinedToolPluginEntry } from "../../tool-plugin-TUOjD1Ez.js";
+
 //#region extensions/llm-task/index.d.ts
-declare const _default: {
-  id: string;
-  name: string;
-  description: string;
-  configSchema: OpenClawPluginConfigSchema;
-  register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<OpenClawPluginDefinition, "kind" | "reload" | "nodeHostCommands" | "securityAuditCollectors">;
+declare const _default: DefinedToolPluginEntry;
 //#endregion
 export { _default as default };

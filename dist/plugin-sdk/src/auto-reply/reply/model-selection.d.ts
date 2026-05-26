@@ -38,6 +38,8 @@ export declare function createModelSelectionState(params: {
     provider: string;
     model: string;
     hasModelDirective: boolean;
+    hasOneTurnModelOverride?: boolean;
+    skipStoredModelOverride?: boolean;
     /** True when heartbeat.model was explicitly resolved for this run.
      *  In that case, skip session-stored overrides so the heartbeat selection wins. */
     hasResolvedHeartbeatModelOverride?: boolean;

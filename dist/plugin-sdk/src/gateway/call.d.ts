@@ -4,12 +4,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { type GatewayClientMode, type GatewayClientName } from "../utils/message-channel.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { GatewayClient, type GatewayClientOptions, type GatewayClientRequestOptions } from "./client.js";
 import { type GatewayConnectionDetails } from "./connection-details.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import { type ExplicitGatewayAuth } from "./credentials.js";
 import { type OperatorScope } from "./method-scopes.js";
 export type { GatewayConnectionDetails };
+export type GatewayRequestFunction = <T = Record<string, unknown>>(method: string, params?: unknown, opts?: GatewayClientRequestOptions) => Promise<T>;
 type CallGatewayBaseOptions = {
     url?: string;
     token?: string;
@@ -20,11 +21,15 @@ type CallGatewayBaseOptions = {
     params?: unknown;
     expectFinal?: boolean;
     timeoutMs?: number;
+    signal?: AbortSignal;
+    onAccepted?: GatewayClientRequestOptions["onAccepted"];
+    onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
     clientName?: GatewayClientName;
     clientDisplayName?: string;
     clientVersion?: string;
     platform?: string;
     mode?: GatewayClientMode;
+    approvalRuntimeToken?: string;
     deviceIdentity?: DeviceIdentity | null;
     instanceId?: string;
     minProtocol?: number;
@@ -61,6 +66,24 @@ export declare class GatewayTransportError extends Error {
         timeoutMs?: number;
     });
 }
+export type GatewayTransportErrorJson = {
+    ok: false;
+    error: {
+        type: "gateway_transport_error";
+        kind: GatewayTransportErrorKind;
+        message: string;
+        code?: number;
+        reason?: string;
+        timeoutMs?: number;
+    };
+    gateway: {
+        url: string;
+        urlSource: string;
+        bindDetail?: string;
+        remoteFallbackNote?: string;
+    };
+};
+export declare function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null;
 export declare function isGatewayTransportError(value: unknown): value is GatewayTransportError;
 declare const defaultCreateGatewayClient: (opts: GatewayClientOptions) => GatewayClient;
 declare const defaultGatewayCallDeps: {
@@ -78,7 +101,7 @@ export declare function buildGatewayConnectionDetails(options?: {
     configPath?: string;
     urlSource?: "cli" | "env";
 }): GatewayConnectionDetails;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void;
     setCreateGatewayClientForTests(createGatewayClient?: typeof defaultCreateGatewayClient): void;
     resetDepsForTests(): void;
@@ -99,3 +122,4 @@ export declare function callGatewayCli<T = Record<string, unknown>>(opts: CallGa
 export declare function callGatewayLeastPrivilege<T = Record<string, unknown>>(opts: CallGatewayBaseOptions): Promise<T>;
 export declare function callGateway<T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T>;
 export declare function randomIdempotencyKey(): `${string}-${string}-${string}-${string}-${string}`;
+export { testing as __testing };

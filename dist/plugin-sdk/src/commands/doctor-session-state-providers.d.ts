@@ -26,6 +26,7 @@ export type DoctorSessionRouteStateRepair = {
     ownerId: string;
     ownerLabel: string;
     reasons: string[];
+    pinnedRuntimeKeys: string[];
     cliSessionKeys: string[];
 };
 export type DoctorSessionRouteStateManualReview = {

@@ -1,4 +1,4 @@
-import { c as provider_runtime_d_exports } from "../provider-runtime-CBPkhPWZ.js";
+import { c as provider_runtime_d_exports } from "../provider-runtime-B73Bddav.js";
 
 //#region src/plugins/provider-runtime.runtime.d.ts
 type ProviderRuntimeModule = typeof provider_runtime_d_exports;

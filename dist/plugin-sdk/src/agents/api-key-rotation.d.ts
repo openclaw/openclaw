@@ -1,3 +1,4 @@
+import { type TransientProviderRetryConfig } from "../provider-runtime/operation-retry.js";
 type ApiKeyRetryParams = {
     apiKey: string;
     error: unknown;
@@ -13,6 +14,7 @@ type ExecuteWithApiKeyRotationOptions<T> = {
     onRetry?: (params: ApiKeyRetryParams & {
         message: string;
     }) => void;
+    transientRetry?: TransientProviderRetryConfig;
 };
 export declare function collectProviderApiKeysForExecution(params: {
     provider: string;

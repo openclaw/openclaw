@@ -40,12 +40,15 @@ export type NativeHookRelayRegistration = {
     sessionKey?: string;
     config?: OpenClawConfig;
     runId: string;
+    channelId?: string;
     allowedEvents: readonly NativeHookRelayEvent[];
     expiresAtMs: number;
     signal?: AbortSignal;
 };
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
+    shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
     commandForEvent: (event: NativeHookRelayEvent) => string;
+    renew: (ttlMs?: number) => void;
     unregister: () => void;
 };
 export type RegisterNativeHookRelayParams = {
@@ -56,6 +59,7 @@ export type RegisterNativeHookRelayParams = {
     sessionKey?: string;
     config?: OpenClawConfig;
     runId: string;
+    channelId?: string;
     allowedEvents?: readonly NativeHookRelayEvent[];
     ttlMs?: number;
     command?: NativeHookRelayCommandOptions;
@@ -102,13 +106,18 @@ export declare function buildNativeHookRelayCommand(params: {
     nodeExecutable?: string;
 }): string;
 export declare function invokeNativeHookRelay(params: InvokeNativeHookRelayParams): Promise<NativeHookRelayProcessResponse>;
+export declare function hasNativeHookRelayInvocation(params: {
+    relayId: string;
+    event: NativeHookRelayEvent;
+    toolUseId?: string;
+}): boolean;
 export declare function invokeNativeHookRelayBridge(params: InvokeNativeHookRelayBridgeParams): Promise<NativeHookRelayProcessResponse>;
 export declare function renderNativeHookRelayUnavailableResponse(params: {
     provider: unknown;
     event: unknown;
     message?: string;
 }): NativeHookRelayProcessResponse;
-export declare const __testing: {
+export declare const testing: {
     clearNativeHookRelaysForTests(): void;
     getNativeHookRelayInvocationsForTests(): NativeHookRelayInvocation[];
     getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined;
@@ -120,4 +129,4 @@ export declare const __testing: {
     permissionRequestToolInputKeyFingerprintForTests(toolInput: Record<string, unknown>): string;
     setNativeHookRelayPermissionApprovalRequesterForTests(requester: NativeHookRelayPermissionApprovalRequester): void;
 };
-export {};
+export { testing as __testing };

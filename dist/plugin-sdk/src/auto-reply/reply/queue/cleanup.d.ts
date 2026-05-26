@@ -9,9 +9,9 @@ declare const defaultQueueCleanupDeps: {
     resolveEmbeddedSessionLane: typeof resolveEmbeddedSessionLane;
     clearCommandLane: typeof clearCommandLane;
 };
-export declare const __testing: {
+export declare const testing: {
     setDepsForTests(deps: Partial<typeof defaultQueueCleanupDeps> | undefined): void;
     resetDepsForTests(): void;
 };
 export declare function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult;
-export {};
+export { testing as __testing };

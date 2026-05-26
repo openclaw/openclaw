@@ -110,13 +110,20 @@ export declare function buildStatusSessionsRows(params: {
     muted: (value: string) => string;
 }): {
     Key: string;
-    Kind: string;
+    Kind: import("../sessions/classify-session-kind.ts").SessionKind;
     Age: string;
     Model: string;
     Runtime: string;
     Tokens: string;
     Cache?: string | undefined;
 }[];
+export declare function buildStatusModelSelectionLines(params: {
+    recent: SessionsRecentLike[];
+    limit?: number;
+    shortenText: (value: string, maxLen: number) => string;
+    warn: (value: string) => string;
+    muted: (value: string) => string;
+}): string[];
 export declare function buildStatusFooterLines(params: {
     updateHint: string | null;
     warn: (value: string) => string;

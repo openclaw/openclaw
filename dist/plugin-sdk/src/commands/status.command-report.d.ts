@@ -12,6 +12,7 @@ export declare function buildStatusCommandReportLines(params: {
     taskMaintenanceHint: string;
     pluginCompatibilityLines: string[];
     pairingRecoveryLines: string[];
+    modelSelectionLines: string[];
     securityAuditLines: string[];
     channelsColumns: readonly TableColumn[];
     channelsRows: Array<Record<string, string>>;

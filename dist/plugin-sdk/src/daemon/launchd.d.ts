@@ -1,7 +1,18 @@
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceCommandConfig, GatewayServiceControlArgs, GatewayServiceEnv, GatewayServiceEnvArgs, GatewayServiceInstallArgs, GatewayServiceManageArgs, GatewayServiceRestartResult } from "./service-types.js";
+export type StaleOpenClawUpdateLaunchdJob = {
+    label: string;
+    pid?: number;
+    lastExitStatus?: number;
+};
+export declare function isOpenClawUpdateLaunchdLabel(label: unknown): label is string;
 export declare function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string;
 export declare function readLaunchAgentProgramArguments(env: GatewayServiceEnv): Promise<GatewayServiceCommandConfig | null>;
+export declare function parseLaunchctlListOpenClawUpdateJobs(output: string): StaleOpenClawUpdateLaunchdJob[];
+export declare function findStaleOpenClawUpdateLaunchdJobs(): Promise<StaleOpenClawUpdateLaunchdJob[]>;
+export declare function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean>;
+export declare function disableOpenClawUpdateLaunchdJob(label: string): Promise<boolean>;
+export declare function disableCurrentOpenClawUpdateLaunchdJob(env?: NodeJS.ProcessEnv): Promise<boolean>;
 type LaunchctlPrintInfo = {
     state?: string;
     pid?: number;

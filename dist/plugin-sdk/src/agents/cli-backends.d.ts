@@ -1,5 +1,6 @@
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineHostCapability } from "../context-engine/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import type { CliBackendAuthEpochMode, CliBundleMcpMode, CliBackendPlugin, CliBackendNativeToolMode, PluginTextTransforms } from "../plugins/types.js";
@@ -17,6 +18,7 @@ export type ResolvedCliBackend = {
     textTransforms?: PluginTextTransforms;
     defaultAuthProfileId?: string;
     authEpochMode?: CliBackendAuthEpochMode;
+    contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
     prepareExecution?: CliBackendPlugin["prepareExecution"];
     resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
     nativeToolMode?: CliBackendNativeToolMode;
@@ -32,8 +34,8 @@ export declare function resolveCliBackendLiveTest(provider: string): ResolvedCli
 export declare function resolveCliBackendConfig(provider: string, cfg?: OpenClawConfig, options?: {
     agentId?: string;
 }): ResolvedCliBackend | null;
-export declare const __testing: {
+export declare const testing: {
     resetDepsForTest(): void;
     setDepsForTest(deps: Partial<CliBackendsDeps>): void;
 };
-export {};
+export { testing as __testing };

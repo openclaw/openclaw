@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { FlowContribution } from "./types.js";
+export { doctorHealthConversionRules, type DoctorHealthConversionKind, type DoctorHealthConversionRule, } from "./doctor-health-conversion-plan.js";
 type DoctorConfigResult = {
     cfg: OpenClawConfig;
     path?: string;
@@ -11,6 +12,7 @@ type DoctorConfigResult = {
     sourceConfigValid?: boolean;
     sourceLastTouchedVersion?: string;
     skipPluginValidationOnWrite?: boolean;
+    preservedLegacyRootKeys?: readonly string[];
 };
 type DoctorHealthFlowContext = {
     runtime: RuntimeEnv;
@@ -30,6 +32,7 @@ type DoctorHealthFlowContext = {
 type DoctorHealthContribution = FlowContribution & {
     kind: "core";
     surface: "health";
+    healthCheckIds: readonly string[];
     run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 export declare function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
@@ -37,4 +40,3 @@ export declare function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
 }): boolean;
 export declare function resolveDoctorHealthContributions(): DoctorHealthContribution[];
 export declare function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void>;
-export {};

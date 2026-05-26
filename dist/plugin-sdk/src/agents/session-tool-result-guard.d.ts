@@ -1,7 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import { redactToolPayloadTextWithConfig } from "../logging/redact.js";
 import type { PluginHookBeforeMessageWriteEvent, PluginHookBeforeMessageWriteResult } from "../plugins/types.js";
 import { getRawSessionAppendMessage } from "./session-raw-append-message.js";
+type ToolResultDetailRedactionConfig = Parameters<typeof redactToolPayloadTextWithConfig>[1];
 export { getRawSessionAppendMessage };
 export declare function installSessionToolResultGuard(sessionManager: SessionManager, opts?: {
     /** Optional session key for transcript update broadcasts. */
@@ -36,10 +38,17 @@ export declare function installSessionToolResultGuard(sessionManager: SessionMan
      * If it returns { message }, the modified message is written instead.
      */
     beforeMessageWriteHook?: (event: PluginHookBeforeMessageWriteEvent) => PluginHookBeforeMessageWriteResult | undefined;
+    redactLoggingConfig?: ToolResultDetailRedactionConfig;
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
+    suppressTranscriptOnlyAssistantPersistence?: boolean;
+    suppressAssistantErrorPersistence?: boolean;
     onUserMessagePersisted?: (message: Extract<AgentMessage, {
         role: "user";
+    }>) => void | Promise<void>;
+    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+    onAssistantErrorMessagePersisted?: (message: Extract<AgentMessage, {
+        role: "assistant";
     }>) => void | Promise<void>;
 }): {
     flushPendingToolResults: () => void;

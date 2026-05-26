@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { type PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 export type PluginConfigContractMatch = {
@@ -21,4 +22,5 @@ export declare function resolvePluginConfigContractsById(params: {
     fallbackToBundledMetadataForResolvedBundled?: boolean;
     fallbackBundledPluginIds?: readonly string[];
     pluginIds: readonly string[];
+    discovery?: PluginDiscoveryResult;
 }): ReadonlyMap<string, PluginConfigContractMetadata>;

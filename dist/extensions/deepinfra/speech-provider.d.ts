@@ -1,2 +1,2 @@
-import { t as buildDeepInfraSpeechProvider } from "../../speech-provider-B7C1mzJU.js";
+import { t as buildDeepInfraSpeechProvider } from "../../speech-provider-n-Hd8GTB.js";
 export { buildDeepInfraSpeechProvider };

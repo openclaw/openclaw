@@ -1,6 +1,6 @@
 export type SkillsChangeEvent = {
     workspaceDir?: string;
-    reason: "watch" | "manual" | "remote-node" | "config-change";
+    reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change";
     changedPath?: string;
 };
 export declare function setSkillsChangeListenerErrorHandler(handler?: (err: unknown) => void): void;

@@ -1,10 +1,10 @@
-import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-LndEvhRk.js";
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { a as STEPFUN_PLAN_PROVIDER_ID, c as STEPFUN_STANDARD_INTL_BASE_URL, i as STEPFUN_PLAN_INTL_BASE_URL, l as buildStepFunPlanProvider, n as STEPFUN_PLAN_CN_BASE_URL, o as STEPFUN_PROVIDER_ID, r as STEPFUN_PLAN_DEFAULT_MODEL_REF, s as STEPFUN_STANDARD_CN_BASE_URL, t as STEPFUN_DEFAULT_MODEL_REF, u as buildStepFunProvider } from "../../provider-catalog-sy_VYmKM.js";
-import { i as applyStepFunStandardConfigCn, n as applyStepFunPlanConfigCn, r as applyStepFunStandardConfig, t as applyStepFunPlanConfig } from "../../onboard-B63C47Rs.js";
+import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-DyL154ka.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { a as STEPFUN_PLAN_PROVIDER_ID, c as STEPFUN_STANDARD_INTL_BASE_URL, i as STEPFUN_PLAN_INTL_BASE_URL, l as buildStepFunPlanProvider, n as STEPFUN_PLAN_CN_BASE_URL, o as STEPFUN_PROVIDER_ID, r as STEPFUN_PLAN_DEFAULT_MODEL_REF, s as STEPFUN_STANDARD_CN_BASE_URL, t as STEPFUN_DEFAULT_MODEL_REF, u as buildStepFunProvider } from "../../provider-catalog-CkR6Ytwv.js";
+import { i as applyStepFunStandardConfigCn, n as applyStepFunPlanConfigCn, r as applyStepFunStandardConfig, t as applyStepFunPlanConfig } from "../../onboard-C2zer3nx.js";
 //#region extensions/stepfun/index.ts
 function trimExplicitBaseUrl(ctx, providerId) {
 	const explicitProvider = ctx.config.models?.providers?.[providerId];

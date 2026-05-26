@@ -10,4 +10,4 @@ export type DeviceAuthStore = {
     tokens: Record<string, DeviceAuthEntry>;
 };
 export declare function normalizeDeviceAuthRole(role: string): string;
-export declare function normalizeDeviceAuthScopes(scopes: string[] | undefined): string[];
+export declare function normalizeDeviceAuthScopes(scopes: readonly unknown[] | undefined): string[];

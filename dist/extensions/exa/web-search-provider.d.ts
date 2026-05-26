@@ -1,4 +1,4 @@
-import { z as WebSearchProviderPlugin } from "../../types-core-CxmUEffr.js";
+import { U as WebSearchProviderPlugin } from "../../types-core-DxqEkbXr.js";
 //#region extensions/exa/src/exa-web-search-provider.d.ts
 declare function createExaWebSearchProvider(): WebSearchProviderPlugin;
 //#endregion

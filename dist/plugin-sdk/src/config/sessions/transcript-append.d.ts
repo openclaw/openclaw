@@ -1,12 +1,15 @@
-import { type SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
-export declare function appendSessionTranscriptMessage(params: {
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
     transcriptPath: string;
-    message: unknown;
+    message: TMessage;
     now?: number;
     sessionId?: string;
     cwd?: string;
     useRawWhenLinear?: boolean;
-    config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<{
+    config?: OpenClawConfig;
+};
+export declare function appendSessionTranscriptMessage<TMessage>(params: AppendSessionTranscriptMessageParams<TMessage>): Promise<{
     messageId: string;
+    message: TMessage;
 }>;
+export {};

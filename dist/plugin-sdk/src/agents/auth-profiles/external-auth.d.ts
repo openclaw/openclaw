@@ -8,7 +8,7 @@ type ExternalCliOverlayOptions = {
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
 };
-export declare const __testing: {
+export declare const testing: {
     resetResolveExternalAuthProfilesForTest(): void;
     setResolveExternalAuthProfilesForTest(resolver: ResolveExternalAuthProfiles): void;
 };
@@ -32,4 +32,4 @@ export declare function syncPersistedExternalCliAuthProfiles(store: AuthProfileS
 } & ExternalCliOverlayOptions): AuthProfileStore;
 export declare const overlayExternalOAuthProfiles: typeof overlayExternalAuthProfiles;
 export declare const shouldPersistExternalOAuthProfile: typeof shouldPersistExternalAuthProfile;
-export {};
+export { testing as __testing };

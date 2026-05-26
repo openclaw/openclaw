@@ -1,3 +1,4 @@
+import { type AgentGeneratedAttachment } from "./generated-attachments.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION, type AgentInternalEventSource, type AgentInternalEventStatus } from "./internal-event-contract.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-runtime-context.js";
 type AgentTaskCompletionInternalEvent = {
@@ -10,6 +11,7 @@ type AgentTaskCompletionInternalEvent = {
     status: AgentInternalEventStatus;
     statusLabel: string;
     result: string;
+    attachments?: AgentGeneratedAttachment[];
     mediaUrls?: string[];
     statsLine?: string;
     replyInstruction: string;

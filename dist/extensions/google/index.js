@@ -1,15 +1,15 @@
-import { c as normalizeOptionalString } from "../../string-coerce-LndEvhRk.js";
-import { u as normalizeResolvedSecretInputString } from "../../types.secrets-BxqheYvy.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../secret-input-DlbCRffO.js";
-import { t as buildGoogleGeminiCliBackend } from "../../cli-backend-B0c198fI.js";
-import { n as registerGoogleGeminiCliProvider } from "../../gemini-cli-provider-u7BY2ne4.js";
-import { c as createGoogleMusicGenerationProviderMetadata, l as createGoogleVideoGenerationProviderMetadata } from "../../generation-provider-metadata-BKUTqzl9.js";
-import { t as geminiMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-BNp2cZcU.js";
-import { n as registerGoogleProvider } from "../../provider-registration-C0iatvMz.js";
-import { n as buildGoogleSpeechProvider } from "../../speech-provider-BDsQFj4O.js";
-import { t as createGeminiWebSearchProvider } from "../../gemini-web-search-provider-BHxxLJg4.js";
+import { c as normalizeOptionalString } from "../../string-coerce-DyL154ka.js";
+import { u as normalizeResolvedSecretInputString } from "../../types.secrets-DwPik3M8.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../secret-input-CWnTb0tw.js";
+import { t as buildGoogleGeminiCliBackend } from "../../cli-backend-B6x02u_n.js";
+import { n as registerGoogleGeminiCliProvider } from "../../gemini-cli-provider-Dy4vY0X2.js";
+import { c as createGoogleMusicGenerationProviderMetadata, l as createGoogleVideoGenerationProviderMetadata } from "../../generation-provider-metadata-DOgeZPJU.js";
+import { t as geminiMemoryEmbeddingProviderAdapter } from "../../memory-embedding-adapter-VWurseVT.js";
+import { n as registerGoogleProvider } from "../../provider-registration-B5v-wcAb.js";
+import { t as buildGoogleSpeechProvider } from "../../speech-provider-ONEzNhmO.js";
+import { t as createGeminiWebSearchProvider } from "../../gemini-web-search-provider-DiEiFq04.js";
 //#region extensions/google/index.ts
 let googleImageGenerationProviderPromise = null;
 let googleMediaUnderstandingProviderPromise = null;

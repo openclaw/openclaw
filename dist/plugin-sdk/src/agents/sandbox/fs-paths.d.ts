@@ -18,6 +18,9 @@ type ParsedBindMount = {
 };
 export declare function parseSandboxBindMount(spec: string): ParsedBindMount | null;
 export declare function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFsMount[];
+export declare function resolveWritableSandboxBindHostRoots(binds: readonly string[] | undefined): string[];
+export declare function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean;
+export declare function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | undefined): boolean;
 export declare function resolveSandboxFsPathWithMounts(params: {
     filePath: string;
     cwd: string;

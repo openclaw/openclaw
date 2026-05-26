@@ -15,7 +15,7 @@ type RealtimeVoiceAgentConsultDeps = {
     resolveParentForkDecision: typeof resolveParentForkDecision;
     forkSessionFromParent: typeof forkSessionFromParent;
 };
-export declare function __setRealtimeVoiceAgentConsultDepsForTest(deps: Partial<RealtimeVoiceAgentConsultDeps> | null): void;
+export declare function setRealtimeVoiceAgentConsultDepsForTest(deps: Partial<RealtimeVoiceAgentConsultDeps> | null): void;
 export declare function consultRealtimeVoiceAgent(params: {
     cfg: OpenClawConfig;
     agentRuntime: RealtimeVoiceAgentConsultRuntime;

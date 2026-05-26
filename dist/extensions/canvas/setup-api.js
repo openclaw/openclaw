@@ -1,6 +1,6 @@
-import { c as isRecord } from "../../utils-CKsuXgDI.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
+import { c as isRecord } from "../../utils-sBTEdeml.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
 //#region extensions/canvas/src/config-migration.ts
 function readRecord(value) {
 	return isRecord(value) ? value : void 0;

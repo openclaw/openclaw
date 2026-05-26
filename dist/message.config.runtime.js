@@ -1,1 +1,1 @@
-export * from "./message.config.runtime-DM-_2Lfs.js";
+export * from "./message.config.runtime-ByCeidp7.js";

@@ -1,2 +1,2 @@
-import { l as deriveCopilotApiBaseUrlFromToken, o as CachedCopilotToken, p as resolveCopilotApiToken, s as DEFAULT_COPILOT_API_BASE_URL } from "../../provider-auth-7cAjOLt5.js";
-export { CachedCopilotToken, DEFAULT_COPILOT_API_BASE_URL, deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken };
+import { n as DEFAULT_COPILOT_API_BASE_URL, r as deriveCopilotApiBaseUrlFromToken, s as resolveCopilotApiToken, t as CachedCopilotToken } from "../../provider-auth-BjUionfq.js";
+export { type CachedCopilotToken, DEFAULT_COPILOT_API_BASE_URL, deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken };

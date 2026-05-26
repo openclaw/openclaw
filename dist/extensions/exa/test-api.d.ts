@@ -1,4 +1,4 @@
-import { o as SearchConfigRecord } from "../../provider-web-search-DnjA_Z1w.js";
+import { o as SearchConfigRecord } from "../../provider-web-search-DcNMGSex.js";
 
 //#region extensions/exa/src/exa-web-search-provider.runtime.d.ts
 declare const EXA_SEARCH_TYPES: readonly ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"];
@@ -35,6 +35,7 @@ type ExaSearchResult = {
   summary?: unknown;
   text?: unknown;
 };
+declare function readExaSearchResults(response: Response): Promise<ExaSearchResult[]>;
 declare function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined;
 declare function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig;
 declare function resolveExaApiKey(exa?: ExaConfig): string | undefined;
@@ -66,7 +67,7 @@ declare function buildExaCacheKey(params: {
   dateBefore?: string;
   contents?: ExaContentsArgs;
 }): string;
-declare const __testing: {
+declare const testing: {
   readonly normalizeExaResults: typeof normalizeExaResults;
   readonly normalizeExaFreshness: typeof normalizeExaFreshness;
   readonly parseExaContents: typeof parseExaContents;
@@ -77,6 +78,7 @@ declare const __testing: {
   readonly resolveExaSearchCount: typeof resolveExaSearchCount;
   readonly resolveExaSearchEndpoint: typeof resolveExaSearchEndpoint;
   readonly resolveFreshnessStartDate: typeof resolveFreshnessStartDate;
+  readonly readExaSearchResults: typeof readExaSearchResults;
 };
 //#endregion
-export { __testing };
+export { testing as __testing, testing };

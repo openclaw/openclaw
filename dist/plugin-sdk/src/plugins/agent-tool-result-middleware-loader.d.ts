@@ -12,7 +12,7 @@ export declare function loadAgentToolResultMiddlewaresForRuntime(params: {
     env?: NodeJS.ProcessEnv;
     manifestRegistry?: PluginManifestRegistry;
 }): Promise<AgentToolResultMiddleware[]>;
-export declare const __testing: {
+export declare const testing: {
     listMiddlewareOwnerPluginIds: typeof listMiddlewareOwnerPluginIds;
 };
-export {};
+export { testing as __testing };

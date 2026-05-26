@@ -6,7 +6,7 @@ export declare function extractModelCompat(modelOrCompat: {
 /** @deprecated Provider-owned model compat helper; do not use from third-party plugins. */
 export declare function applyModelCompatPatch<T extends {
     compat?: ModelCompatConfig;
-}>(model: T, patch: ModelCompatConfig): T;
+}>(model: T, patch: Partial<ModelCompatConfig> & Record<string, unknown>): T;
 export declare function hasToolSchemaProfile(modelOrCompat: {
     compat?: unknown;
 } | ModelCompatConfig | undefined, profile: string): boolean;
@@ -19,4 +19,7 @@ export declare function resolveToolCallArgumentsEncoding(modelOrCompat: {
 export declare function resolveUnsupportedToolSchemaKeywords(modelOrCompat: {
     compat?: unknown;
 } | ModelCompatConfig | undefined): ReadonlySet<string>;
+export declare function shouldOmitEmptyArrayItems(modelOrCompat: {
+    compat?: unknown;
+} | ModelCompatConfig | undefined): boolean;
 export declare function normalizeModelCompat(model: Model<Api>): Model<Api>;

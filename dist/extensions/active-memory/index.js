@@ -1,22 +1,20 @@
-import { i as isPathInside } from "../../path-B5B-_oAT.js";
-import { c as parseThreadSessionSuffix, o as parseAgentSessionKey } from "../../session-key-utils-qD-NZHCY.js";
-import { a as resolveAgentDir, o as resolveAgentWorkspaceDir } from "../../agent-scope-config-26EcJVc0.js";
-import { n as resolveAgentEffectiveModelPrimary } from "../../agent-scope-C1Fl7gAf.js";
-import { n as replaceFileAtomic } from "../../replace-file-VPhXrtU-.js";
-import { n as resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir-C5ctwRKD.js";
-import { t as tempWorkspace } from "../../private-temp-workspace-CS7i2diZ.js";
-import { r as DEFAULT_PROVIDER } from "../../defaults-BGwElg4C.js";
-import { s as resolveSessionStoreEntry } from "../../store-load-cmAGD4uk.js";
-import { s as updateSessionStore } from "../../store-3qAZ3Zl6.js";
-import { i as parseModelRef } from "../../model-selection-normalize-B4tdZ1L4.js";
-import { s as resolveDefaultModelForAgent } from "../../model-selection-VRXWv5rs.js";
-import "../../temp-path-C0pVd7ka.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../routing-BfSZVtOk.js";
-import { n as resolveLivePluginConfigObject, r as resolvePluginConfigObject } from "../../plugin-config-runtime-DyMlx_D0.js";
-import "../../agent-runtime-C0lBBqMR.js";
-import "../../security-runtime-JcBeOGgV.js";
-import "../../session-store-runtime-DIobQazh.js";
+import { i as isPathInside } from "../../path-BlG8lhgR.js";
+import { a as resolveAgentEffectiveModelPrimary } from "../../agent-scope-CtLXGcWm.js";
+import { c as parseAgentSessionKey, u as parseThreadSessionSuffix } from "../../session-key-utils-Ce_xWkNq.js";
+import { a as resolveAgentDir, o as resolveAgentWorkspaceDir } from "../../agent-scope-config-CMp71_27.js";
+import { n as replaceFileAtomic } from "../../replace-file-C7_Inj8B.js";
+import { n as resolvePreferredOpenClawTmpDir } from "../../tmp-openclaw-dir-C60hWKdY.js";
+import { t as tempWorkspace } from "../../private-temp-workspace-DgditT3G.js";
+import { r as DEFAULT_PROVIDER } from "../../defaults-mDjiWzE5.js";
+import { i as parseModelRef } from "../../model-selection-normalize-CBfQo-Fd.js";
+import { s as resolveDefaultModelForAgent } from "../../model-selection-P-81eBKx.js";
+import "../../temp-path-DllZid8c.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../routing-79DRZvfm.js";
+import { n as resolveLivePluginConfigObject, r as resolvePluginConfigObject } from "../../plugin-config-runtime-DWa7yCpn.js";
+import "../../agent-runtime-Lc7H-PlR.js";
+import "../../security-runtime-CcSekjBd.js";
+import { t as closeActiveMemorySearchManager } from "../../memory-host-search-nxwQAw_R.js";
 import fs from "node:fs";
 import path from "node:path";
 import fs$1 from "node:fs/promises";
@@ -264,10 +262,8 @@ function resolveCanonicalSessionKeyFromSessionId(params) {
 	const sessionId = params.sessionId?.trim();
 	if (!sessionId) return;
 	try {
-		const storePath = params.api.runtime.agent.session.resolveStorePath(params.api.config.session?.store, { agentId: params.agentId });
-		const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
 		let bestMatch;
-		for (const [sessionKey, entry] of Object.entries(store)) {
+		for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({ agentId: params.agentId })) {
 			if (!entry || typeof entry !== "object") continue;
 			const candidateSessionId = typeof entry.sessionId === "string" ? entry.sessionId?.trim() : "";
 			if (!candidateSessionId || candidateSessionId !== sessionId) continue;
@@ -301,11 +297,11 @@ function resolveRecallRunChannelContext(params) {
 	const explicitChannel = normalizeOptionalString(params.channelId);
 	const explicitProvider = normalizeOptionalString(params.messageProvider);
 	const runnableExplicitChannel = explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : void 0;
-	const trustedExplicitChannel = runnableExplicitChannel && runnableExplicitChannel !== explicitProvider ? runnableExplicitChannel : void 0;
+	const trustedExplicitChannel = runnableExplicitChannel && runnableExplicitChannel !== explicitProvider && (!explicitProvider || explicitProvider === "webchat") ? runnableExplicitChannel : void 0;
 	const resolveReturnValue = (params) => {
 		const trustedResolvedChannel = params.resolvedChannelStrength === "strong" ? params.resolvedChannel : void 0;
 		return {
-			messageChannel: trustedExplicitChannel ?? trustedResolvedChannel ?? runnableExplicitChannel ?? explicitProvider ?? params.resolvedChannel,
+			messageChannel: trustedExplicitChannel ?? trustedResolvedChannel ?? explicitProvider ?? runnableExplicitChannel ?? params.resolvedChannel,
 			messageProvider: trustedExplicitChannel ?? trustedResolvedChannel ?? explicitProvider ?? runnableExplicitChannel ?? params.resolvedChannel
 		};
 	};
@@ -316,11 +312,10 @@ function resolveRecallRunChannelContext(params) {
 	});
 	if (!resolvedSessionKey) return resolveReturnValue({});
 	try {
-		const storePath = params.api.runtime.agent.session.resolveStorePath(params.api.config.session?.store, { agentId: params.agentId });
-		const sessionEntry = resolveSessionStoreEntry({
-			store: params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false }),
+		const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+			agentId: params.agentId,
 			sessionKey: resolvedSessionKey
-		}).existing;
+		});
 		const rawStrongEntryChannel = normalizeOptionalString(sessionEntry?.lastChannel) ?? normalizeOptionalString(sessionEntry?.channel);
 		const strongEntryChannel = rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel) ? rawStrongEntryChannel : void 0;
 		const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
@@ -501,6 +496,27 @@ function applyActiveMemoryRuntimeConfigSnapshot(cfg, pluginConfig) {
 			}
 		}
 	};
+}
+function resolveActiveMemoryCleanupConfig(api) {
+	try {
+		return api.runtime.config?.current?.() ?? api.config;
+	} catch {
+		return api.config;
+	}
+}
+function scheduleMemorySearchCleanupAfterTimeout(api, logPrefix, agentId) {
+	const cfg = resolveActiveMemoryCleanupConfig(api);
+	setTimeout(() => {
+		closeActiveMemorySearchManager({
+			cfg: cfg ?? api.config,
+			agentId
+		}).then(() => {
+			api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+		}).catch((error) => {
+			const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+			api.logger.warn?.(`${logPrefix} failed to release memory search managers after timeout: ${message}`);
+		});
+	}, 0);
 }
 function resolveThinkingLevel(thinking) {
 	if (thinking === "off" || thinking === "minimal" || thinking === "low" || thinking === "medium" || thinking === "high" || thinking === "xhigh" || thinking === "adaptive" || thinking === "max") return thinking;
@@ -819,33 +835,28 @@ async function persistPluginStatusLines(params) {
 	const agentId = params.agentId.trim();
 	if (!agentId && (params.statusLine || debugLine)) return;
 	try {
-		const storePath = params.api.runtime.agent.session.resolveStorePath(params.api.config.session?.store, agentId ? { agentId } : void 0);
 		if (!params.statusLine && !debugLine) {
-			const existingEntry = resolveSessionStoreEntry({
-				store: params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false }),
+			const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+				agentId,
 				sessionKey
-			}).existing;
+			});
 			if (!(Array.isArray(existingEntry?.pluginDebugEntries) ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory") : false)) return;
 		}
-		await updateSessionStore(storePath, (store) => {
-			const resolved = resolveSessionStoreEntry({
-				store,
-				sessionKey
-			});
-			const existing = resolved.existing;
-			if (!existing) return;
-			const nextEntries = (Array.isArray(existing.pluginDebugEntries) ? existing.pluginDebugEntries : []).filter((entry) => Boolean(entry) && typeof entry === "object" && typeof entry.pluginId === "string" && entry.pluginId !== "active-memory");
-			const nextLines = [];
-			if (params.statusLine) nextLines.push(params.statusLine);
-			if (debugLine) nextLines.push(debugLine);
-			if (nextLines.length > 0) nextEntries.push({
-				pluginId: "active-memory",
-				lines: nextLines
-			});
-			store[resolved.normalizedKey] = {
-				...existing,
-				pluginDebugEntries: nextEntries.length > 0 ? nextEntries : void 0
-			};
+		await params.api.runtime.agent.session.patchSessionEntry({
+			agentId,
+			sessionKey,
+			preserveActivity: true,
+			update: (existing) => {
+				const nextEntries = (Array.isArray(existing.pluginDebugEntries) ? existing.pluginDebugEntries : []).filter((entry) => Boolean(entry) && typeof entry === "object" && typeof entry.pluginId === "string" && entry.pluginId !== "active-memory");
+				const nextLines = [];
+				if (params.statusLine) nextLines.push(params.statusLine);
+				if (debugLine) nextLines.push(debugLine);
+				if (nextLines.length > 0) nextEntries.push({
+					pluginId: "active-memory",
+					lines: nextLines
+				});
+				return { pluginDebugEntries: nextEntries.length > 0 ? nextEntries : void 0 };
+			}
 		});
 	} catch (error) {
 		params.api.logger.debug?.(`active-memory: failed to persist session status note (${error instanceof Error ? error.message : String(error)})`);
@@ -1554,6 +1565,7 @@ async function maybeResolveActiveRecall(params) {
 				searchDebug: result.searchDebug
 			});
 			recordCircuitBreakerTimeout(cbKey);
+			scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
 			return result;
 		}
 		if ("status" in raceResult) {
@@ -1642,6 +1654,7 @@ async function maybeResolveActiveRecall(params) {
 				searchDebug: result.searchDebug
 			});
 			recordCircuitBreakerTimeout(cbKey);
+			scheduleMemorySearchCleanupAfterTimeout(params.api, logPrefix, params.agentId);
 			return result;
 		}
 		const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
@@ -1703,19 +1716,23 @@ var active_memory_default = definePluginEntry({
 					if (action === "status") return { text: `Active Memory: ${isActiveMemoryGloballyEnabled(currentConfig) ? "on" : "off"} globally.` };
 					if (requiresAdminToMutateActiveMemoryGlobal(ctx.gatewayClientScopes)) return { text: ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT };
 					if (action === "on" || action === "enable" || action === "enabled") {
-						const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-						await api.runtime.config.replaceConfigFile({
-							nextConfig,
-							afterWrite: { mode: "auto" }
+						await api.runtime.config.mutateConfigFile({
+							afterWrite: { mode: "auto" },
+							mutate: (draft) => {
+								const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, true);
+								Object.assign(draft, nextConfig);
+							}
 						});
 						refreshLiveConfigFromRuntime();
 						return { text: "Active Memory: on globally." };
 					}
 					if (action === "off" || action === "disable" || action === "disabled") {
-						const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-						await api.runtime.config.replaceConfigFile({
-							nextConfig,
-							afterWrite: { mode: "auto" }
+						await api.runtime.config.mutateConfigFile({
+							afterWrite: { mode: "auto" },
+							mutate: (draft) => {
+								const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, false);
+								Object.assign(draft, nextConfig);
+							}
 						});
 						refreshLiveConfigFromRuntime();
 						return { text: "Active Memory: off globally." };
@@ -1890,4 +1907,4 @@ const testing = {
 	}
 };
 //#endregion
-export { testing as __testing, active_memory_default as default };
+export { testing as __testing, testing, active_memory_default as default };

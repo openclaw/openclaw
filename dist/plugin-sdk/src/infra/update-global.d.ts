@@ -15,6 +15,7 @@ type ResolvedGlobalInstallCommand = {
 export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
     globalRoot: string | null;
     packageRoot: string | null;
+    directNodeModulesRoot?: boolean;
 };
 export declare const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 export type NpmGlobalPrefixLayout = {
@@ -36,7 +37,9 @@ export declare function resolveGlobalInstallSpec(params: {
     env?: NodeJS.ProcessEnv;
 }): string;
 export declare function createGlobalInstallEnv(env?: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv | undefined>;
-export declare function resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot?: string | null): NpmGlobalPrefixLayout | null;
+export declare function resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot?: string | null, options?: {
+    allowDirectNodeModulesRoot?: boolean;
+}): NpmGlobalPrefixLayout | null;
 export declare function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGlobalPrefixLayout;
 export declare function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null;
 export declare function resolveGlobalInstallCommand(manager: GlobalInstallManager, pkgRoot?: string | null): ResolvedGlobalInstallCommand;
@@ -47,6 +50,7 @@ export declare function resolveGlobalInstallTarget(params: {
     runCommand: CommandRunner;
     timeoutMs: number;
     pkgRoot?: string | null;
+    honorPackageRoot?: boolean;
 }): Promise<ResolvedGlobalInstallTarget>;
 export declare function detectGlobalInstallManagerForRoot(runCommand: CommandRunner, pkgRoot: string, timeoutMs: number): Promise<GlobalInstallManager | null>;
 export declare function detectGlobalInstallManagerByPresence(runCommand: CommandRunner, timeoutMs: number): Promise<GlobalInstallManager | null>;

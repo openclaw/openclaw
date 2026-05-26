@@ -1,0 +1,83 @@
+import { t as formatDocsLink } from "./links-CM5vg8_V.js";
+import { r as theme } from "./theme-D58JpUfy.js";
+import { n as defaultRuntime } from "./runtime-yzlkhCoS.js";
+import { n as runCommandWithRuntime } from "./cli-utils-CdDa8OYO.js";
+//#region src/cli/program/register.maintenance.ts
+function registerMaintenanceCommands(program) {
+	program.command("doctor").description("Health checks + quick fixes for the gateway and channels").addHelpText("after", () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`).option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false).option("--yes", "Accept defaults without prompting", false).option("--repair", "Apply recommended repairs without prompting", false).option("--fix", "Apply recommended repairs (alias for --repair)", false).option("--force", "Apply aggressive repairs (overwrites custom service config)", false).option("--non-interactive", "Run without prompts (safe migrations only)", false).option("--generate-gateway-token", "Generate and configure a gateway token", false).option("--deep", "Scan system services for extra gateway installs", false).option("--lint", "Run read-only health checks and report findings", false).option("--json", "With --lint: emit JSON findings instead of human output", false).option("--severity-min <level>", "With --lint: drop findings below this severity (info|warning|error)").option("--skip <id>", "With --lint: skip a specific check id (repeatable)", (v, prev) => [...prev, v], []).option("--only <id>", "With --lint: run only the specified check id (repeatable)", (v, prev) => [...prev, v], []).action(async (opts) => {
+		if (opts.lint === true) {
+			await runCommandWithRuntime(defaultRuntime, async () => {
+				const { runDoctorLintCli } = await import("./doctor-lint-BZF5-bTz.js");
+				const exitCode = await runDoctorLintCli(defaultRuntime, {
+					json: Boolean(opts.json),
+					severityMin: typeof opts.severityMin === "string" ? opts.severityMin : void 0,
+					skipIds: Array.isArray(opts.skip) ? opts.skip : [],
+					onlyIds: Array.isArray(opts.only) ? opts.only : []
+				});
+				defaultRuntime.exit(exitCode);
+			}, (err) => {
+				defaultRuntime.error(String(err));
+				defaultRuntime.exit(2);
+			});
+			return;
+		}
+		if (hasLintOnlyDoctorOptions(opts)) {
+			defaultRuntime.error("doctor lint options require --lint. Use `openclaw doctor --lint ...`.");
+			defaultRuntime.exit(2);
+			return;
+		}
+		await runCommandWithRuntime(defaultRuntime, async () => {
+			const { doctorCommand } = await import("./doctor-cpFtp-iT.js");
+			await doctorCommand(defaultRuntime, {
+				workspaceSuggestions: opts.workspaceSuggestions,
+				yes: Boolean(opts.yes),
+				repair: Boolean(opts.repair) || Boolean(opts.fix),
+				force: Boolean(opts.force),
+				nonInteractive: Boolean(opts.nonInteractive),
+				generateGatewayToken: Boolean(opts.generateGatewayToken),
+				deep: Boolean(opts.deep)
+			});
+			defaultRuntime.exit(0);
+		});
+	});
+	program.command("dashboard").description("Open the Control UI with your current token").addHelpText("after", () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`).option("--no-open", "Print URL but do not launch a browser").option("--yes", "Start/install the gateway without prompting when needed", false).action(async (opts) => {
+		await runCommandWithRuntime(defaultRuntime, async () => {
+			const { dashboardCommand } = await import("./dashboard-BGUEJgpi.js");
+			await dashboardCommand(defaultRuntime, {
+				noOpen: opts.open === false,
+				yes: Boolean(opts.yes)
+			});
+		});
+	});
+	program.command("reset").description("Reset local config/state (keeps the CLI installed)").addHelpText("after", () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/reset", "docs.openclaw.ai/cli/reset")}\n`).option("--scope <scope>", "config|config+creds+sessions|full (default: interactive prompt)").option("--yes", "Skip confirmation prompts", false).option("--non-interactive", "Disable prompts (requires --scope + --yes)", false).option("--dry-run", "Print actions without removing files", false).action(async (opts) => {
+		await runCommandWithRuntime(defaultRuntime, async () => {
+			const { resetCommand } = await import("./reset-D5yS3iLU.js");
+			await resetCommand(defaultRuntime, {
+				scope: opts.scope,
+				yes: Boolean(opts.yes),
+				nonInteractive: Boolean(opts.nonInteractive),
+				dryRun: Boolean(opts.dryRun)
+			});
+		});
+	});
+	program.command("uninstall").description("Uninstall the gateway service + local data (CLI remains)").addHelpText("after", () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/uninstall", "docs.openclaw.ai/cli/uninstall")}\n`).option("--service", "Remove the gateway service", false).option("--state", "Remove state + config", false).option("--workspace", "Remove workspace dirs", false).option("--app", "Remove the macOS app", false).option("--all", "Remove service + state + workspace + app", false).option("--yes", "Skip confirmation prompts", false).option("--non-interactive", "Disable prompts (requires --yes)", false).option("--dry-run", "Print actions without removing files", false).action(async (opts) => {
+		await runCommandWithRuntime(defaultRuntime, async () => {
+			const { uninstallCommand } = await import("./uninstall-Dr0X0mrf.js");
+			await uninstallCommand(defaultRuntime, {
+				service: Boolean(opts.service),
+				state: Boolean(opts.state),
+				workspace: Boolean(opts.workspace),
+				app: Boolean(opts.app),
+				all: Boolean(opts.all),
+				yes: Boolean(opts.yes),
+				nonInteractive: Boolean(opts.nonInteractive),
+				dryRun: Boolean(opts.dryRun)
+			});
+		});
+	});
+}
+function hasLintOnlyDoctorOptions(opts) {
+	return opts.json === true || typeof opts.severityMin === "string" || Array.isArray(opts.skip) && opts.skip.length > 0 || Array.isArray(opts.only) && opts.only.length > 0;
+}
+//#endregion
+export { registerMaintenanceCommands };

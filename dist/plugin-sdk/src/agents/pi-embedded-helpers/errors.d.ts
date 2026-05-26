@@ -22,7 +22,7 @@ export type FailoverClassification = {
 } | {
     kind: "context_overflow";
 };
-export type ProviderRuntimeFailureKind = "auth_scope" | "auth_refresh" | "refresh_timeout" | "refresh_contention" | "callback_timeout" | "callback_validation" | "auth_html_403" | "upstream_html" | "proxy" | "rate_limit" | "dns" | "timeout" | "schema" | "sandbox_blocked" | "replay_invalid" | "empty_response" | "no_error_details" | "unclassified" | "unknown";
+export type ProviderRuntimeFailureKind = "auth_scope" | "auth_refresh" | "refresh_timeout" | "refresh_contention" | "callback_timeout" | "callback_validation" | "auth_html" | "upstream_html" | "proxy" | "rate_limit" | "dns" | "timeout" | "schema" | "sandbox_blocked" | "replay_invalid" | "empty_response" | "no_error_details" | "unclassified" | "unknown";
 export declare function inferSignalStatus(signal: FailoverSignal): number | undefined;
 export declare function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean;
 export declare function isTransientHttpError(raw: string): boolean;

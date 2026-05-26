@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import JSON5 from "json5";
 import { type PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState, getRuntimeConfigSnapshotMetadata as getRuntimeConfigSnapshotMetadataState, getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState, getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState, resetConfigRuntimeState as resetConfigRuntimeStateState, resolveRuntimeConfigCacheKey, selectApplicableRuntimeConfig, setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState, setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState, type ConfigWriteAfterWrite, type RuntimeConfigWriteNotification } from "./runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState, getRuntimeConfigSnapshotMetadata as getRuntimeConfigSnapshotMetadataState, getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState, getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState, resetConfigRuntimeState as resetConfigRuntimeStateState, resolveRuntimeConfigCacheKey, selectApplicableRuntimeConfig, setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState, setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState, type ConfigWriteAfterWrite, type RuntimeConfigSnapshotRefreshOptions, type RuntimeConfigWriteNotification } from "./runtime-snapshot.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "./types.js";
 export { clearRuntimeConfigSnapshotState as clearRuntimeConfigSnapshot, getRuntimeConfigSnapshotMetadataState as getRuntimeConfigSnapshotMetadata, getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot, resetConfigRuntimeStateState as resetConfigRuntimeState, resolveRuntimeConfigCacheKey, selectApplicableRuntimeConfig, setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot, setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler, };
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -13,6 +13,10 @@ export type ParseConfigJson5Result = {
 } | {
     ok: false;
     error: string;
+};
+export type ConfigWriteResult = {
+    persistedHash: string;
+    persistedConfig: OpenClawConfig;
 };
 export type ConfigWriteOptions = {
     /**
@@ -51,6 +55,10 @@ export type ConfigWriteOptions = {
      */
     skipRuntimeSnapshotRefresh?: boolean;
     /**
+     * Optional controls for the active runtime snapshot refresh after this write.
+     */
+    runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
+    /**
      * Allow intentionally destructive config writes, such as explicit reset flows.
      * Normal writers must keep this false so clobbers are rejected before disk commit.
      */
@@ -71,11 +79,22 @@ export type ConfigWriteOptions = {
      */
     afterWrite?: ConfigWriteAfterWrite;
     /**
+     * Legacy root keys to preserve on disk while excluding them from write validation.
+     * This is for doctor repair of historical config metadata that should not become
+     * part of the public schema contract again.
+     */
+    preservedLegacyRootKeys?: readonly string[];
+    /**
      * Skip plugin-aware validation before writing. Use only for safe partial
      * migrations (e.g. legacy key removal) where the base schema is valid but
      * an unrelated plugin rule prevents the full write from succeeding.
      */
     skipPluginValidation?: boolean;
+    /**
+     * Preserve an older writer version for update handoff writes that must be
+     * readable by the parent process after a candidate doctor repair.
+     */
+    lastTouchedVersionOverride?: string;
 };
 export type ReadConfigFileSnapshotForWriteResult = {
     snapshot: ConfigFileSnapshot;
@@ -101,6 +120,13 @@ export type ConfigIoDeps = {
     logger?: Pick<typeof console, "error" | "warn">;
     measure?: ConfigSnapshotReadMeasure;
     suppressFutureVersionWarning?: boolean;
+    observe?: boolean;
+};
+export type ConfigSnapshotReadOptions = {
+    measure?: ConfigSnapshotReadMeasure;
+    observe?: boolean;
+    skipPluginValidation?: boolean;
+    preservedLegacyRootKeys?: readonly string[];
 };
 export declare function parseConfigJson5(raw: string, json5?: {
     parse: (value: string) => unknown;
@@ -111,6 +137,7 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
 };
 export declare function createConfigIO(overrides?: ConfigIoDeps & {
     pluginValidation?: "full" | "skip";
+    preservedLegacyRootKeys?: readonly string[];
 }): {
     configPath: string;
     loadConfig: () => OpenClawConfig;
@@ -133,13 +160,15 @@ export declare function createConfigIO(overrides?: ConfigIoDeps & {
 export declare function clearConfigCache(): void;
 export declare function registerConfigWriteListener(listener: (event: ConfigWriteNotification) => void): () => void;
 export declare function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig;
-export declare function loadConfig(): OpenClawConfig;
-export declare function getRuntimeConfig(): OpenClawConfig;
+export declare function loadConfig(options?: {
+    skipPluginValidation?: boolean;
+}): OpenClawConfig;
+export declare function getRuntimeConfig(options?: {
+    skipPluginValidation?: boolean;
+}): OpenClawConfig;
 export declare function readBestEffortConfig(): Promise<OpenClawConfig>;
 export declare function readSourceConfigBestEffort(): Promise<OpenClawConfig>;
-export declare function readConfigFileSnapshot(options?: {
-    measure?: ConfigSnapshotReadMeasure;
-}): Promise<ConfigFileSnapshot>;
+export declare function readConfigFileSnapshot(options?: ConfigSnapshotReadOptions): Promise<ConfigFileSnapshot>;
 export declare function readConfigFileSnapshotWithPluginMetadata(options?: {
     measure?: ConfigSnapshotReadMeasure;
 }): Promise<ReadConfigFileSnapshotWithPluginMetadataResult>;
@@ -150,6 +179,8 @@ export declare function recoverConfigFromLastKnownGood(params: {
 }): Promise<boolean>;
 export declare function recoverConfigFromJsonRootSuffix(snapshot: ConfigFileSnapshot): Promise<boolean>;
 export declare function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot>;
-export declare function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult>;
+export declare function readConfigFileSnapshotForWrite(options?: {
+    skipPluginValidation?: boolean;
+}): Promise<ReadConfigFileSnapshotForWriteResult>;
 export declare function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult>;
-export declare function writeConfigFile(cfg: OpenClawConfig, options?: ConfigWriteOptions): Promise<void>;
+export declare function writeConfigFile(cfg: OpenClawConfig, options?: ConfigWriteOptions): Promise<ConfigWriteResult>;

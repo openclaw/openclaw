@@ -1,14 +1,18 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { o as SsrFPolicy } from "../../ssrf-B2gz_4IH.js";
-import { a as createConfiguredOllamaCompatNumCtxWrapper, c as createOllamaStreamFn, d as resolveOllamaBaseUrlForRun, f as resolveOllamaCompatNumCtxEnabled, i as convertToOllamaMessages, l as isOllamaCompatProvider, m as wrapOllamaCompatNumCtx, n as buildAssistantMessage, o as createConfiguredOllamaCompatStreamWrapper, p as shouldInjectOllamaCompatNumCtx, r as buildOllamaChatRequest, s as createConfiguredOllamaStreamFn, t as OLLAMA_NATIVE_BASE_URL, u as parseNdjsonStream } from "../../stream-fACa7Fir.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { o as SsrFPolicy } from "../../ssrf-skjEI_i5.js";
+import { a as createConfiguredOllamaCompatNumCtxWrapper, c as createOllamaStreamFn, d as resolveOllamaBaseUrlForRun, f as resolveOllamaCompatNumCtxEnabled, i as convertToOllamaMessages, l as isOllamaCompatProvider, m as wrapOllamaCompatNumCtx, n as buildAssistantMessage, o as createConfiguredOllamaCompatStreamWrapper, p as shouldInjectOllamaCompatNumCtx, r as buildOllamaChatRequest, s as createConfiguredOllamaStreamFn, t as OLLAMA_NATIVE_BASE_URL, u as parseNdjsonStream } from "../../stream-CI_Rrbq3.js";
 
 //#region extensions/ollama/src/embedding-provider.d.ts
 type OllamaEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: {
+    signal?: AbortSignal;
+  }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: {
+    signal?: AbortSignal;
+  }) => Promise<number[][]>;
 };
 type OllamaEmbeddingOptions = {
   config: OpenClawConfig;

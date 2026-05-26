@@ -1,4 +1,4 @@
-import { L as SpeechVoiceOption } from "../../tts-runtime.types-CNnt44C-.js";
+import { L as SpeechVoiceOption } from "../../tts-runtime.types-DsGX4LDs.js";
 //#region extensions/inworld/tts.d.ts
 declare const DEFAULT_INWORLD_VOICE_ID = "Sarah";
 declare const DEFAULT_INWORLD_MODEL_ID = "inworld-tts-1.5-max";

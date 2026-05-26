@@ -6,6 +6,7 @@ export declare function runAgentHarnessAfterToolCallHook(params: {
     agentId?: string;
     sessionId?: string;
     sessionKey?: string;
+    channelId?: string;
     startArgs: Record<string, unknown>;
     result?: unknown;
     error?: string;

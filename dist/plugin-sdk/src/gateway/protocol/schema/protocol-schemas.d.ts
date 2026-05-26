@@ -31,6 +31,7 @@ export declare const ProtocolSchemas: {
             bootstrapToken: import("typebox").TOptional<import("typebox").TString>;
             deviceToken: import("typebox").TOptional<import("typebox").TString>;
             password: import("typebox").TOptional<import("typebox").TString>;
+            approvalRuntimeToken: import("typebox").TOptional<import("typebox").TString>;
         }>>;
         locale: import("typebox").TOptional<import("typebox").TString>;
         userAgent: import("typebox").TOptional<import("typebox").TString>;
@@ -264,6 +265,7 @@ export declare const ProtocolSchemas: {
         stream: import("typebox").TString;
         ts: import("typebox").TInteger;
         spawnedBy: import("typebox").TOptional<import("typebox").TString>;
+        isHeartbeat: import("typebox").TOptional<import("typebox").TBoolean>;
         data: import("typebox").TRecord<"^.*$", import("typebox").TUnknown>;
     }>;
     MessageActionParams: import("typebox").TObject<{
@@ -275,6 +277,7 @@ export declare const ProtocolSchemas: {
         senderIsOwner: import("typebox").TOptional<import("typebox").TBoolean>;
         sessionKey: import("typebox").TOptional<import("typebox").TString>;
         sessionId: import("typebox").TOptional<import("typebox").TString>;
+        inboundTurnKind: import("typebox").TOptional<import("typebox").TString>;
         agentId: import("typebox").TOptional<import("typebox").TString>;
         toolContext: import("typebox").TOptional<import("typebox").TObject<{
             currentChannelId: import("typebox").TOptional<import("typebox").TString>;
@@ -363,6 +366,15 @@ export declare const ProtocolSchemas: {
             status: import("typebox").TString;
             statusLabel: import("typebox").TString;
             result: import("typebox").TString;
+            attachments: import("typebox").TOptional<import("typebox").TArray<import("typebox").TObject<{
+                type: import("typebox").TOptional<import("typebox").TString>;
+                path: import("typebox").TOptional<import("typebox").TString>;
+                url: import("typebox").TOptional<import("typebox").TString>;
+                mediaUrl: import("typebox").TOptional<import("typebox").TString>;
+                filePath: import("typebox").TOptional<import("typebox").TString>;
+                mimeType: import("typebox").TOptional<import("typebox").TString>;
+                name: import("typebox").TOptional<import("typebox").TString>;
+            }>>>;
             mediaUrls: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
             statsLine: import("typebox").TOptional<import("typebox").TString>;
             replyInstruction: import("typebox").TString;
@@ -374,6 +386,7 @@ export declare const ProtocolSchemas: {
             sourceChannel: import("typebox").TOptional<import("typebox").TString>;
             sourceTool: import("typebox").TOptional<import("typebox").TString>;
         }>>;
+        sourceReplyDeliveryMode: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"automatic">, import("typebox").TLiteral<"message_tool_only">]>>;
         voiceWakeTrigger: import("typebox").TOptional<import("typebox").TString>;
         idempotencyKey: import("typebox").TString;
         label: import("typebox").TOptional<import("typebox").TString>;
@@ -411,6 +424,7 @@ export declare const ProtocolSchemas: {
         modelIdentifier: import("typebox").TOptional<import("typebox").TString>;
         caps: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
         commands: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
+        permissions: import("typebox").TOptional<import("typebox").TRecord<"^.*$", import("typebox").TBoolean>>;
         remoteIp: import("typebox").TOptional<import("typebox").TString>;
         silent: import("typebox").TOptional<import("typebox").TBoolean>;
     }>;
@@ -543,6 +557,13 @@ export declare const ProtocolSchemas: {
     SecretsResolveParams: import("typebox").TObject<{
         commandName: import("typebox").TString;
         targetIds: import("typebox").TArray<import("typebox").TString>;
+        allowedPaths: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
+        forcedActivePaths: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
+        optionalActivePaths: import("typebox").TOptional<import("typebox").TArray<import("typebox").TString>>;
+        providerOverrides: import("typebox").TOptional<import("typebox").TObject<{
+            webSearch: import("typebox").TOptional<import("typebox").TString>;
+            webFetch: import("typebox").TOptional<import("typebox").TString>;
+        }>>;
     }>;
     SecretsResolveAssignment: import("typebox").TObject<{
         path: import("typebox").TOptional<import("typebox").TString>;
@@ -561,6 +582,7 @@ export declare const ProtocolSchemas: {
     }>;
     SessionsListParams: import("typebox").TObject<{
         limit: import("typebox").TOptional<import("typebox").TInteger>;
+        offset: import("typebox").TOptional<import("typebox").TInteger>;
         activeMinutes: import("typebox").TOptional<import("typebox").TInteger>;
         includeGlobal: import("typebox").TOptional<import("typebox").TBoolean>;
         includeUnknown: import("typebox").TOptional<import("typebox").TBoolean>;
@@ -621,6 +643,15 @@ export declare const ProtocolSchemas: {
             leafId: import("typebox").TOptional<import("typebox").TString>;
             entryId: import("typebox").TOptional<import("typebox").TString>;
         }>;
+    }>;
+    SessionOperationEvent: import("typebox").TObject<{
+        operationId: import("typebox").TString;
+        operation: import("typebox").TLiteral<"compact">;
+        phase: import("typebox").TUnion<[import("typebox").TLiteral<"start">, import("typebox").TLiteral<"end">]>;
+        sessionKey: import("typebox").TString;
+        ts: import("typebox").TInteger;
+        completed: import("typebox").TOptional<import("typebox").TBoolean>;
+        reason: import("typebox").TOptional<import("typebox").TString>;
     }>;
     SessionsCompactionListParams: import("typebox").TObject<{
         key: import("typebox").TString;
@@ -783,6 +814,7 @@ export declare const ProtocolSchemas: {
     SessionsAbortParams: import("typebox").TObject<{
         key: import("typebox").TOptional<import("typebox").TString>;
         runId: import("typebox").TOptional<import("typebox").TString>;
+        agentId: import("typebox").TOptional<import("typebox").TString>;
     }>;
     SessionsPatchParams: import("typebox").TObject<{
         key: import("typebox").TString;
@@ -804,6 +836,8 @@ export declare const ProtocolSchemas: {
         spawnDepth: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TInteger, import("typebox").TNull]>>;
         subagentRole: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"orchestrator">, import("typebox").TLiteral<"leaf">, import("typebox").TNull]>>;
         subagentControlScope: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"children">, import("typebox").TLiteral<"none">, import("typebox").TNull]>>;
+        inheritedToolAllow: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TArray<import("typebox").TString>, import("typebox").TNull]>>;
+        inheritedToolDeny: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TArray<import("typebox").TString>, import("typebox").TNull]>>;
         sendPolicy: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"allow">, import("typebox").TLiteral<"deny">, import("typebox").TNull]>>;
         groupActivation: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"mention">, import("typebox").TLiteral<"always">, import("typebox").TNull]>>;
     }>;
@@ -834,6 +868,7 @@ export declare const ProtocolSchemas: {
     }>;
     SessionsUsageParams: import("typebox").TObject<{
         key: import("typebox").TOptional<import("typebox").TString>;
+        agentId: import("typebox").TOptional<import("typebox").TString>;
         startDate: import("typebox").TOptional<import("typebox").TString>;
         endDate: import("typebox").TOptional<import("typebox").TString>;
         mode: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"utc">, import("typebox").TLiteral<"gateway">, import("typebox").TLiteral<"specific">]>>;
@@ -1014,6 +1049,7 @@ export declare const ProtocolSchemas: {
     ConfigSchemaLookupResult: import("typebox").TObject<{
         path: import("typebox").TString;
         schema: import("typebox").TUnknown;
+        reloadKind: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"restart">, import("typebox").TLiteral<"hot">, import("typebox").TLiteral<"none">]>>;
         hint: import("typebox").TOptional<import("typebox").TObject<{
             label: import("typebox").TOptional<import("typebox").TString>;
             help: import("typebox").TOptional<import("typebox").TString>;
@@ -1032,6 +1068,7 @@ export declare const ProtocolSchemas: {
             type: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TString, import("typebox").TArray<import("typebox").TString>]>>;
             required: import("typebox").TBoolean;
             hasChildren: import("typebox").TBoolean;
+            reloadKind: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"restart">, import("typebox").TLiteral<"hot">, import("typebox").TLiteral<"none">]>>;
             hint: import("typebox").TOptional<import("typebox").TObject<{
                 label: import("typebox").TOptional<import("typebox").TString>;
                 help: import("typebox").TOptional<import("typebox").TString>;
@@ -1407,6 +1444,7 @@ export declare const ProtocolSchemas: {
     }>;
     TalkSessionCreateParams: import("typebox").TObject<{
         sessionKey: import("typebox").TOptional<import("typebox").TString>;
+        spawnedBy: import("typebox").TOptional<import("typebox").TString>;
         provider: import("typebox").TOptional<import("typebox").TString>;
         model: import("typebox").TOptional<import("typebox").TString>;
         voice: import("typebox").TOptional<import("typebox").TString>;
@@ -1766,6 +1804,7 @@ export declare const ProtocolSchemas: {
         sessionKey: import("typebox").TOptional<import("typebox").TString>;
         runId: import("typebox").TOptional<import("typebox").TString>;
         taskId: import("typebox").TOptional<import("typebox").TString>;
+        agentId: import("typebox").TOptional<import("typebox").TString>;
     }>;
     ArtifactsListResult: import("typebox").TObject<{
         artifacts: import("typebox").TArray<import("typebox").TObject<{
@@ -1788,6 +1827,7 @@ export declare const ProtocolSchemas: {
         sessionKey: import("typebox").TOptional<import("typebox").TString>;
         runId: import("typebox").TOptional<import("typebox").TString>;
         taskId: import("typebox").TOptional<import("typebox").TString>;
+        agentId: import("typebox").TOptional<import("typebox").TString>;
         artifactId: import("typebox").TString;
     }>;
     ArtifactsGetResult: import("typebox").TObject<{
@@ -1811,6 +1851,7 @@ export declare const ProtocolSchemas: {
         sessionKey: import("typebox").TOptional<import("typebox").TString>;
         runId: import("typebox").TOptional<import("typebox").TString>;
         taskId: import("typebox").TOptional<import("typebox").TString>;
+        agentId: import("typebox").TOptional<import("typebox").TString>;
         artifactId: import("typebox").TString;
     }>;
     ArtifactsDownloadResult: import("typebox").TObject<{
@@ -2277,6 +2318,9 @@ export declare const ProtocolSchemas: {
             lastDelivered: import("typebox").TOptional<import("typebox").TBoolean>;
             lastDeliveryStatus: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"delivered">, import("typebox").TLiteral<"not-delivered">, import("typebox").TLiteral<"unknown">, import("typebox").TLiteral<"not-requested">]>>;
             lastDeliveryError: import("typebox").TOptional<import("typebox").TString>;
+            lastFailureNotificationDelivered: import("typebox").TOptional<import("typebox").TBoolean>;
+            lastFailureNotificationDeliveryStatus: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"delivered">, import("typebox").TLiteral<"not-delivered">, import("typebox").TLiteral<"unknown">, import("typebox").TLiteral<"not-requested">]>>;
+            lastFailureNotificationDeliveryError: import("typebox").TOptional<import("typebox").TString>;
             lastFailureAlertAtMs: import("typebox").TOptional<import("typebox").TInteger>;
         }>;
     }>;
@@ -2401,6 +2445,7 @@ export declare const ProtocolSchemas: {
         scope: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"job">, import("typebox").TLiteral<"all">]>>;
         id: import("typebox").TOptional<import("typebox").TString>;
         jobId: import("typebox").TOptional<import("typebox").TString>;
+        runId: import("typebox").TOptional<import("typebox").TString>;
         limit: import("typebox").TOptional<import("typebox").TInteger>;
         offset: import("typebox").TOptional<import("typebox").TInteger>;
         statuses: import("typebox").TOptional<import("typebox").TArray<import("typebox").TUnion<[import("typebox").TLiteral<"ok">, import("typebox").TLiteral<"error">, import("typebox").TLiteral<"skipped">]>>>;
@@ -2432,6 +2477,11 @@ export declare const ProtocolSchemas: {
         delivered: import("typebox").TOptional<import("typebox").TBoolean>;
         deliveryStatus: import("typebox").TOptional<import("typebox").TUnion<[import("typebox").TLiteral<"delivered">, import("typebox").TLiteral<"not-delivered">, import("typebox").TLiteral<"unknown">, import("typebox").TLiteral<"not-requested">]>>;
         deliveryError: import("typebox").TOptional<import("typebox").TString>;
+        failureNotificationDelivery: import("typebox").TOptional<import("typebox").TObject<{
+            delivered: import("typebox").TOptional<import("typebox").TBoolean>;
+            status: import("typebox").TUnion<[import("typebox").TLiteral<"delivered">, import("typebox").TLiteral<"not-delivered">, import("typebox").TLiteral<"unknown">, import("typebox").TLiteral<"not-requested">]>;
+            error: import("typebox").TOptional<import("typebox").TString>;
+        }>>;
         sessionId: import("typebox").TOptional<import("typebox").TString>;
         sessionKey: import("typebox").TOptional<import("typebox").TString>;
         runId: import("typebox").TOptional<import("typebox").TString>;

@@ -13,8 +13,11 @@ interface ProviderHttpMocks {
     resolveApiKeyForProviderMock: Mock<() => Promise<{
         apiKey: string;
     }>>;
+    executeProviderOperationWithRetryMock: AnyMock;
     postJsonRequestMock: AnyMock;
+    postMultipartRequestMock: AnyMock;
     fetchWithTimeoutMock: AnyMock;
+    fetchWithTimeoutGuardedMock: AnyMock;
     pollProviderOperationJsonMock: AnyMock;
     assertOkOrThrowHttpErrorMock: Mock<(response: Response, label: string) => Promise<void>>;
     assertOkOrThrowProviderErrorMock: Mock<(response: Response, label: string) => Promise<void>>;

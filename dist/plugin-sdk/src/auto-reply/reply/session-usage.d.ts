@@ -18,8 +18,10 @@ export declare function persistSessionUsageUpdate(params: {
     contextTokensUsed?: number;
     promptTokens?: number;
     usageIsContextSnapshot?: boolean;
+    isHeartbeat?: boolean;
     systemPromptReport?: SessionSystemPromptReport;
     cliSessionId?: string;
     cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+    preserveFreshTotalTokensOnStaleUsage?: boolean;
     logLabel?: string;
 }): Promise<void>;

@@ -1,5 +1,5 @@
 import type { PluginRegistry } from "./registry.js";
-export type PluginCapabilityKind = "cli-backend" | "text-inference" | "speech" | "realtime-transcription" | "realtime-voice" | "media-understanding" | "image-generation" | "web-search" | "agent-harness" | "context-engine" | "channel";
+export type PluginCapabilityKind = "cli-backend" | "text-inference" | "embedding" | "speech" | "realtime-transcription" | "realtime-voice" | "media-understanding" | "image-generation" | "video-generation" | "music-generation" | "web-search" | "agent-harness" | "context-engine" | "channel";
 export type PluginInspectShape = "hook-only" | "plain-capability" | "hybrid-capability" | "non-capability";
 export type PluginCapabilityEntry = {
     kind: PluginCapabilityKind;
@@ -14,5 +14,5 @@ export type PluginShapeSummary = {
 };
 export declare function buildPluginShapeSummary(params: {
     plugin: PluginRegistry["plugins"][number];
-    report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools">;
+    report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors">;
 }): PluginShapeSummary;

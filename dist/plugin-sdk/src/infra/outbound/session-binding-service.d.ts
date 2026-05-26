@@ -47,7 +47,8 @@ export declare function unregisterSessionBindingAdapter(params: {
     adapter?: SessionBindingAdapter;
 }): void;
 export declare function getSessionBindingService(): SessionBindingService;
-export declare const __testing: {
+export declare const testing: {
     resetSessionBindingAdaptersForTests(): void;
     getRegisteredAdapterKeys(): string[];
 };
+export { testing as __testing };

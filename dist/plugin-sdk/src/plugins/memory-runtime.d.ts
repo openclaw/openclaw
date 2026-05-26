@@ -12,3 +12,7 @@ export declare function resolveActiveMemoryBackendConfig(params: {
     agentId: string;
 }): import("./memory-state.js").MemoryRuntimeBackendConfig | null;
 export declare function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void>;
+export declare function closeActiveMemorySearchManager(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+}): Promise<void>;

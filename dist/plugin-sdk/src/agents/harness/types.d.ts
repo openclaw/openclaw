@@ -34,6 +34,9 @@ export type AgentHarnessSideQuestionParams = {
     sessionFile: string;
     agentId?: string;
     workspaceDir?: string;
+    messageChannel?: string;
+    messageProvider?: string;
+    currentChannelId?: string;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
 };
@@ -51,8 +54,8 @@ export type AgentHarnessResetParams = {
 export type AgentHarnessResultClassification = "ok" | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 export type AgentHarnessDeliveryDefaults = {
     /**
-     * Preferred default for visible source replies when user config has not
-     * explicitly selected automatic or message-tool delivery.
+     * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
+     * config. Kept for existing harness plugins.
      */
     sourceVisibleReplies?: "automatic" | "message_tool";
 };
@@ -60,6 +63,12 @@ export type AgentHarness = {
     id: string;
     label: string;
     pluginId?: string;
+    /**
+     * Context-engine host capabilities provided by this harness during agent
+     * runs. Harnesses that omit this are unsupported for engines that declare
+     * host requirements.
+     */
+    contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
     deliveryDefaults?: AgentHarnessDeliveryDefaults;
     supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
     runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;

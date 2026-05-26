@@ -13,8 +13,8 @@ type TalkTranscriptionRelaySessionResult = {
     transport: "gateway-relay";
     transcriptionSessionId: string;
     audio: {
-        inputEncoding: "pcm16";
-        inputSampleRateHz: 24000;
+        inputEncoding: "g711_ulaw";
+        inputSampleRateHz: 8000;
     };
     expiresAt: number;
 };

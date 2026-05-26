@@ -1,15 +1,15 @@
-import { r as stripAnsi } from "../ansi-Bk0Jp_0O.js";
-import { b as escapeRegExp } from "../utils-CKsuXgDI.js";
-import { a as resetGlobalHookRunner, i as initializeGlobalHookRunner } from "../hook-runner-global-aUo3QVZe.js";
-import { I as createEmptyPluginRegistry, m as releasePinnedPluginChannelRegistry, x as setActivePluginRegistry } from "../runtime-CFKT2mp_.js";
-import { t as deliverOutboundPayloads } from "../deliver-BFTTkM5p.js";
-import { n as formatZonedTimestamp, t as formatUtcTimestamp } from "../format-datetime-tv--XrND.js";
-import { i as shouldAckReaction, n as removeAckReactionAfterReply, r as removeAckReactionHandleAfterReply, t as createAckReactionHandle } from "../ack-reactions-D6S-dTdd.js";
-import { n as resolveInboundMentionDecision, t as implicitMentionKindWhen } from "../mention-gating-Bq0XC9aB.js";
-import { t as addTestHook } from "../hooks.test-helpers-Bl13H_w0.js";
-import { C as createOutboundTestPlugin, g as createRuntimeEnv, w as createTestRegistry } from "../plugin-setup-wizard-D4ENJ6Y0.js";
-import "../testing-DrTSJhfM.js";
-import "../channel-mention-gating-BTEwbCLm.js";
+import { r as stripAnsi } from "../ansi-4r6vVvJt.js";
+import { b as escapeRegExp } from "../utils-sBTEdeml.js";
+import { a as resetGlobalHookRunner, i as initializeGlobalHookRunner } from "../hook-runner-global-BkXXy1ub.js";
+import { F as createEmptyPluginRegistry, m as releasePinnedPluginChannelRegistry, x as setActivePluginRegistry } from "../runtime-DHxRl5F1.js";
+import { n as resolveInboundMentionDecision, t as implicitMentionKindWhen } from "../mention-gating-3P8aSD7o.js";
+import { t as deliverOutboundPayloads } from "../deliver-WPtVqUMT.js";
+import { n as formatZonedTimestamp, t as formatUtcTimestamp } from "../format-datetime-DO2rqkXr.js";
+import { i as shouldAckReaction, n as removeAckReactionAfterReply, r as removeAckReactionHandleAfterReply, t as createAckReactionHandle } from "../ack-reactions-BceP3SaE.js";
+import { t as addTestHook } from "../hooks.test-helpers-C0hHeapp.js";
+import { C as createOutboundTestPlugin, g as createRuntimeEnv, w as createTestRegistry } from "../plugin-setup-wizard-DsSNbhuh.js";
+import "../testing-C7rXcZLa.js";
+import "../channel-mention-gating-C0znWBFq.js";
 import { expect, it, vi } from "vitest";
 //#region src/plugin-sdk/test-helpers/directory.ts
 function createDirectoryTestRuntime() {
@@ -214,6 +214,26 @@ function createTaskFlowSessionMock() {
 function createDeprecatedRuntimeConfigError(name) {
 	return /* @__PURE__ */ new Error(`Plugin runtime config.${name}() is deprecated in tests; pass cfg/current() or use mutateConfigFile()/replaceConfigFile().`);
 }
+function createPluginRuntimeMediaMock(overrides = {}) {
+	const readRemoteMediaBuffer = vi.fn();
+	return {
+		readRemoteMediaBuffer,
+		fetchRemoteMedia: readRemoteMediaBuffer,
+		saveRemoteMedia: vi.fn().mockResolvedValue({
+			path: "/tmp/test-media.jpg",
+			contentType: "image/jpeg"
+		}),
+		saveResponseMedia: vi.fn().mockResolvedValue({
+			path: "/tmp/test-media.jpg",
+			contentType: "image/jpeg"
+		}),
+		saveMediaBuffer: vi.fn().mockResolvedValue({
+			path: "/tmp/test-media.jpg",
+			contentType: "image/jpeg"
+		}),
+		...overrides
+	};
+}
 function createPluginRuntimeMock(overrides = {}) {
 	const taskFlow = {
 		bindSession: vi.fn(createTaskFlowSessionMock),
@@ -337,7 +357,7 @@ function createPluginRuntimeMock(overrides = {}) {
 		await params.adapter.onFinalize?.(result);
 		return result;
 	});
-	const buildChannelTurnContextMock = vi.fn((params) => ({
+	const buildChannelInboundEventContextMock = vi.fn((params) => ({
 		Body: params.message.body ?? params.message.rawBody,
 		BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
 		RawBody: params.message.rawBody,
@@ -376,6 +396,7 @@ function createPluginRuntimeMock(overrides = {}) {
 			mutateConfigFile: vi.fn(async () => ({
 				path: "/tmp/openclaw.json",
 				previousHash: null,
+				persistedHash: null,
 				snapshot: {},
 				nextConfig: {},
 				afterWrite: { mode: "auto" },
@@ -388,6 +409,7 @@ function createPluginRuntimeMock(overrides = {}) {
 			replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
 				path: "/tmp/openclaw.json",
 				previousHash: null,
+				persistedHash: null,
 				snapshot: {},
 				nextConfig,
 				afterWrite: { mode: "auto" },
@@ -448,6 +470,10 @@ function createPluginRuntimeMock(overrides = {}) {
 			session: {
 				resolveStorePath: vi.fn(() => "/tmp/agent-sessions.json"),
 				loadSessionStore: vi.fn(() => ({})),
+				getSessionEntry: vi.fn(() => void 0),
+				listSessionEntries: vi.fn(() => []),
+				patchSessionEntry: vi.fn().mockResolvedValue(null),
+				upsertSessionEntry: vi.fn().mockResolvedValue(void 0),
 				saveSessionStore: vi.fn().mockResolvedValue(void 0),
 				updateSessionStore: vi.fn().mockResolvedValue(void 0),
 				updateSessionStoreEntry: vi.fn().mockResolvedValue(null),
@@ -564,13 +590,7 @@ function createPluginRuntimeMock(overrides = {}) {
 					created: true
 				})
 			},
-			media: {
-				fetchRemoteMedia: vi.fn(),
-				saveMediaBuffer: vi.fn().mockResolvedValue({
-					path: "/tmp/test-media.jpg",
-					contentType: "image/jpeg"
-				})
-			},
+			media: createPluginRuntimeMediaMock(),
 			session: {
 				resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 				readSessionUpdatedAt: vi.fn(() => void 0),
@@ -600,7 +620,8 @@ function createPluginRuntimeMock(overrides = {}) {
 					enqueue: async (item) => {
 						await params.onFlush([item]);
 					},
-					flushKey: vi.fn()
+					flushKey: vi.fn(),
+					cancelKey: vi.fn(() => false)
 				})),
 				resolveInboundDebounceMs: vi.fn((params) => {
 					const p = params;
@@ -633,7 +654,7 @@ function createPluginRuntimeMock(overrides = {}) {
 						resolveTurn: params.resolveTurn
 					}
 				})),
-				buildContext: buildChannelTurnContextMock,
+				buildContext: buildChannelInboundEventContextMock,
 				runPrepared: runPreparedChannelTurnMock,
 				dispatchAssembled: dispatchAssembledChannelTurnMock
 			},
@@ -907,4 +928,4 @@ function expectPairingReplyText(text, params) {
 	return code;
 }
 //#endregion
-export { abortStartedAccount, addTestHook, assertBundledChannelEntries, createDirectoryTestRuntime, createEmptyPluginRegistry, createOutboundTestPlugin, createPluginRuntimeMock, createSendCfgThreadingRuntime, createStartAccountContext, createTestRegistry, deliverOutboundPayloads, escapeRegExp, expectChannelPluginContract, expectDirectoryIds, expectDirectorySurface, expectLifecyclePatch, expectOpenDmPolicyConfigIssue, expectPairingReplyText, expectPendingUntilAbort, expectProvidedCfgSkipsRuntimeLoad, expectRuntimeCfgFallback, expectStopPendingUntilAbort, extractPairingCode, formatEnvelopeTimestamp, formatLocalEnvelopeTimestamp, getRequiredHookHandler, initializeGlobalHookRunner, installChannelActionsContractSuite, installChannelPluginContractSuite, installChannelSetupContractSuite, installChannelStatusContractSuite, registerHookHandlersForTest, releasePinnedPluginChannelRegistry, resetGlobalHookRunner, setActivePluginRegistry, startAccountAndTrackLifecycle, stripAnsi, waitForStartedMocks };
+export { abortStartedAccount, addTestHook, assertBundledChannelEntries, createDirectoryTestRuntime, createEmptyPluginRegistry, createOutboundTestPlugin, createPluginRuntimeMediaMock, createPluginRuntimeMock, createSendCfgThreadingRuntime, createStartAccountContext, createTestRegistry, deliverOutboundPayloads, escapeRegExp, expectChannelPluginContract, expectDirectoryIds, expectDirectorySurface, expectLifecyclePatch, expectOpenDmPolicyConfigIssue, expectPairingReplyText, expectPendingUntilAbort, expectProvidedCfgSkipsRuntimeLoad, expectRuntimeCfgFallback, expectStopPendingUntilAbort, extractPairingCode, formatEnvelopeTimestamp, formatLocalEnvelopeTimestamp, getRequiredHookHandler, initializeGlobalHookRunner, installChannelActionsContractSuite, installChannelPluginContractSuite, installChannelSetupContractSuite, installChannelStatusContractSuite, registerHookHandlersForTest, releasePinnedPluginChannelRegistry, resetGlobalHookRunner, setActivePluginRegistry, startAccountAndTrackLifecycle, stripAnsi, waitForStartedMocks };

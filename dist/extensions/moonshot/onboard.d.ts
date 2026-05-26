@@ -1,2 +1,2 @@
-import { n as applyMoonshotConfig, r as applyMoonshotConfigCn, t as MOONSHOT_DEFAULT_MODEL_REF } from "../../onboard-Kj948CWB.js";
+import { n as applyMoonshotConfig, r as applyMoonshotConfigCn, t as MOONSHOT_DEFAULT_MODEL_REF } from "../../onboard-CS0U4hoK.js";
 export { MOONSHOT_DEFAULT_MODEL_REF, applyMoonshotConfig, applyMoonshotConfigCn };

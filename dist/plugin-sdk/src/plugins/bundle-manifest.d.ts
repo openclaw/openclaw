@@ -1,4 +1,5 @@
 import type { PluginBundleFormat } from "./manifest-types.js";
+import type { PluginManifestActivation } from "./manifest.js";
 export declare const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export declare const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
 export declare const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
@@ -11,6 +12,7 @@ export type BundlePluginManifest = {
     settingsFiles?: string[];
     hooks: string[];
     bundleFormat: PluginBundleFormat;
+    activation?: PluginManifestActivation;
     capabilities: string[];
 };
 export type BundleManifestLoadResult = {

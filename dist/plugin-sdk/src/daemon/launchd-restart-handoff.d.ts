@@ -1,4 +1,4 @@
-type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
+type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 type LaunchdRestartHandoffResult = {
     ok: boolean;
     pid?: number;

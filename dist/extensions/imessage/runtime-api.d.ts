@@ -1,20 +1,20 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { t as DEFAULT_ACCOUNT_ID } from "../../account-id-DfCsc96R.js";
-import { n as RuntimeEnv } from "../../runtime-CZFxIuHh.js";
-import { N as MessageReceipt } from "../../types-Bu3TUX-L.js";
-import { y as ChannelMessageActionAdapter } from "../../types.core-1gFCH89g.js";
-import { n as ChannelPlugin } from "../../types.public-BfuQlAVf.js";
-import { n as PluginRuntime } from "../../types-DtDIgr2k.js";
-import { r as buildChannelConfigSchema } from "../../config-schema-CjXvdXRL.js";
-import { d as getChatChannelMeta } from "../../core-BW4coGrc.js";
-import { E as resolveChannelMediaMaxBytes } from "../../media-runtime-N7LXvAKY.js";
-import { t as PAIRING_APPROVED_MESSAGE } from "../../pairing-message-DoVbZEu3.js";
-import { c as collectStatusIssuesFromLastError, r as buildComputedAccountStatusSnapshot } from "../../status-helpers-zpr3QJIn.js";
-import { i as IMessageConfigSchema } from "../../bundled-channel-config-schema-YRDypMy8.js";
-import { g as formatTrimmedAllowFromEntries } from "../../channel-config-helpers-CCl70z4e.js";
-import { t as chunkTextForOutbound } from "../../text-chunking-BXuE3MM3.js";
-import { a as looksLikeIMessageTargetId, o as normalizeIMessageMessagingTarget, r as probeIMessage, s as ResolvedIMessageAccount, t as IMessageProbe } from "../../probe-ExzEDmd6.js";
-import { d as resolveIMessageGroupRequireMention, f as resolveIMessageGroupToolPolicy, n as IMessageService } from "../../targets-DgPPvwxy.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { t as DEFAULT_ACCOUNT_ID } from "../../account-id-Dh6XMgGH.js";
+import { E as resolveChannelMediaMaxBytes } from "../../media-runtime-Bfz5QAml.js";
+import { n as RuntimeEnv } from "../../runtime-Bxifh4bY.js";
+import { P as MessageReceipt } from "../../types-CxkJAgkR.js";
+import { y as ChannelMessageActionAdapter } from "../../types.core-BkmTlRzr.js";
+import { n as ChannelPlugin } from "../../types.public-B2Ho5PN_.js";
+import { n as PluginRuntime } from "../../types-DpjQFFwi.js";
+import { r as buildChannelConfigSchema } from "../../config-schema-Dx48Ud8L.js";
+import { d as getChatChannelMeta } from "../../core-mTEouOrz.js";
+import { t as PAIRING_APPROVED_MESSAGE } from "../../pairing-message-AZcwFUZz.js";
+import { c as collectStatusIssuesFromLastError, r as buildComputedAccountStatusSnapshot } from "../../status-helpers-Cb-zgqXR.js";
+import { i as IMessageConfigSchema } from "../../bundled-channel-config-schema-4eXcH-RE.js";
+import { g as formatTrimmedAllowFromEntries } from "../../channel-config-helpers-D4mRMuTO.js";
+import { t as chunkTextForOutbound } from "../../text-chunking-B2vtBPHV.js";
+import { a as looksLikeIMessageTargetId, o as normalizeIMessageMessagingTarget, r as probeIMessage, s as ResolvedIMessageAccount, t as IMessageProbe } from "../../probe-B8VUPhwi.js";
+import { d as resolveIMessageGroupRequireMention, f as resolveIMessageGroupToolPolicy, n as IMessageService } from "../../targets-C4Qlt7z3.js";
 
 //#region extensions/imessage/src/config-accessors.d.ts
 declare function resolveIMessageConfigAllowFrom(params: {

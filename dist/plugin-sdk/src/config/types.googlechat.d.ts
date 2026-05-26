@@ -1,4 +1,5 @@
 import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy, ReplyToMode } from "./types.base.js";
+import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type { ChannelHealthMonitorConfig } from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { SecretRef } from "./types.secrets.js";
@@ -15,6 +16,8 @@ export type GoogleChatGroupConfig = {
     enabled?: boolean;
     /** Require mentioning the bot to trigger replies. */
     requireMention?: boolean;
+    /** Sliding-window bot-pair loop guard for accepted bot-authored Google Chat messages. */
+    botLoopProtection?: ChannelBotLoopProtectionConfig;
     /** Allowlist of users that can invoke the bot in this space. */
     users?: Array<string | number>;
     /** Optional system prompt for this space. */
@@ -34,6 +37,8 @@ export type GoogleChatAccountConfig = {
     enabled?: boolean;
     /** Allow bot-authored messages to trigger replies (default: false). */
     allowBots?: boolean;
+    /** Sliding-window bot-pair loop guard for accepted bot-authored Google Chat messages. */
+    botLoopProtection?: ChannelBotLoopProtectionConfig;
     /**
      * Break-glass override: allow mutable principal matching (raw email entries) in allowlists.
      * Default behavior is ID-only matching.

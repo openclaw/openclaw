@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway as defaultCallGateway } from "../gateway/call.js";
 type GatewayCaller = typeof defaultCallGateway;
-/** Test hook: must stay aligned with `sessions-resolution` `__testing.setDepsForTest`. */
+/** Test hook: must stay aligned with `sessions-resolution` `testing.setDepsForTest`. */
 export declare const sessionVisibilityGatewayTesting: {
     setCallGatewayForListSpawned(overrides?: GatewayCaller): void;
 };

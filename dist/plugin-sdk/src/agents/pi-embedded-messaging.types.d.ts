@@ -5,6 +5,8 @@ export type MessagingToolSend = {
     accountId?: string;
     to?: string;
     threadId?: string;
+    threadImplicit?: boolean;
+    threadSuppressed?: boolean;
     text?: string;
     mediaUrls?: string[];
 };

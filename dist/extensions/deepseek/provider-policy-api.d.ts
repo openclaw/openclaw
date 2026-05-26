@@ -1,5 +1,5 @@
-import { l as ModelProviderConfig } from "../../types.models-CkWCv1xp.js";
-import { Kn as ProviderThinkingProfile } from "../../types-lCXG2pW_.js";
+import { u as ModelProviderConfig } from "../../types.models-tqxsISRc.js";
+import { Zn as ProviderThinkingProfile } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/deepseek/provider-policy-api.d.ts
 /**
  * Provider policy surface for DeepSeek.

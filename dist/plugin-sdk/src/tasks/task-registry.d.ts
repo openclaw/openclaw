@@ -160,6 +160,7 @@ export declare function listTasksForAgentId(agentId: string): TaskRecord[];
 export declare function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined;
 export declare function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined;
 export declare function listTasksForOwnerKey(ownerKey: string): TaskRecord[];
+export declare function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[];
 export declare function listTasksForFlowId(flowId: string): TaskRecord[];
 export declare function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined;
 export declare function listTasksForRelatedSessionKey(sessionKey: string): TaskRecord[];

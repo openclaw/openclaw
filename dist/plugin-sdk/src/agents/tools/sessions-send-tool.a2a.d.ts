@@ -14,9 +14,9 @@ export declare function runSessionsSendA2AFlow(params: {
     roundOneReply?: string;
     waitRunId?: string;
 }): Promise<void>;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<{
         callGateway: GatewayCaller;
     }>): void;
 };
-export {};
+export { testing as __testing };

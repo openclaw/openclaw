@@ -1,5 +1,6 @@
 export declare function stripToolCallXmlTags(text: string, options?: {
     stripFunctionCallsXmlPayloads?: boolean;
+    stripFunctionResponseAfterPluralToolCalls?: boolean;
 }): string;
 /**
  * Strip malformed Minimax tool invocations that leak into text content.

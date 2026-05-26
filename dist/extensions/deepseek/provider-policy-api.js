@@ -1,5 +1,5 @@
-import { n as DEEPSEEK_MODEL_CATALOG } from "../../models-0oWbVjFz.js";
-import { t as resolveDeepSeekV4ThinkingProfile } from "../../thinking-8WGKXmoW.js";
+import { n as DEEPSEEK_MODEL_CATALOG } from "../../models-CMCEiKpv.js";
+import { t as resolveDeepSeekV4ThinkingProfile } from "../../thinking-DpufZF19.js";
 //#region extensions/deepseek/provider-policy-api.ts
 /**
 * Build a lookup from the bundled DeepSeek model catalog so we can hydrate

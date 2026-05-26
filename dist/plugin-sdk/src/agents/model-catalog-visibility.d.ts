@@ -7,10 +7,10 @@ export declare function resolveVisibleModelCatalog(params: {
     defaultProvider: string;
     defaultModel?: string;
     agentId?: string;
-    agentDir?: string;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     view?: ModelCatalogVisibilityView;
     runtimeAuthDiscovery?: boolean;
-}): ModelCatalogEntry[];
+    providerAuthChecker?: (provider: string) => Promise<boolean>;
+}): Promise<ModelCatalogEntry[]>;
 export {};

@@ -7,7 +7,7 @@ type CustomEntryLike = {
     data?: unknown;
 };
 type GooglePromptCacheSessionManager = {
-    appendCustomEntry(customType: string, data?: unknown): unknown;
+    appendCustomEntry(customType: string, data?: unknown): void | Promise<void>;
     getEntries(): CustomEntryLike[];
 };
 type GooglePromptCacheModel = Model<Api> & {

@@ -1,0 +1,1195 @@
+import { a as normalizeLowercaseStringOrEmpty } from "./string-coerce-DyL154ka.js";
+import { n as createLazyPromiseLoader } from "./lazy-promise-Djskx0qC.js";
+import { r as writeExternalFileWithinRoot } from "./fs-safe-CV86zY9G.js";
+import { n as resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir-C60hWKdY.js";
+import { i as runExec } from "./exec-D4bhAbbv.js";
+import { n as tempWorkspaceSync, r as withTempWorkspace } from "./private-temp-workspace-DgditT3G.js";
+import { t as resolveSystemBin } from "./resolve-system-bin-pDkUnF3W.js";
+import { t as basenameFromAnyPath } from "./file-name-r4prf02z.js";
+import path from "node:path";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+//#region src/media/ffmpeg-limits.ts
+const MEDIA_FFMPEG_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+const MEDIA_FFPROBE_TIMEOUT_MS = 1e4;
+const MEDIA_FFMPEG_TIMEOUT_MS = 45e3;
+const MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS = 1200;
+//#endregion
+//#region src/media/ffmpeg-exec.ts
+const execFileAsync = promisify(execFile);
+function resolveExecOptions(defaultTimeoutMs, options) {
+	return {
+		timeout: options?.timeoutMs ?? defaultTimeoutMs,
+		maxBuffer: options?.maxBufferBytes ?? 10485760
+	};
+}
+function requireSystemBin(name) {
+	const resolved = resolveSystemBin(name, { trust: "standard" });
+	if (!resolved) {
+		const hint = process.platform === "darwin" ? "e.g. brew install ffmpeg" : "e.g. apt install ffmpeg / dnf install ffmpeg";
+		throw new Error(`${name} not found in trusted system directories. Install it via your system package manager (${hint}).`);
+	}
+	return resolved;
+}
+function isBrokenPipeError(error) {
+	return error.code === "EPIPE";
+}
+async function runFfprobe(args, options) {
+	const execOptions = resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options);
+	if (options?.input == null) {
+		const { stdout } = await execFileAsync(requireSystemBin("ffprobe"), args, execOptions);
+		return stdout.toString();
+	}
+	return await new Promise((resolve, reject) => {
+		let stdinWriteError;
+		const proc = execFile(requireSystemBin("ffprobe"), args, execOptions, (err, stdout) => {
+			if (err) {
+				reject(err);
+				return;
+			}
+			if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
+				reject(stdinWriteError);
+				return;
+			}
+			resolve(stdout.toString());
+		});
+		proc.stdin?.once("error", (err) => {
+			stdinWriteError = err;
+		});
+		proc.stdin?.end(options.input);
+	});
+}
+async function runFfmpeg(args, options) {
+	const { stdout } = await execFileAsync(requireSystemBin("ffmpeg"), args, resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options));
+	return stdout.toString();
+}
+function parseFfprobeCsvFields(stdout, maxFields) {
+	return stdout.trim().split(/[,\r\n]+/, maxFields).map((field) => normalizeLowercaseStringOrEmpty(field));
+}
+function parseFfprobeCodecAndSampleRate(stdout) {
+	const [codecRaw, sampleRateRaw] = parseFfprobeCsvFields(stdout, 2);
+	const codec = codecRaw ? codecRaw : null;
+	const sampleRate = sampleRateRaw ? Number.parseInt(sampleRateRaw, 10) : NaN;
+	return {
+		codec,
+		sampleRateHz: Number.isFinite(sampleRate) ? sampleRate : null
+	};
+}
+//#endregion
+//#region src/media/audio-transcode.ts
+const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48e3;
+const DEFAULT_OPUS_BITRATE = "64k";
+const DEFAULT_OPUS_CHANNELS = 1;
+const DEFAULT_TEMP_PREFIX = "audio-opus-";
+const DEFAULT_OUTPUT_FILE_NAME = "voice.opus";
+function normalizeAudioExtension(params) {
+	const fromExtension = params.inputExtension?.trim();
+	const normalized = (fromExtension ? fromExtension.startsWith(".") ? fromExtension : `.${fromExtension}` : path.extname(params.inputFileName ?? "")).toLowerCase();
+	return /^\.[a-z0-9]{1,12}$/.test(normalized) ? normalized : ".audio";
+}
+function normalizeTempPrefix(value) {
+	const sanitized = value?.trim().replace(/[^a-zA-Z0-9._-]/g, "-");
+	if (!sanitized || sanitized === "." || sanitized === "..") return DEFAULT_TEMP_PREFIX;
+	return sanitized.endsWith("-") ? sanitized : `${sanitized}-`;
+}
+function normalizeOutputFileName(value) {
+	const baseName = basenameFromAnyPath(value?.trim() || DEFAULT_OUTPUT_FILE_NAME);
+	if (/^[a-zA-Z0-9._-]{1,80}$/.test(baseName) && baseName !== "." && baseName !== "..") return baseName;
+	return DEFAULT_OUTPUT_FILE_NAME;
+}
+async function transcodeAudioBufferToOpus(params) {
+	return await withTempWorkspace({
+		rootDir: resolvePreferredOpenClawTmpDir(),
+		prefix: normalizeTempPrefix(params.tempPrefix)
+	}, async (workspace) => {
+		const inputPath = await workspace.write(`input${normalizeAudioExtension(params)}`, params.audioBuffer);
+		const outputFileName = normalizeOutputFileName(params.outputFileName);
+		await writeExternalFileWithinRoot({
+			rootDir: workspace.dir,
+			path: outputFileName,
+			write: async (outputPath) => {
+				await runFfmpeg([
+					"-hide_banner",
+					"-loglevel",
+					"error",
+					"-y",
+					"-i",
+					inputPath,
+					"-vn",
+					"-sn",
+					"-dn",
+					"-c:a",
+					"libopus",
+					"-b:a",
+					params.bitrate ?? DEFAULT_OPUS_BITRATE,
+					"-ar",
+					String(params.sampleRateHz ?? DEFAULT_OPUS_SAMPLE_RATE_HZ),
+					"-ac",
+					String(params.channels ?? DEFAULT_OPUS_CHANNELS),
+					"-f",
+					"opus",
+					outputPath
+				], { timeoutMs: params.timeoutMs });
+			}
+		});
+		return await workspace.read(outputFileName);
+	});
+}
+async function transcodeAudioBuffer(params) {
+	const source = normalizeContainerExt(params.sourceExtension);
+	const target = normalizeContainerExt(params.targetExtension);
+	if (!source || !target) return {
+		ok: false,
+		reason: "invalid-extension"
+	};
+	if (source === target) return {
+		ok: false,
+		reason: "noop-same-container"
+	};
+	const recipe = pickAfconvertRecipe(source, target);
+	if (!recipe) return {
+		ok: false,
+		reason: "no-recipe"
+	};
+	if (process.platform !== "darwin") return {
+		ok: false,
+		reason: "platform-unsupported"
+	};
+	const tmp = tempWorkspaceSync({
+		rootDir: resolvePreferredOpenClawTmpDir(),
+		prefix: "tts-transcode-"
+	});
+	const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+	const outPath = tmp.path(`out.${target}`);
+	try {
+		const result = await runAfconvert({
+			args: [
+				...recipe,
+				inPath,
+				outPath
+			],
+			timeoutMs: params.timeoutMs ?? 5e3
+		});
+		if (!result.ok) return {
+			ok: false,
+			reason: "transcoder-failed",
+			detail: result.detail
+		};
+		return {
+			ok: true,
+			buffer: tmp.read(`out.${target}`)
+		};
+	} catch (err) {
+		return {
+			ok: false,
+			reason: "transcoder-failed",
+			detail: err.message
+		};
+	} finally {
+		tmp.cleanup();
+	}
+}
+function normalizeContainerExt(ext) {
+	const trimmed = ext.trim().toLowerCase().replace(/^\./, "");
+	return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : void 0;
+}
+function pickAfconvertRecipe(_source, target) {
+	if (target === "caf") return [
+		"-f",
+		"caff",
+		"-d",
+		"opus@24000",
+		"-c",
+		"1"
+	];
+}
+function runAfconvert(params) {
+	return new Promise((resolve) => {
+		const child = spawn("/usr/bin/afconvert", params.args, { stdio: "ignore" });
+		const timer = setTimeout(() => {
+			child.kill("SIGKILL");
+			resolve({
+				ok: false,
+				detail: `timeout-${params.timeoutMs}ms`
+			});
+		}, params.timeoutMs);
+		child.once("error", (err) => {
+			clearTimeout(timer);
+			resolve({
+				ok: false,
+				detail: err.message
+			});
+		});
+		child.once("exit", (code) => {
+			clearTimeout(timer);
+			resolve(code === 0 ? { ok: true } : {
+				ok: false,
+				detail: `exit-${code ?? "unknown"}`
+			});
+		});
+	});
+}
+//#endregion
+//#region src/media/image-ops.ts
+const IMAGE_REDUCE_QUALITY_STEPS = [
+	85,
+	75,
+	65,
+	55,
+	45,
+	35
+];
+const MAX_IMAGE_INPUT_PIXELS = 25e6;
+const IMAGE_PROCESS_TIMEOUT_MS = 2e4;
+const IMAGE_TOOL_MAX_BUFFER = 1024 * 1024;
+const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
+const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
+var ImageProcessorUnavailableError = class extends Error {
+	constructor(operation, message, causes = []) {
+		super(message ?? `Image processor unavailable for ${operation}`, { cause: causes.find((cause) => cause instanceof Error) });
+		this.code = "IMAGE_PROCESSOR_UNAVAILABLE";
+		this.name = "ImageProcessorUnavailableError";
+		this.operation = operation;
+		this.causes = causes;
+	}
+};
+function isImageProcessorUnavailableError(err) {
+	const messages = [];
+	let current = err;
+	while (current instanceof Error) {
+		if (current instanceof ImageProcessorUnavailableError) return true;
+		messages.push(current.message);
+		current = current.cause;
+	}
+	const detail = messages.join("\n").toLowerCase();
+	return detail.includes("image processor unavailable") || detail.includes("optional dependency sharp is required") || detail.includes("cannot find package 'sharp'") || detail.includes("cannot find package \"sharp\"") || detail.includes("cannot find module 'sharp'") || detail.includes("cannot find module \"sharp\"");
+}
+function buildImageResizeSideGrid(maxSide, sideStart) {
+	return [
+		sideStart,
+		1800,
+		1600,
+		1400,
+		1200,
+		1e3,
+		800
+	].map((value) => Math.min(maxSide, value)).filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx).toSorted((a, b) => b - a);
+}
+function getImageBackendPreference() {
+	const raw = process.env.OPENCLAW_IMAGE_BACKEND?.trim().toLowerCase();
+	switch (raw) {
+		case "sharp":
+		case "sips":
+		case "windows-native":
+		case "imagemagick":
+		case "graphicsmagick":
+		case "ffmpeg": return raw;
+		case "windows":
+		case "powershell":
+		case "system.drawing":
+		case "systemdrawing": return "windows-native";
+		case "magick":
+		case "convert": return "imagemagick";
+		case "gm": return "graphicsmagick";
+		default: return "auto";
+	}
+}
+function shouldFailClosedOnUnknownMetadata() {
+	return getImageBackendPreference() !== "auto";
+}
+function imageBackendsForOperation(operation) {
+	const preference = getImageBackendPreference();
+	if (preference !== "auto") return [preference];
+	if (operation === "resizeToPng") {
+		if (process.platform === "win32") return [
+			"sharp",
+			"windows-native",
+			"imagemagick",
+			"graphicsmagick"
+		];
+		return [
+			"sharp",
+			"imagemagick",
+			"graphicsmagick"
+		];
+	}
+	if (operation === "normalizeExifOrientation") {
+		if (process.platform === "win32") return [
+			"sharp",
+			"imagemagick",
+			"graphicsmagick"
+		];
+		return process.platform === "darwin" ? [
+			"sharp",
+			"sips",
+			"imagemagick",
+			"graphicsmagick"
+		] : [
+			"sharp",
+			"imagemagick",
+			"graphicsmagick"
+		];
+	}
+	if (process.platform === "win32") {
+		if (operation === "convertHeicToJpeg") return [
+			"sharp",
+			"imagemagick",
+			"graphicsmagick",
+			"ffmpeg"
+		];
+		return [
+			"sharp",
+			"windows-native",
+			"imagemagick",
+			"graphicsmagick",
+			"ffmpeg"
+		];
+	}
+	return ["sharp", ...process.platform === "darwin" ? [
+		"sips",
+		"imagemagick",
+		"graphicsmagick",
+		"ffmpeg"
+	] : [
+		"imagemagick",
+		"graphicsmagick",
+		"ffmpeg"
+	]];
+}
+function createImageProcessorUnavailableError(operation, causes) {
+	return new ImageProcessorUnavailableError(operation, `Image processor unavailable for ${operation}; tried: ${imageBackendsForOperation(operation).join(", ")}. ${process.platform === "win32" ? "Install Sharp, ImageMagick, GraphicsMagick, or ffmpeg; Windows native image resizing is tried automatically when available." : process.platform === "darwin" ? "Install Sharp or a system image tool such as sips, ImageMagick, GraphicsMagick, or ffmpeg." : "Install Sharp, ImageMagick, GraphicsMagick, or ffmpeg."}`, causes);
+}
+function isImageBackendUnavailableCause(error) {
+	const messages = [];
+	let current = error;
+	while (current instanceof Error) {
+		messages.push(current.message);
+		current = current.cause;
+	}
+	const detail = messages.join("\n").toLowerCase();
+	return detail.includes("optional dependency sharp is required") || detail.includes("cannot find package 'sharp'") || detail.includes("cannot find package \"sharp\"") || detail.includes("cannot find module 'sharp'") || detail.includes("cannot find module \"sharp\"") || detail.includes("support for this compression format has not been built in") || detail.includes("is not available") || detail.includes("command not found") || detail.includes("enoent");
+}
+async function runWithImageBackends(operation, fn) {
+	const errors = [];
+	for (const backend of imageBackendsForOperation(operation)) try {
+		return await fn(backend);
+	} catch (error) {
+		errors.push(error);
+		if (!isImageBackendUnavailableCause(error)) throw error;
+	}
+	throw createImageProcessorUnavailableError(operation, errors);
+}
+function isMediaAttachmentImageOps(value) {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value;
+	return typeof candidate.getImageMetadata === "function" && typeof candidate.normalizeExifOrientation === "function" && typeof candidate.resizeToJpeg === "function" && typeof candidate.convertHeicToJpeg === "function" && typeof candidate.hasAlphaChannel === "function" && typeof candidate.resizeToPng === "function";
+}
+const mediaAttachmentImageOpsLoader = createLazyPromiseLoader(async () => {
+	const { loadBundledPluginPublicArtifactModuleSync } = await import("./public-surface-loader-ClIPm0PA.js");
+	const ops = loadBundledPluginPublicArtifactModuleSync({
+		dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
+		artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT
+	}).createMediaAttachmentImageOps?.({ maxInputPixels: MAX_IMAGE_INPUT_PIXELS });
+	if (!isMediaAttachmentImageOps(ops)) throw new Error("Media understanding core did not expose image ops");
+	return ops;
+});
+async function loadMediaAttachmentImageOps() {
+	return await mediaAttachmentImageOpsLoader.load();
+}
+function isPositiveImageDimension(value) {
+	return Number.isInteger(value) && value > 0;
+}
+function buildImageMetadata(width, height) {
+	if (!isPositiveImageDimension(width) || !isPositiveImageDimension(height)) return null;
+	return {
+		width,
+		height
+	};
+}
+function readPngMetadata(buffer) {
+	if (buffer.length < 24) return null;
+	if (buffer[0] !== 137 || buffer[1] !== 80 || buffer[2] !== 78 || buffer[3] !== 71 || buffer[4] !== 13 || buffer[5] !== 10 || buffer[6] !== 26 || buffer[7] !== 10 || buffer.toString("ascii", 12, 16) !== "IHDR") return null;
+	return buildImageMetadata(buffer.readUInt32BE(16), buffer.readUInt32BE(20));
+}
+function readPngAlphaChannel(buffer) {
+	if (buffer.length < 29 || readPngMetadata(buffer) === null) return null;
+	const colorType = buffer[25];
+	if (colorType === 4 || colorType === 6) return true;
+	if (colorType !== 0 && colorType !== 2 && colorType !== 3) return null;
+	let offset = 8;
+	while (offset + 8 <= buffer.length) {
+		const chunkLength = buffer.readUInt32BE(offset);
+		const typeStart = offset + 4;
+		const dataEnd = offset + 8 + chunkLength;
+		const nextOffset = dataEnd + 4;
+		if (dataEnd > buffer.length || nextOffset > buffer.length) return null;
+		const chunkType = buffer.toString("ascii", typeStart, typeStart + 4);
+		if (chunkType === "tRNS") return chunkLength > 0;
+		if (chunkType === "IDAT" || chunkType === "IEND") return false;
+		offset = nextOffset;
+	}
+	return false;
+}
+function readGifMetadata(buffer) {
+	if (buffer.length < 10) return null;
+	const signature = buffer.toString("ascii", 0, 6);
+	if (signature !== "GIF87a" && signature !== "GIF89a") return null;
+	return buildImageMetadata(buffer.readUInt16LE(6), buffer.readUInt16LE(8));
+}
+function readWebpMetadata(buffer) {
+	if (buffer.length < 30 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WEBP") return null;
+	const chunkType = buffer.toString("ascii", 12, 16);
+	if (chunkType === "VP8X") {
+		if (buffer.length < 30) return null;
+		return buildImageMetadata(1 + buffer.readUIntLE(24, 3), 1 + buffer.readUIntLE(27, 3));
+	}
+	if (chunkType === "VP8 ") {
+		if (buffer.length < 30) return null;
+		return buildImageMetadata(buffer.readUInt16LE(26) & 16383, buffer.readUInt16LE(28) & 16383);
+	}
+	if (chunkType === "VP8L") {
+		if (buffer.length < 25 || buffer[20] !== 47) return null;
+		const bits = buffer[21] | buffer[22] << 8 | buffer[23] << 16 | buffer[24] << 24;
+		return buildImageMetadata((bits & 16383) + 1, (bits >> 14 & 16383) + 1);
+	}
+	return null;
+}
+const ISO_BMFF_IMAGE_BRANDS = new Set([
+	"avif",
+	"avis",
+	"heic",
+	"heix",
+	"hevc",
+	"hevx",
+	"heif",
+	"mif1",
+	"msf1"
+]);
+const ISO_BMFF_CONTAINER_BOXES = new Set([
+	"edts",
+	"ipco",
+	"iprp",
+	"mdia",
+	"meta",
+	"minf",
+	"moov",
+	"stbl",
+	"trak"
+]);
+function readIsoBmffBoxSize(buffer, offset, end) {
+	if (offset + 8 > end) return null;
+	const size32 = buffer.readUInt32BE(offset);
+	if (size32 === 0) return end - offset;
+	if (size32 === 1) {
+		if (offset + 16 > end) return null;
+		const size64 = buffer.readBigUInt64BE(offset + 8);
+		return size64 <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(size64) : null;
+	}
+	return size32;
+}
+function isIsoBmffImage(buffer) {
+	if (buffer.length < 16 || buffer.toString("ascii", 4, 8) !== "ftyp") return false;
+	const ftypSize = readIsoBmffBoxSize(buffer, 0, buffer.length);
+	if (!ftypSize || ftypSize < 16 || ftypSize > buffer.length) return false;
+	for (let offset = 8; offset + 4 <= ftypSize; offset += 4) if (ISO_BMFF_IMAGE_BRANDS.has(buffer.toString("ascii", offset, offset + 4))) return true;
+	return false;
+}
+function pickLargerImageMetadata(current, candidate) {
+	if (!candidate) return current;
+	if (!current) return candidate;
+	const currentPixels = BigInt(current.width) * BigInt(current.height);
+	return BigInt(candidate.width) * BigInt(candidate.height) > currentPixels ? candidate : current;
+}
+function findIsoBmffIspeMetadata(buffer, start, end, depth) {
+	if (depth > 8) return null;
+	let offset = start;
+	let largest = null;
+	while (offset + 8 <= end) {
+		const boxSize = readIsoBmffBoxSize(buffer, offset, end);
+		if (!boxSize || boxSize < 8 || offset + boxSize > end) return null;
+		const type = buffer.toString("ascii", offset + 4, offset + 8);
+		const headerSize = buffer.readUInt32BE(offset) === 1 ? 16 : 8;
+		const dataStart = offset + headerSize;
+		const boxEnd = offset + boxSize;
+		if (type === "ispe" && dataStart + 12 <= boxEnd) largest = pickLargerImageMetadata(largest, buildImageMetadata(buffer.readUInt32BE(dataStart + 4), buffer.readUInt32BE(dataStart + 8)));
+		if (ISO_BMFF_CONTAINER_BOXES.has(type)) {
+			const meta = findIsoBmffIspeMetadata(buffer, type === "meta" ? dataStart + 4 : dataStart, boxEnd, depth + 1);
+			largest = pickLargerImageMetadata(largest, meta);
+		}
+		offset = boxEnd;
+	}
+	return largest;
+}
+function readIsoBmffImageMetadata(buffer) {
+	if (!isIsoBmffImage(buffer)) return null;
+	return findIsoBmffIspeMetadata(buffer, 0, buffer.length, 0);
+}
+function readJpegMetadata(buffer) {
+	if (buffer.length < 4 || buffer[0] !== 255 || buffer[1] !== 216) return null;
+	let offset = 2;
+	while (offset + 8 < buffer.length) {
+		while (offset < buffer.length && buffer[offset] === 255) offset++;
+		if (offset >= buffer.length) return null;
+		const marker = buffer[offset];
+		offset++;
+		if (marker === 216 || marker === 217) continue;
+		if (marker === 1 || marker >= 208 && marker <= 215) continue;
+		if (offset + 1 >= buffer.length) return null;
+		const segmentLength = buffer.readUInt16BE(offset);
+		if (segmentLength < 2 || offset + segmentLength > buffer.length) return null;
+		if (marker >= 192 && marker <= 207 && marker !== 196 && marker !== 200 && marker !== 204) {
+			if (segmentLength < 7 || offset + 6 >= buffer.length) return null;
+			return buildImageMetadata(buffer.readUInt16BE(offset + 5), buffer.readUInt16BE(offset + 3));
+		}
+		offset += segmentLength;
+	}
+	return null;
+}
+function readImageMetadataFromHeader(buffer) {
+	return readPngMetadata(buffer) ?? readGifMetadata(buffer) ?? readWebpMetadata(buffer) ?? readIsoBmffImageMetadata(buffer) ?? readJpegMetadata(buffer);
+}
+function countImagePixels(meta) {
+	const pixels = meta.width * meta.height;
+	return Number.isSafeInteger(pixels) ? pixels : null;
+}
+function exceedsImagePixelLimit(meta) {
+	return meta.width > Math.floor(MAX_IMAGE_INPUT_PIXELS / meta.height);
+}
+function createImagePixelLimitError(meta) {
+	const pixelCount = countImagePixels(meta);
+	const detail = pixelCount === null ? `${meta.width}x${meta.height}` : `${meta.width}x${meta.height} (${pixelCount} pixels)`;
+	return /* @__PURE__ */ new Error(`Image dimensions exceed the ${MAX_IMAGE_INPUT_PIXELS.toLocaleString("en-US")} pixel input limit: ${detail}`);
+}
+function validateImagePixelLimit(meta) {
+	if (exceedsImagePixelLimit(meta)) throw createImagePixelLimitError(meta);
+	return meta;
+}
+async function readImageMetadataForLimit(buffer) {
+	return readImageMetadataFromHeader(buffer);
+}
+async function assertImagePixelLimit(buffer) {
+	const meta = await readImageMetadataForLimit(buffer);
+	if (!meta) {
+		if (shouldFailClosedOnUnknownMetadata()) throw new Error("Unable to determine image dimensions; refusing to process");
+		return;
+	}
+	validateImagePixelLimit(meta);
+}
+function assertKnownImagePixelLimitBeforeExternalFallback(buffer) {
+	const meta = readImageMetadataFromHeader(buffer);
+	if (!meta) throw new Error("Unable to determine image dimensions; refusing to process");
+	validateImagePixelLimit(meta);
+}
+/**
+* Reads EXIF orientation from JPEG buffer.
+* Returns orientation value 1-8, or null if not found/not JPEG.
+*
+* EXIF orientation values:
+* 1 = Normal, 2 = Flip H, 3 = Rotate 180, 4 = Flip V,
+* 5 = Rotate 270 CW + Flip H, 6 = Rotate 90 CW, 7 = Rotate 90 CW + Flip H, 8 = Rotate 270 CW
+*/
+function readJpegExifOrientation(buffer) {
+	if (buffer.length < 2 || buffer[0] !== 255 || buffer[1] !== 216) return null;
+	let offset = 2;
+	while (offset < buffer.length - 4) {
+		if (buffer[offset] !== 255) {
+			offset++;
+			continue;
+		}
+		const marker = buffer[offset + 1];
+		if (marker === 255) {
+			offset++;
+			continue;
+		}
+		if (marker === 225) {
+			const exifStart = offset + 4;
+			if (buffer.length > exifStart + 6 && buffer.toString("ascii", exifStart, exifStart + 4) === "Exif" && buffer[exifStart + 4] === 0 && buffer[exifStart + 5] === 0) {
+				const tiffStart = exifStart + 6;
+				if (buffer.length < tiffStart + 8) return null;
+				const isLittleEndian = buffer.toString("ascii", tiffStart, tiffStart + 2) === "II";
+				const readU16 = (pos) => isLittleEndian ? buffer.readUInt16LE(pos) : buffer.readUInt16BE(pos);
+				const readU32 = (pos) => isLittleEndian ? buffer.readUInt32LE(pos) : buffer.readUInt32BE(pos);
+				const ifd0Start = tiffStart + readU32(tiffStart + 4);
+				if (buffer.length < ifd0Start + 2) return null;
+				const numEntries = readU16(ifd0Start);
+				for (let i = 0; i < numEntries; i++) {
+					const entryOffset = ifd0Start + 2 + i * 12;
+					if (buffer.length < entryOffset + 12) break;
+					if (readU16(entryOffset) === 274) {
+						const value = readU16(entryOffset + 8);
+						return value >= 1 && value <= 8 ? value : null;
+					}
+				}
+			}
+			return null;
+		}
+		if (marker >= 224 && marker <= 239) {
+			const segmentLength = buffer.readUInt16BE(offset + 2);
+			offset += 2 + segmentLength;
+			continue;
+		}
+		if (marker === 192 || marker === 218) break;
+		offset++;
+	}
+	return null;
+}
+async function withImageTemp(fn) {
+	return await withTempWorkspace({
+		rootDir: resolvePreferredOpenClawTmpDir(),
+		prefix: "openclaw-img-"
+	}, fn);
+}
+function clampInteger(value, min, max) {
+	return Math.max(min, Math.min(max, Math.round(value)));
+}
+function resolveImageTool(backend) {
+	if (backend === "sips") return process.platform === "darwin" ? {
+		backend,
+		flavor: "sips",
+		command: "/usr/bin/sips"
+	} : null;
+	if (backend === "windows-native") {
+		const powershell = resolveSystemBin("powershell", { trust: "strict" });
+		return powershell && process.platform === "win32" ? {
+			backend,
+			flavor: "powershell",
+			command: powershell
+		} : null;
+	}
+	if (backend === "imagemagick") {
+		const magick = resolveSystemBin("magick", { trust: "standard" });
+		if (magick) return {
+			backend,
+			flavor: "magick",
+			command: magick
+		};
+		if (process.platform !== "win32") {
+			const convert = resolveSystemBin("convert", { trust: "standard" });
+			if (convert) return {
+				backend,
+				flavor: "convert",
+				command: convert
+			};
+		}
+		return null;
+	}
+	if (backend === "graphicsmagick") {
+		const gm = resolveSystemBin("gm", { trust: "standard" });
+		return gm ? {
+			backend,
+			flavor: "gm",
+			command: gm
+		} : null;
+	}
+	const ffmpeg = resolveSystemBin("ffmpeg", { trust: "standard" });
+	return ffmpeg ? {
+		backend,
+		flavor: "ffmpeg",
+		command: ffmpeg
+	} : null;
+}
+function convertToolArgs(tool, args) {
+	return tool.flavor === "gm" ? ["convert", ...args] : args;
+}
+async function runPowerShellImageScript(scriptName, script, args) {
+	const tool = resolveImageTool("windows-native");
+	if (!tool || tool.flavor !== "powershell") throw new Error("Windows native image backend is not available");
+	return await withImageTemp(async (workspace) => {
+		const scriptPath = await workspace.write(scriptName, Buffer.from(script, "utf8"));
+		return await runExec(tool.command, [
+			"-NoProfile",
+			"-NonInteractive",
+			"-ExecutionPolicy",
+			"Bypass",
+			"-File",
+			scriptPath,
+			...args
+		], {
+			timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+			maxBuffer: IMAGE_TOOL_MAX_BUFFER
+		});
+	});
+}
+const WINDOWS_NATIVE_RESIZE_SCRIPT = `
+param(
+  [string]$InputPath,
+  [string]$OutputPath,
+  [int]$MaxSide,
+  [int]$Quality,
+  [int]$WithoutEnlargement,
+  [string]$Format
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$source = [System.Drawing.Image]::FromFile($InputPath)
+$bitmap = $null
+$graphics = $null
+try {
+  try {
+    if ($source.PropertyIdList -contains 274) {
+      $orientation = [BitConverter]::ToUInt16($source.GetPropertyItem(274).Value, 0)
+      switch ($orientation) {
+        2 { $source.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX) }
+        3 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }
+        4 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipX) }
+        5 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipX) }
+        6 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }
+        7 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipX) }
+        8 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }
+      }
+      try { $source.RemovePropertyItem(274) } catch {}
+    }
+  } catch {}
+  $maxDim = [Math]::Max($source.Width, $source.Height)
+  if ($maxDim -le 0) { throw 'Invalid image dimensions' }
+  $scale = $MaxSide / [double]$maxDim
+  if ($WithoutEnlargement -eq 1) {
+    $scale = [Math]::Min(1.0, $scale)
+  }
+  $width = [Math]::Max(1, [int][Math]::Round($source.Width * $scale))
+  $height = [Math]::Max(1, [int][Math]::Round($source.Height * $scale))
+  $pixelFormat = [System.Drawing.Imaging.PixelFormat]::Format24bppRgb
+  if ($Format -eq 'png') {
+    $pixelFormat = [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+  }
+  $bitmap = New-Object System.Drawing.Bitmap($width, $height, $pixelFormat)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+  $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+  if ($Format -eq 'png') {
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+  } else {
+    $graphics.Clear([System.Drawing.Color]::White)
+  }
+  $graphics.DrawImage($source, 0, 0, $width, $height)
+  if ($Format -eq 'png') {
+    $bitmap.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  } else {
+    $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+      Where-Object { $_.MimeType -eq 'image/jpeg' } |
+      Select-Object -First 1
+    if ($null -eq $codec) { throw 'JPEG encoder not available' }
+    $encoder = [System.Drawing.Imaging.Encoder]::Quality
+    $encoderParam = New-Object System.Drawing.Imaging.EncoderParameter($encoder, [int64]$Quality)
+    $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+    try {
+      $encoderParams.Param[0] = $encoderParam
+      $bitmap.Save($OutputPath, $codec, $encoderParams)
+    } finally {
+      $encoderParam.Dispose()
+      $encoderParams.Dispose()
+    }
+  }
+} finally {
+  if ($null -ne $graphics) { $graphics.Dispose() }
+  if ($null -ne $bitmap) { $bitmap.Dispose() }
+  $source.Dispose()
+}
+`;
+async function windowsNativeResize(params, format) {
+	return await withImageTemp(async (workspace) => {
+		const input = await workspace.write("in.img", params.buffer);
+		const outputName = format === "png" ? "out.png" : "out.jpg";
+		await runPowerShellImageScript("resize.ps1", WINDOWS_NATIVE_RESIZE_SCRIPT, [
+			input,
+			workspace.path(outputName),
+			String(clampInteger(params.maxSide, 1, Number.MAX_SAFE_INTEGER)),
+			String(clampInteger("quality" in params ? params.quality : 90, 1, 100)),
+			params.withoutEnlargement === false ? "0" : "1",
+			format === "png" ? "png" : "jpeg"
+		]);
+		return await workspace.read(outputName);
+	});
+}
+async function runConvertTool(tool, args) {
+	await runExec(tool.command, convertToolArgs(tool, args), {
+		timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+		maxBuffer: IMAGE_TOOL_MAX_BUFFER
+	});
+}
+function buildResizeGeometry(maxSide, withoutEnlargement) {
+	const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+	return `${side}x${side}${withoutEnlargement === false ? "" : ">"}`;
+}
+function buildFfmpegResizeFilter(maxSide, withoutEnlargement) {
+	const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+	if (withoutEnlargement === false) return `scale=w=${side}:h=${side}:force_original_aspect_ratio=decrease`;
+	return `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`;
+}
+async function externalResizeToJpeg(backend, params) {
+	const tool = resolveImageTool(backend);
+	if (!tool) throw new Error(`Image backend ${backend} is not available`);
+	if (tool.flavor === "sips") {
+		const normalized = await normalizeExifOrientationSips(params.buffer);
+		if (params.withoutEnlargement !== false) {
+			const meta = await getImageMetadata(normalized);
+			if (meta) {
+				const maxDim = Math.max(meta.width, meta.height);
+				if (maxDim > 0 && maxDim <= params.maxSide) return await sipsResizeToJpeg({
+					buffer: normalized,
+					maxSide: maxDim,
+					quality: params.quality
+				});
+			}
+		}
+		return await sipsResizeToJpeg({
+			buffer: normalized,
+			maxSide: params.maxSide,
+			quality: params.quality
+		});
+	}
+	if (tool.flavor === "powershell") return await windowsNativeResize(params, "jpeg");
+	return await withImageTemp(async (workspace) => {
+		const input = await workspace.write("in.img", params.buffer);
+		const output = workspace.path("out.jpg");
+		if (tool.flavor === "ffmpeg") {
+			const side = clampInteger(params.maxSide, 1, Number.MAX_SAFE_INTEGER);
+			const qv = clampInteger(31 - params.quality * .29, 2, 31);
+			await runExec(tool.command, [
+				"-y",
+				"-i",
+				input,
+				"-vf",
+				buildFfmpegResizeFilter(side, params.withoutEnlargement),
+				"-frames:v",
+				"1",
+				"-q:v",
+				String(qv),
+				output
+			], {
+				timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+				maxBuffer: IMAGE_TOOL_MAX_BUFFER
+			});
+			return await workspace.read("out.jpg");
+		}
+		await runConvertTool(tool, [
+			input,
+			"-auto-orient",
+			"-resize",
+			buildResizeGeometry(params.maxSide, params.withoutEnlargement),
+			"-quality",
+			String(clampInteger(params.quality, 1, 100)),
+			output
+		]);
+		return await workspace.read("out.jpg");
+	});
+}
+async function externalConvertToJpeg(backend, buffer) {
+	const tool = resolveImageTool(backend);
+	if (!tool) throw new Error(`Image backend ${backend} is not available`);
+	if (tool.flavor === "sips") return await sipsConvertToJpeg(buffer);
+	if (tool.flavor === "powershell") throw new Error("Windows native image backend does not convert HEIC to JPEG");
+	return await withImageTemp(async (workspace) => {
+		const input = await workspace.write("in.img", buffer);
+		const output = workspace.path("out.jpg");
+		if (tool.flavor === "ffmpeg") await runExec(tool.command, [
+			"-y",
+			"-i",
+			input,
+			"-frames:v",
+			"1",
+			"-q:v",
+			"3",
+			output
+		], {
+			timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+			maxBuffer: IMAGE_TOOL_MAX_BUFFER
+		});
+		else await runConvertTool(tool, [
+			input,
+			"-auto-orient",
+			"-quality",
+			"90",
+			output
+		]);
+		return await workspace.read("out.jpg");
+	});
+}
+async function externalNormalizeExifOrientation(backend, buffer) {
+	if (backend === "sips") return await normalizeExifOrientationSips(buffer);
+	const tool = resolveImageTool(backend);
+	if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips" || tool.flavor === "powershell") throw new Error(`Image backend ${backend} is not available`);
+	if (!readJpegExifOrientation(buffer)) return buffer;
+	return await withImageTemp(async (workspace) => {
+		await runConvertTool(tool, [
+			await workspace.write("in.jpg", buffer),
+			"-auto-orient",
+			workspace.path("out.jpg")
+		]);
+		return await workspace.read("out.jpg");
+	});
+}
+async function externalResizeToPng(backend, params) {
+	const tool = resolveImageTool(backend);
+	if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips") throw new Error(`Image backend ${backend} is not available`);
+	if (tool.flavor === "powershell") return await windowsNativeResize(params, "png");
+	return await withImageTemp(async (workspace) => {
+		const input = await workspace.write("in.img", params.buffer);
+		const output = workspace.path("out.png");
+		const args = [
+			input,
+			"-auto-orient",
+			"-resize",
+			buildResizeGeometry(params.maxSide, params.withoutEnlargement)
+		];
+		const compressionLevel = params.compressionLevel;
+		if (compressionLevel !== void 0 && tool.flavor !== "gm") args.push("-define", `png:compression-level=${clampInteger(compressionLevel, 0, 9)}`);
+		args.push(output);
+		await runConvertTool(tool, args);
+		return await workspace.read("out.png");
+	});
+}
+async function sipsResizeToJpeg(params) {
+	return await withImageTemp(async (workspace) => {
+		const input = await workspace.write("in.img", params.buffer);
+		const output = workspace.path("out.jpg");
+		await runExec("/usr/bin/sips", [
+			"-Z",
+			String(Math.max(1, Math.round(params.maxSide))),
+			"-s",
+			"format",
+			"jpeg",
+			"-s",
+			"formatOptions",
+			String(Math.max(1, Math.min(100, Math.round(params.quality)))),
+			input,
+			"--out",
+			output
+		], {
+			timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+			maxBuffer: IMAGE_TOOL_MAX_BUFFER
+		});
+		return await workspace.read("out.jpg");
+	});
+}
+async function sipsConvertToJpeg(buffer) {
+	return await withImageTemp(async (workspace) => {
+		await runExec("/usr/bin/sips", [
+			"-s",
+			"format",
+			"jpeg",
+			await workspace.write("in.heic", buffer),
+			"--out",
+			workspace.path("out.jpg")
+		], {
+			timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+			maxBuffer: IMAGE_TOOL_MAX_BUFFER
+		});
+		return await workspace.read("out.jpg");
+	});
+}
+async function getImageMetadata(buffer) {
+	const metadataForLimit = await readImageMetadataForLimit(buffer).catch(() => null);
+	if (metadataForLimit) try {
+		return validateImagePixelLimit(metadataForLimit);
+	} catch {
+		return null;
+	}
+	const preference = getImageBackendPreference();
+	if (preference !== "auto" && preference !== "sharp") return null;
+	return await (async () => {
+		const meta = await (await loadMediaAttachmentImageOps()).getImageMetadata(buffer);
+		return meta ? validateImagePixelLimit(meta) : null;
+	})().catch(() => null);
+}
+/**
+* Applies rotation/flip to image buffer using sips based on EXIF orientation.
+*/
+async function sipsApplyOrientation(buffer, orientation) {
+	const ops = [];
+	switch (orientation) {
+		case 2:
+			ops.push("-f", "horizontal");
+			break;
+		case 3:
+			ops.push("-r", "180");
+			break;
+		case 4:
+			ops.push("-f", "vertical");
+			break;
+		case 5:
+			ops.push("-r", "270", "-f", "horizontal");
+			break;
+		case 6:
+			ops.push("-r", "90");
+			break;
+		case 7:
+			ops.push("-r", "90", "-f", "horizontal");
+			break;
+		case 8:
+			ops.push("-r", "270");
+			break;
+		default: return buffer;
+	}
+	return await withImageTemp(async (workspace) => {
+		const input = await workspace.write("in.jpg", buffer);
+		const output = workspace.path("out.jpg");
+		await runExec("/usr/bin/sips", [
+			...ops,
+			input,
+			"--out",
+			output
+		], {
+			timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+			maxBuffer: IMAGE_TOOL_MAX_BUFFER
+		});
+		return await workspace.read("out.jpg");
+	});
+}
+/**
+* Normalizes EXIF orientation in an image buffer.
+* Returns the buffer with correct pixel orientation (rotated if needed).
+* Falls back to original buffer if normalization fails.
+*/
+async function normalizeExifOrientation(buffer) {
+	await assertImagePixelLimit(buffer);
+	for (const backend of imageBackendsForOperation("normalizeExifOrientation")) try {
+		if (backend === "sharp") return await (await loadMediaAttachmentImageOps()).normalizeExifOrientation(buffer);
+		if (backend !== "ffmpeg") {
+			assertKnownImagePixelLimitBeforeExternalFallback(buffer);
+			return await externalNormalizeExifOrientation(backend, buffer);
+		}
+	} catch {}
+	return buffer;
+}
+async function resizeToJpeg(params) {
+	await assertImagePixelLimit(params.buffer);
+	return await runWithImageBackends("resizeToJpeg", async (backend) => {
+		if (backend === "sharp") return await (await loadMediaAttachmentImageOps()).resizeToJpeg(params);
+		assertKnownImagePixelLimitBeforeExternalFallback(params.buffer);
+		return await externalResizeToJpeg(backend, params);
+	});
+}
+async function convertHeicToJpeg(buffer) {
+	await assertImagePixelLimit(buffer);
+	return await runWithImageBackends("convertHeicToJpeg", async (backend) => {
+		if (backend === "sharp") return await (await loadMediaAttachmentImageOps()).convertHeicToJpeg(buffer);
+		assertKnownImagePixelLimitBeforeExternalFallback(buffer);
+		return await externalConvertToJpeg(backend, buffer);
+	});
+}
+/**
+* Checks if an image has an alpha channel (transparency).
+* Returns true if the image has alpha, false otherwise.
+*/
+async function hasAlphaChannel(buffer) {
+	await assertImagePixelLimit(buffer);
+	const pngAlphaChannel = readPngAlphaChannel(buffer);
+	if (pngAlphaChannel !== null) return pngAlphaChannel;
+	try {
+		return await (await loadMediaAttachmentImageOps()).hasAlphaChannel(buffer);
+	} catch {
+		return false;
+	}
+}
+/**
+* Resizes an image to PNG format, preserving alpha channel (transparency).
+* Falls back to the media attachments plugin only (no sips fallback for PNG with alpha).
+*/
+async function resizeToPng(params) {
+	await assertImagePixelLimit(params.buffer);
+	return await runWithImageBackends("resizeToPng", async (backend) => {
+		if (backend === "sharp") return await (await loadMediaAttachmentImageOps()).resizeToPng(params);
+		if (backend === "windows-native" || backend === "imagemagick" || backend === "graphicsmagick") {
+			assertKnownImagePixelLimitBeforeExternalFallback(params.buffer);
+			return await externalResizeToPng(backend, params);
+		}
+		throw new Error(`Image backend ${backend} is not available for PNG resizing`);
+	});
+}
+async function optimizeImageToPng(buffer, maxBytes) {
+	const sides = [
+		2048,
+		1536,
+		1280,
+		1024,
+		800
+	];
+	const compressionLevels = [
+		6,
+		7,
+		8,
+		9
+	];
+	let smallest = null;
+	let firstResizeError;
+	for (const side of sides) for (const compressionLevel of compressionLevels) try {
+		const out = await resizeToPng({
+			buffer,
+			maxSide: side,
+			compressionLevel,
+			withoutEnlargement: true
+		});
+		const size = out.length;
+		if (!smallest || size < smallest.size) smallest = {
+			buffer: out,
+			size,
+			resizeSide: side,
+			compressionLevel
+		};
+		if (size <= maxBytes) return {
+			buffer: out,
+			optimizedSize: size,
+			resizeSide: side,
+			compressionLevel
+		};
+	} catch (err) {
+		firstResizeError ??= err;
+	}
+	if (smallest) return {
+		buffer: smallest.buffer,
+		optimizedSize: smallest.size,
+		resizeSide: smallest.resizeSide,
+		compressionLevel: smallest.compressionLevel
+	};
+	if (firstResizeError) throw firstResizeError;
+	throw new Error("Failed to optimize PNG image");
+}
+/**
+* Internal sips-only EXIF normalization (no sharp fallback).
+* Used by resizeToJpeg to normalize before sips resize.
+*/
+async function normalizeExifOrientationSips(buffer) {
+	try {
+		const orientation = readJpegExifOrientation(buffer);
+		if (!orientation || orientation === 1) return buffer;
+		return await sipsApplyOrientation(buffer, orientation);
+	} catch {
+		return buffer;
+	}
+}
+//#endregion
+//#region src/media/video-dimensions.ts
+function parsePositiveDimension(value) {
+	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return;
+	return value;
+}
+function parseFfprobeVideoDimensions(stdout) {
+	const stream = JSON.parse(stdout).streams?.[0];
+	const width = parsePositiveDimension(stream?.width);
+	const height = parsePositiveDimension(stream?.height);
+	return width && height ? {
+		width,
+		height
+	} : void 0;
+}
+async function probeVideoDimensions(buffer) {
+	try {
+		return parseFfprobeVideoDimensions(await runFfprobe([
+			"-v",
+			"error",
+			"-select_streams",
+			"v:0",
+			"-show_entries",
+			"stream=width,height",
+			"-of",
+			"json",
+			"pipe:0"
+		], { input: buffer }));
+	} catch {
+		return;
+	}
+}
+//#endregion
+export { MEDIA_FFMPEG_TIMEOUT_MS as C, MEDIA_FFMPEG_MAX_BUFFER_BYTES as S, parseFfprobeCodecAndSampleRate as _, MAX_IMAGE_INPUT_PIXELS as a, runFfprobe as b, getImageMetadata as c, normalizeExifOrientation as d, optimizeImageToPng as f, transcodeAudioBufferToOpus as g, transcodeAudioBuffer as h, ImageProcessorUnavailableError as i, hasAlphaChannel as l, resizeToPng as m, probeVideoDimensions as n, buildImageResizeSideGrid as o, resizeToJpeg as p, IMAGE_REDUCE_QUALITY_STEPS as r, convertHeicToJpeg as s, parseFfprobeVideoDimensions as t, isImageProcessorUnavailableError as u, parseFfprobeCsvFields as v, MEDIA_FFPROBE_TIMEOUT_MS as w, MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS as x, runFfmpeg as y };

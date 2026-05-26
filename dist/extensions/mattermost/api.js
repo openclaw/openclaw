@@ -1,2 +1,2 @@
-import { n as isMattermostSenderAllowed } from "../../monitor-auth-YRbV8ui7.js";
+import { n as isMattermostSenderAllowed } from "../../monitor-auth-Ce-BTHuT.js";
 export { isMattermostSenderAllowed };

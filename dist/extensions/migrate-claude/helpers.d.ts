@@ -1,4 +1,4 @@
-import { a as MigrationItem } from "../../types-lCXG2pW_.js";
+import { l as MigrationItem } from "../../types-Vx7Jq4_-2.js";
 //#region extensions/migrate-claude/helpers.d.ts
 declare function resolveHomePath(input: string): string;
 declare function exists(filePath: string): Promise<boolean>;

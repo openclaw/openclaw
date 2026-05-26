@@ -1,2 +1,2 @@
-import { t as buildDeepInfraImageGenerationProvider } from "../../image-generation-provider-B6lMOYyh.js";
+import { t as buildDeepInfraImageGenerationProvider } from "../../image-generation-provider-B1Cz4Sx0.js";
 export { buildDeepInfraImageGenerationProvider };

@@ -19,4 +19,4 @@ export declare function collectConfiguredModelPricingRefs(config: OpenClawConfig
 }): ModelRef[];
 export declare function refreshGatewayModelPricingCache(params: GatewayModelPricingRefreshParams): Promise<void>;
 export declare function startGatewayModelPricingRefresh(params: GatewayModelPricingRefreshParams): () => void;
-export declare function __resetGatewayModelPricingCacheForTest(): void;
+export declare function resetGatewayModelPricingCacheForTest(): void;

@@ -18,7 +18,7 @@ export declare function resolveCronSessionDiagnosticContext(params: {
 }): CronSessionContext;
 export declare function formatCronSessionDiagnosticFields(context: CronSessionContext): string;
 export declare function formatStoppedCronSessionDiagnosticFields(context: CronSessionContext): string;
-export declare const __testing: {
+export declare const testing: {
     quoteLogField: typeof quoteLogField;
 };
-export {};
+export { testing as __testing };

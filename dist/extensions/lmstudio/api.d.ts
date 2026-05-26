@@ -1,9 +1,9 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
-import { l as ModelProviderConfig } from "../../types.models-CkWCv1xp.js";
-import { i as WizardPrompter } from "../../prompts-CAujqc6P.js";
-import { t as SecretInputMode } from "../../provider-auth-types-Dkrd4Vmf.js";
-import { Ct as ProviderAuthMethodNonInteractiveContext, Mt as ProviderCatalogContext, Tt as ProviderAuthResult, ln as ProviderPrepareDynamicModelContext, qn as ProviderRuntimeModel } from "../../types-lCXG2pW_.js";
-import { A as LMSTUDIO_PROVIDER_LABEL, C as LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH, D as LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, E as LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL, O as LMSTUDIO_MODEL_PLACEHOLDER, S as LMSTUDIO_DEFAULT_INFERENCE_BASE_URL, T as LMSTUDIO_DOCKER_HOST_BASE_URL, _ as resolveLmstudioServerBase, a as resolveLmstudioRuntimeApiKey, b as LMSTUDIO_DEFAULT_BASE_URL, c as buildLmstudioModelName, d as normalizeLmstudioConfiguredCatalogEntries, f as normalizeLmstudioConfiguredCatalogEntry, g as resolveLmstudioReasoningCompat, h as resolveLmstudioReasoningCapability, i as resolveLmstudioRequestContext, k as LMSTUDIO_PROVIDER_ID, l as mapLmstudioWireEntry, m as resolveLmstudioInferenceBase, n as resolveLmstudioConfiguredApiKey, o as LmstudioModelBase, p as normalizeLmstudioProviderConfig, r as resolveLmstudioProviderHeaders, s as LmstudioModelWire, t as buildLmstudioAuthHeaders, u as mapLmstudioWireModelsToConfig, v as resolveLoadedContextWindow, w as LMSTUDIO_DEFAULT_MODEL_ID, x as LMSTUDIO_DEFAULT_EMBEDDING_MODEL, y as LMSTUDIO_DEFAULT_API_KEY_ENV_VAR } from "../../runtime-CBb_A1Oh.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
+import { f as ModelProviderDeclarationConfig } from "../../types.models-tqxsISRc.js";
+import { i as WizardPrompter } from "../../prompts-DgKIGa-v.js";
+import { t as SecretInputMode } from "../../provider-auth-types-C72FsWut.js";
+import { At as ProviderAuthResult, Lt as ProviderCatalogContext, Ot as ProviderAuthMethodNonInteractiveContext, Qn as ProviderRuntimeModel, mn as ProviderPrepareDynamicModelContext } from "../../types-Vx7Jq4_-2.js";
+import { A as LMSTUDIO_PROVIDER_LABEL, C as LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH, D as LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, E as LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL, O as LMSTUDIO_MODEL_PLACEHOLDER, S as LMSTUDIO_DEFAULT_INFERENCE_BASE_URL, T as LMSTUDIO_DOCKER_HOST_BASE_URL, _ as resolveLmstudioServerBase, a as resolveLmstudioRuntimeApiKey, b as LMSTUDIO_DEFAULT_BASE_URL, c as buildLmstudioModelName, d as normalizeLmstudioConfiguredCatalogEntries, f as normalizeLmstudioConfiguredCatalogEntry, g as resolveLmstudioReasoningCompat, h as resolveLmstudioReasoningCapability, i as resolveLmstudioRequestContext, k as LMSTUDIO_PROVIDER_ID, l as mapLmstudioWireEntry, m as resolveLmstudioInferenceBase, n as resolveLmstudioConfiguredApiKey, o as LmstudioModelBase, p as normalizeLmstudioProviderConfig, r as resolveLmstudioProviderHeaders, s as LmstudioModelWire, t as buildLmstudioAuthHeaders, u as mapLmstudioWireModelsToConfig, v as resolveLoadedContextWindow, w as LMSTUDIO_DEFAULT_MODEL_ID, x as LMSTUDIO_DEFAULT_EMBEDDING_MODEL, y as LMSTUDIO_DEFAULT_API_KEY_ENV_VAR } from "../../runtime-BPUwFkCP.js";
 //#region extensions/lmstudio/src/setup.d.ts
 type ProviderPromptText = (params: {
   message: string;
@@ -26,7 +26,7 @@ declare function promptAndConfigureLmstudioInteractive(params: {
 declare function configureLmstudioNonInteractive(ctx: ProviderAuthMethodNonInteractiveContext): Promise<OpenClawConfig | null>;
 /** Discovers provider settings, merging explicit config with live model discovery. */
 declare function discoverLmstudioProvider(ctx: ProviderCatalogContext): Promise<{
-  provider: ModelProviderConfig;
+  provider: ModelProviderDeclarationConfig;
 } | null>;
 declare function prepareLmstudioDynamicModels(ctx: ProviderPrepareDynamicModelContext): Promise<ProviderRuntimeModel[]>;
 //#endregion

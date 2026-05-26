@@ -3,6 +3,7 @@ export declare const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export declare const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export declare const GATEWAY_SERVICE_MARKER = "openclaw";
 export declare const GATEWAY_SERVICE_KIND = "gateway";
+export declare const GATEWAY_SERVICE_RUNTIME_PID_ENV = "OPENCLAW_GATEWAY_SERVICE_PID";
 export declare const NODE_SERVICE_MARKER = "openclaw";
 export declare const NODE_SERVICE_KIND = "node";
 export declare const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";

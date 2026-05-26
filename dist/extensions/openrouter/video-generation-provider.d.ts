@@ -1,5 +1,5 @@
-import { o as VideoGenerationProvider } from "../../video-generation-BAXEv2wS.js";
-import { n as listOpenRouterVideoModelCatalog } from "../../video-model-catalog-CmI5Q7mH.js";
+import { o as VideoGenerationProvider } from "../../video-generation-BzlZ07CN.js";
+import { n as listOpenRouterVideoModelCatalog } from "../../video-model-catalog-KOwZlSLB.js";
 
 //#region extensions/openrouter/video-generation-provider.d.ts
 declare function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvider;

@@ -1,6 +1,6 @@
-import { i as OpenClawConfig } from "../../../types.openclaw-DIZy8jcb.js";
-import { r as LoadInstalledPluginIndexParams, t as InstalledPluginIndex } from "../../../installed-plugin-index-8AK4l4aU.js";
-import { n as InstalledPluginIndexStoreOptions, t as InstalledPluginIndexStoreInspection } from "../../../installed-plugin-index-store-vtLE59iY.js";
+import { i as OpenClawConfig } from "../../../types.openclaw-BLF4DJTX.js";
+import { r as LoadInstalledPluginIndexParams, t as InstalledPluginIndex } from "../../../installed-plugin-index-types-BNeq3o_Y.js";
+import { n as InstalledPluginIndexStoreOptions, t as InstalledPluginIndexStoreInspection } from "../../../installed-plugin-index-store-DOWcYfTI.js";
 
 //#region src/commands/doctor/shared/plugin-registry-migration.d.ts
 declare const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";

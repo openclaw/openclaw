@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { type OpenClawConfig } from "../../../config/config.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import { resetEmbeddedAgentBaseStreamFnCacheForTest, resolveEmbeddedAgentBaseStreamFn, resolveEmbeddedAgentStreamFn } from "../stream-resolution.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
@@ -36,6 +37,7 @@ export declare function buildToolSearchRunPlan(params: {
     catalogRegistered: boolean;
     catalogToolCount: number;
     controlsEnabled: boolean;
+    controlNames?: readonly string[];
     explicitAllowlistSources: Array<{
         entries: string[];
     }>;
@@ -50,6 +52,30 @@ export declare function remapInjectedContextFilesToWorkspace(params: {
     sourceWorkspaceDir: string;
     targetWorkspaceDir: string;
 }): EmbeddedContextFile[];
+export type EmbeddedPiActiveSessionSteerTarget = {
+    agent?: unknown;
+    getSteeringMessages?(): readonly string[];
+    steer(text: string): Promise<void>;
+    subscribe(listener: (event: unknown) => void): () => void;
+};
+declare function cancelQueuedSteeringMessage(activeSession: EmbeddedPiActiveSessionSteerTarget, text: string): Promise<boolean>;
+export declare const testing: {
+    cancelQueuedSteeringMessage: typeof cancelQueuedSteeringMessage;
+    resolveEmbeddedAttemptSessionWriteLockOptions: typeof resolveEmbeddedAttemptSessionWriteLockOptions;
+    resolveAttemptStreamAuthProfileId: typeof resolveAttemptStreamAuthProfileId;
+    steerAndWaitForTranscriptCommit: typeof steerAndWaitForTranscriptCommit;
+};
+declare function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
+    config?: OpenClawConfig;
+    compactionTimeoutMs: number;
+    env?: NodeJS.ProcessEnv;
+}): {
+    timeoutMs: number;
+    staleMs: number;
+    maxHoldMs: number;
+};
+declare function resolveAttemptStreamAuthProfileId(params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">): string | undefined;
+declare function steerAndWaitForTranscriptCommit(activeSession: EmbeddedPiActiveSessionSteerTarget, text: string, timeoutMs: number): Promise<void>;
 export declare function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[];
 export declare function shouldRunLlmOutputHooksForAttempt(params: {
     promptErrorSource: string | null;
@@ -59,3 +85,4 @@ export declare function resolveAttemptToolPolicyMessageProvider(params: {
     messageChannel?: string;
 }): string | undefined;
 export declare function runEmbeddedAttempt(params: EmbeddedRunAttemptParams): Promise<EmbeddedRunAttemptResult>;
+export { testing as __testing };

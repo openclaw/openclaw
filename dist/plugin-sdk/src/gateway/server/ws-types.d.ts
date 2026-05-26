@@ -10,4 +10,7 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     sharedGatewaySessionGeneration?: string;
     presenceKey?: string;
     clientIp?: string;
+    internal?: {
+        approvalRuntime?: boolean;
+    };
 };

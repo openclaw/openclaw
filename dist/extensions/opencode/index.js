@@ -1,13 +1,13 @@
-import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-LndEvhRk.js";
-import { c as resolveClaudeThinkingProfile, i as PASSTHROUGH_GEMINI_REPLAY_HOOKS, u as matchesExactOrPrefix } from "../../provider-model-shared-D-slKnZa.js";
-import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-DaaaGg6p.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import { t as OPENCODE_ZEN_DEFAULT_MODEL } from "../../provider-onboard-DhuPxzG7.js";
-import "../../provider-auth-api-key-BdQf4UTi.js";
-import { n as applyOpencodeZenConfig } from "../../onboard-DEn62ub_.js";
-import "../../api-dfpXRsW_.js";
-import { t as opencodeMediaUnderstandingProvider } from "../../media-understanding-provider-Dvl51_zo.js";
+import { a as normalizeLowercaseStringOrEmpty } from "../../string-coerce-DyL154ka.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import { c as resolveClaudeThinkingProfile, i as PASSTHROUGH_GEMINI_REPLAY_HOOKS, u as matchesExactOrPrefix } from "../../provider-model-shared-DtsPmvDx.js";
+import { t as createProviderApiKeyAuthMethod } from "../../provider-api-key-auth-E_5Yag4W.js";
+import { t as OPENCODE_ZEN_DEFAULT_MODEL } from "../../provider-onboard-MLXAQX8H.js";
+import "../../provider-auth-api-key-C06h8GOX.js";
+import { n as applyOpencodeZenConfig } from "../../onboard-C-hUcL-z.js";
+import "../../api-CahBs_F8.js";
+import { t as opencodeMediaUnderstandingProvider } from "../../media-understanding-provider-Yppg8XoY.js";
 //#region extensions/opencode/index.ts
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"];

@@ -21,9 +21,10 @@
       "choiceLabel": "fal API key",
       "groupId": "fal",
       "groupLabel": "fal",
-      "groupHint": "Image and video generation",
+      "groupHint": "Image, video, and music generation",
       "onboardingScopes": [
-        "image-generation"
+        "image-generation",
+        "music-generation"
       ],
       "optionKey": "falApiKey",
       "cliFlag": "--fal-api-key",
@@ -35,9 +36,17 @@
     "imageGenerationProviders": [
       "fal"
     ],
+    "musicGenerationProviders": [
+      "fal"
+    ],
     "videoGenerationProviders": [
       "fal"
     ]
+  },
+  "videoGenerationProviderMetadata": {
+    "fal": {
+      "referenceAudioInputs": true
+    }
   },
   "configSchema": {
     "type": "object",

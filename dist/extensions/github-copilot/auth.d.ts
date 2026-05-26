@@ -1,4 +1,4 @@
-import { i as OpenClawConfig } from "../../types.openclaw-DIZy8jcb.js";
+import { i as OpenClawConfig } from "../../types.openclaw-BLF4DJTX.js";
 //#region extensions/github-copilot/auth.d.ts
 declare function resolveFirstGithubToken(params: {
   agentDir?: string;

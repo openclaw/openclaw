@@ -1,4 +1,5 @@
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
+import type { EmbeddedAgentExecutionPhase } from "../agents/pi-embedded-runner/execution-phase.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronJobBase } from "./types-shared.js";
@@ -64,6 +65,12 @@ export type CronDeliveryTrace = {
     fallbackUsed?: boolean;
     delivered?: boolean;
 };
+export type CronFailureNotificationDelivery = {
+    /** Whether the last failed run's failure notification reached the target channel. */
+    delivered?: boolean;
+    status: CronDeliveryStatus;
+    error?: string;
+};
 export type CronDeliveryPreview = {
     label: string;
     detail: string;
@@ -105,7 +112,7 @@ export type CronRunOutcome = {
     sessionKey?: string;
     diagnostics?: CronRunDiagnostics;
 };
-export type CronAgentExecutionPhase = "runner_entered" | "workspace" | "runtime_plugins" | "model_resolution" | "auth" | "context_engine" | "attempt_dispatch" | "context_assembled" | "turn_accepted" | "process_spawned" | "tool_execution_started" | "assistant_output_started" | "model_call_started";
+export type CronAgentExecutionPhase = EmbeddedAgentExecutionPhase;
 export type CronAgentExecutionStarted = {
     jobId: string;
     agentId?: string;
@@ -197,6 +204,12 @@ export type CronJobState = {
     lastDeliveryError?: string;
     /** Whether the last run's output was delivered to the target channel. */
     lastDelivered?: boolean;
+    /** Whether the last failed run's failure notification was delivered to the target channel. */
+    lastFailureNotificationDelivered?: boolean;
+    /** Delivery outcome for the last failed run's failure notification. */
+    lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+    /** Delivery-specific error for the last failed run's failure notification. */
+    lastFailureNotificationDeliveryError?: string;
 };
 export type CronJob = CronJobBase<CronSchedule, CronSessionTarget, CronWakeMode, CronPayload, CronDelivery, CronFailureAlert | false> & {
     state: CronJobState;

@@ -12,6 +12,7 @@ export declare function listSkillCommandsForAgents(params: {
     cfg: OpenClawConfig;
     agentIds?: string[];
 }): SkillCommandSpec[];
-export declare const __testing: {
+export declare const testing: {
     dedupeBySkillName: typeof dedupeBySkillName;
 };
+export { testing as __testing };

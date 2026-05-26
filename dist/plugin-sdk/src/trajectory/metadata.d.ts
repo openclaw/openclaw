@@ -35,6 +35,7 @@ type BuildTrajectoryArtifactsParams = {
     timedOutDuringToolExecution: boolean;
     promptError?: string;
     promptErrorSource?: string | null;
+    terminalError?: string;
     usage?: unknown;
     promptCache?: unknown;
     compactionCount: number;

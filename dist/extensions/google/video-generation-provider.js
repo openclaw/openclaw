@@ -1,2 +1,2 @@
-import { t as buildGoogleVideoGenerationProvider } from "../../video-generation-provider-DA4N9hSm.js";
+import { t as buildGoogleVideoGenerationProvider } from "../../video-generation-provider-DRXPVH1i.js";
 export { buildGoogleVideoGenerationProvider };

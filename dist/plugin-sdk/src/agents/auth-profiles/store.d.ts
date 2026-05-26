@@ -6,6 +6,7 @@ type LoadAuthProfileStoreOptions = {
     config?: OpenClawConfig;
     externalCli?: ExternalCliAuthDiscovery;
     readOnly?: boolean;
+    resolveLegacyOAuthSidecars?: boolean;
     syncExternalCli?: boolean;
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
@@ -16,12 +17,13 @@ type SaveAuthProfileStoreOptions = {
 };
 export declare function updateAuthProfileStoreWithLock(params: {
     agentDir?: string;
+    saveOptions?: SaveAuthProfileStoreOptions;
     updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null>;
 export declare function loadAuthProfileStore(): AuthProfileStore;
 export declare function loadAuthProfileStoreForRuntime(agentDir?: string, options?: LoadAuthProfileStoreOptions): AuthProfileStore;
 export declare function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore;
-export declare function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): AuthProfileStore;
+export declare function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string, loadOptions?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "resolveLegacyOAuthSidecars">): AuthProfileStore;
 export declare function ensureAuthProfileStore(agentDir?: string, options?: {
     allowKeychainPrompt?: boolean;
     config?: OpenClawConfig;
@@ -31,6 +33,7 @@ export declare function ensureAuthProfileStore(agentDir?: string, options?: {
 }): AuthProfileStore;
 export declare function ensureAuthProfileStoreWithoutExternalProfiles(agentDir?: string, options?: {
     allowKeychainPrompt?: boolean;
+    resolveLegacyOAuthSidecars?: boolean;
 }): AuthProfileStore;
 export declare function findPersistedAuthProfileCredential(params: {
     agentDir?: string;

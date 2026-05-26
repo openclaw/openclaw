@@ -1,11 +1,11 @@
-import { a as normalizeLowercaseStringOrEmpty, s as normalizeOptionalLowercaseString } from "../../string-coerce-LndEvhRk.js";
-import { i as formatErrorMessage } from "../../errors-VfATXfah.js";
-import { i as resolveActiveTalkProviderConfig } from "../../talk-CbjHCImG.js";
-import "../../error-runtime-BnVeBNYa.js";
-import "../../string-coerce-runtime-Ce59bOpy.js";
-import { t as definePluginEntry } from "../../plugin-entry-CJpThfKg.js";
-import "../../talk-config-runtime-BGkqpksR.js";
-import "../../api-xRzniSTq.js";
+import { a as normalizeLowercaseStringOrEmpty, s as normalizeOptionalLowercaseString } from "../../string-coerce-DyL154ka.js";
+import { i as formatErrorMessage } from "../../errors-b3ZrCRlt.js";
+import { i as resolveActiveTalkProviderConfig } from "../../talk-C8XF4d_d.js";
+import "../../error-runtime-DGHc7DZw.js";
+import "../../string-coerce-runtime-BAEEbdFW.js";
+import { t as definePluginEntry } from "../../plugin-entry-Dgh5bRuw.js";
+import "../../talk-config-runtime-bTGEPF_X.js";
+import "../../api-DIkBuDgj.js";
 //#region extensions/talk-voice/index.ts
 function mask(s, keep = 6) {
 	const trimmed = s.trim();
@@ -132,24 +132,26 @@ var talk_voice_default = definePluginEntry({
 					}
 					const chosen = findVoice(voices, query);
 					if (!chosen) return { text: `No voice found for ${isLikelyVoiceId(query) ? query : `"${query}"`}. Try: ${commandLabel} list` };
-					const nextConfig = {
-						...cfg,
-						talk: {
-							...cfg.talk,
-							provider: providerId,
-							providers: {
-								...cfg.talk?.providers,
-								[providerId]: {
-									...cfg.talk?.providers?.[providerId],
-									voiceId: chosen.id
+					await api.runtime.config.mutateConfigFile({
+						afterWrite: { mode: "auto" },
+						mutate: (draft) => {
+							const nextConfig = {
+								...draft,
+								talk: {
+									...draft.talk,
+									provider: providerId,
+									providers: {
+										...draft.talk?.providers,
+										[providerId]: {
+											...draft.talk?.providers?.[providerId],
+											voiceId: chosen.id
+										}
+									},
+									...providerId === "elevenlabs" ? { voiceId: chosen.id } : {}
 								}
-							},
-							...providerId === "elevenlabs" ? { voiceId: chosen.id } : {}
+							};
+							Object.assign(draft, nextConfig);
 						}
-					};
-					await api.runtime.config.replaceConfigFile({
-						nextConfig,
-						afterWrite: { mode: "auto" }
 					});
 					return { text: `✅ ${providerLabel} Talk voice set to ${(chosen.name ?? "").trim() || "(unnamed)"}\n${chosen.id}` };
 				}

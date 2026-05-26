@@ -1,2 +1,2 @@
-import { t as resolveDeepSeekV4ThinkingProfile } from "../../thinking-8WGKXmoW.js";
+import { t as resolveDeepSeekV4ThinkingProfile } from "../../thinking-DpufZF19.js";
 export { resolveDeepSeekV4ThinkingProfile };

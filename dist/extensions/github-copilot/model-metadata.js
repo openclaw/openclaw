@@ -1,2 +1,2 @@
-import { n as resolveStaticCopilotModelOverride, t as resolveCopilotTransportApi } from "../../model-metadata-D_CTx7yH.js";
-export { resolveCopilotTransportApi, resolveStaticCopilotModelOverride };
+import { n as resolveCopilotTransportApi, r as resolveStaticCopilotModelOverride, t as resolveCopilotModelCompat } from "../../model-metadata-CuGtXx9C.js";
+export { resolveCopilotModelCompat, resolveCopilotTransportApi, resolveStaticCopilotModelOverride };

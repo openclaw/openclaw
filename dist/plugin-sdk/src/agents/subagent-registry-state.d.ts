@@ -1,5 +1,6 @@
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export declare function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>): void;
+export declare function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>): void;
 export declare function restoreSubagentRunsFromDisk(params: {
     runs: Map<string, SubagentRunRecord>;
     mergeOnly?: boolean;

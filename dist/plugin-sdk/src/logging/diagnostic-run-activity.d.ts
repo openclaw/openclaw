@@ -1,6 +1,10 @@
-import { type DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+import { type DiagnosticEventPayload, type DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+type DiagnosticModelStartedActivityEvent = Pick<Extract<DiagnosticEventPayload, {
+    type: "model.call.started";
+}>, "runId" | "sessionId" | "sessionKey" | "provider" | "model">;
 export type DiagnosticSessionActivitySnapshot = {
     activeWorkKind?: DiagnosticSessionActiveWorkKind;
+    hasActiveEmbeddedRun?: boolean;
     activeToolName?: string;
     activeToolCallId?: string;
     activeToolAgeMs?: number;
@@ -10,10 +14,13 @@ export type DiagnosticSessionActivitySnapshot = {
 export declare function markDiagnosticEmbeddedRunStarted(params: {
     sessionId: string;
     sessionKey?: string;
+    workKey?: string;
 }): void;
 export declare function markDiagnosticEmbeddedRunEnded(params: {
     sessionId: string;
     sessionKey?: string;
+    workKey?: string;
+    clearRunActivity?: boolean;
 }): void;
 export declare function getDiagnosticSessionActivitySnapshot(params: {
     sessionId?: string;
@@ -32,4 +39,6 @@ export declare function markDiagnosticToolStartedForTest(params: {
     toolName: string;
     toolCallId?: string;
 }): void;
+export declare function markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void;
 export declare function resetDiagnosticRunActivityForTest(): void;
+export {};

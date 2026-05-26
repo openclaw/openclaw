@@ -9,4 +9,11 @@ type BuildUsageHttpErrorSnapshotOptions = {
 };
 export declare function buildUsageErrorSnapshot(provider: UsageProviderId, error: string): ProviderUsageSnapshot;
 export declare function buildUsageHttpErrorSnapshot(options: BuildUsageHttpErrorSnapshotOptions): ProviderUsageSnapshot;
+export declare function readUsageJson(provider: UsageProviderId, response: Response): Promise<{
+    ok: true;
+    data: unknown;
+} | {
+    ok: false;
+    snapshot: ProviderUsageSnapshot;
+}>;
 export {};

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectOutboundPayloadPlanForJson } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv } from "../../runtime.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
@@ -39,9 +40,31 @@ export type AgentCommandDeliveryStatus = {
 export type AgentCommandDeliveryResult = {
     payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
     meta: EmbeddedPiRunMeta & AgentCommandResultMetaOverrides;
+    didSendViaMessagingTool?: boolean;
+    messagingToolSentTexts?: string[];
+    messagingToolSentMediaUrls?: string[];
+    messagingToolSentTargets?: MessagingToolSend[];
     deliverySucceeded?: boolean;
     deliveryStatus?: AgentCommandDeliveryStatus;
 };
+type FreshSessionEntryForDeliveryResolver = () => Promise<SessionEntry | undefined>;
+type FreshSessionDeliveryRefreshParams = {
+    expectedSessionIdForFreshDelivery: string;
+    resolveFreshSessionEntryForDelivery: FreshSessionEntryForDeliveryResolver;
+} | {
+    expectedSessionIdForFreshDelivery?: string;
+    resolveFreshSessionEntryForDelivery?: undefined;
+};
+type DeliverAgentCommandResultParams = {
+    cfg: OpenClawConfig;
+    deps: CliDeps;
+    runtime: RuntimeEnv;
+    opts: AgentCommandOpts;
+    outboundSession: OutboundSessionContext | undefined;
+    sessionEntry: SessionEntry | undefined;
+    result: RunResult;
+    payloads: RunResult["payloads"];
+} & FreshSessionDeliveryRefreshParams;
 export declare function normalizeAgentCommandReplyPayloads(params: {
     cfg: OpenClawConfig;
     opts: AgentCommandOpts;
@@ -52,14 +75,5 @@ export declare function normalizeAgentCommandReplyPayloads(params: {
     accountId?: string;
     applyChannelTransforms?: boolean;
 }): ReplyPayload[];
-export declare function deliverAgentCommandResult(params: {
-    cfg: OpenClawConfig;
-    deps: CliDeps;
-    runtime: RuntimeEnv;
-    opts: AgentCommandOpts;
-    outboundSession: OutboundSessionContext | undefined;
-    sessionEntry: SessionEntry | undefined;
-    result: RunResult;
-    payloads: RunResult["payloads"];
-}): Promise<AgentCommandDeliveryResult>;
+export declare function deliverAgentCommandResult(params: DeliverAgentCommandResultParams): Promise<AgentCommandDeliveryResult>;
 export {};

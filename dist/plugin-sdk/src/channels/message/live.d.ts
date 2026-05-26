@@ -19,6 +19,8 @@ export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
     resolveFinalizedId?: (id: TId, edit: TEdit) => TId | undefined;
     createPreviewReceipt?: (id: TId, edit: TEdit) => MessageReceipt;
     onPreviewFinalized?: (id: TId, receipt: MessageReceipt, liveState: LiveMessageState<TPayload>) => Promise<void> | void;
+    buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
+    deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
     handlePreviewEditError?: (params: {
         error: unknown;
         id: TId;
@@ -53,6 +55,8 @@ export declare function deliverFinalizableLivePreview<TPayload, TId, TEdit>(para
     deliverNormally: (payload: TPayload) => Promise<boolean | void>;
     createPreviewReceipt?: (id: TId, edit: TEdit) => MessageReceipt;
     onPreviewFinalized?: (id: TId, receipt: MessageReceipt, liveState: LiveMessageState<TPayload>) => Promise<void> | void;
+    buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
+    deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
     handlePreviewEditError?: (params: {
         error: unknown;
         id: TId;

@@ -148,7 +148,7 @@ export declare function resolveControlledSubagentTarget(runs: SubagentRunRecord[
     recentMinutes?: number;
     isActive?: (entry: SubagentRunRecord) => boolean;
 }): SubagentTargetResolution;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<{
         callGateway: GatewayCaller;
         updateSessionStore: UpdateSessionStore;
@@ -156,4 +156,4 @@ export declare const __testing: {
         clearSessionQueues: ClearSessionQueues;
     }>): void;
 };
-export {};
+export { testing as __testing };

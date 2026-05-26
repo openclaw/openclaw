@@ -1,3 +1,3 @@
-import { t as waitForTransportReady } from "../transport-ready-Bzq9L3jB.js";
-import "../transport-ready-runtime-DUdysQVT.js";
+import { t as waitForTransportReady } from "../transport-ready-BJHvYgtu.js";
+import "../transport-ready-runtime-IjPfSFuM.js";
 export { waitForTransportReady };

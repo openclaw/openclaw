@@ -1,3 +1,4 @@
+import { type ChatType } from "../../channels/chat-type.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -10,6 +11,7 @@ export type HeartbeatTarget = OutboundChannel;
 export type OutboundTarget = {
     channel: OutboundChannel;
     to?: string;
+    chatType?: ChatType;
     reason?: string;
     accountId?: string;
     threadId?: string | number;
@@ -27,6 +29,7 @@ export declare function resolveOutboundTarget(params: {
     channel: GatewayMessageChannel;
     to?: string;
     allowFrom?: string[];
+    allowBootstrap?: boolean;
     cfg?: OpenClawConfig;
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;

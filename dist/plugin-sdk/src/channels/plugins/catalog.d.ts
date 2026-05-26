@@ -1,3 +1,5 @@
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import { type PluginInstallSourceInfo } from "../../plugins/install-source-info.js";
 import type { PluginPackageInstall } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
@@ -36,6 +38,8 @@ type CatalogOptions = {
     officialCatalogPaths?: string[];
     env?: NodeJS.ProcessEnv;
     excludeWorkspace?: boolean;
+    installRecords?: Record<string, PluginInstallRecord>;
+    discovery?: PluginDiscoveryResult;
 };
 export declare function buildChannelUiCatalog(plugins: Array<{
     id: string;

@@ -6,6 +6,7 @@ export type ProcessGatewayAllowlistParams = {
     command: string;
     workdir: string;
     env: Record<string, string>;
+    pathPrepend?: string[];
     requestedEnv?: Record<string, string>;
     pty: boolean;
     timeoutSec?: number;
@@ -39,5 +40,6 @@ export type ProcessGatewayAllowlistResult = {
     execCommandOverride?: string;
     allowWithoutEnforcedCommand?: boolean;
     pendingResult?: AgentToolResult<ExecToolDetails>;
+    deniedResult?: AgentToolResult<ExecToolDetails>;
 };
 export declare function processGatewayAllowlist(params: ProcessGatewayAllowlistParams): Promise<ProcessGatewayAllowlistResult>;

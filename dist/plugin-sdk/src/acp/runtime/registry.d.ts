@@ -11,8 +11,8 @@ export declare function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): v
 export declare function unregisterAcpRuntimeBackend(id: string): void;
 export declare function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null;
 export declare function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend;
-export declare const __testing: {
+export declare const testing: {
     resetAcpRuntimeBackendsForTests(): void;
     getAcpRuntimeRegistryGlobalStateForTests(): AcpRuntimeRegistryGlobalState;
 };
-export {};
+export { testing as __testing };

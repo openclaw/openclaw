@@ -1,11 +1,13 @@
-import { a as shouldLogVerbose, r as logVerbose } from "../globals-CouSpJO4.js";
-import { i as runExec } from "../exec-DusmGtXL.js";
-import { c as isBlockedHostnameOrIp } from "../ssrf-CYoLqc2K.js";
-import "../defaults-C7Hv5EKy.js";
-import { t as CLI_OUTPUT_MAX_BUFFER } from "../defaults.constants-CRZ3dal0.js";
-import { c as normalizeMediaUnderstandingChatType, l as resolveMediaUnderstandingScope, s as resolveTimeoutMs } from "../resolve-DZ2OAK4b.js";
-import { t as applyTemplate } from "../templating-f2VQyYBM.js";
-import { t as finalizeInboundContext } from "../inbound-context-DC32Bk5a.js";
+import { a as shouldLogVerbose, r as logVerbose } from "../globals-YU5FjfZK.js";
+import { r as runCommandWithTimeout } from "../exec-D4bhAbbv.js";
+import { c as isBlockedHostnameOrIp } from "../ssrf-DdDeGa5L.js";
+import { n as fetchWithSsrFGuard, t as GUARDED_FETCH_MODE } from "../fetch-guard-BEAbHb5H.js";
+import { n as readResponseWithLimit } from "../read-response-with-limit-S6PVjcFB.js";
+import "../defaults-DCsp7qAB.js";
+import { t as CLI_OUTPUT_MAX_BUFFER } from "../defaults.constants-DeIx7Gbv.js";
+import { c as normalizeMediaUnderstandingChatType, l as resolveMediaUnderstandingScope, s as resolveTimeoutMs } from "../resolve-CJVCx0AN.js";
+import { t as applyTemplate } from "../templating-CLmjS51i.js";
+import { t as finalizeInboundContext } from "../inbound-context-Cg0uCtqQ.js";
 //#region src/link-understanding/format.ts
 function formatLinkUnderstandingBody(params) {
 	const outputs = params.outputs.map((output) => output.trim()).filter(Boolean);
@@ -66,6 +68,47 @@ function resolveScopeDecision(params) {
 function resolveTimeoutMsFromConfig(params) {
 	return resolveTimeoutMs(params.entry.timeoutSeconds ?? params.config?.timeoutSeconds, 30);
 }
+function isLinkUrlTemplate(value) {
+	return value.includes("LinkUrl") || value.includes("LinkFinalUrl");
+}
+function commandName(command) {
+	return (command.split(/[\\/]/).pop() ?? command).toLowerCase();
+}
+function isUrlFetcherCommand(command) {
+	return commandName(command) === "curl" || commandName(command) === "wget";
+}
+function buildLinkCliArgs(params) {
+	const templCtx = {
+		...params.ctx,
+		LinkFinalUrl: params.finalUrl,
+		LinkUrl: params.url
+	};
+	return params.args.filter((arg) => !isLinkUrlTemplate(arg)).map((arg) => applyTemplate(arg, templCtx));
+}
+async function fetchLinkContent(params) {
+	const { response, finalUrl, release } = await fetchWithSsrFGuard({
+		url: params.url,
+		timeoutMs: params.timeoutMs,
+		mode: GUARDED_FETCH_MODE.STRICT,
+		auditContext: "link-understanding",
+		init: { headers: {
+			Accept: "text/*,application/json,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			"User-Agent": "OpenClaw-LinkUnderstanding/1.0"
+		} }
+	});
+	try {
+		if (!response.ok) throw new Error(`Link fetch failed with HTTP ${response.status}`);
+		const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
+		const content = new TextDecoder().decode(buffer).trim();
+		if (!content) return null;
+		return {
+			content,
+			finalUrl
+		};
+	} finally {
+		await release();
+	}
+}
 async function runCliEntry(params) {
 	if ((params.entry.type ?? "cli") !== "cli") return null;
 	const command = params.entry.command.trim();
@@ -75,23 +118,32 @@ async function runCliEntry(params) {
 		config: params.config,
 		entry: params.entry
 	});
-	const templCtx = {
-		...params.ctx,
-		LinkUrl: params.url
-	};
-	const argv = [command, ...args].map((part, index) => index === 0 ? part : applyTemplate(part, templCtx));
+	if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) return params.content;
+	const argv = [command, ...buildLinkCliArgs({
+		args,
+		ctx: params.ctx,
+		finalUrl: params.finalUrl,
+		url: params.url
+	})];
 	if (shouldLogVerbose()) logVerbose(`Link understanding via CLI: ${argv.join(" ")}`);
-	const { stdout } = await runExec(argv[0], argv.slice(1), {
+	const result = await runCommandWithTimeout(argv, {
 		timeoutMs,
-		maxBuffer: CLI_OUTPUT_MAX_BUFFER
+		input: params.content,
+		env: {
+			OPENCLAW_LINK_FINAL_URL: params.finalUrl,
+			OPENCLAW_LINK_URL: params.url
+		}
 	});
-	return stdout.trim() || null;
+	if (result.code !== 0) throw new Error(`Link understanding command exited with code ${result.code ?? "unknown"}`);
+	return result.stdout.trim() || null;
 }
 async function runLinkEntries(params) {
 	let lastError;
 	for (const entry of params.entries) try {
 		const output = await runCliEntry({
+			content: params.content,
 			entry,
+			finalUrl: params.finalUrl,
 			ctx: params.ctx,
 			url: params.url,
 			config: params.config
@@ -132,12 +184,29 @@ async function runLinkUnderstanding(params) {
 	};
 	const outputs = [];
 	for (const url of links) {
+		const timeoutMs = resolveTimeoutMsFromConfig({
+			config,
+			entry: entries[0]
+		});
+		let fetched;
+		try {
+			fetched = await fetchLinkContent({
+				url,
+				timeoutMs
+			});
+		} catch (err) {
+			if (shouldLogVerbose()) logVerbose(`Link understanding fetch blocked or failed for ${url}: ${String(err)}`);
+			continue;
+		}
+		if (!fetched) continue;
 		const output = await runLinkEntries({
+			content: fetched.content,
 			entries,
+			finalUrl: fetched.finalUrl,
 			ctx: params.ctx,
 			url,
 			config
-		});
+		}) ?? fetched.content;
 		if (output) outputs.push(output);
 	}
 	return {

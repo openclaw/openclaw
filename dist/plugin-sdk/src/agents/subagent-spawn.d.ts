@@ -23,6 +23,7 @@ export type SpawnSubagentParams = {
     model?: string;
     taskName?: string;
     thinking?: string;
+    cwd?: string;
     runTimeoutSeconds?: number;
     thread?: boolean;
     mode?: SpawnSubagentMode;
@@ -41,6 +42,8 @@ export type SpawnSubagentParams = {
 };
 export type SpawnSubagentContext = {
     agentSessionKey?: string;
+    /** Separate key used only for completion routing, not sandbox policy. */
+    completionOwnerKey?: string;
     agentChannel?: string;
     agentAccountId?: string;
     agentTo?: string;
@@ -52,6 +55,8 @@ export type SpawnSubagentContext = {
     requesterAgentIdOverride?: string;
     /** Explicit workspace directory for subagent to inherit (optional). */
     workspaceDir?: string;
+    inheritedToolAllowlist?: string[];
+    inheritedToolDenylist?: string[];
 };
 export type SpawnSubagentResult = {
     status: "accepted" | "forbidden" | "error";
@@ -75,6 +80,7 @@ export type SpawnSubagentResult = {
 };
 export { splitModelRef } from "./subagent-spawn-plan.js";
 export declare function spawnSubagentDirect(params: SpawnSubagentParams, ctx: SpawnSubagentContext): Promise<SpawnSubagentResult>;
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides?: Partial<SubagentSpawnDeps>): void;
 };
+export { testing as __testing };

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { type DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { type PluginHookToolInputKind, type PluginHookToolKind } from "../plugins/types.js";
 import { isPlainObject } from "../utils.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -41,6 +42,7 @@ type HookOutcome = {
     blocked: false;
     params: unknown;
 };
+export declare function hasBeforeToolCallPolicy(): boolean;
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
  */
@@ -48,6 +50,7 @@ export declare class BeforeToolCallBlockedError extends Error {
     readonly reason: string;
     constructor(reason: string);
 }
+export declare function recordAdjustedParamsForToolCall(toolCallId: string | undefined, params: unknown, runId?: string): void;
 /**
  * Returns true when an error represents an intentional before_tool_call veto.
  */
@@ -74,16 +77,22 @@ export declare function buildBlockedToolResult(params: {
 export declare function runBeforeToolCallHook(args: {
     toolName: string;
     params: unknown;
+    toolKind?: PluginHookToolKind;
+    toolInputKind?: PluginHookToolInputKind;
     toolCallId?: string;
     ctx?: HookContext;
     signal?: AbortSignal;
     approvalMode?: "request" | "report";
 }): Promise<HookOutcome>;
-export declare function wrapToolWithBeforeToolCallHook(tool: AnyAgentTool, ctx?: HookContext): AnyAgentTool;
+export declare function wrapToolWithBeforeToolCallHook(tool: AnyAgentTool, ctx?: HookContext, options?: {
+    emitDiagnostics?: boolean;
+}): AnyAgentTool;
 export declare function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean;
+export declare function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void;
 export declare function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void;
 export declare function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown;
-export declare const __testing: {
+export declare const testing: {
+    BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS: symbol;
     BEFORE_TOOL_CALL_WRAPPED: symbol;
     buildAdjustedParamsKey: typeof buildAdjustedParamsKey;
     adjustedParamsByToolCallId: Map<string, unknown>;
@@ -91,4 +100,4 @@ export declare const __testing: {
     mergeParamsWithApprovalOverrides: typeof mergeParamsWithApprovalOverrides;
     isPlainObject: typeof isPlainObject;
 };
-export {};
+export { testing as __testing };

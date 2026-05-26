@@ -1,5 +1,5 @@
 import type { CronConfig } from "../config/types.cron.js";
-import type { CronDeliveryStatus, CronDeliveryTrace, CronRunDiagnostics, CronRunStatus, CronRunTelemetry } from "./types.js";
+import type { CronDeliveryStatus, CronDeliveryTrace, CronFailureNotificationDelivery, CronRunDiagnostics, CronRunStatus, CronRunTelemetry } from "./types.js";
 export type CronRunLogEntry = {
     ts: number;
     jobId: string;
@@ -11,6 +11,7 @@ export type CronRunLogEntry = {
     delivered?: boolean;
     deliveryStatus?: CronDeliveryStatus;
     deliveryError?: string;
+    failureNotificationDelivery?: CronFailureNotificationDelivery;
     delivery?: CronDeliveryTrace;
     sessionId?: string;
     sessionKey?: string;
@@ -25,6 +26,7 @@ type ReadCronRunLogPageOptions = {
     limit?: number;
     offset?: number;
     jobId?: string;
+    runId?: string;
     status?: CronRunLogStatusFilter;
     statuses?: CronRunStatus[];
     deliveryStatus?: CronDeliveryStatus;

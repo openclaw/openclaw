@@ -16,7 +16,7 @@ export declare function resolveWebFetchEnabled(params: {
     sandboxed?: boolean;
 }): boolean;
 export declare function isWebFetchProviderConfigured(params: {
-    provider: Pick<PluginWebFetchProviderEntry, "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential">;
+    provider: Pick<PluginWebFetchProviderEntry, "envVars" | "getConfiguredCredentialFallback" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential">;
     config?: OpenClawConfig;
 }): boolean;
 export declare function listWebFetchProviders(params?: {

@@ -21,7 +21,7 @@ type CommandSecretGatewayDeps = {
     resolveManifestContractOwnerPluginId: typeof resolveManifestContractOwnerPluginId;
     resolveRuntimeWebTools: typeof resolveRuntimeWebTools;
 };
-export declare const __testing: {
+export declare const testing: {
     setDepsForTest(overrides: Partial<CommandSecretGatewayDeps>): () => void;
     resetDepsForTest(): void;
 };
@@ -31,5 +31,7 @@ export declare function resolveCommandSecretRefsViaGateway(params: {
     targetIds: Set<string>;
     mode?: CommandSecretResolutionModeInput;
     allowedPaths?: ReadonlySet<string>;
+    forcedActivePaths?: ReadonlySet<string>;
+    optionalActivePaths?: ReadonlySet<string>;
 }): Promise<ResolveCommandSecretsResult>;
-export {};
+export { testing as __testing };

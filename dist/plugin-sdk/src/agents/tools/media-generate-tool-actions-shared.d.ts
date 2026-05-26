@@ -29,6 +29,7 @@ export declare function createMediaGenerateProviderListActionResult<TProvider ex
     providers: TProvider[];
     emptyText: string;
     cfg?: OpenClawConfig;
+    workspaceDir?: string;
     agentDir?: string;
     authStore?: AuthProfileStore;
     listModes: (provider: TProvider) => string[];

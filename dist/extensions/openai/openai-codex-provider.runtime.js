@@ -1,5 +1,5 @@
-import { i as ensureGlobalUndiciEnvProxyDispatcher } from "../../undici-global-dispatcher-DbxuiFXu.js";
-import "../../runtime-env-AKjXcC53.js";
+import { r as ensureGlobalUndiciEnvProxyDispatcher } from "../../undici-global-dispatcher-B3DjrQKu.js";
+import "../../runtime-env-BtvWnLRh.js";
 import { getOAuthApiKey as getOAuthApiKey$1, refreshOpenAICodexToken as refreshOpenAICodexToken$1 } from "@earendil-works/pi-ai/oauth";
 //#region extensions/openai/openai-codex-provider.runtime.ts
 function createOpenAICodexProviderRuntime(deps) {

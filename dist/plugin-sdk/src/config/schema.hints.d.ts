@@ -10,7 +10,8 @@ export declare function applySensitiveUrlHints(hints: ConfigUiHints, allowedKeys
 export declare function collectMatchingSchemaPaths(schema: z.ZodType, path: string, matchesPath: (path: string) => boolean, paths?: Set<string>): Set<string>;
 export declare function mapSensitivePaths(schema: z.ZodType, path: string, hints: ConfigUiHints): ConfigUiHints;
 /** @internal */
-export declare const __test__: {
+export declare const testApi: {
     collectMatchingSchemaPaths: typeof collectMatchingSchemaPaths;
     mapSensitivePaths: typeof mapSensitivePaths;
 };
+export { testApi as __test__ };

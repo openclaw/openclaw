@@ -1,6 +1,7 @@
 export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 type ToolSchemaCompatInput = {
     unsupportedToolSchemaKeywords?: unknown;
+    omitEmptyArrayItems?: unknown;
 };
 type ToolWithParameters = {
     name?: unknown;

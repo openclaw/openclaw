@@ -1,2 +1,2 @@
-import { n as closeTrackedBrowserTabsForSessions, t as movePathToTrash } from "../../trash-Cu8xQZTh.js";
+import { n as closeTrackedBrowserTabsForSessions, t as movePathToTrash } from "../../trash-BXzGPezD.js";
 export { closeTrackedBrowserTabsForSessions, movePathToTrash };

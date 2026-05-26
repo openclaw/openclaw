@@ -6,6 +6,7 @@ export type ParsedRegistryNpmSpec = {
     selectorIsPrerelease: boolean;
 };
 export declare function parseRegistryNpmSpec(rawSpec: string): ParsedRegistryNpmSpec | null;
+export declare function isOpenClawOrgNpmSpec(rawSpec: string | undefined): boolean;
 export declare function validateRegistryNpmSpec(rawSpec: string): string | null;
 export declare function isExactSemverVersion(value: string): boolean;
 export declare function isOpenClawStableCorrectionVersion(value: string): boolean;
