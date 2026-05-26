@@ -289,16 +289,19 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const chokidarPaths = watchMock.mock.calls[0][0] as string[];
+    const [chokidarPaths, chokidarOptions] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      Record<string, unknown>,
+    ];
     expect(chokidarPaths).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
 
     expect(nativeWatchMock).toHaveBeenCalledTimes(2);
-    const nativeDirs = nativeWatchMock.mock.calls.map((call) => call[0]);
+    const nativeDirs = (nativeWatchMock.mock.calls as unknown as [string, ...unknown[]][]).map(
+      (call) => call[0],
+    );
     expect(nativeDirs).toStrictEqual(
       expect.arrayContaining([path.join(workspaceDir, "memory"), extraDir]),
     );
-
-    const chokidarOptions = watchMock.mock.calls[0][1] as Record<string, unknown>;
     const ignored = chokidarOptions.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"))).toBe(false);
@@ -395,8 +398,11 @@ describe("memory watcher config", () => {
     // Native watch for memory/ threw — that dir should fall back into chokidar's set.
     expect(nativeWatchMock).toHaveBeenCalled();
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const chokidarPaths = watchMock.mock.calls[0][0] as string[];
-    expect(chokidarPaths).toStrictEqual(
+    const [chokidarPathsFallback] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      Record<string, unknown>,
+    ];
+    expect(chokidarPathsFallback).toStrictEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
         path.join(workspaceDir, "memory"),
@@ -477,8 +483,11 @@ describe("memory watcher config", () => {
       // Chokidar should receive the file path AND both directory paths
       // (the bare `memory/` plus `extraDir`).
       expect(watchMock).toHaveBeenCalledTimes(1);
-      const chokidarPaths = watchMock.mock.calls[0][0] as string[];
-      expect(chokidarPaths).toStrictEqual(
+      const [chokidarPathsLinux] = watchMock.mock.calls[0] as unknown as [
+        string[],
+        Record<string, unknown>,
+      ];
+      expect(chokidarPathsLinux).toStrictEqual(
         expect.arrayContaining([
           path.join(workspaceDir, "MEMORY.md"),
           path.join(workspaceDir, "memory"),
@@ -519,7 +528,9 @@ describe("memory watcher config", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     expect(watchMock.mock.calls.length).toBe(chokidarCallsBefore + 1);
-    const newChokidarCall = watchMock.mock.calls[chokidarCallsBefore];
+    const newChokidarCall = watchMock.mock.calls[chokidarCallsBefore] as unknown as
+      | [string[], Record<string, unknown>]
+      | undefined;
     expect(newChokidarCall?.[0]).toStrictEqual([memoryDir]);
   });
 
