@@ -14,6 +14,11 @@ import {
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
 import {
+  detectStaleSessionLocks,
+  sessionLockToHealthFinding,
+  sessionLockToRepairEffect,
+} from "../commands/doctor-session-locks.js";
+import {
   disableUnavailableSkillsInConfig,
   formatMissingSkillSummary,
 } from "../commands/doctor-skills-core.js";
@@ -42,6 +47,7 @@ const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profil
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
 
 type CoreHealthCheckContext = HealthCheckContext & {
   readonly deep?: boolean;
@@ -729,6 +735,32 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
+const sessionLocksCheck: HealthCheck = {
+  id: SESSION_LOCKS_CHECK_ID,
+  kind: "core",
+  description: "Stale session lock files are represented as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    return (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
+      sessionLockToHealthFinding,
+    );
+  },
+  async repair(ctx) {
+    const effects = (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
+      sessionLockToRepairEffect,
+    );
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor session lock contribution owns cleanup",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -981,6 +1013,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     codexSessionRoutesCheck,
+    sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
