@@ -37,7 +37,10 @@ function resolveCwd(cwdRaw: unknown): string {
   const base = process.cwd();
   const resolved = path.resolve(base, cwd);
 
-  const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
+  const rel = path.relative(
+    normalizeForCwdSandbox(base),
+    normalizeForCwdSandbox(resolved),
+  );
   if (rel === "" || rel === ".") {
     return resolved;
   }
@@ -58,7 +61,10 @@ async function runLobsterSubprocessOnce(params: {
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
 
-  const env = { ...process.env, LOBSTER_MODE: "tool" } as Record<string, string | undefined>;
+  const env = { ...process.env, LOBSTER_MODE: "tool" } as Record<
+    string,
+    string | undefined
+  >;
   const nodeOptions = env.NODE_OPTIONS ?? "";
   if (nodeOptions.includes("--inspect")) {
     delete env.NODE_OPTIONS;
@@ -82,7 +88,9 @@ async function runLobsterSubprocessOnce(params: {
     let settled = false;
 
     const settle = (
-      result: { ok: true; value: { stdout: string } } | { ok: false; error: Error },
+      result:
+        | { ok: true; value: { stdout: string } }
+        | { ok: false; error: Error },
     ) => {
       if (settled) {
         return;
@@ -133,7 +141,9 @@ async function runLobsterSubprocessOnce(params: {
       if (code !== 0) {
         settle({
           ok: false,
-          error: new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`),
+          error: new Error(
+            `lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`,
+          ),
         });
         return;
       }
@@ -180,7 +190,10 @@ function parseEnvelope(stdout: string): LobsterEnvelope {
   throw new Error("lobster returned invalid JSON envelope");
 }
 
-function buildLobsterArgv(action: string, params: Record<string, unknown>): string[] {
+function buildLobsterArgv(
+  action: string,
+  params: Record<string, unknown>,
+): string[] {
   if (action === "run") {
     const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
     if (!pipeline.trim()) {
@@ -215,7 +228,10 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
     parameters: Type.Object({
       // NOTE: Prefer string enums in tool schemas; some providers reject unions/anyOf.
-      action: Type.Unsafe<"run" | "resume">({ type: "string", enum: ["run", "resume"] }),
+      action: Type.Unsafe<"run" | "resume">({
+        type: "string",
+        enum: ["run", "resume"],
+      }),
       pipeline: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
@@ -230,16 +246,20 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       maxStdoutBytes: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
-      const action = typeof params.action === "string" ? params.action.trim() : "";
+      const action =
+        typeof params.action === "string" ? params.action.trim() : "";
       if (!action) {
         throw new Error("action required");
       }
 
       const execPath = "lobster";
       const cwd = resolveCwd(params.cwd);
-      const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
+      const timeoutMs =
+        typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
       const maxStdoutBytes =
-        typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
+        typeof params.maxStdoutBytes === "number"
+          ? params.maxStdoutBytes
+          : 512_000;
 
       const argv = buildLobsterArgv(action, params);
 
