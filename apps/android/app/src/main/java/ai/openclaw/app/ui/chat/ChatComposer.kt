@@ -337,3 +337,4 @@ private fun mobileBodyStyle() =
     fontSize = 15.sp,
     lineHeight = 22.sp,
   )
+

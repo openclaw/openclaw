@@ -94,3 +94,4 @@ struct QRScannerView: UIViewControllerRepresentable {
         }
     }
 }
+

@@ -12,3 +12,4 @@ enum class VoiceWakeMode(val rawValue: String) {
     }
   }
 }
+

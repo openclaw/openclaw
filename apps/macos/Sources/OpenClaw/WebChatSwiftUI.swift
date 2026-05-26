@@ -456,3 +456,4 @@ final class WebChatSwiftUIWindowController {
         ColorHexSupport.color(fromHex: raw)
     }
 }
+
