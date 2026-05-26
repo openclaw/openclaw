@@ -1821,3 +1821,4 @@ private fun hasMotionCapabilities(context: Context): Boolean {
   return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
     sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
+
