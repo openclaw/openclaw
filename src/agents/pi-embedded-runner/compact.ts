@@ -499,6 +499,8 @@ async function compactEmbeddedPiSessionDirectOnce(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  // Keep the configured provider for context-window policy, while auth/model loading below can
+  // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   const modelConfigProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
@@ -727,7 +729,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         model: effectiveModel,
         modelApi: effectiveModel.api,
         harnessId: params.agentHarnessId,
-        harnessRuntime: params.agentHarnessId,
+        harnessRuntime: selectedHarnessRuntime,
         authProfileProvider: authProfileId?.split(":", 1)[0],
         sessionAuthProfileId: authProfileId,
         config: params.config,

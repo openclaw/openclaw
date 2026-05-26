@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -236,6 +244,239 @@ docker_e2e_build_or_reuse \\
 test "$(grep -c '^--kill-after=30s 3s|' "$TMPDIR/timeout-seen")" = "2"
 grep -q '^image inspect openclaw-reuse-image$' "$TMPDIR/docker-seen"
 grep -q '^pull openclaw-reuse-image$' "$TMPDIR/docker-seen"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails Docker commands fast when timeout is unavailable", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-timeout-required-"));
+
+    try {
+      mkdirSync(join(workDir, "bin"));
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export DOCKER_COMMAND_TIMEOUT=7s
+
+docker() {
+  printf "%s\\n" "$*" >"$TMPDIR/docker-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+set +e
+docker_e2e_docker_cmd ps 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "127" ]]
+[[ "$stderr" = *"timeout command not found; cannot bound Docker command after 7s"* ]]
+[[ ! -e "$TMPDIR/docker-seen" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses plain timeout when kill-after is unsupported", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-plain-timeout-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 1
+fi
+printf 'plain:%s|%s\\n' "$1" "\${*:2}" >>"$TMPDIR/timeout-seen"
+shift
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export DOCKER_COMMAND_TIMEOUT=9s
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_cmd image inspect demo
+
+grep -q '^plain:9s|docker image inspect demo$' "$TMPDIR/timeout-seen"
+grep -q '^image inspect demo$' "$TMPDIR/docker-seen"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses gtimeout when timeout is unavailable", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-gtimeout-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "gtimeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+printf 'gtimeout:%s %s|%s\\n' "$1" "$2" "\${*:3}" >>"$TMPDIR/timeout-seen"
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "gtimeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=13s
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_run_cmd run demo
+
+[[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 13s|docker run demo" ]]
+[[ "$(<"$TMPDIR/docker-seen")" = "run demo" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps package-backed Docker runs bounded without the shared timeout helper", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-timeout-required-"));
+
+    try {
+      mkdirSync(join(workDir, "bin"));
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=11s
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >"$TMPDIR/docker-seen"
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "127" ]]
+[[ "$stderr" = *"timeout command not found; cannot bound Docker run after 11s"* ]]
+[[ ! -e "$TMPDIR/docker-seen" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses gtimeout for package-backed Docker runs without the shared timeout helper", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-gtimeout-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "gtimeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+printf 'gtimeout:%s %s|%s\\n' "$1" "$2" "\${*:3}" >>"$TMPDIR/timeout-seen"
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "gtimeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=15s
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_docker_run_cmd run demo
+
+[[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 15s|docker run demo" ]]
+[[ "$(<"$TMPDIR/docker-seen")" = "run demo" ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

@@ -1507,7 +1507,7 @@ jobs:
 
       - name: Setup Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "22.x"
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1516,7 +1516,7 @@ jobs:
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          node-version: 24.x
+          node-version: 22.x
 
       - name: Runtime versions
         run: |

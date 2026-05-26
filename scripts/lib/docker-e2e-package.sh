@@ -20,15 +20,22 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
       return
     fi
     local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+    local timeout_bin=""
     if command -v timeout >/dev/null 2>&1; then
-      if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-        timeout --kill-after=30s "$timeout_value" docker "$@"
+      timeout_bin="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+      timeout_bin="gtimeout"
+    fi
+    if [ -n "$timeout_bin" ]; then
+      if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+        "$timeout_bin" --kill-after=30s "$timeout_value" docker "$@"
       else
-        timeout "$timeout_value" docker "$@"
+        "$timeout_bin" "$timeout_value" docker "$@"
       fi
       return
     fi
-    docker "$@"
+    echo "timeout command not found; cannot bound Docker run after ${timeout_value}" >&2
+    return 127
   }
 fi
 

@@ -185,18 +185,22 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 async function writeProjectFiles(tmp: string, files: Record<string, string>) {
-  for (const [relativePath, contents] of Object.entries(files)) {
-    const absolutePath = resolvePath(tmp, relativePath);
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fs.writeFile(absolutePath, contents, "utf-8");
-  }
+  await Promise.all(
+    Object.entries(files).map(async ([relativePath, contents]) => {
+      const absolutePath = resolvePath(tmp, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, contents, "utf-8");
+    }),
+  );
 }
 
 async function touchProjectFiles(tmp: string, relativePaths: string[], time: Date) {
-  for (const relativePath of relativePaths) {
-    const absolutePath = resolvePath(tmp, relativePath);
-    await fs.utimes(absolutePath, time, time);
-  }
+  await Promise.all(
+    relativePaths.map(async (relativePath) => {
+      const absolutePath = resolvePath(tmp, relativePath);
+      await fs.utimes(absolutePath, time, time);
+    }),
+  );
 }
 
 async function setupTrackedProject(
