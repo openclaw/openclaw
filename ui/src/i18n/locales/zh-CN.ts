@@ -431,7 +431,7 @@ export const zh_CN: TranslationMap = {
     aiAgents: "代理、模型、技能、工具、记忆和会话设置。",
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
-    dreams: "记忆做梦、巩固与反思。",
+    dreams: "梦境记忆、巩固与反思。",
   },
   activity: {
     title: "活动记录",
@@ -1310,7 +1310,7 @@ export const zh_CN: TranslationMap = {
       announceDefault: "发布摘要（默认）",
       webhookPost: "Webhook POST",
       noneInternal: "无（仅内部）",
-      deliveryHelp: "发布将摘要发送到聊天。无保持执行仅内部。",
+      deliveryHelp: "选发布模式将摘要发送到聊天，否则仅内部执行。",
       webhookUrl: "Webhook URL",
       channel: "渠道",
       webhookPlaceholder: "https://example.com/cron",
