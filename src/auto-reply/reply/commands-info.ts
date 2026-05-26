@@ -2,7 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
-import { listSkillCommandsForAgents } from "../skill-commands.js";
+import { listSkillCommandsForAgents, resolveSkillCommandInvocation } from "../skill-commands.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -15,7 +15,7 @@ import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import { buildStatusReply } from "./commands-status.js";
-import type { CommandHandler } from "./commands-types.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 export { handleContextCommand } from "./commands-context-command.js";
@@ -86,6 +86,62 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   return {
     shouldContinue: false,
     reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
+  };
+};
+
+function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams["skillCommands"]>) {
+  const lines = ["Usage: /skill <name> [input]"];
+  if (skillCommands.length > 0) {
+    const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
+    lines.push("", `Available: ${names.join(", ")}`);
+    if (skillCommands.length > names.length) {
+      lines.push(`More: /commands (${skillCommands.length - names.length} more)`);
+    } else {
+      lines.push("More: /commands");
+    }
+  } else {
+    lines.push("", "Use /commands to list available skill commands.");
+  }
+  return lines.join("\n");
+}
+
+export const handleSkillCommandUsage: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/skill" && !normalized.startsWith("/skill ")) {
+    return null;
+  }
+  // Bare or unknown /skill commands are deterministic help responses; handling
+  // them here avoids falling through into a full agent/model turn.
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /skill from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const [, rawName] = normalized.match(/^\/skill(?:\s+([^\s]+))?/u) ?? [];
+  const agentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
+  const skillCommands =
+    params.skillCommands ??
+    listSkillCommandsForAgents({
+      cfg: params.cfg,
+      agentIds: agentId ? [agentId] : undefined,
+    });
+  if (
+    rawName &&
+    resolveSkillCommandInvocation({ commandBodyNormalized: normalized, skillCommands })
+  ) {
+    return null;
+  }
+  const prefix = rawName ? `Unknown skill: ${rawName}\n\n` : "";
+  return {
+    shouldContinue: false,
+    reply: { text: `${prefix}${buildSkillCommandUsage(skillCommands)}` },
   };
 };
 
