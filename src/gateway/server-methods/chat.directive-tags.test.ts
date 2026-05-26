@@ -351,7 +351,7 @@ vi.mock("../../media/store.js", async () => {
               `openclaw-chat-outgoing-${process.pid}-${mockState.savedMediaCalls.length}.png`,
             )
           : `/tmp/${mockState.savedMediaCalls.length}.png`);
-      if (subdir === "outgoing/originals") {
+      if (subdir === "outgoing/originals" && !next?.path) {
         fs.rmSync(savedPath, { force: true });
       }
       try {
