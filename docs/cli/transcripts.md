@@ -113,4 +113,39 @@ or metadata was written before any utterances arrived.
 Use `path <session> --transcript` to inspect the append-only transcript, and use
 the `transcripts` tool action `summarize` to regenerate the Markdown summary.
 
+## Configuration
+
+Transcript capture is opt-in because live sources can join and record meeting
+audio. Enable the tool with top-level `transcripts.enabled`:
+
+```json
+{
+  "transcripts": {
+    "enabled": true,
+    "maxUtterances": 2000
+  }
+}
+```
+
 Configure auto-start sources with `transcripts.autoStart` in `openclaw.json`.
+Each entry is enabled by being present; omit an entry to disable that source.
+
+```json
+{
+  "transcripts": {
+    "enabled": true,
+    "autoStart": [
+      {
+        "providerId": "discord-voice",
+        "guildId": "1234567890",
+        "channelId": "2345678901"
+      },
+      {
+        "providerId": "slack-huddle",
+        "accountId": "workspace",
+        "channelId": "C123"
+      }
+    ]
+  }
+}
+```

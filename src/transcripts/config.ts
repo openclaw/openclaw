@@ -63,7 +63,7 @@ export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfi
       ? Math.max(1, Math.min(10_000, Math.floor(config.maxUtterances)))
       : 2_000;
   return {
-    enabled: config.enabled !== false,
+    enabled: config.enabled === true,
     maxUtterances,
     autoStart: resolveAutoStart(config.autoStart),
   };

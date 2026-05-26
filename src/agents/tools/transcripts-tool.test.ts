@@ -26,7 +26,7 @@ function currentDateDir(): string {
 }
 
 async function createHarness(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
-  const config = { transcripts: pluginConfig };
+  const config = { transcripts: { enabled: true, ...pluginConfig } };
   const logger = { warn: vi.fn() };
   return {
     logger,
@@ -45,6 +45,15 @@ describe("transcripts tool", () => {
     const { tool } = await createHarness(stateDir);
 
     expect(tool.name).toBe("transcripts");
+  });
+
+  it("requires explicit enablement before execution", async () => {
+    const stateDir = await makeStateDir();
+    const { tool } = await createHarness(stateDir, { enabled: false });
+
+    await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
+      "transcripts are disabled",
+    );
   });
 
   it("imports a speaker transcript and writes summary artifacts", async () => {
