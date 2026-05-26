@@ -73,7 +73,15 @@ type ChannelBrokerDurableInboundMetadata = {
 const brokerIngressIdentity = defineStableChannelIngressIdentity({
   kind: "stable-id",
   normalize: normalizeBrokerIngressIdentifier,
-  aliases: [{ key: "handle", kind: "username", normalize: normalizeBrokerIngressIdentifier }],
+  aliases: [
+    { key: "handle", kind: "username", normalize: normalizeBrokerIngressIdentifier },
+    {
+      key: "platformScopedSender",
+      kind: "stable-id",
+      normalize: normalizeBrokerIngressIdentifier,
+    },
+    { key: "nativeFrom", kind: "stable-id", normalize: normalizeBrokerIngressIdentifier },
+  ],
   isWildcardEntry: (value) => value.trim() === "*",
   entryIdPrefix: "broker-sender",
 });
@@ -459,7 +467,11 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
             identity: brokerIngressIdentity,
             subject: {
               stableId: event.sender.id,
-              ...(event.sender.handle ? { aliases: { handle: event.sender.handle } } : {}),
+              aliases: {
+                ...(event.sender.handle ? { handle: event.sender.handle } : {}),
+                platformScopedSender: `${event.platform}:${event.sender.id}`,
+                ...(event.message.nativeIds?.from ? { nativeFrom: event.message.nativeIds.from } : {}),
+              },
             },
             conversation: {
               kind: chatKind,
@@ -492,6 +504,7 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
               },
             },
             allowFrom: account.allowFrom,
+            accessGroups: cfg.accessGroups,
             mentionFacts,
           });
           return brokerIngress;

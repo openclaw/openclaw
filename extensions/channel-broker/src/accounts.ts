@@ -40,11 +40,15 @@ export function listChannelBrokerProviderIds(cfg: CoreConfig): string[] {
   const channelConfig = getChannelBrokerConfig(cfg);
   const providerIds = Object.keys(channelConfig?.providers ?? {});
   const accountIds = Object.keys(channelConfig?.accounts ?? {});
+  const topLevelDefaultId = normalizeOptionalString(
+    channelConfig?.defaultProviderId ?? channelConfig?.defaultAccount,
+  );
+  const implicitAccountId = hasConfiguredAccountValue(channelConfig?.baseUrl)
+    ? normalizeAccountId(topLevelDefaultId ?? DEFAULT_ACCOUNT_ID)
+    : undefined;
   return listCombinedAccountIds({
     configuredAccountIds: [...providerIds, ...accountIds].map(normalizeAccountId),
-    implicitAccountId: hasConfiguredAccountValue(channelConfig?.baseUrl)
-      ? DEFAULT_ACCOUNT_ID
-      : undefined,
+    implicitAccountId,
     fallbackAccountIdWhenEmpty: DEFAULT_ACCOUNT_ID,
   });
 }

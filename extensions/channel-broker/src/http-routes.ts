@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   buildBrokerInboundDedupeKey,
   normalizeBrokerInboundEvent,
@@ -69,6 +70,9 @@ function isSenderAllowed(params: {
   event: BrokerInboundEventV1;
 }): boolean {
   const allowed = params.account.allowFrom.map((value) => String(value).trim()).filter(Boolean);
+  if (allowed.some((entry) => parseAccessGroupAllowFromEntry(entry) !== null)) {
+    return true;
+  }
   if (allowed.includes("*")) {
     return true;
   }

@@ -1,4 +1,5 @@
 import type { BrokerPlatformCapabilities } from "openclaw/plugin-sdk/channel-broker";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ChannelBrokerPlatformCapabilityConfig = Omit<BrokerPlatformCapabilities, "platform"> & {
@@ -29,6 +30,7 @@ export type ChannelBrokerConfig = ChannelBrokerProviderConfig & {
 };
 
 export type CoreConfig = {
+  accessGroups?: OpenClawConfig["accessGroups"];
   channels?: {
     "channel-broker"?: ChannelBrokerConfig;
   };

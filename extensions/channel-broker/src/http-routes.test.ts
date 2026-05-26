@@ -385,6 +385,84 @@ describe("channel-broker HTTP routes", () => {
     );
   });
 
+  it("dispatches broker senders matched by access groups", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "hello there",
+        mentions: { canDetectMention: true, wasMentioned: true, hasAnyMention: true },
+      },
+    });
+    const config = {
+      ...brokerConfig("broker-secret", { allowFrom: ["accessGroup:owners"] }),
+      accessGroups: {
+        owners: {
+          type: "message.senders" as const,
+          members: { "channel-broker": ["telegram:user-1"] },
+        },
+      },
+    };
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access: expect.objectContaining({
+          group: expect.objectContaining({ senderAllowed: true }),
+        }),
+      }),
+    );
+  });
+
+  it("dispatches broker senders matched by platform-scoped allowlists", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "hello there",
+        mentions: { canDetectMention: true, wasMentioned: true, hasAnyMention: true },
+      },
+    });
+    const config = brokerConfig("broker-secret", { allowFrom: ["telegram:user-1"] });
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access: expect.objectContaining({
+          group: expect.objectContaining({ senderAllowed: true }),
+        }),
+      }),
+    );
+  });
+
   it("adapts the injected plugin runtime into the real channel turn path", async () => {
     const body = inboundBody();
     const config = brokerConfig();
@@ -1500,6 +1578,32 @@ describe("channel-broker HTTP routes", () => {
     expect(res.statusCode).toBe(404);
     expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "provider_not_configured" });
     expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("accepts signed inbound events for a top-level default provider id", async () => {
+    const body = inboundBody("user-1", { providerId: "acme" });
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            defaultProviderId: "acme",
+            baseUrl: "https://broker.example.test",
+            signingSecret: "broker-secret",
+            allowFrom: ["user-1"],
+          },
+        },
+      },
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(receiveInboundEvent).toHaveBeenCalledOnce();
   });
 
   it("applies the pre-auth body limit before signature verification", async () => {
