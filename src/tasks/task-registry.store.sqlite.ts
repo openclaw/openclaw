@@ -2,6 +2,7 @@ import { existsSync, renameSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import {
   ensureSqliteStorePermissions,
@@ -72,7 +73,8 @@ type TaskRegistryDatabase = {
 let cachedDatabase: TaskRegistryDatabase | null = null;
 const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
-const TASK_RUN_SELECT_COLUMNS = `
+const log = createSubsystemLogger("task-registry");
+const TASK_RUN_SELECT_COLUMNS = `;
   task_id,
   runtime,
   task_kind,
@@ -443,7 +445,7 @@ function isSqliteCorruptionError(error: unknown): boolean {
   );
 }
 
-function quarantineCorruptedDatabase(pathname: string): void {
+function quarantineCorruptedDatabase(pathname: string): string | null {
   const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
   try {
     renameSync(pathname, quarantinePath);
@@ -453,8 +455,9 @@ function quarantineCorruptedDatabase(pathname: string): void {
         renameSync(sidecar, `${quarantinePath}${suffix}`);
       }
     }
+    return quarantinePath;
   } catch {
-    // best-effort rename; if it fails, the fresh open will overwrite
+    return null;
   }
 }
 
@@ -480,7 +483,14 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
     if (!isSqliteCorruptionError(error) || !existsSync(pathname)) {
       throw error;
     }
-    quarantineCorruptedDatabase(pathname);
+    const quarantinePath = quarantineCorruptedDatabase(pathname);
+    if (quarantinePath) {
+      log.warn("Corrupted task registry database quarantined, creating fresh database", {
+        originalPath: pathname,
+        quarantinePath,
+        error: String(error),
+      });
+    }
     ensureTaskRegistryPermissions(pathname);
     db = new DatabaseSync(pathname);
     db.exec(`PRAGMA synchronous = NORMAL;`);
