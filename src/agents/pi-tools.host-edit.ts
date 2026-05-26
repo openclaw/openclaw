@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
+import { buildEditDiff } from "./pi-tools.host-edit-diff.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -111,7 +112,11 @@ function didEditLikelyApply(params: {
   return true;
 }
 
-function buildEditSuccessResult(pathParam: string, editCount: number): AgentToolResult<unknown> {
+function buildEditSuccessResult(
+  pathParam: string,
+  editCount: number,
+  diff: string = "",
+): AgentToolResult<unknown> {
   const text =
     editCount > 1
       ? `Successfully replaced ${editCount} block(s) in ${pathParam}.`
@@ -124,7 +129,12 @@ function buildEditSuccessResult(pathParam: string, editCount: number): AgentTool
         text,
       },
     ],
-    details: { diff: "", firstChangedLine: undefined },
+    // ``diff`` defaults to "" so recovery callers that lack a pre-edit
+    // snapshot keep emitting today's empty-diff result.  When the caller
+    // can compute a diff it is rendered by the export-html template (case
+    // "edit", around L1144 in src/auto-reply/reply/export-html/template.js).
+    // See #82015.
+    details: { diff, firstChangedLine: undefined },
   } as AgentToolResult<unknown>;
 }
 
@@ -194,7 +204,26 @@ export function wrapEditToolWithRecovery(
               edits,
             })
           ) {
-            return buildEditSuccessResult(pathParam ?? absolutePath, edits.length);
+            // The base tool threw but the edit landed on disk.  Compute a
+            // bounded unified diff from the pre-edit snapshot so the
+            // recovered success result can drive the same HTML rendering
+            // path the upstream happy-path result already does.  See
+            // #82015.  Skipped silently when the snapshot is missing or
+            // the diff helper rejects the input on its size guard.
+            let recoveryDiff = "";
+            if (typeof originalContent === "string") {
+              try {
+                recoveryDiff = buildEditDiff(
+                  originalContent,
+                  currentContent,
+                  pathParam ?? path.relative(options.root, absolutePath),
+                );
+              } catch {
+                // Best-effort only — recovery result stays useful without
+                // the diff.
+              }
+            }
+            return buildEditSuccessResult(pathParam ?? absolutePath, edits.length, recoveryDiff);
           }
         }
 
