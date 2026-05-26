@@ -41,6 +41,31 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 ../crabbox/bin/crabbox webvnc --help
 ```
 
+- If both PATH `crabbox` and `../crabbox/bin/crabbox` are missing, or the
+  sibling binary fails the version/help checks, install the sibling Crabbox CLI
+  before reporting Crabbox as unavailable:
+
+```sh
+mkdir -p ../crabbox
+if [ ! -d ../crabbox/src/.git ]; then
+  git clone https://github.com/openclaw/crabbox.git ../crabbox/src
+else
+  if [ -n "$(git -C ../crabbox/src status --short)" ]; then
+    git -C ../crabbox/src status --short
+    echo "Dirty ../crabbox/src checkout; resolve before updating Crabbox." >&2
+    exit 1
+  fi
+  git -C ../crabbox/src pull --ff-only
+fi
+mkdir -p ../crabbox/bin
+go version
+(cd ../crabbox/src && go build -o ../bin/crabbox ./cmd/crabbox)
+../crabbox/bin/crabbox --version
+node scripts/crabbox-wrapper.mjs run --help | sed -n '1,80p'
+```
+
+- If `go version` is missing or the build fails, report that first actionable
+  toolchain/build error. Do not claim Crabbox proof from a stale PATH shim.
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
   shim can be stale.
 - Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
@@ -224,6 +249,43 @@ Read the JSON summary and the Testbox line. Useful fields:
 blacksmith testbox list --all
 blacksmith testbox status <tbx_id>
 ```
+
+## Fresh PR Smoke And Local Container Fallback
+
+Use `--fresh-pr <owner/repo#number>` to validate an upstream PR from a clean
+remote checkout. Delegated `blacksmith-testbox` owns checkout/sync and does not
+support `--fresh-pr`; use a direct provider such as brokered AWS, or
+`local-container` when remote providers are unavailable and a local Docker proof
+is still useful.
+
+Example local-container fallback:
+
+```sh
+node scripts/crabbox-wrapper.mjs run \
+  --provider local-container \
+  --local-container-image node:24-bookworm \
+  --no-hydrate \
+  --fresh-pr openclaw/openclaw#123 \
+  --timing-json \
+  --shell -- \
+  "set -euo pipefail
+   corepack pnpm install --frozen-lockfile --store-dir .pnpm-store
+   git diff --check
+   corepack pnpm test <path-or-filter>"
+```
+
+- Report `provider=local-container` and the returned `cbx_...` id exactly. This
+  is a Crabbox wrapper proof, but not AWS/Testbox remote proof.
+- Prefer `corepack pnpm ...` inside containers. `corepack enable` may fail when
+  the user cannot symlink into `/usr/local/bin`.
+- If package hydration or install fails with `ERR_PNPM_EXDEV`, rerun with
+  `--no-hydrate` and a repo-local store such as `--store-dir .pnpm-store`.
+- If brokered AWS falls through to AWS credential or IMDS errors, verify
+  `crabbox config show`, `crabbox whoami`, and broker login before asking for
+  cloud keys. For normal OpenClaw validation, prefer broker auth or an existing
+  brokered lease.
+- If `blacksmith` is not installed, do not treat that as an AWS Crabbox
+  blocker. Use brokered AWS or local-container, and label the actual provider.
 
 ## Observability Flags
 
