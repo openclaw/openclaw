@@ -2491,6 +2491,7 @@ async function processOpenAICompletionsStream(
     : null;
   let pendingDeepSeekDsmlText = "";
   let deepSeekDsmlSyntheticCallCount = 0;
+  let hasSeenNativeToolCalls = false;
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2659,6 +2660,9 @@ async function processOpenAICompletionsStream(
     return true;
   };
   const tryFlushDeepSeekDsmlToolText = (final: boolean) => {
+    if (hasSeenNativeToolCalls) {
+      return false;
+    }
     if (!pendingDeepSeekDsmlText) {
       return false;
     }
@@ -2777,6 +2781,7 @@ async function processOpenAICompletionsStream(
       }
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      hasSeenNativeToolCalls = true;
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
         let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;

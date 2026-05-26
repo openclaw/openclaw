@@ -1664,6 +1664,57 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it("skips DSML recovery when native tool calls are present", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-native-mix",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: {
+                      name: "read",
+                      arguments: '{"path":"/tmp/test.md"}',
+                    },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: {},
+        partialArgs: '{"path":"/tmp/test.md"}',
+      },
+    ]);
+  });
+
   it("recovers observed DeepSeek DSML parameter tool call emitted as text", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
