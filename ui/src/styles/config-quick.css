@@ -8,6 +8,34 @@
   width: 100%;
 }
 
+/* Opt-in fill-height chain for routes whose primary card needs to own the
+   viewport (e.g. Logs). Activates only when a `.card--fill-height` is present
+   so other settings routes keep the default `.content` auto-scroll.
+
+   The chain works because the entire ancestor stack is converted to flex
+   columns so the workspace can take the remaining viewport after the
+   `.content-header` breadcrumb without triggering `.content`'s overflow scroll. */
+.content:has(.card--fill-height) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content:has(.card--fill-height) .settings-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: auto;
+}
+
+.content:has(.card--fill-height) .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .settings-section-nav {
   display: flex;
   flex-wrap: wrap;
