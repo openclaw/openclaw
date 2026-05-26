@@ -25,3 +25,7 @@ The bootstrap writes a Zorg MemoryDB usage block into the OpenClaw workspace mar
 This is required because importing rules into PostgreSQL alone is not enough: the local LLM must be able to read how to use the database memory path before it can reliably call the DB-backed recall tools.
 
 The Python recall tools install their dependencies from `zorg/requirements.txt` into `.venv-sqlmem`. They also re-exec through `.venv-sqlmem/bin/python` when launched with plain `python3`, so agent-readable commands do not fail just because the system Python lacks `psycopg2`.
+
+## Direct npm prerequisite repair
+
+`zorg/check-node-version.cjs` is intentionally duplicated from the root OpenClaw lifecycle helper into this packaged Zorg tree. Direct git installs can run npm lifecycle scripts from a temporary packed tree before every root development script is present. Keeping the Node prerequisite repair helper under `zorg/` makes the repair path available during `npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git`, including on old hosts that start with Node v12.

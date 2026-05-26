@@ -39,6 +39,23 @@ sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zor
 
 If `node --version` prints Node 12, Node 18, or any version below 22.19.0, do not use direct npm yet. Run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.
 
+Observed failure on old hosts: npm resolves the package dependency tree before the OpenClaw lifecycle script can run. On Node v12.22.9 this produces a long `npm WARN EBADENGINE` cascade. If the lifecycle script does run and upgrades Node during the same npm process, npm can still continue inside the temporary git package tree it already prepared. Zorg keeps a copy of the Node prerequisite repair script under `zorg/check-node-version.cjs`, which is part of the packaged add-on tree, so the lifecycle path remains available during direct git installs.
+
+If direct npm has already failed once on an old host, verify the repaired runtime and rerun:
+
+```bash
+node --version
+npm --version
+sudo npm cache clean --force
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+```
+
+If Node is still below v22.19.0 after the failed direct npm attempt, use the first-run installer instead of repeating direct npm:
+
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
+```
+
 ## Docker Gateway TUI Compatibility
 
 When OpenClaw runs in Docker or Podman and the host runs `openclaw tui` against a published gateway port such as `127.0.0.1:18789`, the gateway can see the host connection as a container bridge address instead of true localhost. Without the compatibility patch, the TUI can fail with:
