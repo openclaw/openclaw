@@ -51,13 +51,20 @@ openclaw_active_node_version() {
   node -p 'process.versions.node' 2>/dev/null || true
 }
 
+openclaw_shell_path() {
+  local path_value="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$path_value" 2>/dev/null || printf '%s' "$path_value"
+  else
+    printf '%s' "$path_value"
+  fi
+}
+
 openclaw_prepend_node_bin() {
   local node_bin_dir="$1"
   local github_path_dir="${2:-$node_bin_dir}"
-  local shell_node_bin_dir="$node_bin_dir"
-  if command -v cygpath >/dev/null 2>&1; then
-    shell_node_bin_dir="$(cygpath -u "$node_bin_dir" 2>/dev/null || printf '%s' "$node_bin_dir")"
-  fi
+  local shell_node_bin_dir
+  shell_node_bin_dir="$(openclaw_shell_path "$node_bin_dir")"
   export PATH="$shell_node_bin_dir:$PATH"
   if [[ -n "${GITHUB_PATH:-}" ]]; then
     local github_node_bin_dir="$github_path_dir"
@@ -84,9 +91,8 @@ openclaw_find_toolcache_node() {
     "/Users/runner/hostedtoolcache" \
     "/c/hostedtoolcache/windows"
   do
-    if [[ ! -d "$root" && "$root" == *\\* ]] && command -v cygpath >/dev/null 2>&1; then
-      root="$(cygpath -u "$root" 2>/dev/null || printf '%s' "$root")"
-    fi
+    [[ -n "$root" ]] || continue
+    root="$(openclaw_shell_path "$root")"
     if [[ -d "$root/node" ]]; then
       roots+=("$root/node")
     elif [[ "$(basename "$root")" == "node" && -d "$root" ]]; then
@@ -175,10 +181,7 @@ openclaw_download_node() {
   local version platform archive_url install_root temp_root
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
-  temp_root="${RUNNER_TEMP:-/tmp}"
-  if command -v cygpath >/dev/null 2>&1; then
-    temp_root="$(cygpath -u "$temp_root" 2>/dev/null || printf '%s\n' "$temp_root")"
-  fi
+  temp_root="$(openclaw_shell_path "${RUNNER_TEMP:-/tmp}")"
   install_root="${temp_root}/openclaw-node-${version}-${platform}"
   if [[ "$platform" == win-* ]]; then
     local archive_path ps_archive_path ps_install_root ps_bin_dir node_bin_dir

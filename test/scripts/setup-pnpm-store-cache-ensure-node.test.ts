@@ -6,10 +6,16 @@ import { describe, expect, it } from "vitest";
 
 const ensureNodeScript = resolve(".github/actions/setup-pnpm-store-cache/ensure-node.sh");
 
+function writeExecutable(path: string, contents: string) {
+  writeFileSync(path, contents);
+  chmodSync(path, 0o755);
+  return path;
+}
+
 function writeFakeNode(binDir: string, version: string) {
   mkdirSync(binDir, { recursive: true });
   const nodePath = join(binDir, "node");
-  writeFileSync(
+  return writeExecutable(
     nodePath,
     `#!/usr/bin/env bash
 if [[ "$1" == "-p" ]]; then
@@ -23,8 +29,6 @@ fi
 exit 0
 `,
   );
-  chmodSync(nodePath, 0o755);
-  return nodePath;
 }
 
 function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.ProcessEnv = {}) {
@@ -117,9 +121,8 @@ describe("setup-pnpm-store-cache ensure-node", () => {
       const toolcacheNode = writeFakeNode(toolcacheBin, "24.15.0");
       const helperBin = join(root, "helpers");
       mkdirSync(helperBin, { recursive: true });
-      const cygpath = join(helperBin, "cygpath");
-      writeFileSync(
-        cygpath,
+      writeExecutable(
+        join(helperBin, "cygpath"),
         `#!/usr/bin/env bash
 if [[ "$1" == "-u" ]]; then
   echo "${toolcacheBin}"
@@ -132,7 +135,6 @@ fi
 exit 1
 `,
       );
-      chmodSync(cygpath, 0o755);
       const githubPath = join(root, "github-path");
       const result = spawnSync(
         "bash",
@@ -155,6 +157,164 @@ exit 1
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
       expect(result.stdout).toContain("C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes Windows toolcache roots before scanning for Node", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.22.3");
+      const toolcacheRoot = join(root, "toolcache");
+      const toolcacheBin = join(toolcacheRoot, "node", "24.15.0", "x64");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "24.15.0");
+      const helperBin = join(root, "helpers");
+      mkdirSync(helperBin, { recursive: true });
+      writeExecutable(
+        join(helperBin, "cygpath"),
+        `#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then
+  case "$2" in
+    "C:\\\\hostedtoolcache\\\\windows") echo "${toolcacheRoot}" ;;
+    *) echo "$2" ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "-w" ]]; then
+  echo "$2"
+  exit 0
+fi
+exit 1
+`,
+      );
+      const result = runEnsureNode(root, "24.x", {
+        PATH: `${helperBin}:${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TOOL_CACHE: "C:\\hostedtoolcache\\windows",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Using Node 24.15.0 from ${toolcacheNode}`);
+      expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("supports Windows Node archive downloads", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const helperBin = join(root, "helpers");
+      mkdirSync(helperBin, { recursive: true });
+      writeExecutable(
+        join(helperBin, "uname"),
+        `#!/usr/bin/env bash
+case "$1" in
+  -s) echo "MINGW64_NT-10.0" ;;
+  -m) echo "x86_64" ;;
+  *) exit 1 ;;
+esac
+`,
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -e",
+            `export PATH=${JSON.stringify(`${helperBin}:${process.env.PATH ?? ""}`)}`,
+            `source "${ensureNodeScript}"`,
+            "openclaw_node_download_platform",
+          ].join("; "),
+        ],
+        { encoding: "utf8", env: process.env },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("win-x64");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("downloads and activates a Windows Node zip when no matching toolcache node exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.22.3");
+      const helperBin = join(root, "helpers");
+      const runnerTemp = join(root, "runner-temp");
+      const extractedBin = join(
+        runnerTemp,
+        "openclaw-node-v24.15.0-win-x64",
+        "node-v24.15.0-win-x64",
+      );
+      mkdirSync(helperBin, { recursive: true });
+      mkdirSync(runnerTemp, { recursive: true });
+      writeExecutable(
+        join(helperBin, "uname"),
+        `#!/usr/bin/env bash
+case "$1" in
+  -s) echo "MINGW64_NT-10.0" ;;
+  -m) echo "x86_64" ;;
+  *) exit 1 ;;
+esac
+`,
+      );
+      writeExecutable(
+        join(helperBin, "curl"),
+        `#!/usr/bin/env bash
+out=""
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-o" ]]; then out="$arg"; fi
+  prev="$arg"
+done
+[[ -n "$out" ]] && printf 'zip' > "$out"
+`,
+      );
+      writeExecutable(
+        join(helperBin, "cygpath"),
+        `#!/usr/bin/env bash
+if [[ "$1" == "-u" ]]; then
+  case "$2" in
+    "C:\\\\runner\\\\_temp") echo "${runnerTemp}" ;;
+    *) echo "$2" ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "-w" ]]; then
+  echo "$2"
+  exit 0
+fi
+exit 1
+`,
+      );
+      writeExecutable(
+        join(helperBin, "pwsh"),
+        `#!/usr/bin/env bash
+mkdir -p "${extractedBin}"
+cat > "${join(extractedBin, "node")}" <<'NODEEOF'
+#!/usr/bin/env bash
+if [[ "$1" == "-p" ]]; then echo "24.15.0"; exit 0; fi
+exit 0
+NODEEOF
+chmod +x "${join(extractedBin, "node")}"
+`,
+      );
+      const result = runEnsureNode(root, "24.15.0", {
+        GITHUB_PATH: join(root, "github-path"),
+        PATH: `${helperBin}:${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TEMP: "C:\\runner\\_temp",
+        RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "Downloading Node v24.15.0 from https://nodejs.org/dist/v24.15.0/node-v24.15.0-win-x64.zip",
+      );
+      expect(result.stdout).toContain(`${join(extractedBin, "node")}\n24.15.0`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
