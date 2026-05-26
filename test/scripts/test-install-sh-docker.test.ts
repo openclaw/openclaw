@@ -66,7 +66,7 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
     expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
     expect(script).toContain("pnpm build");
-    expect(script).toContain("pnpm ui:build");
+    expect(script).not.toContain("pnpm ui:build");
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
   });
 
@@ -285,6 +285,9 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "0"');
     expect(workflow).toContain("Run Rocky Linux installer smoke");
+    expect(workflow).toContain("Run Rocky Linux CLI installer smoke");
+    expect(workflow).toContain("scripts/install-cli.sh:/tmp/install-cli.sh:ro");
+    expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli");
     expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");

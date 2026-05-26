@@ -25,6 +25,7 @@ import {
   createDefaultEmbeddedSession,
   createContextEngineBootstrapAndAssemble,
   createContextEngineAttemptRunner,
+  createSubscriptionMock,
   expectCalledWithSessionKey,
   getHoisted,
   resetEmbeddedAttemptHarness,
@@ -208,6 +209,32 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
+  });
+
+  it("flushes block replies again after compaction retry wait resolves", async () => {
+    const order: string[] = [];
+    let flushCount = 0;
+    const onBlockReplyFlush = vi.fn(async () => {
+      flushCount += 1;
+      order.push(`flush-${flushCount}`);
+    });
+    hoisted.waitForCompactionRetryWithAggregateTimeoutMock.mockImplementation(async () => {
+      order.push("retry-wait");
+      return { timedOut: false };
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        onBlockReplyFlush,
+      },
+    });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
+    expect(hoisted.waitForCompactionRetryWithAggregateTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["flush-1", "retry-wait", "flush-2"]);
   });
 
   it("enables Tool Search controls for embedded PI runs when configured", async () => {
@@ -1512,6 +1539,102 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(events).toContain("bootstrap");
     expect(events).toContain("lock");
     expect(events.indexOf("bootstrap")).toBeLessThan(events.indexOf("lock"));
+  });
+
+  it("does not acquire the session write lock after aborting during prep", async () => {
+    const abortController = new AbortController();
+    hoisted.resolveBootstrapContextForRunMock.mockImplementation(async () => {
+      abortController.abort();
+      return { bootstrapFiles: [], contextFiles: [] };
+    });
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: { abortSignal: abortController.signal },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(hoisted.acquireSessionWriteLockMock).not.toHaveBeenCalled();
+  });
+
+  it("disposes prep runtimes after aborting before the session write lock", async () => {
+    const abortController = new AbortController();
+    const lspDispose = vi.fn(async () => {});
+    hoisted.createBundleLspToolRuntimeMock.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {
+        tools: [],
+        dispose: lspDispose,
+      };
+    });
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          abortSignal: abortController.signal,
+          disableTools: false,
+          toolsAllow: ["*"],
+        },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(hoisted.acquireSessionWriteLockMock).not.toHaveBeenCalled();
+    expect(hoisted.createBundleLspToolRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(lspDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops session setup when aborting after the session write lock", async () => {
+    const abortController = new AbortController();
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    hoisted.sessionManagerOpenMock.mockImplementationOnce(() => {
+      abortController.abort();
+      return hoisted.sessionManager;
+    });
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createTestContextEngine({ bootstrap, assemble }),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: { abortSignal: abortController.signal },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(hoisted.acquireSessionWriteLockMock).toHaveBeenCalledTimes(1);
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(assemble).not.toHaveBeenCalled();
+    expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not submit a prompt after aborting a created session", async () => {
+    const abortController = new AbortController();
+    const sessionPrompt = vi.fn(async () => {});
+    hoisted.subscribeEmbeddedPiSessionMock.mockImplementationOnce(() => {
+      abortController.abort();
+      return createSubscriptionMock();
+    });
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        createSession: () =>
+          createDefaultEmbeddedSession({
+            initialMessages: [seedMessage],
+            prompt: sessionPrompt,
+          }),
+        attemptOverrides: { abortSignal: abortController.signal },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(sessionPrompt).not.toHaveBeenCalled();
   });
 
   it("forwards modelId to assemble", async () => {

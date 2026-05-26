@@ -24,6 +24,7 @@ import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-s
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
@@ -94,7 +95,7 @@ function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   if (legacyChatTargets.length === 0) {
     return params.groupAllowFrom;
   }
-  return Array.from(new Set([...params.groupAllowFrom, ...legacyChatTargets]));
+  return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
 }
 
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
