@@ -105,7 +105,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 ## Alternative: manual npm, pnpm, or bun
 
 ```bash
-npm i -g github:StefRush2099/Zorg_MemoryDB
+npm i -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 Prefer `openclaw update` for supervised installs because it can coordinate the
@@ -124,7 +124,7 @@ that owns the root-owned global prefix on your host:
 
 ```bash
 openclaw gateway stop
-sudo /usr/bin/npm i -g github:StefRush2099/Zorg_MemoryDB
+sudo /usr/bin/npm i -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 openclaw gateway install --force
 openclaw gateway restart
 ```

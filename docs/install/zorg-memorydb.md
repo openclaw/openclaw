@@ -23,7 +23,7 @@ Active memory markdown files should not exist in a Zorg MemoryDB install. If ret
 Use the HTTPS git install form. The npm `github:` shorthand can resolve through SSH on some systems and fail when root or the install user has no GitHub SSH key.
 
 ```bash
-sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 ## Zorg MemoryDB first-run installer
@@ -37,5 +37,5 @@ curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush
 Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
 
 ```bash
-sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```

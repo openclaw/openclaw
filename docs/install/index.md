@@ -72,7 +72,7 @@ If you already manage Node yourself:
 <Tabs>
   <Tab title="npm">
     ```bash
-    npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+    npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
     openclaw onboard --install-daemon
     ```
 
@@ -112,7 +112,7 @@ If you already manage Node yourself:
   If `sharp` fails due to a globally installed libvips:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 </Accordion>
@@ -231,7 +231,7 @@ For details, see [Zorg MemoryDB And LAN Command Chat Install](./zorg-memorydb.md
 Use HTTPS for npm installs so clean systems and root installs do not require a GitHub SSH key:
 
 ```bash
-sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 ## Zorg MemoryDB first-run installer
@@ -245,5 +245,5 @@ curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush
 Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
 
 ```bash
-sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```

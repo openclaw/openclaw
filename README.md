@@ -100,7 +100,7 @@ Model note: while many providers and models are supported, prefer a current flag
 Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 ```bash
-npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 # or: pnpm add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 
 openclaw onboard --install-daemon
@@ -510,7 +510,7 @@ See [docs/install/zorg-memorydb.md](docs/install/zorg-memorydb.md).
 Use HTTPS for npm installs so target systems do not need a GitHub SSH key:
 
 ```bash
-sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
 
 ## Zorg MemoryDB first-run installer
@@ -524,5 +524,5 @@ curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush
 Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
 
 ```bash
-sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
