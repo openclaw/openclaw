@@ -15,6 +15,7 @@ import {
   setAgentRunnerMemoryTestDeps,
 } from "./agent-runner-memory.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 const compactEmbeddedPiSessionMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
@@ -28,12 +29,31 @@ function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolve
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
-function createReplyOperation() {
+type TestReplyOperation = ReplyOperation & {
+  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
+  updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
+};
+
+function createReplyOperation(): TestReplyOperation {
   return {
+    key: "test",
+    sessionId: "session",
     abortSignal: new AbortController().signal,
-    setPhase: vi.fn(),
-    updateSessionId: vi.fn(),
-  } as never;
+    resetTriggered: false,
+    phase: "queued",
+    result: null,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
+    updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
+    attachBackend: vi.fn(),
+    detachBackend: vi.fn(),
+    complete: vi.fn(),
+    completeThen: vi.fn((afterClear: () => void) => {
+      afterClear();
+    }),
+    fail: vi.fn(),
+    abortByUser: vi.fn(),
+    abortForRestart: vi.fn(),
+  };
 }
 
 type RefreshQueuedFollowupSessionParams = {
@@ -75,6 +95,7 @@ type CompactEmbeddedPiSessionParams = {
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;
+  contextTokenBudget?: number;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -845,12 +866,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionFile,
       sessionKey: "agent:main:main",
     });
-    const updateSessionId = vi.fn();
-    const replyOperation = {
-      abortSignal: new AbortController().signal,
-      setPhase: vi.fn(),
-      updateSessionId,
-    } as never;
+    const replyOperation = createReplyOperation();
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -869,7 +885,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(entry?.sessionFile).toBe(successorFile);
     expect(followupRun.run.sessionId).toBe("session-rotated");
     expect(followupRun.run.sessionFile).toBe(successorFile);
-    expect(updateSessionId).toHaveBeenCalledWith("session-rotated");
+    expect(replyOperation.updateSessionId).toHaveBeenCalledWith("session-rotated");
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "agent:main:main",
       previousSessionId: "session",
@@ -925,6 +941,48 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it("continues when preflight compaction returns a successful no-op", async () => {
+    compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "already under target",
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 180_499,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.contextTokenBudget).toBe(200_000);
+    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+    expect(replyOperation.updateSessionId).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
   it("skips OpenClaw preflight compaction for persisted Codex runtime sessions", async () => {
@@ -1574,11 +1632,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
     const sessionStore = { main: sessionEntry };
-    const replyOperation = {
-      abortSignal: new AbortController().signal,
-      setPhase: vi.fn(),
-      updateSessionId: vi.fn(),
-    };
+    const replyOperation = createReplyOperation();
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: {
@@ -1603,7 +1657,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: replyOperation as never,
+      replyOperation,
     });
 
     expect(entry?.compactionCount).toBe(1);
