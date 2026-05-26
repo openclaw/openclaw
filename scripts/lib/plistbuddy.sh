@@ -33,3 +33,9 @@ plist_set_or_add_bool() {
   /usr/libexec/PlistBuddy -c "Set :$key $value" "$plist" ||
     /usr/libexec/PlistBuddy -c "Add :$key bool $value" "$plist"
 }
+
+plist_print_required() {
+  local plist="$1"
+  local key="$2"
+  /usr/libexec/PlistBuddy -c "Print :$key" "$plist"
+}

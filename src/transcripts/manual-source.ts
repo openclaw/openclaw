@@ -1,4 +1,4 @@
-import type { MeetingNotesSourceProviderPlugin } from "openclaw/plugin-sdk/meeting-notes";
+import type { TranscriptSourceProvider } from "./provider-types.js";
 
 function parseSpeakerLine(line: string): { speakerLabel?: string; text: string } {
   const match = /^([^:\n]{1,80}):\s+(.+)$/.exec(line.trim());
@@ -8,7 +8,7 @@ function parseSpeakerLine(line: string): { speakerLabel?: string; text: string }
   return { speakerLabel: match[1]?.trim(), text: match[2]?.trim() ?? "" };
 }
 
-export const manualTranscriptSourceProvider: MeetingNotesSourceProviderPlugin = {
+export const manualTranscriptSourceProvider: TranscriptSourceProvider = {
   id: "manual-transcript",
   aliases: ["import", "transcript"],
   name: "Manual Transcript Import",

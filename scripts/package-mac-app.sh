@@ -262,7 +262,8 @@ MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
 if [ -f "$MODEL_CATALOG_SRC" ]; then
   cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
 else
-  echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+  echo "ERROR: model catalog missing at $MODEL_CATALOG_SRC" >&2
+  exit 1
 fi
 
 echo "📦 Copying Control UI assets"
@@ -282,7 +283,8 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
   rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
   cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
 else
-  echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
+  echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
+  exit 1
 fi
 
 echo "📦 Copying Textual resources"

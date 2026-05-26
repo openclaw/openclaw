@@ -3,15 +3,12 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import type {
-  MeetingNotesSessionDescriptor,
-  MeetingNotesUtterance,
-} from "openclaw/plugin-sdk/meeting-notes";
-import type { MeetingNotesSummary } from "./summary.js";
-import { renderMeetingNotesMarkdown } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type { TranscriptsSummary } from "./summary.js";
+import { renderTranscriptsMarkdown } from "./summary.js";
 
-export type MeetingNotesSessionEntry = {
-  session: MeetingNotesSessionDescriptor;
+export type TranscriptsSessionEntry = {
+  session: TranscriptSessionDescriptor;
   sessionDir: string;
 };
 
@@ -43,16 +40,16 @@ function normalizeMaxUtterances(value: number | undefined): number | undefined {
 }
 
 function sameSessionIdentity(
-  left: MeetingNotesSessionDescriptor,
-  right: MeetingNotesSessionDescriptor,
+  left: TranscriptSessionDescriptor,
+  right: TranscriptSessionDescriptor,
 ): boolean {
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
 }
 
-export class MeetingNotesStore {
+export class TranscriptsStore {
   constructor(private readonly rootDir: string) {}
 
-  sessionDir(session: MeetingNotesSessionDescriptor): string {
+  sessionDir(session: TranscriptSessionDescriptor): string {
     return path.join(this.rootDir, dateSegment(session.startedAt), safeSegment(session.sessionId));
   }
 
@@ -60,9 +57,9 @@ export class MeetingNotesStore {
     return (await readJsonFile<unknown>(path.join(dir, "metadata.json"))) !== undefined;
   }
 
-  private async findSessionDirForSession(session: MeetingNotesSessionDescriptor): Promise<string> {
+  private async findSessionDirForSession(session: TranscriptSessionDescriptor): Promise<string> {
     const datedDir = this.sessionDir(session);
-    const datedSession = await readJsonFile<MeetingNotesSessionDescriptor>(
+    const datedSession = await readJsonFile<TranscriptSessionDescriptor>(
       path.join(datedDir, "metadata.json"),
     );
     if (datedSession && sameSessionIdentity(datedSession, session)) {
@@ -102,7 +99,7 @@ export class MeetingNotesStore {
     const matches: string[] = [];
     for (const entry of datedEntries) {
       const candidate = path.join(this.rootDir, entry.name, safeSessionId);
-      const session = await readJsonFile<MeetingNotesSessionDescriptor>(
+      const session = await readJsonFile<TranscriptSessionDescriptor>(
         path.join(candidate, "metadata.json"),
       );
       if (session?.sessionId === selector) {
@@ -111,34 +108,34 @@ export class MeetingNotesStore {
     }
     if (matches.length > 1) {
       throw new Error(
-        `multiple meeting notes sessions match ${selector}; use a YYYY-MM-DD/${selector} selector`,
+        `multiple transcripts sessions match ${selector}; use a YYYY-MM-DD/${selector} selector`,
       );
     }
     return matches[0];
   }
 
-  async writeSession(session: MeetingNotesSessionDescriptor): Promise<void> {
+  async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "metadata.json"), `${JSON.stringify(session, null, 2)}\n`);
   }
 
-  async readSession(sessionId: string): Promise<MeetingNotesSessionDescriptor | undefined> {
+  async readSession(sessionId: string): Promise<TranscriptSessionDescriptor | undefined> {
     return (await this.readSessionEntry(sessionId))?.session;
   }
 
-  async readSessionEntry(sessionId: string): Promise<MeetingNotesSessionEntry | undefined> {
+  async readSessionEntry(sessionId: string): Promise<TranscriptsSessionEntry | undefined> {
     const dir = await this.findSessionDir(sessionId);
     if (!dir) {
       return undefined;
     }
-    const session = await readJsonFile<MeetingNotesSessionDescriptor>(
+    const session = await readJsonFile<TranscriptSessionDescriptor>(
       path.join(dir, "metadata.json"),
     );
     return session ? { session, sessionDir: dir } : undefined;
   }
 
-  async appendUtterance(sessionId: string, utterance: MeetingNotesUtterance): Promise<void> {
+  async appendUtterance(sessionId: string, utterance: TranscriptUtterance): Promise<void> {
     const dir =
       (await this.findSessionDir(sessionId)) ??
       path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
@@ -146,8 +143,8 @@ export class MeetingNotesStore {
   }
 
   async appendUtteranceForSession(
-    session: MeetingNotesSessionDescriptor,
-    utterance: MeetingNotesUtterance,
+    session: TranscriptSessionDescriptor,
+    utterance: TranscriptUtterance,
   ): Promise<void> {
     const dir = await this.findSessionDirForSession(session);
     await this.appendUtteranceToDir(dir, session.sessionId, utterance);
@@ -156,7 +153,7 @@ export class MeetingNotesStore {
   private async appendUtteranceToDir(
     dir: string,
     sessionId: string,
-    utterance: MeetingNotesUtterance,
+    utterance: TranscriptUtterance,
   ): Promise<void> {
     await fs.mkdir(dir, { recursive: true });
     await fs.appendFile(
@@ -166,23 +163,23 @@ export class MeetingNotesStore {
   }
 
   async readUtterancesForSession(
-    session: MeetingNotesSessionDescriptor,
+    session: TranscriptSessionDescriptor,
     options: { maxUtterances?: number } = {},
-  ): Promise<MeetingNotesUtterance[]> {
+  ): Promise<TranscriptUtterance[]> {
     return await this.readUtterancesFromDir(await this.findSessionDirForSession(session), options);
   }
 
   async readUtterancesFromSessionDir(
     sessionDir: string,
     options: { maxUtterances?: number } = {},
-  ): Promise<MeetingNotesUtterance[]> {
+  ): Promise<TranscriptUtterance[]> {
     return await this.readUtterancesFromDir(sessionDir, options);
   }
 
   async readUtterances(
     sessionId: string,
     options: { maxUtterances?: number } = {},
-  ): Promise<MeetingNotesUtterance[]> {
+  ): Promise<TranscriptUtterance[]> {
     const dir = await this.findSessionDir(sessionId);
     if (!dir) {
       return [];
@@ -193,11 +190,11 @@ export class MeetingNotesStore {
   private async readUtterancesFromDir(
     dir: string,
     options: { maxUtterances?: number } = {},
-  ): Promise<MeetingNotesUtterance[]> {
+  ): Promise<TranscriptUtterance[]> {
     const transcriptPath = path.join(dir, "transcript.jsonl");
     const maxUtterances = normalizeMaxUtterances(options.maxUtterances);
     if (maxUtterances !== undefined) {
-      const utterances: MeetingNotesUtterance[] = [];
+      const utterances: TranscriptUtterance[] = [];
       try {
         const lines = createInterface({
           input: createReadStream(transcriptPath, { encoding: "utf8" }),
@@ -207,7 +204,7 @@ export class MeetingNotesStore {
           if (!line) {
             continue;
           }
-          utterances.push(JSON.parse(line) as MeetingNotesUtterance);
+          utterances.push(JSON.parse(line) as TranscriptUtterance);
           if (utterances.length > maxUtterances) {
             utterances.shift();
           }
@@ -232,7 +229,7 @@ export class MeetingNotesStore {
     return raw
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as MeetingNotesUtterance);
+      .map((line) => JSON.parse(line) as TranscriptUtterance);
   }
 
   async updateStopped(sessionId: string, stoppedAt: string): Promise<void> {
@@ -240,7 +237,7 @@ export class MeetingNotesStore {
     if (!dir) {
       return;
     }
-    const session = await readJsonFile<MeetingNotesSessionDescriptor>(
+    const session = await readJsonFile<TranscriptSessionDescriptor>(
       path.join(dir, "metadata.json"),
     );
     if (!session) {
@@ -253,8 +250,8 @@ export class MeetingNotesStore {
   }
 
   async writeSummary(
-    summary: MeetingNotesSummary,
-    session?: MeetingNotesSessionDescriptor,
+    summary: TranscriptsSummary,
+    session?: TranscriptSessionDescriptor,
   ): Promise<string> {
     const dir =
       session !== undefined
@@ -264,10 +261,10 @@ export class MeetingNotesStore {
     return await this.writeSummaryToDir(summary, dir);
   }
 
-  async writeSummaryToDir(summary: MeetingNotesSummary, dir: string): Promise<string> {
+  async writeSummaryToDir(summary: TranscriptsSummary, dir: string): Promise<string> {
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
-    const markdown = renderMeetingNotesMarkdown(summary);
+    const markdown = renderTranscriptsMarkdown(summary);
     const markdownPath = path.join(dir, "summary.md");
     await fs.writeFile(markdownPath, `${markdown}\n`);
     return markdownPath;

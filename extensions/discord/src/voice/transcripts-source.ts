@@ -1,7 +1,7 @@
 import type {
-  MeetingNotesSourceProviderPlugin,
-  MeetingNotesStartRequest,
-} from "openclaw/plugin-sdk/meeting-notes";
+  TranscriptSourceProvider,
+  TranscriptStartRequest,
+} from "openclaw/plugin-sdk/transcripts";
 import type { DiscordVoiceManager } from "./manager.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
@@ -10,7 +10,7 @@ const managerWaiters = new Set<{
   resolve: () => void;
 }>();
 
-export function setDiscordMeetingNotesVoiceManager(params: {
+export function setDiscordTranscriptsVoiceManager(params: {
   accountId: string;
   manager: DiscordVoiceManager | null;
 }): void {
@@ -26,7 +26,7 @@ export function setDiscordMeetingNotesVoiceManager(params: {
   }
 }
 
-function resolveManager(request: MeetingNotesStartRequest): DiscordVoiceManager | undefined {
+function resolveManager(request: TranscriptStartRequest): DiscordVoiceManager | undefined {
   const accountId = request.session.source.accountId?.trim();
   if (accountId) {
     return managersByAccountId.get(accountId);
@@ -35,7 +35,7 @@ function resolveManager(request: MeetingNotesStartRequest): DiscordVoiceManager 
 }
 
 async function waitForManager(
-  request: MeetingNotesStartRequest,
+  request: TranscriptStartRequest,
 ): Promise<DiscordVoiceManager | undefined> {
   const existing = resolveManager(request);
   if (existing) {
@@ -70,7 +70,7 @@ async function waitForManager(
   return resolveManager(request);
 }
 
-export const discordVoiceMeetingNotesSourceProvider: MeetingNotesSourceProviderPlugin = {
+export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
   id: "discord-voice",
   aliases: ["discord"],
   name: "Discord Voice",
@@ -81,17 +81,17 @@ export const discordVoiceMeetingNotesSourceProvider: MeetingNotesSourceProviderP
       return { ok: false, error: "Discord voice manager is not available." };
     }
     if (request.abortSignal?.aborted) {
-      return { ok: false, error: "Discord meeting notes start aborted." };
+      return { ok: false, error: "Discord transcripts start aborted." };
     }
     const guildId = request.session.source.guildId?.trim();
     const channelId = request.session.source.channelId?.trim();
     if (!guildId || !channelId) {
-      return { ok: false, error: "Discord meeting notes require guildId and channelId." };
+      return { ok: false, error: "Discord transcripts require guildId and channelId." };
     }
     const joined = await manager.join(
       { guildId, channelId },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: request.session.sessionId,
           onUtterance: request.onUtterance,
         },
@@ -112,7 +112,7 @@ export const discordVoiceMeetingNotesSourceProvider: MeetingNotesSourceProviderP
     }
     const guildId = request.source.guildId?.trim();
     if (!guildId) {
-      return { ok: false, error: "Discord meeting notes require guildId." };
+      return { ok: false, error: "Discord transcripts require guildId." };
     }
     const result = await manager.leave(
       {
@@ -120,7 +120,7 @@ export const discordVoiceMeetingNotesSourceProvider: MeetingNotesSourceProviderP
         channelId: request.source.channelId,
       },
       {
-        meetingNotesSessionId: request.sessionId,
+        transcriptsSessionId: request.sessionId,
       },
     );
     if (!result.ok) {

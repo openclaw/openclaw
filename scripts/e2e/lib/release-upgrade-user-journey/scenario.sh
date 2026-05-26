@@ -69,7 +69,10 @@ start_gateway() {
 }
 
 echo "Installing published baseline $BASELINE_SPEC..."
-npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1; then
+  cat /tmp/openclaw-release-upgrade-baseline-install.log >&2 || true
+  exit 1
+fi
 command -v openclaw >/dev/null
 baseline_root="$(openclaw_e2e_package_root)"
 baseline_entry="$(openclaw_e2e_package_entrypoint "$baseline_root")"

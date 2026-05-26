@@ -50,7 +50,6 @@
     "!dist/extensions/line/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
-    "!dist/extensions/meeting-notes/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/msteams/**",
     "!dist/extensions/nextcloud-talk/**",
@@ -1011,9 +1010,9 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
-    "./plugin-sdk/meeting-notes": {
-      "types": "./dist/plugin-sdk/meeting-notes.d.ts",
-      "default": "./dist/plugin-sdk/meeting-notes.js"
+    "./plugin-sdk/transcripts": {
+      "types": "./dist/plugin-sdk/transcripts.d.ts",
+      "default": "./dist/plugin-sdk/transcripts.js"
     },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
@@ -1716,6 +1715,7 @@
     "test:force": "node --import tsx scripts/test-force.ts",
     "test:gateway": "node scripts/run-with-env.mjs OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
     "test:gateway:cpu-scenarios": "node scripts/check-gateway-cpu-scenarios.mjs",
+    "test:gateway:memory-fd-repro": "node scripts/check-memory-fd-repro.mjs",
     "test:gateway:watch-regression": "node scripts/check-gateway-watch-regression.mjs",
     "test:install:e2e": "bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:e2e:anthropic": "OPENCLAW_E2E_MODELS=anthropic bash scripts/test-install-sh-e2e-docker.sh",

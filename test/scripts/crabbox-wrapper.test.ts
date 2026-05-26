@@ -256,7 +256,25 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
   });
 
-  it("bootstraps a Node toolchain for raw AWS macOS JavaScript commands", () => {
+  it("bootstraps only Node for raw AWS macOS node commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "node", "--version"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
+    expect(remoteCommand).toContain("node --version >&2");
+    expect(remoteCommand).not.toContain("corepack enable");
+    expect(remoteCommand).not.toContain("pnpm --version >&2");
+    expectGroupedShellCommand(remoteCommand, "node --version");
+  });
+
+  it("bootstraps Corepack for raw AWS macOS pnpm commands", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--target", "macos", "--", "pnpm", "--version"],
@@ -276,10 +294,27 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain('return "$status"');
     expect(remoteCommand).toContain('if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;');
     expect(remoteCommand).toContain('mkdir -p "$TMPDIR"');
-    expect(remoteCommand).toContain('usable TMPDIR not found: $TMPDIR');
+    expect(remoteCommand).toContain("usable TMPDIR not found: $TMPDIR");
     expect(remoteCommand).toContain("node --version >&2");
+    expect(remoteCommand).toContain('export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}"');
+    expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(remoteCommand).toContain("pnpm --version >&2");
     expectGroupedShellCommand(remoteCommand, "pnpm --version");
+  });
+
+  it("bootstraps Corepack for AWS macOS node changed-gate commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "node", "scripts/check-changed.mjs"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("node --version >&2");
+    expect(remoteCommand).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expectGroupedShellCommand(remoteCommand, "node scripts/check-changed.mjs");
   });
 
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
@@ -333,6 +368,8 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
     expect(output.scriptContent).toContain('if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR"');
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(output.scriptContent).toContain("pnpm --version >&2");
     expect(output.scriptContent).toContain(`\n${script}`);
   });
 
@@ -349,6 +386,8 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).not.toContain("--script-stdin");
     expect(output.args).toContain("--script");
     expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).not.toContain("corepack enable");
+    expect(output.scriptContent).not.toContain("pnpm --version >&2");
     expect(output.scriptContent).toContain("cat >\"$tmp_script\" <<'OPENCLAW_CRABBOX_SCRIPT_0'");
     expect(output.scriptContent).toContain(`\n${script}\nOPENCLAW_CRABBOX_SCRIPT_0\n`);
     expect(output.scriptContent).toContain('chmod 700 "$tmp_script" || exit $?');

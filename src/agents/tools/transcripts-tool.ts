@@ -1,38 +1,50 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import {
-  getMeetingNotesSourceProvider,
-  listMeetingNotesSourceProviders,
-  type MeetingNotesSessionDescriptor,
-  type MeetingNotesSourceLocator,
-} from "openclaw/plugin-sdk/meeting-notes";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginService,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
-import { type MeetingNotesAutoStartConfig, resolveMeetingNotesConfig } from "./config.js";
-import { manualTranscriptSourceProvider } from "./manual-source.js";
-import { MeetingNotesStore, type MeetingNotesSessionEntry } from "./store.js";
-import { summarizeMeetingNotes } from "./summary.js";
+import { resolveStateDir } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import {
+  type ResolvedTranscriptsAutoStartConfig,
+  resolveTranscriptsConfig,
+} from "../../transcripts/config.js";
+import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
+import {
+  getTranscriptSourceProvider,
+  listTranscriptSourceProviders,
+} from "../../transcripts/provider-registry.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+} from "../../transcripts/provider-types.js";
+import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
+import { summarizeTranscripts } from "../../transcripts/summary.js";
+import { type AnyAgentTool } from "./common.js";
 
-type ActiveMeetingNotesSession = {
-  session: MeetingNotesSessionDescriptor;
+type TranscriptsLogger = {
+  warn: (message: string) => void;
+};
+
+type TranscriptsRuntimeContext = {
+  config?: OpenClawConfig;
+  stateDir: string;
+  logger: TranscriptsLogger;
+};
+
+type ActiveTranscriptsSession = {
+  session: TranscriptSessionDescriptor;
   providerId: string;
 };
 
-const activeSessions = new Map<string, ActiveMeetingNotesSession>();
+const activeSessions = new Map<string, ActiveTranscriptsSession>();
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
 const AUTO_START_STOP_TIMEOUT_MS = 5_000;
 const AUTO_START_PROVIDER_READY_TIMEOUT_MS = 30_000;
 
 function sameSessionIdentity(
-  left: MeetingNotesSessionDescriptor,
-  right: MeetingNotesSessionDescriptor,
+  left: TranscriptSessionDescriptor,
+  right: TranscriptSessionDescriptor,
 ): boolean {
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
 }
@@ -72,7 +84,7 @@ function readStringParam(
   return normalized || undefined;
 }
 
-const MeetingNotesSchema = Type.Object(
+const TranscriptsSchema = Type.Object(
   {
     action: Type.String({
       description: "start, stop, status, import, or summarize.",
@@ -91,11 +103,11 @@ const MeetingNotesSchema = Type.Object(
 );
 
 function createSessionId(): string {
-  return `meeting-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
+  return `transcript-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 }
 
-function createStore(api: OpenClawPluginApi): MeetingNotesStore {
-  return new MeetingNotesStore(path.join(api.runtime.state.resolveStateDir(), "meeting-notes"));
+function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
+  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
 }
 
 async function waitForPendingAutoStartsToSettle(
@@ -120,7 +132,7 @@ async function waitForPendingAutoStartsToSettle(
   }
 }
 
-function sourceFromParams(params: Record<string, unknown>): MeetingNotesSourceLocator {
+function sourceFromParams(params: Record<string, unknown>): TranscriptSourceLocator {
   const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
   return {
     providerId,
@@ -131,10 +143,10 @@ function sourceFromParams(params: Record<string, unknown>): MeetingNotesSourceLo
   };
 }
 
-function resolveSourceProvider(providerId: string, api: OpenClawPluginApi) {
+function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
   return providerId === manualTranscriptSourceProvider.id
     ? manualTranscriptSourceProvider
-    : getMeetingNotesSourceProvider(providerId, api.config);
+    : getTranscriptSourceProvider(providerId, ctx.config);
 }
 
 function toolText(text: string, details?: Record<string, unknown>) {
@@ -145,9 +157,9 @@ function toolText(text: string, details?: Record<string, unknown>) {
 }
 
 async function summarizeAndPersist(params: {
-  config: ReturnType<typeof resolveMeetingNotesConfig>;
-  store: MeetingNotesStore;
-  session: MeetingNotesSessionDescriptor;
+  config: ReturnType<typeof resolveTranscriptsConfig>;
+  store: TranscriptsStore;
+  session: TranscriptSessionDescriptor;
   sessionDir?: string;
 }) {
   const utterances =
@@ -158,7 +170,7 @@ async function summarizeAndPersist(params: {
       : await params.store.readUtterancesForSession(params.session, {
           maxUtterances: params.config.maxUtterances,
         });
-  const summary = summarizeMeetingNotes({ session: params.session, utterances });
+  const summary = summarizeTranscripts({ session: params.session, utterances });
   const summaryPath =
     params.sessionDir !== undefined
       ? await params.store.writeSummaryToDir(summary, params.sessionDir)
@@ -166,22 +178,22 @@ async function summarizeAndPersist(params: {
   return { summary, summaryPath };
 }
 
-async function startMeetingNotes(params: {
-  api: OpenClawPluginApi;
-  store: MeetingNotesStore;
+async function startTranscripts(params: {
+  ctx: TranscriptsRuntimeContext;
+  store: TranscriptsStore;
   rawParams: Record<string, unknown>;
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
 }) {
   if (params.abortSignal?.aborted) {
-    throw new Error("meeting notes start aborted");
+    throw new Error("transcripts start aborted");
   }
   const source = sourceFromParams(params.rawParams);
-  const provider = resolveSourceProvider(source.providerId, params.api);
+  const provider = resolveSourceProvider(source.providerId, params.ctx);
   if (!provider?.start) {
-    throw new Error(`meeting notes provider ${source.providerId} cannot start live capture`);
+    throw new Error(`transcripts provider ${source.providerId} cannot start live capture`);
   }
-  const session: MeetingNotesSessionDescriptor = {
+  const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
     source,
@@ -189,7 +201,7 @@ async function startMeetingNotes(params: {
   };
   await params.store.writeSession(session);
   const result = await provider.start({
-    cfg: params.api.config,
+    cfg: params.ctx.config,
     session,
     abortSignal: params.abortSignal,
     startupWaitMs: params.startupWaitMs,
@@ -200,23 +212,23 @@ async function startMeetingNotes(params: {
   }
   if (params.abortSignal?.aborted) {
     await provider.stop?.({
-      cfg: params.api.config,
+      cfg: params.ctx.config,
       sessionId: session.sessionId,
       source: session.source,
       reason: "service-stop",
     });
-    throw new Error("meeting notes start aborted");
+    throw new Error("transcripts start aborted");
   }
   activeSessions.set(session.sessionId, { session, providerId: provider.id });
-  return toolText(`Meeting notes started: ${session.sessionId}`, {
+  return toolText(`Transcripts started: ${session.sessionId}`, {
     sessionId: session.sessionId,
     providerId: provider.id,
   });
 }
 
-async function stopMeetingNotes(params: {
-  api: OpenClawPluginApi;
-  store: MeetingNotesStore;
+async function stopTranscripts(params: {
+  ctx: TranscriptsRuntimeContext;
+  store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
   const sessionSelector = readStringParam(params.rawParams, "sessionId", {
@@ -224,7 +236,7 @@ async function stopMeetingNotes(params: {
     trim: true,
   });
   const directActive = activeSessions.get(sessionSelector);
-  const resolvedEntry: MeetingNotesSessionEntry | undefined = directActive
+  const resolvedEntry: TranscriptsSessionEntry | undefined = directActive
     ? { session: directActive.session, sessionDir: params.store.sessionDir(directActive.session) }
     : await params.store.readSessionEntry(sessionSelector);
   const resolvedSession = resolvedEntry?.session;
@@ -237,15 +249,15 @@ async function stopMeetingNotes(params: {
   const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
   const session = selectedActive?.session ?? resolvedSession;
   if (!session) {
-    throw new Error(`meeting notes session not found: ${sessionSelector}`);
+    throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
   const providerId = selectedActive?.providerId ?? session.source.providerId;
-  const provider = resolveSourceProvider(providerId, params.api);
+  const provider = resolveSourceProvider(providerId, params.ctx);
   let providerStopError: string | undefined;
   if (selectedActive && provider?.stop) {
     const result = await provider.stop({
-      cfg: params.api.config,
+      cfg: params.ctx.config,
       sessionId,
       source: session.source,
       reason: "tool-stop",
@@ -258,7 +270,7 @@ async function stopMeetingNotes(params: {
   if (selectedActive) {
     activeSessions.delete(sessionId);
   }
-  const stoppedSession: MeetingNotesSessionDescriptor = {
+  const stoppedSession: TranscriptSessionDescriptor = {
     ...session,
     stoppedAt,
     ...(providerStopError
@@ -277,12 +289,12 @@ async function stopMeetingNotes(params: {
     await params.store.updateStopped(sessionSelector, stoppedAt);
   }
   const { summaryPath, summary } = await summarizeAndPersist({
-    config: resolveMeetingNotesConfig(params.api.pluginConfig),
+    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
     store: params.store,
     session: stoppedSession,
     sessionDir: selectedActive ? undefined : resolvedEntry?.sessionDir,
   });
-  return toolText(`Meeting notes stopped: ${sessionId}\nSummary: ${summaryPath}`, {
+  return toolText(`Transcripts stopped: ${sessionId}\nSummary: ${summaryPath}`, {
     sessionId,
     ...(providerStopError ? { providerStopError } : {}),
     summary,
@@ -290,17 +302,17 @@ async function stopMeetingNotes(params: {
   });
 }
 
-async function importMeetingNotes(params: {
-  api: OpenClawPluginApi;
-  store: MeetingNotesStore;
+async function importTranscripts(params: {
+  ctx: TranscriptsRuntimeContext;
+  store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
   const source = sourceFromParams(params.rawParams);
-  const provider = resolveSourceProvider(source.providerId, params.api);
+  const provider = resolveSourceProvider(source.providerId, params.ctx);
   if (!provider?.importTranscript) {
-    throw new Error(`meeting notes provider ${source.providerId} cannot import transcripts`);
+    throw new Error(`transcripts provider ${source.providerId} cannot import transcripts`);
   }
-  const session: MeetingNotesSessionDescriptor = {
+  const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
     source,
@@ -313,7 +325,7 @@ async function importMeetingNotes(params: {
   });
   await params.store.writeSession(session);
   const utterances = await provider.importTranscript({
-    cfg: params.api.config,
+    cfg: params.ctx.config,
     session,
     text: transcript,
     speakerLabel: readStringParam(params.rawParams, "speakerLabel", { trim: true }),
@@ -322,11 +334,11 @@ async function importMeetingNotes(params: {
     await params.store.appendUtteranceForSession(session, utterance);
   }
   const { summaryPath, summary } = await summarizeAndPersist({
-    config: resolveMeetingNotesConfig(params.api.pluginConfig),
+    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
     store: params.store,
     session,
   });
-  return toolText(`Meeting transcript imported: ${session.sessionId}\nSummary: ${summaryPath}`, {
+  return toolText(`Transcript imported: ${session.sessionId}\nSummary: ${summaryPath}`, {
     sessionId: session.sessionId,
     utteranceCount: utterances.length,
     summary,
@@ -335,8 +347,8 @@ async function importMeetingNotes(params: {
 }
 
 async function summarizeExisting(params: {
-  config: ReturnType<typeof resolveMeetingNotesConfig>;
-  store: MeetingNotesStore;
+  config: ReturnType<typeof resolveTranscriptsConfig>;
+  store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
   const sessionId = readStringParam(params.rawParams, "sessionId", {
@@ -345,7 +357,7 @@ async function summarizeExisting(params: {
   });
   const entry = await params.store.readSessionEntry(sessionId);
   if (!entry) {
-    throw new Error(`meeting notes session not found: ${sessionId}`);
+    throw new Error(`transcripts session not found: ${sessionId}`);
   }
   const { summaryPath, summary } = await summarizeAndPersist({
     config: params.config,
@@ -353,17 +365,17 @@ async function summarizeExisting(params: {
     session: entry.session,
     sessionDir: entry.sessionDir,
   });
-  return toolText(`Meeting notes summarized: ${sessionId}\nSummary: ${summaryPath}`, {
+  return toolText(`Transcripts summarized: ${sessionId}\nSummary: ${summaryPath}`, {
     sessionId,
     summary,
     summaryPath,
   });
 }
 
-async function statusMeetingNotes(api: OpenClawPluginApi) {
+async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   const providers = [
     manualTranscriptSourceProvider.id,
-    ...listMeetingNotesSourceProviders(api.config).map((provider) => provider.id),
+    ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
   ];
   const uniqueProviders = uniqueStrings(providers);
   const active = [...activeSessions.values()].map((entry) => ({
@@ -374,50 +386,59 @@ async function statusMeetingNotes(api: OpenClawPluginApi) {
   }));
   return toolText(
     [
-      `Meeting notes providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
+      `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
       `Active sessions: ${active.length}`,
     ].join("\n"),
     { providers: uniqueProviders, active },
   );
 }
 
-export function createMeetingNotesTool(
-  api: OpenClawPluginApi,
-  _ctx?: OpenClawPluginToolContext,
-): AnyAgentTool {
+export function createTranscriptsTool(options?: {
+  config?: OpenClawConfig;
+  stateDir?: string;
+  logger?: TranscriptsLogger;
+}): AnyAgentTool {
+  const ctx: TranscriptsRuntimeContext = {
+    config: options?.config,
+    stateDir: options?.stateDir ?? resolveStateDir(),
+    logger: options?.logger ?? console,
+  };
   return {
-    name: "meeting_notes",
-    label: "Meeting Notes",
+    name: "transcripts",
+    label: "Transcripts",
     description:
-      "Start, stop, import, summarize, or inspect meeting notes from Discord, Google Meet, Slack huddles, and other meeting sources.",
-    parameters: MeetingNotesSchema,
+      "Start, stop, import, summarize, or inspect transcripts from Discord, Google Meet, Slack huddles, and other meeting sources.",
+    parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams) {
-      const config = resolveMeetingNotesConfig(api.pluginConfig);
+      const config = resolveTranscriptsConfig(ctx.config?.transcripts);
       if (!config.enabled) {
-        throw new Error("meeting notes plugin is disabled");
+        throw new Error("transcripts are disabled");
       }
       const params = asParamsRecord(rawParams);
       const action = readStringParam(params, "action", { required: true, trim: true });
-      const store = createStore(api);
+      const store = createStore(ctx);
       switch (action) {
         case "start":
-          return await startMeetingNotes({ api, store, rawParams: params });
+          return await startTranscripts({ ctx, store, rawParams: params });
         case "stop":
-          return await stopMeetingNotes({ api, store, rawParams: params });
+          return await stopTranscripts({ ctx, store, rawParams: params });
         case "import":
-          return await importMeetingNotes({ api, store, rawParams: params });
+          return await importTranscripts({ ctx, store, rawParams: params });
         case "summarize":
           return await summarizeExisting({ config, store, rawParams: params });
         case "status":
-          return await statusMeetingNotes(api);
+          return await statusTranscripts(ctx);
         default:
-          throw new Error(`unsupported meeting_notes action: ${action}`);
+          throw new Error(`unsupported transcripts action: ${action}`);
       }
     },
   };
 }
 
-export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): OpenClawPluginService {
+export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext): {
+  start: () => void;
+  stop: () => Promise<void>;
+} {
   let stopped = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const startedSessionIds = new Set<string>();
@@ -433,18 +454,17 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
   };
 
   const startEntry = (
-    entry: MeetingNotesAutoStartConfig,
+    entry: ResolvedTranscriptsAutoStartConfig,
     attempt: number,
-    serviceApi: OpenClawPluginApi,
-    store: MeetingNotesStore,
+    store: TranscriptsStore,
   ) => {
-    if (stopped || !entry.enabled || startedSessionIds.has(entry.sessionId ?? "")) {
+    if (stopped || startedSessionIds.has(entry.sessionId ?? "")) {
       return;
     }
     const abortController = new AbortController();
     pendingStartControllers.add(abortController);
-    const startTask = startMeetingNotes({
-      api: serviceApi,
+    const startTask = startTranscripts({
+      ctx,
       store,
       abortSignal: abortController.signal,
       startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
@@ -465,14 +485,14 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
           return;
         }
         if (attempt >= AUTO_START_RETRY_ATTEMPTS) {
-          api.logger.warn(
-            `meeting-notes autoStart failed provider=${entry.providerId}: ${
+          ctx.logger.warn(
+            `transcripts autoStart failed provider=${entry.providerId}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           );
           return;
         }
-        schedule(() => startEntry(entry, attempt + 1, serviceApi, store), AUTO_START_RETRY_MS);
+        schedule(() => startEntry(entry, attempt + 1, store), AUTO_START_RETRY_MS);
       })
       .finally(() => {
         pendingStartControllers.delete(abortController);
@@ -482,14 +502,12 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
   };
 
   return {
-    id: "meeting-notes-auto-start",
-    start(ctx) {
-      const config = resolveMeetingNotesConfig(api.pluginConfig);
+    start() {
+      const config = resolveTranscriptsConfig(ctx.config?.transcripts);
       if (!config.enabled || config.autoStart.length === 0) {
         return;
       }
-      const serviceApi = { ...api, config: ctx.config };
-      const store = new MeetingNotesStore(path.join(ctx.stateDir, "meeting-notes"));
+      const store = new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
       for (const entry of config.autoStart) {
         startEntry(
           {
@@ -497,12 +515,11 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
             sessionId: entry.sessionId ?? createSessionId(),
           },
           1,
-          serviceApi,
           store,
         );
       }
     },
-    async stop(ctx) {
+    async stop() {
       stopped = true;
       for (const timer of timers) {
         clearTimeout(timer);
@@ -513,22 +530,21 @@ export function createMeetingNotesAutoStartService(api: OpenClawPluginApi): Open
       }
       const pendingStartsSettled = await waitForPendingAutoStartsToSettle(pendingStarts);
       if (!pendingStartsSettled) {
-        api.logger.warn(
-          `meeting-notes autoStart stop timed out waiting for ${pendingStarts.size} pending start${
+        ctx.logger.warn(
+          `transcripts autoStart stop timed out waiting for ${pendingStarts.size} pending start${
             pendingStarts.size === 1 ? "" : "s"
           }`,
         );
       }
-      const serviceApi = { ...api, config: ctx.config };
-      const store = new MeetingNotesStore(path.join(ctx.stateDir, "meeting-notes"));
+      const store = new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
       for (const sessionId of startedSessionIds) {
-        await stopMeetingNotes({
-          api: serviceApi,
+        await stopTranscripts({
+          ctx,
           store,
           rawParams: { action: "stop", sessionId },
         }).catch((err) =>
-          api.logger.warn(
-            `meeting-notes autoStart stop failed session=${sessionId}: ${
+          ctx.logger.warn(
+            `transcripts autoStart stop failed session=${sessionId}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           ),

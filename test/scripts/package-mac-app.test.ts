@@ -43,6 +43,27 @@ afterEach(() => {
 });
 
 describe("package-mac-app plist stamping", () => {
+  it("fails closed when required bundled resources are missing", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const modelCatalogBlock = script.slice(
+      script.indexOf('MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"'),
+      script.indexOf('echo "📦 Copying Control UI assets"'),
+    );
+    const openClawKitBlock = script.slice(
+      script.indexOf('OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"'),
+      script.indexOf('echo "📦 Copying Textual resources"'),
+    );
+
+    expect(modelCatalogBlock).toContain("ERROR: model catalog missing");
+    expect(modelCatalogBlock).toContain("exit 1");
+    expect(modelCatalogBlock).not.toContain("WARN:");
+    expect(modelCatalogBlock).not.toContain("continuing");
+    expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
+    expect(openClawKitBlock).toContain("exit 1");
+    expect(openClawKitBlock).not.toContain("WARN:");
+    expect(openClawKitBlock).not.toContain("continuing");
+  });
+
   it("does not mask required Info.plist stamp failures", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stampBlock = script.slice(

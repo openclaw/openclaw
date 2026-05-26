@@ -143,6 +143,12 @@ describe("RTT harness", () => {
     expect(installEnvSnapshotIndex).toBeGreaterThanOrEqual(0);
     expect(convexSecretForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(packageInstallIndex).toBeLessThan(credentialAcquireIndex);
+    expect(script).toContain(
+      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+    );
+    expect(script).toContain(
+      'timeout --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
     expect(script).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
     expect(script).not.toContain("run_logged docker run --rm");
     expect(heartbeatStartIndex).toBeGreaterThan(sourceIndex);

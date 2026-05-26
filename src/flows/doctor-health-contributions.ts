@@ -533,6 +533,79 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { resolveAgentContextLimits } = await import("../agents/agent-scope.js");
+  const { normalizeAgentId } = await import("../routing/session-key.js");
+  const targets: Array<{
+    agentId?: string;
+    configuredCap?: number;
+    scopeLabel: string;
+  }> = [];
+  const defaultsConfiguredCap = ctx.cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
+  if (ctx.options.deep === true || defaultsConfiguredCap !== undefined) {
+    targets.push({
+      configuredCap: defaultsConfiguredCap,
+      scopeLabel: "defaults",
+    });
+  }
+  for (const entry of ctx.cfg.agents?.list ?? []) {
+    const normalizedAgentId = normalizeAgentId(entry.id);
+    if (
+      !normalizedAgentId ||
+      (ctx.options.deep !== true &&
+        defaultsConfiguredCap === undefined &&
+        entry.contextLimits?.toolResultMaxChars === undefined)
+    ) {
+      continue;
+    }
+    targets.push({
+      agentId: normalizedAgentId,
+      configuredCap: resolveAgentContextLimits(ctx.cfg, normalizedAgentId)?.toolResultMaxChars,
+      scopeLabel: `agent "${normalizedAgentId}"`,
+    });
+  }
+  if (targets.length === 0) {
+    return;
+  }
+
+  const { DEFAULT_CONTEXT_TOKENS } = await import("../agents/defaults.js");
+  const { loadModelCatalog, findModelCatalogEntry } = await import("../agents/model-catalog.js");
+  const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
+  const { resolveDefaultModelForAgent, modelKey } = await import("../agents/model-selection.js");
+  const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
+  const { note } = await import("../terminal/note.js");
+
+  const catalog = await loadModelCatalog({ config: ctx.cfg });
+  const lines = targets.flatMap((target) => {
+    const modelRef = resolveDefaultModelForAgent({
+      cfg: ctx.cfg,
+      agentId: target.agentId,
+    });
+    const entry = findModelCatalogEntry(catalog, {
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+    });
+    const contextWindow = resolveContextWindowInfo({
+      cfg: ctx.cfg,
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      modelContextTokens: entry?.contextTokens,
+      modelContextWindow: entry?.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    return buildToolResultCapDoctorAdvice({
+      contextWindowTokens: contextWindow.tokens,
+      modelKey: modelKey(modelRef.provider, modelRef.model),
+      configuredCap: target.configuredCap,
+      deep: ctx.options.deep === true,
+      scopeLabel: target.scopeLabel,
+    });
+  });
+  if (lines.length > 0) {
+    note(lines.join("\n"), "Tool result cap");
+  }
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -875,6 +948,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:tool-result-cap",
+      label: "Tool result cap",
+      run: runToolResultCapHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",

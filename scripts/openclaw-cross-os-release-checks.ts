@@ -41,7 +41,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   600,
 );
-const CROSS_OS_AGENT_TURN_OPTIONAL = parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", true);
+const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
   openai: {
@@ -180,8 +180,8 @@ function parsePositiveIntegerEnv(name, fallback) {
   return value;
 }
 
-function parseBooleanEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+function parseBooleanEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
   }
@@ -192,6 +192,10 @@ function parseBooleanEnv(name, fallback) {
     return false;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
+}
+
+export function resolveCrossOsAgentTurnOptional(env = process.env) {
+  return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
 }
 
 export function looksLikeReleaseVersionRef(ref) {
@@ -2274,7 +2278,10 @@ async function runInstalledAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
       if (skipped) {
         return skipped;
       }
@@ -3090,7 +3097,10 @@ async function runAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
-      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath, {
+        attempt,
+        maxAttempts: 2,
+      });
       if (skipped) {
         return skipped;
       }
@@ -3108,8 +3118,15 @@ async function runAgentTurn(params) {
   throw lastError;
 }
 
-function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
-  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)) {
+export function maybeBuildOptionalAgentTurnSkipResult(error, logPath, options = {}) {
+  const attempt = options.attempt ?? 1;
+  const maxAttempts = options.maxAttempts ?? 2;
+  const optional = options.optional ?? CROSS_OS_AGENT_TURN_OPTIONAL;
+  if (
+    attempt < maxAttempts ||
+    !optional ||
+    !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)
+  ) {
     return null;
   }
   const message = error instanceof Error ? error.message : String(error);

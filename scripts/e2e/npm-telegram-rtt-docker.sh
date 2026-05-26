@@ -207,6 +207,7 @@ docker_env=(
   -e OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES="${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}"
   -e OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS="${OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS:-30000}"
   -e OPENCLAW_NPM_TELEGRAM_MAX_FAILURES="${OPENCLAW_NPM_TELEGRAM_MAX_FAILURES:-${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}}"
+  -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
 )
 
 forward_env_if_set() {
@@ -262,7 +263,15 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 
-npm install -g "$install_source" --no-fund --no-audit
+npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
+  npm install -g "$install_source" --no-fund --no-audit
+elif command -v timeout >/dev/null 2>&1; then
+  timeout --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+else
+  echo "timeout command not found; running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT" >&2
+  npm install -g "$install_source" --no-fund --no-audit
+fi
 command -v openclaw
 openclaw --version
 node -p "require('/npm-global/lib/node_modules/openclaw/package.json').version"

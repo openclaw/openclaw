@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
 const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
+const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
@@ -60,7 +61,17 @@ describe("test-install-sh-docker", () => {
 
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
     expect(script).toContain("restore_local_dist_from_image");
-    expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain(
+      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
+    );
+    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(script).toContain(
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+    );
+    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(script).not.toContain('container_id="$(docker create "$image")"');
+    expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
     expect(script).toContain("ensure_local_update_dist_import_closure");
     expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
@@ -68,6 +79,20 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain("pnpm build");
     expect(script).not.toContain("pnpm ui:build");
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
+  });
+
+  it("bounds installer smoke container runs", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'INSTALL_SMOKE_DOCKER_RUN_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_DOCKER_RUN_TIMEOUT:-2700s}"',
+    );
+    expect(script).toContain("run_install_smoke_container()");
+    expect(script).toContain(
+      'DOCKER_COMMAND_TIMEOUT="$INSTALL_SMOKE_DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run "$@"',
+    );
+    expect(script.match(/run_install_smoke_container --rm -t/g)?.length).toBe(6);
+    expect(script).not.toContain("docker run --rm -t \\");
   });
 
   it("runs the root Dockerfile build with the CI heap limit", () => {
@@ -94,6 +119,60 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"');
     expect(script).toContain("OPENCLAW_INSTALL_BROWSER \\");
     expect(script).toContain('--build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}"');
+  });
+
+  it("bounds Docker setup image pulls", () => {
+    const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+
+    expect(script).toContain('DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"');
+    expect(script).toContain("run_docker_pull()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(script).toContain('timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"');
+    expect(script).toContain('run_docker_pull "$IMAGE_NAME"');
+    expect(script).not.toContain('docker pull "$IMAGE_NAME"');
+  });
+
+  it("bounds Podman setup image pulls", () => {
+    const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
+
+    expect(script).toContain(
+      'PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"',
+    );
+    expect(script).toContain("run_podman_pull()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
+    expect(script).toContain('timeout "$PODMAN_PULL_TIMEOUT" podman pull "$image"');
+    expect(script).toContain('run_podman_pull "$OPENCLAW_IMAGE"');
+    expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
+  });
+
+  it("bounds Podman setup image builds", () => {
+    const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
+
+    expect(script).toContain(
+      'PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"',
+    );
+    expect(script).toContain("run_podman_build()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('run_podman_build -t "$OPENCLAW_IMAGE"');
+    expect(script).not.toContain('podman build -t "$OPENCLAW_IMAGE"');
+  });
+
+  it("bounds detached Podman launches without timing out onboarding", () => {
+    const script = readFileSync(PODMAN_RUN_PATH, "utf8");
+
+    expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
+    expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
+    expect(script).toContain("run_podman_detached()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+    expect(script).toContain('timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"');
+    expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
+    expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');
+    expect(script).not.toContain('podman run --pull="$PODMAN_PULL" -d --replace \\');
   });
 
   it("passes image-scoped pip packages through Docker and Podman setup", () => {
@@ -186,7 +265,7 @@ describe("install-sh smoke runner", () => {
     );
     expect(script).toContain("run_with_heartbeat");
     expect(script).toContain("npm_install_global");
-    expect(script).toContain('timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s"');
+    expect(script).toContain('timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s"');
     expect(script).toContain("==> Still running");
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
@@ -258,6 +337,17 @@ describe("bun global install smoke", () => {
     expect(script).toContain("assert-image-providers");
     expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain(
+      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
+    );
+    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(script).toContain(
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+    );
+    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(script).not.toContain('container_id="$(docker create "$image")"');
+    expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
   });
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {
@@ -302,9 +392,13 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("install-smoke-fast:");
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
-    expect(workflow).toContain("timeout 45m docker buildx build");
-    expect(workflow).toContain('timeout 600s docker pull "$IMAGE_REF"');
+    expect(workflow).toContain("timeout --kill-after=30s 45m docker buildx build");
+    expect(workflow).toContain('timeout --kill-after=30s 600s docker pull "$IMAGE_REF"');
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
+    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(
+      6,
+    );
+    expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
     expect(workflow).toContain("OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh");

@@ -66,7 +66,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
@@ -1067,7 +1067,7 @@ export async function runCodexAppServerAttempt(
   });
   const startupEnvApiKeyCacheKey = startupAuthProfileId
     ? undefined
-    : resolveCodexAppServerEnvApiKeyCacheKey({
+    : resolveCodexAppServerFallbackApiKeyCacheKey({
         startOptions: appServer.start,
       });
   const nodeExecBlocksNativeExecution = isCodexNativeExecutionBlockedByNodeExecHost(params, {
@@ -2409,10 +2409,20 @@ export async function runCodexAppServerAttempt(
     });
     embeddedAgentLog.debug("codex app-server raw notification received", correlation);
     if (notification.method === "turn/completed" && correlation.matchesActiveTurn === false) {
-      embeddedAgentLog.warn(
-        "codex app-server turn/completed did not match active turn",
-        correlation,
-      );
+      if (correlation.matchesActiveThread) {
+        embeddedAgentLog.warn(
+          "codex app-server turn/completed did not match active turn",
+          correlation,
+        );
+      } else {
+        embeddedAgentLog.debug(
+          "codex app-server turn/completed ignored for other subscribed thread",
+          correlation,
+        );
+      }
+    }
+    if (isCodexNotificationOutsideActiveRun(correlation)) {
+      return Promise.resolve();
     }
     if (!projector || !turnId) {
       userInputBridge?.handleNotification(notification);
@@ -2722,9 +2732,8 @@ export async function runCodexAppServerAttempt(
   const codexDiagnosticToolDefinitions = codexModelContentCapture.toolDefinitions
     ? buildCodexDiagnosticToolDefinitions(tools)
     : undefined;
-  const codexModelContentPrivateData = (
-    modelContent: DiagnosticModelCallContent | undefined,
-  ) => (modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined);
+  const codexModelContentPrivateData = (modelContent: DiagnosticModelCallContent | undefined) =>
+    modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
   const buildCodexModelCallDiagnosticContent = (): DiagnosticModelCallContent | undefined => {
     const modelContent = {
       ...(codexModelContentCapture.inputMessages
@@ -2768,9 +2777,7 @@ export async function runCodexAppServerAttempt(
         ...buildCodexModelCallDiagnosticContent(),
         ...(codexModelContentCapture.outputMessages
           ? {
-              outputMessages: result.lastAssistant
-                ? [result.lastAssistant]
-                : result.assistantTexts,
+              outputMessages: result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
             }
           : {}),
       }),
@@ -5025,6 +5032,20 @@ function isTurnNotification(
   turnId: string,
 ): boolean {
   return isCodexNotificationForTurn(value, threadId, turnId);
+}
+
+function isCodexNotificationOutsideActiveRun(
+  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
+): boolean {
+  const hasThreadScope = Boolean(correlation.threadId || correlation.nestedTurnThreadId);
+  if (!hasThreadScope) {
+    return false;
+  }
+  if (!correlation.matchesActiveThread) {
+    return true;
+  }
+  const hasTurnScope = Boolean(correlation.turnId || correlation.nestedTurnId);
+  return hasTurnScope && correlation.matchesActiveTurn === false;
 }
 
 function isCurrentThreadTurnRequestParams(

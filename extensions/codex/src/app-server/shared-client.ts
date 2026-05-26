@@ -3,6 +3,7 @@ import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import {
@@ -97,9 +98,13 @@ export async function getSharedCodexAppServerClient(options?: {
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
   });
+  const fallbackApiKeyCacheKey = authProfileId
+    ? undefined
+    : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions });
   const key = codexAppServerStartOptionsKey(startOptions, {
     authProfileId,
     agentDir: usesNativeAuth ? undefined : agentDir,
+    fallbackApiKeyCacheKey,
   });
   const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);
