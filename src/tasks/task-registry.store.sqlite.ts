@@ -480,7 +480,6 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
     if (!isSqliteCorruptionError(error) || !existsSync(pathname)) {
       throw error;
     }
-    db?.close?.();
     quarantineCorruptedDatabase(pathname);
     ensureTaskRegistryPermissions(pathname);
     db = new DatabaseSync(pathname);
