@@ -1023,6 +1023,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "assistant",
     );
     expect(assistantUpdates).toHaveLength(1);
+
+    const transcriptIndex = await readSessionTranscriptIndex(mockState.transcriptPath);
+    const persistedAssistant = transcriptIndex?.entries
+      .toReversed()
+      .map((entry) => entry.record.message as Record<string, any> | undefined)
+      .find((message) => message?.idempotencyKey === "idem-agent-block-then-tts:assistant-media");
+    const persistedContent = Array.isArray(persistedAssistant?.content)
+      ? (persistedAssistant.content as Array<Record<string, any>>)
+      : [];
+    expect(persistedContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(persistedContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(finalAudioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+    expect(JSON.stringify(persistedAssistant)).not.toContain(fs.realpathSync(blockAudioPath));
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {

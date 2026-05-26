@@ -1414,7 +1414,24 @@ describe("gateway server chat", () => {
             (entry as { role?: unknown }).role === "assistant",
         );
         expect(assistantMessages).toHaveLength(1);
+        const historyContent = (assistantMessages[0].content ?? []) as Array<
+          Record<string, unknown>
+        >;
+        expect(historyContent[0]).toEqual({ type: "text", text: "Audio reply" });
+        expect(historyContent[1]).toEqual({
+          type: "attachment",
+          attachment: {
+            url: await fs.realpath(audioPath),
+            kind: "audio",
+            label: "tts.mp3",
+            mimeType: "audio/mpeg",
+            isVoiceNote: true,
+          },
+        });
         expect(JSON.stringify(assistantMessages[0])).not.toContain(spokenText);
+        expect(JSON.stringify(assistantMessages[0])).not.toContain(
+          await fs.realpath(blockAudioPath),
+        );
       } finally {
         testState.agentConfig = previousAgentConfig;
       }
