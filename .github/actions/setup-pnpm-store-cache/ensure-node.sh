@@ -100,20 +100,60 @@ openclaw_node_download_platform() {
     Linux:aarch64 | Linux:arm64) printf 'linux-arm64\n' ;;
     Darwin:x86_64) printf 'darwin-x64\n' ;;
     Darwin:arm64) printf 'darwin-arm64\n' ;;
+    MINGW*:x86_64 | MSYS*:x86_64 | CYGWIN*:x86_64) printf 'win-x64\n' ;;
+    MINGW*:aarch64 | MINGW*:arm64 | MSYS*:aarch64 | MSYS*:arm64 | CYGWIN*:aarch64 | CYGWIN*:arm64) printf 'win-arm64\n' ;;
     *)
       return 1
       ;;
   esac
 }
 
+openclaw_powershell_path() {
+  local path_value="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$path_value"
+  else
+    printf '%s\n' "$path_value"
+  fi
+}
+
+openclaw_expand_zip() {
+  local archive_path="$1"
+  local destination="$2"
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -NonInteractive -Command \
+      "Expand-Archive -LiteralPath '$(openclaw_powershell_path "$archive_path")' -DestinationPath '$(openclaw_powershell_path "$destination")' -Force"
+  elif command -v unzip >/dev/null 2>&1; then
+    unzip -q "$archive_path" -d "$destination"
+  else
+    echo "::error::Cannot extract Node zip archive: powershell.exe or unzip is required"
+    return 1
+  fi
+}
+
 openclaw_download_node() {
   local requested_node="$1"
-  local version platform archive_url install_root
+  local version platform archive_url install_root archive_path extracted_root
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
   install_root="${RUNNER_TEMP:-/tmp}/openclaw-node-${version}-${platform}"
-  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
+  rm -rf "$install_root"
   mkdir -p "$install_root"
+
+  if [[ "$platform" == win-* ]]; then
+    archive_path="${install_root}.zip"
+    archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
+    rm -f "$archive_path"
+    echo "Downloading Node ${version} from ${archive_url}"
+    curl -fsSL -o "$archive_path" "$archive_url"
+    openclaw_expand_zip "$archive_path" "$install_root"
+    extracted_root="$install_root/node-${version}-${platform}"
+    [[ -d "$extracted_root" ]] || extracted_root="$install_root"
+    openclaw_prepend_node_bin "$extracted_root"
+    return 0
+  fi
+
+  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
   echo "Downloading Node ${version} from ${archive_url}"
   curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
   openclaw_prepend_node_bin "$install_root/bin"

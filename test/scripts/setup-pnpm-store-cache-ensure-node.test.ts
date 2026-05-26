@@ -134,6 +134,45 @@ describe("setup-pnpm-store-cache ensure-node", () => {
     }
   });
 
+  it("maps Git Bash on Windows to Node's Windows download archive", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const fakeBin = join(root, "bin");
+      mkdirSync(fakeBin, { recursive: true });
+      const unamePath = join(fakeBin, "uname");
+      writeFileSync(
+        unamePath,
+        `#!/usr/bin/env bash
+if [[ "$1" == "-s" ]]; then
+  echo MINGW64_NT-10.0-20348
+elif [[ "$1" == "-m" ]]; then
+  echo x86_64
+fi
+`,
+      );
+      chmodSync(unamePath, 0o755);
+
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -e",
+            `export PATH=${JSON.stringify(`${fakeBin}:${process.env.PATH ?? ""}`)}`,
+            `source "${ensureNodeScript}"`,
+            "openclaw_node_download_platform",
+          ].join("; "),
+        ],
+        { encoding: "utf8", env: process.env },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("win-x64");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails clearly when no matching node is available", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {

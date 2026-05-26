@@ -562,6 +562,31 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Yield",
       detailKeys: ["message"],
     },
+    transcripts: {
+      emoji: "📝",
+      title: "Transcripts",
+      actions: {
+        start: {
+          label: "start",
+          detailKeys: ["providerId", "sessionId", "title", "meetingUrl", "channelId"],
+        },
+        stop: {
+          label: "stop",
+          detailKeys: ["sessionId"],
+        },
+        import: {
+          label: "import",
+          detailKeys: ["sessionId", "title", "providerId", "speakerLabel"],
+        },
+        summarize: {
+          label: "summarize",
+          detailKeys: ["sessionId"],
+        },
+        status: {
+          label: "status",
+        },
+      },
+    },
     tts: {
       emoji: "🔊",
       title: "TTS",
