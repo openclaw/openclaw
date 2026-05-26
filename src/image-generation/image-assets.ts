@@ -1,6 +1,7 @@
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithTimeoutGuarded } from "../media-understanding/shared.js";
 import { canonicalizeBase64 } from "../media/base64.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -25,10 +26,6 @@ export type OpenAiCompatibleImageResponseEntry = {
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {

@@ -100,6 +100,16 @@ model calls must not export `StreamAbandoned` on successful turns; raw diagnosti
 payloads must not contain the prompt sentinel, response sentinel, or QA session
 key. It writes `otel-smoke-summary.json` next to the QA suite artifacts.
 
+For a collector-backed OpenTelemetry smoke, run:
+
+```bash
+pnpm qa:otel:collector-smoke
+```
+
+That lane puts a real OpenTelemetry Collector Docker container in front of the
+same local receiver. Use it when changing endpoint wiring, collector
+compatibility, or OTLP export behavior that the in-process receiver could mask.
+
 For the protected Prometheus scrape smoke, run:
 
 ```bash
@@ -116,6 +126,13 @@ To run both observability smokes back to back, use:
 
 ```bash
 pnpm qa:observability:smoke
+```
+
+For the collector-backed OpenTelemetry lane plus the protected Prometheus scrape
+smoke, use:
+
+```bash
+pnpm qa:observability:collector-smoke
 ```
 
 Observability QA stays source-checkout only. The npm tarball intentionally omits
@@ -815,6 +832,9 @@ The report should answer:
 - What follow-up scenarios are worth adding
 
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
+When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
+The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
+Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:

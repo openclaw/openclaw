@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
@@ -549,7 +550,7 @@ export function resolveMediaToolLocalRoots(
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  return workspaceDir ? uniqueStrings([...roots, workspaceDir]) : [...roots];
 }
 
 export function resolvePromptAndModelOverride(

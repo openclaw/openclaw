@@ -4,7 +4,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
-  emitDiagnosticEvent,
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
   isDiagnosticsEnabled,
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
@@ -513,6 +513,9 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  // Local providers are not blanket-exempt from recovery. Streaming model
+  // chunks refresh run activity while emitted progress events are throttled, so
+  // active streams stay fresh and silent/non-streaming calls can be recovered.
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
@@ -1258,6 +1261,7 @@ export function startDiagnosticHeartbeat(
               queueDepth: state.queueDepth,
               expectedState: state.state,
               stateGeneration: state.generation,
+              staleActiveProgressAbortMs: stuckSessionAbortMs,
             },
           });
         } else if (

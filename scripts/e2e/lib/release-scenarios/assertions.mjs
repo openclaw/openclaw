@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertAgentReplyContainsMarker,
+  assertOpenAiRequestLogUsed,
+} from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
@@ -60,10 +64,8 @@ function assertAgentTurn() {
   const marker = process.argv[3];
   const outputPath = process.argv[4];
   const requestLogPath = process.argv[5];
-  const output = fs.readFileSync(outputPath, "utf8");
-  assert(output.includes(marker), `agent output did not contain ${marker}. Output: ${output}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(/\/v1\/(responses|chat\/completions)/u.test(requestLog), "mock OpenAI was not used");
+  assertAgentReplyContainsMarker(marker, outputPath);
+  assertOpenAiRequestLogUsed(requestLogPath, "mock OpenAI");
 }
 
 function assertFileContains() {

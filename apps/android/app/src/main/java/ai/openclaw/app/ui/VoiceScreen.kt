@@ -161,7 +161,7 @@ fun VoiceScreen(
         .fillMaxSize()
         .imePadding()
         .padding(horizontal = 20.dp, vertical = 8.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     VoiceHeader(
       statusText = if (voiceActive || !gatewayReady) activeStatus else "Your voice command center.",
@@ -371,12 +371,12 @@ private fun TalkSessionScreen(
         .fillMaxSize()
         .imePadding()
         .padding(horizontal = 20.dp, vertical = 8.dp),
-    verticalArrangement = Arrangement.spacedBy(11.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
       VoicePlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to voice", onClick = onEndTalk)
       Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(text = "Realtime Talk", style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp), color = ClawTheme.colors.text)
+        Text(text = "Realtime Talk", style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (speaking || listening) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
           Text(
@@ -397,8 +397,8 @@ private fun TalkSessionScreen(
     }
 
     Surface(
-      modifier = Modifier.fillMaxWidth().height(58.dp),
-      shape = RoundedCornerShape(ClawTheme.radii.pill),
+      modifier = Modifier.fillMaxWidth().height(52.dp),
+      shape = RoundedCornerShape(ClawTheme.radii.panel),
       color = ClawTheme.colors.canvas,
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
     ) {
@@ -429,7 +429,7 @@ private fun TalkTranscript(
   entries: List<VoiceConversationEntry>,
   modifier: Modifier = Modifier,
 ) {
-  LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+  LazyColumn(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (entries.isEmpty()) {
       item {
         TalkTranscriptCard(label = "OpenClaw", text = "Listening for your next turn.", muted = true)
@@ -458,7 +458,7 @@ private fun TalkTranscriptCard(
     color = ClawTheme.colors.surface,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
       Text(text = label, style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = text, style = ClawTheme.type.body, color = if (muted) ClawTheme.colors.textMuted else ClawTheme.colors.text)
     }
@@ -476,7 +476,7 @@ private fun TalkControl(
     Surface(
       onClick = onClick,
       modifier = Modifier.size(ClawTheme.spacing.touchTarget),
-      shape = CircleShape,
+      shape = RoundedCornerShape(ClawTheme.radii.button),
       color = if (primary) ClawTheme.colors.primary else ClawTheme.colors.canvas,
       contentColor = if (primary) ClawTheme.colors.primaryText else ClawTheme.colors.text,
       border = BorderStroke(1.dp, if (primary) ClawTheme.colors.primary else ClawTheme.colors.border),
@@ -592,7 +592,7 @@ private fun VoiceHero(
   onStartDictation: () -> Unit,
   onConnectGateway: () -> Unit,
 ) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
     VoiceOrb(
       active = micEnabled || talkModeEnabled,
       listening = talkModeListening || voiceCaptureMode == VoiceCaptureMode.ManualMic,
@@ -639,7 +639,7 @@ private fun VoiceHero(
       }
     }
 
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
       VoiceModeRow(
         title = if (talkModeEnabled) "End Talk" else "Realtime Talk",
         subtitle =
@@ -696,19 +696,19 @@ private fun VoiceModeRow(
 ) {
   Surface(onClick = onClick, enabled = enabled, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
-      modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp).padding(horizontal = 10.dp, vertical = 6.dp),
+      modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp).padding(horizontal = 0.dp, vertical = 7.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Surface(
-        modifier = Modifier.size(34.dp),
-        shape = CircleShape,
+        modifier = Modifier.size(30.dp),
+        shape = RoundedCornerShape(ClawTheme.radii.control),
         color = if (enabled) ClawTheme.colors.surface else ClawTheme.colors.canvas,
         contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
         border = BorderStroke(1.dp, ClawTheme.colors.border),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(16.dp))
+          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(15.dp))
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -719,7 +719,7 @@ private fun VoiceModeRow(
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
           contentDescription = null,
-          modifier = Modifier.size(21.dp),
+          modifier = Modifier.size(18.dp),
           tint = ClawTheme.colors.textMuted,
         )
       }
@@ -738,19 +738,19 @@ private fun VoiceProviderCard(gatewayStatus: String) {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Surface(
-        modifier = Modifier.size(34.dp),
-        shape = CircleShape,
+        modifier = Modifier.size(30.dp),
+        shape = RoundedCornerShape(ClawTheme.radii.control),
         color = ClawTheme.colors.canvas,
         contentColor = ClawTheme.colors.text,
         border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(17.dp))
+          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(15.dp))
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -780,7 +780,7 @@ private fun VoicePrimaryAction(
   Surface(
     onClick = onClick,
     modifier = Modifier.fillMaxWidth().height(ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = ClawTheme.colors.primary,
     contentColor = ClawTheme.colors.primaryText,
   ) {
@@ -802,7 +802,7 @@ private fun VoiceOrb(
   speaking: Boolean,
 ) {
   Surface(
-    modifier = Modifier.size(132.dp),
+    modifier = Modifier.size(112.dp),
     shape = CircleShape,
     color = if (active) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
@@ -817,7 +817,7 @@ private fun VoiceOrb(
               else -> Icons.Default.Mic
             },
           contentDescription = null,
-          modifier = Modifier.size(38.dp),
+          modifier = Modifier.size(32.dp),
           tint = ClawTheme.colors.text,
         )
         Waveform(active = active)
@@ -875,7 +875,7 @@ private fun VoiceTranscript(
       item {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
           Text(text = "Live transcript", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-          ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
+          ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
               Text(text = "No transcript yet", style = ClawTheme.type.section, color = ClawTheme.colors.text)
               Text(
@@ -902,7 +902,7 @@ private fun VoiceTurnCard(entry: VoiceConversationEntry) {
       contentColor = ClawTheme.colors.text,
       border = BorderStroke(1.dp, if (entry.isStreaming) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
     ) {
-      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text(
           text = if (isUser) "You" else "OpenClaw",
           style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),

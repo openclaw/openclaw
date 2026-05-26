@@ -10,6 +10,7 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
   buildVitestRunPlans,
+  findUnmatchedExplicitTestTargets,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -270,6 +271,20 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(
+        [
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-support.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
+        process.cwd(),
+      ),
+    ).toEqual([]);
   });
 
   it("routes contract roots to separate contract shards", () => {
@@ -550,6 +565,21 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed ui build helpers to their importing tests", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/config/control-ui-chunking.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/control-ui-chunking.test.ts"],
         watchMode: false,
       },
     ]);
@@ -904,6 +934,24 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(targets).toContain("src/auto-reply/status.test.ts");
     expect(repoSourceReads.length).toBeLessThan(100);
+  });
+
+  it.each([
+    "test/vitest/vitest.agents-core.config.ts",
+    "test/vitest/vitest.agents-pi-embedded.config.ts",
+    "test/vitest/vitest.agents-support.config.ts",
+    "test/vitest/vitest.agents-tools.config.ts",
+  ])("routes split agents vitest config %s to itself", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: target,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
   });
 
   it.each([

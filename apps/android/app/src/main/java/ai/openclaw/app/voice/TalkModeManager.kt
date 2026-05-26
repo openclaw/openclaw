@@ -157,7 +157,6 @@ class TalkModeManager internal constructor(
   private val completedRunStates = LinkedHashMap<String, Boolean>()
   private val completedRunTexts = LinkedHashMap<String, String>()
   private var configLoaded = false
-  private var executionMode = TalkModeExecutionMode.Native
   private val startGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
@@ -480,6 +479,19 @@ class TalkModeManager internal constructor(
     pendingRunId = null
   }
 
+  internal suspend fun runE2eRealtimeTurn(
+    userText: String,
+    assistantText: String,
+    timeoutMs: Long,
+  ) {
+    if (!_isEnabled.value) {
+      setEnabled(true)
+    }
+    val sessionId = awaitRealtimeSessionId(timeoutMs)
+    handleGatewayEvent("talk.event", realtimeTranscriptPayload(sessionId = sessionId, role = "user", text = userText))
+    handleGatewayEvent("talk.event", realtimeTranscriptPayload(sessionId = sessionId, role = "assistant", text = assistantText))
+  }
+
   fun setPlaybackEnabled(enabled: Boolean) {
     if (playbackEnabled == enabled) return
     playbackEnabled = enabled
@@ -513,50 +525,14 @@ class TalkModeManager internal constructor(
       try {
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        if (executionMode == TalkModeExecutionMode.RealtimeRelay) {
-          startRealtimeRelay(generation)
-        } else {
-          startNativeRecognition(generation)
-        }
+        startRealtimeRelay(generation)
       } catch (err: Throwable) {
         if (err is CancellationException) return@launch
         _statusText.value = "Start failed: ${err.message ?: err::class.simpleName}"
         Log.w(tag, "start failed: ${err.message ?: err::class.simpleName}")
-        if (executionMode == TalkModeExecutionMode.RealtimeRelay) {
-          stopRealtimeRelay(closeSession = false, preserveStatus = true)
-          disableRealtimeModeAndNotifyOwner()
-        }
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
+        disableRealtimeModeAndNotifyOwner()
       }
-    }
-  }
-
-  private suspend fun startNativeRecognition(generation: Long) {
-    withContext(Dispatchers.Main) {
-      if (generation != startGeneration.get()) return@withContext
-      if (!_isEnabled.value || stopRequested) return@withContext
-      if (_isListening.value) return@withContext
-      Log.d(tag, "start native")
-
-      if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-        _statusText.value = "Speech recognizer unavailable"
-        Log.w(tag, "speech recognizer unavailable")
-        return@withContext
-      }
-
-      val micOk =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-          PackageManager.PERMISSION_GRANTED
-      if (!micOk) {
-        _statusText.value = "Microphone permission required"
-        Log.w(tag, "microphone permission required")
-        return@withContext
-      }
-
-      recognizer?.destroy()
-      recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
-      startListeningInternal(markListening = true)
-      startSilenceMonitor()
-      Log.d(tag, "listening")
     }
   }
 
@@ -596,6 +572,19 @@ class TalkModeManager internal constructor(
     }
     shutdownTextToSpeech()
   }
+
+  private suspend fun awaitRealtimeSessionId(timeoutMs: Long): String =
+    withTimeout(timeoutMs) {
+      while (true) {
+        realtimeSessionId?.let { return@withTimeout it }
+        val status = _statusText.value
+        if (!_isEnabled.value && status != "Off") {
+          throw IllegalStateException(status)
+        }
+        delay(100L)
+      }
+      error("unreachable")
+    }
 
   private suspend fun startRealtimeRelay(generation: Long) {
     if (!isConnected()) {
@@ -851,6 +840,19 @@ class TalkModeManager internal constructor(
       }
     }
   }
+
+  private fun realtimeTranscriptPayload(
+    sessionId: String,
+    role: String,
+    text: String,
+  ): String =
+    buildJsonObject {
+      put("relaySessionId", JsonPrimitive(sessionId))
+      put("type", JsonPrimitive("transcript"))
+      put("role", JsonPrimitive(role))
+      put("text", JsonPrimitive(text))
+      put("final", JsonPrimitive(true))
+    }.toString()
 
   private fun playRealtimeAudio(bytes: ByteArray) {
     if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
@@ -2182,11 +2184,9 @@ class TalkModeManager internal constructor(
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
-      executionMode = parsed.executionMode
       configLoaded = true
     } catch (_: Throwable) {
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
-      executionMode = TalkModeExecutionMode.Native
       configLoaded = false
     }
   }

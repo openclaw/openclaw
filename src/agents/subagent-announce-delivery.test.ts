@@ -247,9 +247,11 @@ async function deliverTelegramDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
+  requesterSessionId?: string | null;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
   requesterSessionKey?: string;
   sourceTool?: string;
+  runtimeConfig?: Record<string, unknown>;
   origin?: {
     channel: "telegram";
     to: string;
@@ -266,10 +268,13 @@ async function deliverTelegramDirectMessageCompletion(params: {
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
-      sessionId: "requester-session-telegram",
+      sessionId:
+        params.requesterSessionId === null
+          ? undefined
+          : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
-    getRuntimeConfig: () => ({}) as never,
+    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
@@ -1416,13 +1421,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it("reports failure for Telegram DMs when announce-agent delivery fails", async () => {
-    const callGateway = vi.fn(async () => {
-      throw new Error("UNAVAILABLE: requester wake failed");
-    }) as unknown as typeof runtimeCallGateway;
+    const callGateway = createGatewayMock({
+      result: {
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "requester wake failed",
+        },
+      },
+    });
     const sendMessage = createSendMessageMock();
     const result = await deliverTelegramDirectMessageCompletion({
       callGateway,
       sendMessage,
+      queueEmbeddedPiMessageWithOutcome: createQueueOutcomeMock(false),
+      requesterSessionId: null,
+      requesterSessionKey: "agent:main:telegram:direct:123456789",
+      origin: {
+        channel: "telegram",
+        to: "direct:123456789",
+        accountId: "bot-1",
+      },
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            subagents: {
+              announceTimeoutMs: 10,
+            },
+          },
+        },
+      },
       internalEvents: [
         {
           type: "task_completion",
@@ -1442,7 +1469,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "UNAVAILABLE: requester wake failed",
+      error: "requester wake failed",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1460,6 +1487,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sendMessage,
       isActive: true,
       queueEmbeddedPiMessageWithOutcome,
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            subagents: {
+              announceTimeoutMs: 10,
+            },
+          },
+        },
+      },
       internalEvents: [
         {
           type: "task_completion",
@@ -1496,7 +1532,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
-        deliveryTimeoutMs: 120_000,
+        deliveryTimeoutMs: 10,
       },
     );
     expect(callGateway).toHaveBeenCalledTimes(1);
@@ -2279,6 +2315,197 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     );
     expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("directly delivers missing generated media after active requester wake failure", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "The first image is ready.",
+            mediaUrls: ["/tmp/generated-robot-1.png"],
+          },
+        ],
+      },
+    });
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "requester-session-channel",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-active-wake-failed",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "two proof images",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result:
+            "Generated 2 images.\nMEDIA:/tmp/generated-robot-1.png\nMEDIA:/tmp/generated-robot-2.png",
+          mediaUrls: ["/tmp/generated-robot-1.png", "/tmp/generated-robot-2.png"],
+          replyInstruction:
+            "Tell the user the images are ready and send them through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-robot-2.png"],
+        idempotencyKey: "announce-channel-media-active-wake-failed:generated-media-direct",
+      }),
+    );
+  });
+
+  it("directly delivers stale isolated cron run media completions", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "stale-cron-run-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-stale-cron-media",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "daily media",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-daily.png",
+          mediaUrls: ["/tmp/generated-daily.png"],
+          replyInstruction: "Deliver the generated image through the requester run.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-daily.png"],
+        idempotencyKey: "announce-stale-cron-media:generated-media-direct",
+      }),
+    );
+  });
+
+  it("no-ops stale isolated cron run text completions", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "stale-cron-run-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-text:run:run-123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-stale-cron-text",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "none",
+      phases: [{ phase: "direct-primary", delivered: true, path: "none", error: undefined }],
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("directly delivers stale isolated cron run media failure completions", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Image generation failed. Provider timed out." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "stale-cron-run-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-stale-cron-media-failure",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "daily media",
+          status: "error",
+          statusLabel: "failed",
+          result: "Provider timed out.",
+          replyInstruction: "Tell the user image generation failed.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
