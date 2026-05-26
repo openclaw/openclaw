@@ -15,14 +15,19 @@ const mocks = vi.hoisted(() => ({
   formatRestartSentinelMessage: vi.fn(() => "restart message"),
   summarizeRestartSentinel: vi.fn(() => "restart summary"),
   resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
-  parseSessionThreadInfo: vi.fn(() => ({ baseSessionKey: null, threadId: undefined })),
+  parseSessionThreadInfo: vi.fn(() => ({
+    baseSessionKey: null,
+    threadId: undefined,
+  })),
   loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
   resolveAnnounceTargetFromKey: vi.fn(() => null),
   deliveryContextFromSession: vi.fn(() => undefined),
-  mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
-    ...b,
-    ...a,
-  })),
+  mergeDeliveryContext: vi.fn(
+    (a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
+      ...b,
+      ...a,
+    }),
+  ),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => []),
@@ -76,7 +81,8 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const { scheduleRestartSentinelWake } =
+  await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
   it("forwards session context to outbound delivery", async () => {
