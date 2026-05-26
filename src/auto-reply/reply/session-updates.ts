@@ -9,7 +9,10 @@ import {
   shouldRefreshSnapshotForVersion,
 } from "../../agents/skills/refresh-state.js";
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
-import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
+import {
+  hydrateResolvedSkills,
+  isSkillsSnapshotSchemaOutdated,
+} from "../../agents/skills/snapshot-hydration.js";
 import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   canonicalizeAbsoluteSessionFilePath,
@@ -262,7 +265,14 @@ export async function ensureSkillSnapshot(params: {
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  // Mirror the agent-command reuse predicate: persisted snapshots written by
+  // older builds may lack `schemaVersion` (or carry a value below the current
+  // shape), which means the lane-split fields (`trustedDeveloperPrompt`,
+  // `untrustedReferencePrompt`, `remoteNote`) are missing. Without forcing a
+  // rebuild here, the channel reuse path would hydrate those legacy snapshots
+  // as-is and Codex loses skills visibility until the workspace version bumps.
   const shouldRefreshSnapshot =
+    isSkillsSnapshotSchemaOutdated(existingSnapshot) ||
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
   const buildSnapshot = () => {

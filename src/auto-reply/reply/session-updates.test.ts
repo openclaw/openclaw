@@ -1,10 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SKILL_SNAPSHOT_SCHEMA_VERSION } from "../../agents/skills/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
 type TestSkillSnapshot = NonNullable<SessionEntry["skillsSnapshot"]>;
 
 function strippedSnapshot(skillName = "test"): TestSkillSnapshot {
+  return {
+    prompt: "skills prompt",
+    schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
+    skills: [{ name: skillName }],
+    version: 0,
+  };
+}
+
+function legacyStrippedSnapshot(skillName = "test"): TestSkillSnapshot {
+  // Pre-PR shape: no `schemaVersion`, no lane-split fields. Used by the
+  // legacy-rebuild regression test below.
   return {
     prompt: "skills prompt",
     skills: [{ name: skillName }],
@@ -262,6 +274,64 @@ describe("ensureSkillSnapshot", () => {
 
     expect(second.skillsSnapshot?.resolvedSkills).toEqual([]);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("force-rebuilds legacy persisted snapshots that lack schemaVersion in the channel path", async () => {
+    // ClawSweeper P1 regression at the channel boundary: pre-PR sessions
+    // persisted snapshots without `schemaVersion` (the lane-split fields
+    // did not exist yet). Without the schema-version refresh guard, the
+    // reuse path hydrates the legacy snapshot as-is and the Codex turn
+    // would never see `trustedDeveloperPrompt` / `untrustedReferencePrompt`
+    // until a workspace bump. Force-refresh re-runs
+    // `buildWorkspaceSkillSnapshot` so the new lane fields are populated.
+    //
+    // `resolvedSkills` is pre-seeded so the hydrate path would normally
+    // short-circuit. Without the schema-version guard, that short-circuit
+    // would return the legacy snapshot as-is and the mock would not be
+    // called — making this assertion a clean regression test for the
+    // schema-refresh behavior rather than for the resolvedSkills hydrate
+    // fallback.
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    const legacy: TestSkillSnapshot = {
+      ...legacyStrippedSnapshot(),
+      resolvedSkills: [],
+    };
+    const sessionStore: Record<string, SessionEntry> = {};
+
+    await ensureSkillSnapshot({
+      sessionEntry: testSessionEntry("sess-1", legacy),
+      sessionStore,
+      sessionKey: "main",
+      isFirstTurnInSession: false,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses persisted snapshots that already carry the current schemaVersion", async () => {
+    // Complements the legacy-rebuild test above: a snapshot stamped with the
+    // current `SKILL_SNAPSHOT_SCHEMA_VERSION` (and with `resolvedSkills`
+    // pre-seeded so the hydrate short-circuit is hit) must not trigger a
+    // rebuild on the reuse path.
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    const fresh: TestSkillSnapshot = {
+      ...strippedSnapshot(),
+      resolvedSkills: [],
+    };
+    await ensureSkillSnapshot({
+      sessionEntry: testSessionEntry("sess-1", fresh),
+      sessionStore: {},
+      sessionKey: "main",
+      isFirstTurnInSession: false,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("redacts secret values in the cache key while preserving eligibility presence", async () => {

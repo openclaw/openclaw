@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SKILL_SNAPSHOT_SCHEMA_VERSION } from "../../agents/skills/types.js";
 
 const {
   buildWorkspaceSkillSnapshotMock,
@@ -78,5 +79,46 @@ describe("resolveCronSkillsSnapshot", () => {
     });
 
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+  });
+
+  it("force-rebuilds legacy persisted snapshots that lack schemaVersion", async () => {
+    // ClawSweeper P1 regression at the cron boundary: pre-PR cron sessions
+    // persisted only the v1 shape (`prompt` / `skills` / `resolvedSkills`).
+    // Without the schema-version refresh guard, `resolveCronSkillsSnapshot`
+    // returns the legacy snapshot as-is and the Codex call site reads
+    // `undefined` for both lane fields. The schema-outdated check forces a
+    // rebuild via `buildWorkspaceSkillSnapshot`.
+    await resolveCronSkillsSnapshot({
+      workspaceDir: "/tmp/workspace",
+      config: {} as never,
+      agentId: "writer",
+      existingSnapshot: {
+        prompt: "legacy v1",
+        skills: [{ name: "github" }],
+        version: 0,
+        // Intentionally no `schemaVersion` — this is what a pre-PR cron
+        // session looks like on disk.
+      },
+      isFastTestEnv: false,
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+  });
+
+  it("reuses persisted snapshots that already carry the current schemaVersion", async () => {
+    await resolveCronSkillsSnapshot({
+      workspaceDir: "/tmp/workspace",
+      config: {} as never,
+      agentId: "writer",
+      existingSnapshot: {
+        prompt: "current v3",
+        schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
+        skills: [{ name: "github" }],
+        version: 0,
+      },
+      isFastTestEnv: false,
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 });
