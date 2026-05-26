@@ -11,4 +11,12 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
   clientIp?: string;
+  internal?: {
+    approvalRuntime?: boolean;
+  };
+  canvasHostUrl?: string;
+  canvasCapability?: string;
+  canvasCapabilityExpiresAtMs?: number;
+  invalidated?: boolean;
+  invalidatedReason?: string;
 };

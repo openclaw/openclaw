@@ -7,6 +7,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
 } from "../agents/pi-embedded-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
+import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
   formatStoppedCronSessionDiagnosticFields,
@@ -20,6 +21,42 @@ import {
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
+// Default no-forward-progress age used only when the caller does not carry a
+// resolved `diagnostics.stuckSessionAbortMs`. A run flagged "active" that has made
+// no forward progress (tool/model/chunk events) for at least the resolved window,
+// while queued work waits, is treated as a leaked/dead handle and reclaimed even
+// without an explicit active-abort grant. `lastProgressAgeMs` tracks real progress
+// (not incoming queued messages), so it keeps growing while a lane is wedged.
+const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
+
+function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
+  const configured = params.staleActiveProgressAbortMs;
+  // Honor the resolved `diagnostics.stuckSessionAbortMs` as-is — an operator can
+  // raise it to protect slow active work (it is the same threshold the existing
+  // `session.stalled` abort uses). It is floored at the warn threshold upstream,
+  // not necessarily 5 min, so we only apply the 5-min default when no value is
+  // carried (e.g. direct callers).
+  return typeof configured === "number" && configured > 0
+    ? configured
+    : STUCK_SESSION_PROGRESS_STALE_MS;
+}
+
+function isActiveRunProgressStale(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  queueDepth?: number;
+  staleAbortMs: number;
+}): boolean {
+  if ((params.queueDepth ?? 0) <= 0) {
+    return false;
+  }
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
+  const lastProgressAgeMs = activity.lastProgressAgeMs;
+  return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
+}
 const recoveriesInFlight = new Set<string>();
 
 export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
@@ -74,7 +111,7 @@ export async function recoverStuckDiagnosticSession(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         generation: params.stateGeneration,
-        state: "processing",
+        state: params.expectedState ?? "processing",
       })
     ) {
       return {
@@ -89,7 +126,7 @@ export async function recoverStuckDiagnosticSession(
       params.sessionId && isEmbeddedPiRunHandleActive(params.sessionId)
         ? params.sessionId
         : undefined;
-    const activeSessionId = params.sessionKey
+    let activeSessionId = params.sessionKey
       ? (resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) ?? fallbackActiveSessionId)
       : fallbackActiveSessionId;
     const activeWorkSessionId = params.sessionKey
@@ -100,9 +137,18 @@ export async function recoverStuckDiagnosticSession(
     let aborted = false;
     let drained = true;
     let forceCleared = false;
+    const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
 
     if (activeSessionId) {
-      if (params.allowActiveAbort !== true) {
+      const reclaimStaleActiveRun =
+        params.allowActiveAbort !== true &&
+        isActiveRunProgressStale({
+          sessionId: activeSessionId,
+          sessionKey: params.sessionKey,
+          queueDepth: params.queueDepth,
+          staleAbortMs: staleActiveProgressAbortMs,
+        });
+      if (params.allowActiveAbort !== true && !reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "observe_only",
@@ -118,6 +164,11 @@ export async function recoverStuckDiagnosticSession(
         diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
         return outcome;
       }
+      if (reclaimStaleActiveRun) {
+        diag.warn(
+          `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
+        );
+      }
       const result = await abortAndDrainEmbeddedPiRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,
@@ -131,17 +182,47 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      const outcome: StuckSessionRecoveryOutcome = {
-        status: "skipped",
-        action: "keep_lane",
-        reason: "active_reply_work",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        activeSessionId: activeWorkSessionId,
-        activeWorkKind: "embedded_run",
-      };
-      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-      return outcome;
+      const reclaimStaleReplyWork =
+        params.allowActiveAbort !== true &&
+        isActiveRunProgressStale({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          queueDepth: params.queueDepth,
+          staleAbortMs: staleActiveProgressAbortMs,
+        });
+      if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
+        if (reclaimStaleReplyWork) {
+          diag.warn(
+            `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
+              params,
+              { activeSessionId: activeWorkSessionId },
+            )}`,
+          );
+        }
+        const result = await abortAndDrainEmbeddedPiRun({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+          forceClear: true,
+          reason: "stuck_recovery",
+        });
+        aborted = result.aborted;
+        drained = result.drained;
+        forceCleared = result.forceCleared;
+        activeSessionId = activeWorkSessionId;
+      } else {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_reply_work",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+          activeWorkKind: "embedded_run",
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
     }
 
     if (!activeSessionId && sessionLane) {
@@ -162,11 +243,14 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
+    const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
     const released =
       sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
 
-    if (aborted || released > 0) {
-      const action = aborted ? "abort_embedded_run" : "release_lane";
+    const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
+
+    if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
+      const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
       );
@@ -177,28 +261,30 @@ export async function recoverStuckDiagnosticSession(
           stoppedFields ? ` ${stoppedFields}` : ""
         }`,
       );
-      const outcome: StuckSessionRecoveryOutcome = aborted
-        ? {
-            status: "aborted",
-            action: "abort_embedded_run",
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            activeSessionId,
-            activeWorkKind: "embedded_run",
-            aborted,
-            drained,
-            forceCleared,
-            released,
-            lane: sessionLane ?? undefined,
-          }
-        : {
-            status: "released",
-            action: "release_lane",
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            released,
-            lane: sessionLane ?? undefined,
-          };
+      const outcome: StuckSessionRecoveryOutcome =
+        aborted || forceCleared
+          ? {
+              status: "aborted",
+              action: "abort_embedded_run",
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              activeSessionId,
+              activeWorkKind: "embedded_run",
+              aborted,
+              drained,
+              forceCleared,
+              released,
+              lane: sessionLane ?? undefined,
+              ...(queuedCount > 0 ? { queuedCount } : {}),
+            }
+          : {
+              status: "released",
+              action: "release_lane",
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              released,
+              lane: sessionLane ?? undefined,
+            };
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;
     }
@@ -232,8 +318,9 @@ export async function recoverStuckDiagnosticSession(
   }
 }
 
-export const __testing = {
+export const testing = {
   resetRecoveriesInFlight(): void {
     recoveriesInFlight.clear();
   },
 };
+export { testing as __testing };

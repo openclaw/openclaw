@@ -5,11 +5,13 @@ import type { ProviderPlugin } from "../plugins/types.js";
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderCatalog: vi.fn(),
+  runProviderStaticCatalog: vi.fn(),
 }));
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog: mocks.runProviderCatalog,
+  runProviderStaticCatalog: mocks.runProviderStaticCatalog,
   groupPluginDiscoveryProvidersByOrder: (providers: ProviderPlugin[]) => ({
     simple: providers,
     profile: [],
@@ -55,6 +57,28 @@ function createProvider(id: string): ProviderPlugin {
   };
 }
 
+function createProviderWithStaticCatalog(id: string): ProviderPlugin {
+  return {
+    ...createProvider(id),
+    staticCatalog: {
+      order: "simple",
+      run: async () => null,
+    },
+  };
+}
+
+function createTextModel(id: string, name: string) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  };
+}
+
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   const call = mock.mock.calls[0];
   if (!call) {
@@ -68,6 +92,15 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     vi.clearAllMocks();
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("openai")]);
     mocks.runProviderCatalog.mockResolvedValue({
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [],
+        },
+      },
+    });
+    mocks.runProviderStaticCatalog.mockResolvedValue({
       providers: {
         openai: {
           baseUrl: "https://api.openai.com/v1",
@@ -120,5 +153,105 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       "runtime plugin discovery",
     ) as { discoveryEntriesOnly?: boolean };
     expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
+  });
+
+  it("uses static provider catalogs for entries-only startup discovery", async () => {
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProviderWithStaticCatalog("codex"),
+    ]);
+
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit provider models manual without provider wildcard visibility", async () => {
+    const explicitProvider = {
+      baseUrl: "http://vllm.example/v1",
+      api: "openai-completions" as const,
+      models: [createTextModel("manual-model", "Manual Model")],
+    };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("vllm")]);
+    mocks.runProviderCatalog.mockResolvedValue({
+      provider: {
+        baseUrl: "http://vllm.example/v1",
+        api: "openai-completions" as const,
+        models: [createTextModel("discovered-model", "Discovered Model")],
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/manual-model": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            vllm: explicitProvider,
+          },
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {
+        vllm: explicitProvider,
+      },
+    });
+
+    expect(providers?.vllm?.models.map((model) => model.id)).toEqual(["manual-model"]);
+  });
+
+  it("merges discovered self-hosted models into explicit provider models for wildcard visibility", async () => {
+    const explicitProvider = {
+      baseUrl: "http://vllm.example/v1",
+      api: "openai-completions" as const,
+      models: [createTextModel("manual-model", "Manual Model")],
+    };
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("vllm")]);
+    mocks.runProviderCatalog.mockResolvedValue({
+      provider: {
+        baseUrl: "http://vllm.example/v1",
+        api: "openai-completions" as const,
+        models: [createTextModel("discovered-model", "Discovered Model")],
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            vllm: explicitProvider,
+          },
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {
+        vllm: explicitProvider,
+      },
+    });
+
+    expect(providers?.vllm?.models.map((model) => model.id)).toEqual([
+      "manual-model",
+      "discovered-model",
+    ]);
   });
 });

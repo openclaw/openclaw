@@ -23,15 +23,12 @@ export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
     getSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
   );
 
-export function createCodexAppServerClientFactoryTestHooks(
-  setFactory: (factory: CodexAppServerClientFactory) => void,
-) {
-  return {
-    setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
-      setFactory(factory);
-    },
-    resetCodexAppServerClientFactoryForTests(): void {
-      setFactory(defaultCodexAppServerClientFactory);
-    },
-  } as const;
-}
+export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFactory = (
+  startOptions,
+  authProfileId,
+  agentDir,
+  config,
+) =>
+  import("./shared-client.js").then(({ getLeasedSharedCodexAppServerClient }) =>
+    getLeasedSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
+  );

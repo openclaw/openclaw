@@ -31,6 +31,15 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type QueuedReplyDeliveryCorrelation = {
+  begin: () => (() => void) | void;
+};
+
+export type QueuedReplyLifecycle = {
+  onEnqueued?: () => void;
+  onComplete?: () => void;
+};
+
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
   replace?: true;
@@ -66,6 +75,8 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /** Dynamic form used when verbose progress visibility can change mid-run. */
+  shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -168,10 +179,15 @@ export type GetReplyOptions = {
   onModelSelected?: (ctx: ModelSelectedContext) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
-   * the source conversation. `message_tool_only` keeps final/block/preview
-   * output private; visible channel output must come from the message tool.
+   * the source conversation. `message_tool_only` prefers message-tool visible
+   * delivery and keeps normal final text, block output, and preview output
+   * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Starts delivery tracking when this turn later drains as a queued followup. */
+  queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
+  /** Tracks ownership transfer when this turn later drains as a queued followup. */
+  queuedFollowupLifecycle?: QueuedReplyLifecycle;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   disableBlockStreaming?: boolean;

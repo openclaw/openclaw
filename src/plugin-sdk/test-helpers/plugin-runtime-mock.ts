@@ -69,6 +69,33 @@ function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFil
   );
 }
 
+export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
+
+export function createPluginRuntimeMediaMock(
+  overrides: Partial<PluginRuntimeMediaMock> = {},
+): PluginRuntimeMediaMock {
+  const readRemoteMediaBuffer =
+    vi.fn() as unknown as PluginRuntimeMediaMock["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia:
+      readRemoteMediaBuffer as unknown as PluginRuntimeMediaMock["fetchRemoteMedia"],
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntimeMediaMock["saveMediaBuffer"],
+    ...overrides,
+  };
+}
+
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const taskFlow = {
     bindSession: vi.fn(
@@ -233,7 +260,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       return result;
     },
   ) as unknown as PluginRuntime["channel"]["turn"]["run"];
-  const buildChannelTurnContextMock = vi.fn(
+  const buildChannelInboundEventContextMock = vi.fn(
     (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
       ({
         Body: params.message.body ?? params.message.rawBody,
@@ -279,6 +306,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       mutateConfigFile: vi.fn(async () => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig: {},
         afterWrite: { mode: "auto" },
@@ -288,6 +316,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig,
         afterWrite: { mode: "auto" },
@@ -350,6 +379,22 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         loadSessionStore: vi.fn(
           () => ({}),
         ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],
+        getSessionEntry: vi.fn(
+          () => undefined,
+        ) as unknown as PluginRuntime["agent"]["session"]["getSessionEntry"],
+        listSessionEntries: vi.fn(
+          () => [],
+        ) as unknown as PluginRuntime["agent"]["session"]["listSessionEntries"],
+        patchSessionEntry: vi
+          .fn()
+          .mockResolvedValue(
+            null,
+          ) as unknown as PluginRuntime["agent"]["session"]["patchSessionEntry"],
+        upsertSessionEntry: vi
+          .fn()
+          .mockResolvedValue(
+            undefined,
+          ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
         saveSessionStore: vi
           .fn()
           .mockResolvedValue(
@@ -524,14 +569,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           created: true,
         }) as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
-      media: {
-        fetchRemoteMedia:
-          vi.fn() as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-        saveMediaBuffer: vi.fn().mockResolvedValue({
-          path: "/tmp/test-media.jpg",
-          contentType: "image/jpeg",
-        }) as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-      },
+      media: createPluginRuntimeMediaMock(),
       session: {
         resolveStorePath: vi.fn(
           () => "/tmp/sessions.json",
@@ -583,6 +621,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               await params.onFlush([item]);
             },
             flushKey: vi.fn(),
+            cancelKey: vi.fn(() => false),
           }),
         ) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
         resolveInboundDebounceMs: vi.fn((params: unknown) => {
@@ -656,7 +695,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               },
             }),
         ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
-        buildContext: buildChannelTurnContextMock,
+        buildContext: buildChannelInboundEventContextMock,
         runPrepared: runPreparedChannelTurnMock,
         dispatchAssembled:
           dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],

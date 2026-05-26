@@ -45,6 +45,7 @@ type PromptDecisionParams = {
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
+  harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
 
@@ -57,8 +58,10 @@ type AssistantDecisionParams = {
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   timedOut: boolean;
+  idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
 
@@ -79,9 +82,12 @@ function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
 
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
+  failoverFailure: boolean;
   failoverReason: FailoverReason | null;
 }): boolean {
-  return params.failoverReason === "format" && params.allowFormatRetry !== true;
+  return (
+    params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
+  );
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
@@ -92,14 +98,38 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
   );
 }
 
+function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
+  return (
+    params.idleTimedOut ||
+    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+  );
+}
+
+function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): boolean {
+  return (
+    params.failoverFailure && Boolean(params.failoverReason) && params.failoverReason !== "timeout"
+  );
+}
+
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
-  return (
-    (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
-  );
+  const timeoutFailure = isAssistantTimeoutFailure(params);
+  const harnessOwnedTimeout =
+    params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
+  if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
+    return false;
+  }
+  return (!params.aborted && params.failoverFailure) || timeoutFailure;
+}
+
+function assistantFallbackReason(params: AssistantDecisionParams): FailoverReason {
+  const failoverReason = params.failoverReason;
+  if (params.failoverFailure && failoverReason && failoverReason !== "timeout") {
+    return failoverReason;
+  }
+  return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
 export function mergeRetryFailoverReason(params: {
@@ -133,6 +163,12 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
 
   if (params.stage === "prompt") {
     if (params.externalAbort) {
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
+    if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
       return {
         action: "surface_error",
         reason: params.failoverReason,
@@ -178,7 +214,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   if (assistantShouldRotate && params.fallbackConfigured) {
     return {
       action: "fallback_model",
-      reason: params.timedOut ? "timeout" : (params.failoverReason ?? "unknown"),
+      reason: assistantFallbackReason(params),
     };
   }
   if (!assistantShouldRotate) {

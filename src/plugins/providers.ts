@@ -1,5 +1,7 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { compileSafeRegex } from "../security/safe-regex.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -10,11 +12,10 @@ import {
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
-  resolvePluginContributionOwners,
-  resolveProviderOwners,
   type PluginRegistryRecord,
   type PluginRegistrySnapshot,
 } from "./plugin-registry.js";
@@ -76,6 +77,13 @@ function resolveProviderSurfacePluginIdSet(
   );
 }
 
+function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
+  return (
+    plugin.modelCatalog?.runtimeAugment === true ||
+    (plugin.origin !== "bundled" && plugin.providers.length > 0)
+  );
+}
+
 function resolveProviderOwnerPluginIds(
   params: ProviderRegistryLoadParams & {
     pluginIds: readonly string[];
@@ -90,7 +98,9 @@ function resolveProviderOwnerPluginIds(
   }
   const pluginIdSet = new Set(params.pluginIds);
   const registry = loadProviderRegistrySnapshot(params);
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) => pluginIdSet.has(plugin.pluginId) && params.isEligible(plugin, normalizedConfig),
@@ -160,7 +170,9 @@ export function resolveBundledProviderCompatPluginIds(params: {
 export function resolveEnabledProviderPluginIds(params: ProviderRegistryLoadParams): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -178,6 +190,7 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   return resolveRegistryManifestContractPluginIds({
     ...params,
@@ -192,6 +205,7 @@ function resolveRegistryManifestContractPluginIds(params: {
   env?: PluginLoadOptions["env"];
   origin?: PluginRegistryRecord["origin"];
   onlyPluginIds?: readonly string[];
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   return resolveManifestRegistry({
@@ -220,6 +234,7 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   declaredPluginIds?: ReadonlySet<string>;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   // Deprecated compatibility fallback for provider plugins that still implement
   // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders. Remove
@@ -228,7 +243,9 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
     params.declaredPluginIds ?? new Set(resolveExternalAuthProfileProviderPluginIds(params));
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -254,9 +271,11 @@ export function resolveDiscoveredProviderPluginIds(params: {
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(registry, (plugin) => {
     if (
       !(
@@ -313,9 +332,11 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   return resolveProviderOwnerPluginIds({
     ...params,
@@ -358,6 +379,8 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   return resolveProviderOwnerPluginIds({
@@ -371,7 +394,7 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   resolveActivatableProviderOwnerPluginIds,
   resolveEnabledProviderPluginIds,
   resolveExternalAuthProfileCompatFallbackPluginIds,
@@ -433,12 +456,12 @@ function resolveModelSupportMatchKind(
 ): ModelSupportMatchKind | undefined {
   const patterns = plugin.modelSupport?.modelPatterns ?? [];
   for (const patternSource of patterns) {
-    try {
-      if (new RegExp(patternSource, "u").test(modelId)) {
-        return "pattern";
-      }
-    } catch {
-      continue;
+    // compileSafeRegex rejects patterns with nested repetition (ReDoS risk)
+    // and returns null. Rejected patterns are silently skipped: the plugin
+    // will not match via that pattern but other patterns/prefixes still apply.
+    const regex = compileSafeRegex(patternSource, "u");
+    if (regex?.test(modelId)) {
+      return "pattern";
     }
   }
   const prefixes = plugin.modelSupport?.modelPrefixes ?? [];
@@ -451,7 +474,7 @@ function resolveModelSupportMatchKind(
 }
 
 function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 function resolvePreferredManifestPluginIds(
@@ -490,43 +513,30 @@ export function resolveOwningPluginIdsForProvider(params: {
     return undefined;
   }
 
-  if (params.manifestRegistry) {
-    const pluginIds = params.manifestRegistry.plugins
-      .filter(
-        (plugin) =>
-          plugin.providers.some(
-            (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-          ) ||
-          plugin.cliBackends.some(
-            (backendId) => normalizeProviderId(backendId) === normalizedProvider,
-          ),
-      )
-      .map((plugin) => plugin.id);
-
-    return pluginIds.length > 0 ? pluginIds : undefined;
-  }
-
-  const env = params.env ?? process.env;
-  const pluginIds = [
-    ...resolveProviderOwners({
-      config: params.config,
+  const manifestRegistry =
+    params.manifestRegistry ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
       workspaceDir: params.workspaceDir,
-      env,
-      providerId: normalizedProvider,
-      includeDisabled: true,
-    }),
-    ...resolvePluginContributionOwners({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env,
-      contribution: "cliBackends",
-      matches: (backendId) => normalizeProviderId(backendId) === normalizedProvider,
-      includeDisabled: true,
-    }),
-  ];
+      env: params.env ?? process.env,
+    }).manifestRegistry;
 
-  const deduped = dedupeSortedPluginIds(pluginIds);
-  return deduped.length > 0 ? deduped : undefined;
+  const pluginIds = manifestRegistry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.some(
+          (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+        ) ||
+        plugin.cliBackends.some(
+          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
+        ) ||
+        (plugin.setup?.cliBackends ?? []).some(
+          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
+        ),
+    )
+    .map((plugin) => plugin.id);
+
+  return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {
@@ -624,20 +634,35 @@ export function resolveCatalogHookProviderPluginIds(params: {
   env?: PluginLoadOptions["env"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
+  const manifestRegistry = resolveManifestRegistry({
+    ...params,
+    registry,
+    includeDisabled: true,
+  });
+  const providerSurfacePluginIds = new Set(
+    manifestRegistry.plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
+  );
+  const runtimeAugmentPluginIds = new Set(
+    manifestRegistry.plugins.flatMap((plugin) =>
+      resolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
+    ),
+  );
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   const enabledProviderPluginIds = listRegistryPluginIds(
     registry,
     (plugin) =>
       providerSurfacePluginIds.has(plugin.pluginId) &&
+      runtimeAugmentPluginIds.has(plugin.pluginId) &&
       resolveEffectiveRegistryPluginActivation({
         plugin,
         normalizedConfig,
         rootConfig: params.config,
       }).activated,
   );
-  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params);
-  return [...new Set([...enabledProviderPluginIds, ...bundledCompatPluginIds])].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds({
+    ...params,
+    manifestRegistry,
+  }).filter((pluginId) => runtimeAugmentPluginIds.has(pluginId));
+  return dedupeSortedPluginIds([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
 }
+export { testing as __testing };

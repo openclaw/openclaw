@@ -88,6 +88,8 @@ describe("isAuthPermanentErrorMessage", () => {
         "OAuth authentication is currently not allowed for this organization",
         "API_KEY_REVOKED",
         "api_key_deleted",
+        "deactivated_workspace",
+        "deactivated workspace",
       ],
       expected: true,
     },
@@ -573,10 +575,30 @@ describe("extractObservedOverflowTokenCount", () => {
         "This model's maximum context length is 128000 tokens. However, your messages resulted in 145000 tokens.",
       ),
     ).toBe(145000);
+    expect(
+      extractObservedOverflowTokenCount(
+        "400 The prompt is too long: 203557, model maximum context length: 196607",
+      ),
+    ).toBe(203557);
+    expect(
+      extractObservedOverflowTokenCount(
+        "Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      ),
+    ).toBe(291351);
+    expect(
+      extractObservedOverflowTokenCount(
+        "input length and max_tokens exceed context limit (i.e 156321 + 48384 > 200000)",
+      ),
+    ).toBe(204705);
   });
 
   it("returns undefined when overflow counts are not present", () => {
     expect(extractObservedOverflowTokenCount("Prompt too large for this model")).toBeUndefined();
+    expect(
+      extractObservedOverflowTokenCount(
+        "The prompt is too long: 203557 characters, model maximum context length: 196607",
+      ),
+    ).toBeUndefined();
     expect(extractObservedOverflowTokenCount("rate limit exceeded")).toBeUndefined();
   });
 });
@@ -1442,11 +1464,34 @@ describe("classifyProviderRuntimeFailureKind", () => {
   });
 
   it("classifies OAuth refresh failures", () => {
-    expect(
-      classifyProviderRuntimeFailureKind(
-        "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
-      ),
-    ).toBe("auth_refresh");
+    const refreshFailures = [
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+      "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    ];
+    for (const message of refreshFailures) {
+      expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth_permanent");
+    }
+  });
+
+  it("does not make uncertain OAuth refresh wrappers terminal", () => {
+    const message =
+      "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
+    expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
+    expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("auth");
+  });
+
+  it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
+    const entitlementMessages = [
+      "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM.",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits, try again later.",
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"You\\u0027ve hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM."}}',
+    ];
+    for (const message of entitlementMessages) {
+      expect(classifyProviderRuntimeFailureKind(message)).not.toBe("auth_refresh");
+      expect(classifyFailoverReason(message, { provider: "openai-codex" })).toBe("rate_limit");
+    }
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
@@ -1485,7 +1530,15 @@ describe("classifyProviderRuntimeFailureKind", () => {
       classifyProviderRuntimeFailureKind(
         "403 <!DOCTYPE html><html><body>Access denied</body></html>",
       ),
-    ).toBe("auth_html_403");
+    ).toBe("auth_html");
+  });
+
+  it("classifies HTML 401 auth failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      ),
+    ).toBe("auth_html");
   });
 
   it("classifies proxy, dns, timeout, schema, sandbox, and replay failures", () => {

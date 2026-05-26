@@ -14,6 +14,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import {
+  normalizeUniqueSingleOrTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -22,6 +26,8 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
   resolveSubagentCapabilityStore,
+  resolveStoredSubagentInheritedToolAllowlist,
+  resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
   type SubagentSessionRole,
@@ -84,6 +90,13 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
+function mergeConfiguredSubagentAllow(
+  allow: string[] | undefined,
+  alsoAllow: string[] | undefined,
+): string[] | undefined {
+  return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
+}
+
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
@@ -99,7 +112,7 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
     ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
 }
 
@@ -130,8 +143,32 @@ export function resolveSubagentToolPolicyForSession(
     ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
+}
+
+export function resolveInheritedToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string | undefined | null,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
+): SandboxToolPolicy | undefined {
+  const inheritedToolAllow = resolveStoredSubagentInheritedToolAllowlist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  if (inheritedToolAllow.length === 0 && inheritedToolDeny.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
+    ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
+  };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
@@ -195,17 +232,7 @@ function buildProviderToolPolicyLookup(
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    resolved.push(trimmed);
-  }
-  return resolved;
+  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
@@ -476,7 +503,7 @@ export function resolveEffectiveToolPolicy(params: {
   }
 
   const profileAlsoAllow = explicitProfileAlsoAllow
-    ? Array.from(new Set(explicitProfileAlsoAllow))
+    ? uniqueStrings(explicitProfileAlsoAllow)
     : undefined;
   return {
     agentId,

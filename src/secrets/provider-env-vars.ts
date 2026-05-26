@@ -13,10 +13,12 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  "openai-codex": ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -33,6 +35,7 @@ export type ProviderEnvVarLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export type ProviderAuthEvidence = {
@@ -123,6 +126,9 @@ function appendUniqueAuthEvidence(
 function resolveProviderMetadataSnapshot(
   params?: ProviderEnvVarLookupParams,
 ): PluginMetadataSnapshot {
+  if (params?.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
   const config = params?.config ?? {};
   const env = params?.env ?? process.env;
   const current = getCurrentPluginMetadataSnapshot({
@@ -307,7 +313,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  */
 export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
-export const __testing = {
+export const testing = {
   resetProviderEnvVarCachesForTests(): void {
     for (const reset of lazyRecordCacheResetters) {
       reset();
@@ -329,16 +335,14 @@ export function getProviderEnvVars(
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [
-    ...new Set([
-      ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-      ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
-    ]),
-  ];
+  return uniqueStrings([
+    ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
+    ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
+  ]);
 }
 
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys))];
+  return uniqueStrings(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys));
 }
 
 export function omitEnvKeysCaseInsensitive(
@@ -363,3 +367,4 @@ export function omitEnvKeysCaseInsensitive(
   }
   return env;
 }
+export { testing as __testing };

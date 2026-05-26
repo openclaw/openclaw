@@ -205,16 +205,14 @@ export async function resetAcpSessionInPlace(params: {
       allowBackendUnavailable: true,
       requireAcpSession: false,
     });
+
     const runtimeNotice =
       typeof closeResult.runtimeNotice === "string" ? closeResult.runtimeNotice : "";
     if (
       runtimeNotice &&
       isAcpStaleSessionError({ code: "ACP_SESSION_INIT_FAILED", message: runtimeNotice })
     ) {
-      await cleanupStaleAcpSessionBindings({
-        sessionKey,
-        message: runtimeNotice,
-      });
+      await cleanupStaleAcpSessionBindings({ sessionKey, message: runtimeNotice });
       return {
         ok: false,
         skipped: true,

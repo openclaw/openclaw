@@ -44,7 +44,7 @@ vi.mock("./persistent-bindings.resolve.js", () => ({
 
 vi.mock("../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
-    unbind: bindingServiceMocks.unbind,
+    unbind: (input: unknown) => bindingServiceMocks.unbind(input),
   }),
 }));
 const baseCfg = {
@@ -110,7 +110,7 @@ function mockReadySession(params: {
 
 function expectCloseArgs(): Record<string, unknown> {
   expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const call = managerMocks.closeSession.mock.calls.at(0);
+  const call = managerMocks.closeSession.mock.calls[0];
   if (!call) {
     throw new Error("expected closeSession call");
   }
@@ -119,7 +119,7 @@ function expectCloseArgs(): Record<string, unknown> {
 
 function expectInitializeArgs(): Record<string, unknown> {
   expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
-  const call = managerMocks.initializeSession.mock.calls.at(0);
+  const call = managerMocks.initializeSession.mock.calls[0];
   if (!call) {
     throw new Error("expected initializeSession call");
   }
@@ -313,96 +313,89 @@ describe("resetAcpSessionInPlace", () => {
     expect(managerMocks.initializeSession).not.toHaveBeenCalled();
   });
 
-  it("unbinds stale bindings and returns skipped when the ACP cwd is gone", async () => {
-    const sessionKey = "agent:claude:acp:binding:demo-binding:default:stale";
+  it("unbinds configured bindings when reset hits a missing working directory", async () => {
+    const spec = {
+      channel: "demo-binding",
+      accountId: "default",
+      conversationId: "9373ab192b2317f4",
+      agentId: "claude",
+      mode: "persistent",
+      backend: "acpx",
+      cwd: "/home/bob/missing",
+    } as const;
+    const sessionKey = buildConfiguredAcpSessionKey(spec);
+    resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReturnValue(spec);
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         agent: "claude",
         mode: "persistent",
         backend: "acpx",
-        runtimeOptions: { cwd: "/tmp/opik-runtime-pr2" },
+        runtimeOptions: { cwd: "/home/bob/missing" },
       },
     });
     managerMocks.closeSession.mockRejectedValueOnce(
-      new Error("ACP runtime working directory does not exist: /tmp/opik-runtime-pr2"),
+      Object.assign(new Error("working directory does not exist: /home/bob/missing"), {
+        code: "ACP_SESSION_INIT_FAILED",
+      }),
     );
 
     const result = await resetAcpSessionInPlace({
       cfg: baseCfg,
       sessionKey,
-      reason: "new",
+      reason: "reset",
     });
 
     expect(result).toEqual({
       ok: false,
       skipped: true,
-      error: "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
+      error: "working directory does not exist: /home/bob/missing",
     });
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
     expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
       targetSessionKey: sessionKey,
       reason: "acp-session-init-failed",
     });
   });
 
-  it("unbinds stale bindings when close returns a missing-cwd runtime notice", async () => {
-    const sessionKey = "agent:claude:acp:binding:demo-binding:default:stale";
+  it("unbinds configured bindings when reset returns a stale runtime notice", async () => {
+    const spec = {
+      channel: "demo-binding",
+      accountId: "default",
+      conversationId: "9373ab192b2317f4",
+      agentId: "claude",
+      mode: "persistent",
+      backend: "acpx",
+      cwd: "/home/bob/missing",
+    } as const;
+    const sessionKey = buildConfiguredAcpSessionKey(spec);
+    const runtimeNotice = "working directory does not exist: /home/bob/missing";
+    resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReturnValue(spec);
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
       acp: {
         agent: "claude",
         mode: "persistent",
         backend: "acpx",
-        runtimeOptions: { cwd: "/tmp/opik-runtime-pr2" },
+        runtimeOptions: { cwd: "/home/bob/missing" },
       },
     });
     managerMocks.closeSession.mockResolvedValueOnce({
       runtimeClosed: false,
       metaCleared: false,
-      runtimeNotice: "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
+      runtimeNotice,
     });
 
     const result = await resetAcpSessionInPlace({
       cfg: baseCfg,
       sessionKey,
-      reason: "new",
+      reason: "reset",
     });
 
     expect(result).toEqual({
       ok: false,
       skipped: true,
-      error: "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
+      error: runtimeNotice,
     });
-    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
-      targetSessionKey: sessionKey,
-      reason: "acp-session-init-failed",
-    });
-  });
-
-  it("still returns skipped when stale-binding cleanup fails", async () => {
-    const sessionKey = "agent:claude:acp:binding:demo-binding:default:stale";
-    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
-      acp: {
-        agent: "claude",
-        mode: "persistent",
-        backend: "acpx",
-        runtimeOptions: { cwd: "/tmp/opik-runtime-pr2" },
-      },
-    });
-    managerMocks.closeSession.mockRejectedValueOnce(
-      new Error("ACP runtime working directory does not exist: /tmp/opik-runtime-pr2"),
-    );
-    bindingServiceMocks.unbind.mockRejectedValueOnce(new Error("unbind failed"));
-
-    const result = await resetAcpSessionInPlace({
-      cfg: baseCfg,
-      sessionKey,
-      reason: "new",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      skipped: true,
-      error: "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
-    });
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
     expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
       targetSessionKey: sessionKey,
       reason: "acp-session-init-failed",

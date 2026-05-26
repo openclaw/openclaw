@@ -61,7 +61,7 @@ function cliInstallPath(pluginId: string): string {
 
 function useProfileExtensionsDir(): string {
   process.env.OPENCLAW_STATE_DIR = PROFILE_STATE_ROOT;
-  return path.join(PROFILE_STATE_ROOT, "extensions");
+  return path.resolve(PROFILE_STATE_ROOT, "extensions");
 }
 
 function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
@@ -302,6 +302,7 @@ type MockWithCalls = {
 };
 
 type PluginInstallCall = {
+  allowSourceTypeScriptEntries?: boolean;
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
   dryRun?: boolean;
@@ -679,7 +680,9 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", pluginId]);
 
-    const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    const writtenConfig = writeConfigFile.mock.calls[
+      writeConfigFile.mock.calls.length - 1
+    ]?.[0] as OpenClawConfig;
     expect(writtenConfig.plugins?.entries?.[pluginId]).toBeUndefined();
     expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     const record = persistedInstallRecord(pluginId);
@@ -848,10 +851,10 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "wecom"]);
 
-    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.4.23");
+    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
     expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
     expect(npmInstallCall().expectedIntegrity).toBe(
-      "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     );
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
@@ -894,15 +897,15 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpec.mockResolvedValue({
       ok: false,
       error:
-        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.4.23",
+        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.5.7",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "wecom"])).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.4.23");
+    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
     expect(hookNpmInstallCall().expectedIntegrity).toBe(
-      "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     );
   });
 
@@ -1051,6 +1054,7 @@ describe("plugins cli install", () => {
     const enabledCfg = createEnabledPluginConfig("discord");
 
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("discord"));
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
@@ -1067,11 +1071,62 @@ describe("plugins cli install", () => {
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 
+  it("uses bundled OpenClaw package specs instead of pinning stale managed npm overrides", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("discord");
+    const bundledPath = "/app/dist/extensions/discord";
+
+    loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockImplementation((params: unknown) => {
+      const { lookup } = params as {
+        lookup: { kind: "pluginId" | "npmSpec"; value: string };
+      };
+      return lookup.kind === "npmSpec" && lookup.value === "@openclaw/discord"
+        ? {
+            pluginId: "discord",
+            localPath: bundledPath,
+            npmSpec: "@openclaw/discord",
+            version: "2026.5.24-beta.2",
+          }
+        : undefined;
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "install",
+      "@openclaw/discord@2026.5.20",
+      "--pin",
+      "--force",
+    ]);
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+      lookup: { kind: "npmSpec", value: "@openclaw/discord@2026.5.20" },
+    });
+    expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+      lookup: { kind: "npmSpec", value: "@openclaw/discord" },
+    });
+    const record = persistedInstallRecord("discord");
+    expect(record.source).toBe("path");
+    expect(record.spec).toBe("@openclaw/discord@2026.5.20");
+    expect(record.sourcePath).toBe(bundledPath);
+    expect(record.installPath).toBe(bundledPath);
+    expect(runtimeLogsContain("ships with the current OpenClaw build")).toBe(true);
+    expect(runtimeLogsContain("npm:@openclaw/discord@2026.5.20")).toBe(true);
+  });
+
   it("marks catalog npm package installs with alternate selectors as trusted", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
 
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue(
       createNpmPluginInstallResult("wecom-openclaw-plugin"),
     );
@@ -1319,6 +1374,7 @@ describe("plugins cli install", () => {
 
     expect(pathInstallCall().path).toBe(tmpRoot);
     expect(pathInstallCall().dryRun).toBe(true);
+    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
   });
 
@@ -1534,6 +1590,7 @@ describe("plugins cli install", () => {
 
     expect(pathInstallCall().path).toBe(localPluginDir);
     expect(pathInstallCall().dryRun).toBe(true);
+    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
     expect(typeof pathInstallCall().logger?.info).toBe("function");
     expect(typeof pathInstallCall().logger?.warn).toBe("function");

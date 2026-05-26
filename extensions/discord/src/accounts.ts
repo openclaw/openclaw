@@ -27,7 +27,12 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord", {
+  implicitDefaultAccount: {
+    channelKeys: ["token"],
+    envVars: ["DISCORD_BOT_TOKEN"],
+  },
+});
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
@@ -42,13 +47,15 @@ export function mergeDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  return resolveMergedAccountConfig<DiscordAccountConfig>({
+  const merged = resolveMergedAccountConfig<DiscordAccountConfig>({
     channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
     accounts: cfg.channels?.discord?.accounts as
       | Record<string, Partial<DiscordAccountConfig>>
       | undefined,
     accountId,
+    nestedObjectKeys: ["agentComponents", "botLoopProtection"],
   });
+  return merged;
 }
 
 export function resolveDiscordAccountAllowFrom(params: {

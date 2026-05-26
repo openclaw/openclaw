@@ -135,12 +135,18 @@ const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
-const TELEGRAM_PROOF_VIEW = {
-  cropWidth: 520,
+const TELEGRAM_PROOF_WINDOW = {
   height: 1000,
   width: 650,
   x: 635,
   y: 40,
+};
+const TELEGRAM_PROOF_CROP = {
+  cropWidth: 430,
+  height: TELEGRAM_PROOF_WINDOW.height,
+  width: 430,
+  x: TELEGRAM_PROOF_WINDOW.x + 220,
+  y: TELEGRAM_PROOF_WINDOW.y,
 };
 
 function usageText() {
@@ -165,7 +171,7 @@ function usageText() {
     "  --output-dir <path>           Artifact directory under the repo.",
     "  --message-id <id>             Telegram message id for proof-view deep link.",
     "  --preview-crop telegram-window Create a side-by-side friendly Telegram-window GIF.",
-    "  --preview-crop-width <pixels>  Cropped preview GIF width. Default: 520.",
+    "  --preview-crop-width <pixels>  Cropped preview GIF width. Default: 430.",
     "  --preview-fps <fps>            Motion GIF frames per second. Default: 24.",
     "  --preview-width <pixels>       Motion GIF width. Default: 1920.",
     "  --pr <number>                 Pull request number for publish.",
@@ -237,7 +243,7 @@ function parseArgs(argv: string[]): Options {
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
-    previewCropWidth: TELEGRAM_PROOF_VIEW.cropWidth,
+    previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
     provider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "aws",
@@ -841,38 +847,46 @@ async function startLocalSutDaemon(params: {
   const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
   const mockLog = path.join(params.outputDir, "mock-openai.log");
   const gatewayLog = path.join(params.outputDir, "gateway.log");
-  const mockPid = spawnDaemon({
-    command: "node",
-    args: ["scripts/e2e/mock-openai-server.mjs"],
-    cwd: params.repoRoot,
-    env: mockServerEnv({ ...params, requestLog }),
-    logPath: mockLog,
-  });
-  if (!mockPid) {
-    throw new Error("mock-openai did not start.");
-  }
-  await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
+  let mockPid: number | undefined;
+  let gatewayPid: number | undefined;
+  try {
+    mockPid = spawnDaemon({
+      command: "node",
+      args: ["scripts/e2e/mock-openai-server.mjs"],
+      cwd: params.repoRoot,
+      env: mockServerEnv({ ...params, requestLog }),
+      logPath: mockLog,
+    });
+    if (!mockPid) {
+      throw new Error("mock-openai did not start.");
+    }
+    await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
-  const gatewayPid = spawnDaemon({
-    command: "pnpm",
-    args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-    cwd: params.repoRoot,
-    env: gatewayEnv({ ...config, sutToken: params.sutToken }),
-    logPath: gatewayLog,
-  });
-  if (!gatewayPid) {
-    throw new Error("gateway did not start.");
+    gatewayPid = spawnDaemon({
+      command: "pnpm",
+      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+      cwd: params.repoRoot,
+      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      logPath: gatewayLog,
+    });
+    if (!gatewayPid) {
+      throw new Error("gateway did not start.");
+    }
+    await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
+    return {
+      ...config,
+      drained,
+      gatewayLog,
+      gatewayPid,
+      mockLog,
+      mockPid,
+      requestLog,
+    };
+  } catch (error) {
+    killPidTree(gatewayPid);
+    killPidTree(mockPid);
+    throw error;
   }
-  await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
-  return {
-    ...config,
-    drained,
-    gatewayLog,
-    gatewayPid,
-    mockLog,
-    mockPid,
-    requestLog,
-  };
 }
 
 function extractLeaseId(output: string) {
@@ -939,12 +953,12 @@ async function createMotionPreview(params: {
 
 function previewCrop(opts: Options) {
   return opts.previewCrop === "telegram-window"
-    ? { ...TELEGRAM_PROOF_VIEW, cropWidth: opts.previewCropWidth }
+    ? { ...TELEGRAM_PROOF_CROP, cropWidth: opts.previewCropWidth }
     : undefined;
 }
 
 async function createCroppedMotionPreview(params: {
-  crop: typeof TELEGRAM_PROOF_VIEW;
+  crop: typeof TELEGRAM_PROOF_CROP;
   croppedGifPath: string;
   croppedVideoPath: string;
   opts: Options;
@@ -1049,9 +1063,35 @@ function sshArgs(inspect: CrabboxInspect) {
   };
 }
 
+function isTransientSshFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
+}
+
+async function runRemoteCommand(params: {
+  args: string[];
+  command: string;
+  cwd: string;
+  stdio?: "inherit" | "pipe";
+}) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      return await runCommand(params);
+    } catch (error) {
+      lastError = error;
+      if (attempt === 4 || !isTransientSshFailure(error)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+    }
+  }
+  throw lastError;
+}
+
 async function scpToRemote(root: string, inspect: CrabboxInspect, local: string, remote: string) {
   const ssh = sshArgs(inspect);
-  await runCommand({
+  await runRemoteCommand({
     command: "scp",
     args: [...ssh.scpBase, local, `${ssh.target}:${remote}`],
     cwd: root,
@@ -1061,7 +1101,7 @@ async function scpToRemote(root: string, inspect: CrabboxInspect, local: string,
 
 async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: string, local: string) {
   const ssh = sshArgs(inspect);
-  await runCommand({
+  await runRemoteCommand({
     command: "scp",
     args: [...ssh.scpBase, `${ssh.target}:${remote}`, local],
     cwd: root,
@@ -1071,7 +1111,7 @@ async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: stri
 
 async function sshRun(root: string, inspect: CrabboxInspect, remoteCommand: string) {
   const ssh = sshArgs(inspect);
-  return await runCommand({
+  return await runRemoteCommand({
     command: "ssh",
     args: [...ssh.base, ssh.target, remoteCommand],
     cwd: root,
@@ -1087,23 +1127,50 @@ set -euo pipefail
 root=${REMOTE_ROOT}
 tdlib_sha256=${tdlibSha256}
 tdlib_url=${tdlibUrl}
+setup_step_timeout_kill_after="\${OPENCLAW_TELEGRAM_USER_SETUP_KILL_AFTER_SECONDS:-30}s"
+apt_timeout="\${OPENCLAW_TELEGRAM_USER_APT_TIMEOUT_SECONDS:-900}s"
+download_timeout="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_TIMEOUT_SECONDS:-600}"
+download_connect_timeout="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}"
+download_retries="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_RETRIES:-3}"
+download_retry_delay="\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_RETRY_DELAY_SECONDS:-5}"
+tdlib_clone_timeout="\${OPENCLAW_TELEGRAM_USER_TDLIB_CLONE_TIMEOUT_SECONDS:-600}s"
+tdlib_build_timeout="\${OPENCLAW_TELEGRAM_USER_TDLIB_BUILD_TIMEOUT_SECONDS:-1800}s"
+run_setup_step() {
+  local label="$1"
+  local timeout_value="$2"
+  shift 2
+  echo "==> $label" >&2
+  timeout --kill-after="$setup_step_timeout_kill_after" "$timeout_value" "$@"
+}
+download_file() {
+  local url="$1"
+  local output="$2"
+  curl -fL \
+    --connect-timeout "$download_connect_timeout" \
+    --max-time "$download_timeout" \
+    --retry "$download_retries" \
+    --retry-delay "$download_retry_delay" \
+    --retry-all-errors \
+    -o "$output" \
+    "$url"
+}
 mkdir -p "$root"
 tar -xzf "$root/state.tgz" -C "$root"
-sudo apt-get update -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
+run_setup_step "apt-get update" "$apt_timeout" sudo apt-get update -y
+run_setup_step "apt-get install" "$apt_timeout" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils zbar-tools libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
   exit 127
 fi
 if [ ! -x "$root/Telegram/Telegram" ]; then
-  curl -fL https://telegram.org/dl/desktop/linux -o "$root/telegram.tar.xz"
+  download_file https://telegram.org/dl/desktop/linux "$root/telegram.tar.xz"
   tar -xJf "$root/telegram.tar.xz" -C "$root"
 fi
 if ! ldconfig -p | grep -q libtdjson.so; then
   if [ -n "$tdlib_url" ]; then
-    curl -fL "$tdlib_url" -o "$root/tdlib-linux.tgz"
+    download_file "$tdlib_url" "$root/tdlib-linux.tgz"
     if [ -z "$tdlib_sha256" ]; then
-      curl -fL "$tdlib_url.sha256" -o "$root/tdlib-linux.tgz.sha256"
+      download_file "$tdlib_url.sha256" "$root/tdlib-linux.tgz.sha256"
       tdlib_sha256="$(awk '{print $1; exit}' "$root/tdlib-linux.tgz.sha256")"
     fi
     printf '%s  %s\\n' "$tdlib_sha256" "$root/tdlib-linux.tgz" | sha256sum -c -
@@ -1114,14 +1181,15 @@ if ! ldconfig -p | grep -q libtdjson.so; then
     sudo install -m 0755 "$lib" /usr/local/lib/libtdjson.so
   else
     rm -rf "$root/td" "$root/td-build"
-    git clone --depth 1 --branch v1.8.0 https://github.com/tdlib/td.git "$root/td"
-    cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=OFF
-    cmake --build "$root/td-build" --target tdjson -j "$(nproc)"
-    sudo cmake --install "$root/td-build"
+    run_setup_step "tdlib clone" "$tdlib_clone_timeout" git clone --depth 1 --branch v1.8.0 https://github.com/tdlib/td.git "$root/td"
+    run_setup_step "tdlib configure" "$tdlib_build_timeout" cmake -S "$root/td" -B "$root/td-build" -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_JNI=OFF
+    run_setup_step "tdlib build" "$tdlib_build_timeout" cmake --build "$root/td-build" --target tdjson -j "$(nproc)"
+    run_setup_step "tdlib install" "$apt_timeout" sudo cmake --install "$root/td-build"
   fi
   sudo ldconfig
 fi
 TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" status --json --timeout-ms 60000 >"$root/status.json"
+TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver" python3 "$root/user-driver.py" terminate-desktop-sessions --json --timeout-ms 60000 --output "$root/desktop-sessions-cleanup.json"
 `;
 }
 
@@ -1131,6 +1199,7 @@ set -euo pipefail
 root=${REMOTE_ROOT}
 export DISPLAY="\${DISPLAY:-:99}"
 pkill -f "$root/Telegram/Telegram" >/dev/null 2>&1 || true
+rm -rf "$root/desktop/tdata"
 nohup "$root/Telegram/Telegram" -workdir "$root/desktop" >"$root/telegram-desktop.log" 2>&1 &
 pid=$!
 sleep 8
@@ -1142,6 +1211,60 @@ if ! wmctrl -l | grep -i telegram >/dev/null 2>&1; then
   cat "$root/telegram-desktop.log" >&2
   exit 1
 fi
+`;
+}
+
+function renderAuthorizeDesktop() {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+root=${REMOTE_ROOT}
+export DISPLAY="\${DISPLAY:-:99}"
+win="$(wmctrl -l | awk 'tolower($0) ~ /telegram/ {print $1; exit}')"
+test -n "$win"
+xdotool windowactivate "$win"
+sleep 5
+click_window_ratio() {
+  eval "$(xdotool getwindowgeometry --shell "$win")"
+  xdotool windowactivate "$win"
+  sleep 0.2
+  xdotool mousemove "$((X + WIDTH / 2))" "$((Y + HEIGHT * $1 / 100))"
+  sleep 0.2
+  xdotool click 1
+  sleep 1
+}
+read_qr_link() {
+  scrot "$root/telegram-login-qr.png"
+  { zbarimg --raw "$root/telegram-login-qr.png" 2>/dev/null || true; } | awk 'index($0, "tg://login?token=") == 1 {print; exit}'
+}
+wait_for_qr_link() {
+  for _ in $(seq 1 25); do
+    link="$(read_qr_link)"
+    if [ -n "$link" ]; then
+      printf '%s\\n' "$link"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+click_window_ratio 69
+sleep 3
+click_window_ratio 80
+link="$(wait_for_qr_link)" || {
+  echo "Telegram Desktop QR login code was not found." >&2
+  exit 1
+}
+export TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver"
+python3 "$root/user-driver.py" confirm-qr --link "$link" --json --output "$root/desktop-session.json"
+python3 - "$root/desktop-session.json" <<'PY'
+import json
+import sys
+payload = json.loads(open(sys.argv[1]).read())
+session = payload.get("session") or {}
+if session.get("isPasswordPending"):
+    raise SystemExit("Telegram Desktop QR login requires a 2FA password.")
+PY
+sleep 6
 `;
 }
 
@@ -1414,12 +1537,14 @@ async function writeRemoteSessionScripts(params: {
 }) {
   const setupScript = path.join(params.localRoot, "remote-setup.sh");
   const launchScript = path.join(params.localRoot, "launch-desktop.sh");
+  const authorizeScript = path.join(params.localRoot, "authorize-desktop.sh");
   const selectChatScript = path.join(params.localRoot, "select-desktop-chat.sh");
   await writeExecutable(
     setupScript,
     renderRemoteSetup({ tdlibSha256: params.opts.tdlibSha256, tdlibUrl: params.opts.tdlibUrl }),
   );
   await writeExecutable(launchScript, renderLaunchDesktop());
+  await writeExecutable(authorizeScript, renderAuthorizeDesktop());
   await writeExecutable(
     selectChatScript,
     renderSelectDesktopChat({ chatTitle: params.opts.desktopChatTitle }),
@@ -1432,11 +1557,18 @@ async function writeRemoteSessionScripts(params: {
   await scpToRemote(
     params.root,
     params.inspect,
+    authorizeScript,
+    `${REMOTE_ROOT}/authorize-desktop.sh`,
+  );
+  await scpToRemote(
+    params.root,
+    params.inspect,
     selectChatScript,
     `${REMOTE_ROOT}/select-desktop-chat.sh`,
   );
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
   await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
   await sshRun(
     params.root,
@@ -1486,6 +1618,30 @@ fi`,
   );
 }
 
+async function terminateRemoteDesktopSession(root: string, inspect: CrabboxInspect) {
+  await sshRun(
+    root,
+    inspect,
+    `set -euo pipefail
+root=${REMOTE_ROOT}
+if [ ! -s "$root/desktop-session.json" ]; then
+  exit 0
+fi
+session_id="$(python3 - "$root/desktop-session.json" <<'PY'
+import json
+import sys
+payload = json.loads(open(sys.argv[1]).read())
+print((payload.get("session") or {}).get("id") or "")
+PY
+)"
+if [ -z "$session_id" ]; then
+  exit 0
+fi
+export TELEGRAM_USER_DRIVER_STATE_DIR="$root/user-driver"
+python3 "$root/user-driver.py" terminate-session --session-id "$session_id" --json --output "$root/desktop-session-terminated.json"`,
+  );
+}
+
 async function startSession(root: string, opts: Options, outputDir: string) {
   const localRoot = path.join(outputDir, ".session");
   fs.rmSync(localRoot, { force: true, recursive: true });
@@ -1512,20 +1668,21 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   }
 
   requireUserDriverScript(opts);
-  const credential = await leaseCredential({ localRoot, opts, root });
-  const sut = opts.sutUsername
-    ? { id: "", username: opts.sutUsername }
-    : await sutIdentity(credential.sutToken);
-  const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+  let credential: Awaited<ReturnType<typeof leaseCredential>> | undefined;
   let leaseId = opts.leaseId;
   let createdLease = false;
-  if (!leaseId) {
-    leaseId = await warmupCrabbox(opts, root);
-    createdLease = true;
-  }
-  const inspect = await inspectCrabbox(opts, root, leaseId);
   let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
   try {
+    credential = await leaseCredential({ localRoot, opts, root });
+    const sut = opts.sutUsername
+      ? { id: "", username: opts.sutUsername }
+      : await sutIdentity(credential.sutToken);
+    const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+    if (!leaseId) {
+      leaseId = await warmupCrabbox(opts, root);
+      createdLease = true;
+    }
+    const inspect = await inspectCrabbox(opts, root, leaseId);
     await writeRemoteSessionScripts({
       inspect,
       localRoot,
@@ -1582,16 +1739,18 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       },
       webvnc: `${opts.crabboxBin} webvnc --provider ${opts.provider} --target ${opts.target} --id ${leaseId} --open`,
       commands: {
-        send: `pnpm qa:telegram-user:crabbox -- send --session ${path.relative(root, pathname)} --text '/status'`,
-        view: `pnpm qa:telegram-user:crabbox -- view --session ${path.relative(root, pathname)} --message-id <message-id>`,
-        run: `pnpm qa:telegram-user:crabbox -- run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
-        finish: `pnpm qa:telegram-user:crabbox -- finish --session ${path.relative(root, pathname)} --preview-crop telegram-window`,
+        send: `openclaw-telegram-user-crabbox-proof send --session ${path.relative(root, pathname)} --text '/status'`,
+        view: `openclaw-telegram-user-crabbox-proof view --session ${path.relative(root, pathname)} --message-id <message-id>`,
+        run: `openclaw-telegram-user-crabbox-proof run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
+        finish: `openclaw-telegram-user-crabbox-proof finish --session ${path.relative(root, pathname)} --preview-crop telegram-window`,
       },
     };
   } catch (error) {
     killPidTree(localSut?.gatewayPid);
     killPidTree(localSut?.mockPid);
-    await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    if (credential) {
+      await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    }
     if (leaseId && createdLease) {
       await stopCrabbox(root, opts, leaseId).catch(() => {});
     }
@@ -1696,7 +1855,7 @@ if [ -z "$win" ]; then
   exit 1
 fi
 wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
-wmctrl -ir "$win" -e 0,${TELEGRAM_PROOF_VIEW.x},${TELEGRAM_PROOF_VIEW.y},${TELEGRAM_PROOF_VIEW.width},${TELEGRAM_PROOF_VIEW.height}
+wmctrl -ir "$win" -e 0,${TELEGRAM_PROOF_WINDOW.x},${TELEGRAM_PROOF_WINDOW.y},${TELEGRAM_PROOF_WINDOW.width},${TELEGRAM_PROOF_WINDOW.height}
 telegram="$root/Telegram/Telegram"
 test -x "$telegram"
 set +e
@@ -1724,7 +1883,8 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
   );
   fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
   return {
-    geometry: TELEGRAM_PROOF_VIEW,
+    crop: TELEGRAM_PROOF_CROP,
+    geometry: TELEGRAM_PROOF_WINDOW,
     link,
     log: path.relative(root, logPath),
     status: "pass",
@@ -1756,6 +1916,16 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
   const statusPath = path.join(session.outputDir, "status.json");
   const ffmpegLogPath = path.join(session.outputDir, "ffmpeg.log");
   const crop = previewCrop(opts);
+  let desktopSessionTerminationAttempted = false;
+  const terminateDesktopSession = async () => {
+    if (opts.keepBox || desktopSessionTerminationAttempted) {
+      return;
+    }
+    desktopSessionTerminationAttempted = true;
+    await terminateRemoteDesktopSession(root, session.crabbox.inspect).catch((error: unknown) => {
+      summary.desktopSessionTerminateError = error instanceof Error ? error.message : String(error);
+    });
+  };
   try {
     await stopRemoteRecording(root, session.crabbox.inspect, session);
     await scpFromRemote(root, session.crabbox.inspect, session.recorder.remoteVideo, videoPath);
@@ -1774,6 +1944,23 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
     await scpFromRemote(root, session.crabbox.inspect, session.recorder.log, ffmpegLogPath).catch(
       () => {},
     );
+    await runCommand({
+      command: opts.crabboxBin,
+      args: [
+        "screenshot",
+        "--provider",
+        session.crabbox.provider,
+        "--target",
+        session.crabbox.target,
+        "--id",
+        session.crabbox.id,
+        "--output",
+        screenshotPath,
+      ],
+      cwd: root,
+      stdio: "inherit",
+    });
+    await terminateDesktopSession();
     summary.mediaPreview = await createMotionPreview({
       motionGifPath,
       motionVideoPath,
@@ -1791,22 +1978,6 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
         videoPath: motionVideoPath,
       });
     }
-    await runCommand({
-      command: opts.crabboxBin,
-      args: [
-        "screenshot",
-        "--provider",
-        session.crabbox.provider,
-        "--target",
-        session.crabbox.target,
-        "--id",
-        session.crabbox.id,
-        "--output",
-        screenshotPath,
-      ],
-      cwd: root,
-      stdio: "inherit",
-    });
     summary.artifacts = {
       desktopLog: path.relative(root, desktopLogPath),
       ffmpegLog: path.relative(root, ffmpegLogPath),
@@ -1826,6 +1997,7 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
   } finally {
     killPidTree(session.localSut.gatewayPid);
     killPidTree(session.localSut.mockPid);
+    await terminateDesktopSession();
     await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
       summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
     });
@@ -2038,6 +2210,7 @@ async function main() {
 
     const setupScript = path.join(localRoot, "remote-setup.sh");
     const launchScript = path.join(localRoot, "launch-desktop.sh");
+    const authorizeScript = path.join(localRoot, "authorize-desktop.sh");
     const selectChatScript = path.join(localRoot, "select-desktop-chat.sh");
     const probeScript = path.join(localRoot, "remote-probe.sh");
     await writeExecutable(
@@ -2045,6 +2218,7 @@ async function main() {
       renderRemoteSetup({ tdlibSha256: opts.tdlibSha256, tdlibUrl: opts.tdlibUrl }),
     );
     await writeExecutable(launchScript, renderLaunchDesktop());
+    await writeExecutable(authorizeScript, renderAuthorizeDesktop());
     await writeExecutable(
       selectChatScript,
       renderSelectDesktopChat({ chatTitle: opts.desktopChatTitle }),
@@ -2063,6 +2237,7 @@ async function main() {
     await scpToRemote(root, inspect, stateArchive, `${REMOTE_ROOT}/state.tgz`);
     await scpToRemote(root, inspect, setupScript, `${REMOTE_ROOT}/remote-setup.sh`);
     await scpToRemote(root, inspect, launchScript, `${REMOTE_ROOT}/launch-desktop.sh`);
+    await scpToRemote(root, inspect, authorizeScript, `${REMOTE_ROOT}/authorize-desktop.sh`);
     await scpToRemote(root, inspect, selectChatScript, `${REMOTE_ROOT}/select-desktop-chat.sh`);
     await scpToRemote(root, inspect, probeScript, `${REMOTE_ROOT}/remote-probe.sh`);
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
@@ -2086,6 +2261,7 @@ async function main() {
     };
 
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
+    await sshRun(root, inspect, `bash ${REMOTE_ROOT}/authorize-desktop.sh`);
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
     const videoPath = path.join(outputDir, "telegram-user-crabbox-proof.mp4");
     const recording = spawn(

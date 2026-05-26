@@ -1,5 +1,6 @@
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -7,6 +8,7 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
@@ -21,6 +23,7 @@ export function resolveModelAuthLabel(params: {
   agentDir?: string;
   workspaceDir?: string;
   includeExternalProfiles?: boolean;
+  acceptedProviderIds?: readonly string[];
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
@@ -39,17 +42,33 @@ export function resolveModelAuthLabel(params: {
           }),
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const order = resolveAuthProfileOrder({
-    cfg: params.cfg,
-    store,
-    provider: providerKey,
-    preferredProfile: profileOverride,
-  });
+  const acceptedProviderKeys = uniqueStrings(
+    [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  );
+  const order = uniqueStrings(
+    acceptedProviderKeys.flatMap((acceptedProvider) =>
+      resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: acceptedProvider,
+        preferredProfile: profileOverride,
+      }),
+    ),
+  );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
-    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
+    if (
+      !profile ||
+      !acceptedProviderKeys.some((acceptedProvider) =>
+        isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider: acceptedProvider,
+          credential: profile,
+        }),
+      )
+    ) {
       continue;
     }
     const label = resolveAuthProfileDisplayLabel({

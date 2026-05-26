@@ -3,7 +3,10 @@ import {
   assertOkOrThrowProviderError,
   assertOkOrThrowHttpError,
   extractProviderErrorDetail,
+  extractProviderErrorInfo,
   extractProviderRequestId,
+  ProviderHttpError,
+  readProviderJsonResponse,
 } from "./provider-http-errors.js";
 
 describe("provider error utils", () => {
@@ -36,6 +39,44 @@ describe("provider error utils", () => {
     expect(extractProviderRequestId(response)).toBe("fallback_req");
   });
 
+  it("attaches structured provider error metadata", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: {
+          message: "Quota exceeded for api_key=sk-secret1234567890abcd",
+          type: "rate_limit_error",
+          code: "insufficient_quota",
+        },
+      }),
+      {
+        status: 429,
+        headers: { "x-request-id": "req_456" },
+      },
+    );
+
+    const info = await extractProviderErrorInfo(response.clone());
+    expect(info).toMatchObject({
+      code: "insufficient_quota",
+      type: "rate_limit_error",
+      requestId: "req_456",
+    });
+    expect(info.detail).toContain("Quota exceeded");
+    expect(info.body).toContain("Quota exceeded");
+    expect(info.body).not.toContain("sk-secret1234567890abcd");
+
+    await expect(
+      assertOkOrThrowProviderError(response, "Provider API error"),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 429,
+      statusCode: 429,
+      code: "insufficient_quota",
+      errorCode: "insufficient_quota",
+      errorType: "rate_limit_error",
+      requestId: "req_456",
+    } satisfies Partial<ProviderHttpError>);
+  });
+
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
     const response = new Response(
       JSON.stringify({
@@ -52,6 +93,17 @@ describe("provider error utils", () => {
 
     await expect(assertOkOrThrowHttpError(response, "Legacy provider error")).rejects.toThrow(
       "Legacy provider error (HTTP 400): Bad request [code=invalid_request] [request_id=req_legacy]",
+    );
+  });
+
+  it("wraps malformed successful JSON responses with provider labels", async () => {
+    const response = new Response("{ nope", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
+      "Provider catalog failed: malformed JSON response",
     );
   });
 });

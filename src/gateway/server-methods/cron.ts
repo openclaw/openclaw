@@ -477,9 +477,15 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await context.cron.remove(jobId);
-    if (result.removed) {
-      context.logGateway.info("cron: job removed", { jobId });
+    if (!result.removed) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.remove params: id not found"),
+      );
+      return;
     }
+    context.logGateway.info("cron: job removed", { jobId });
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context }) => {
@@ -532,6 +538,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       scope?: "job" | "all";
       id?: string;
       jobId?: string;
+      runId?: string;
       limit?: number;
       offset?: number;
       statuses?: Array<"ok" | "error" | "skipped">;
@@ -565,6 +572,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         offset: p.offset,
         statuses: p.statuses,
         status: p.status,
+        runId: p.runId,
         deliveryStatuses: p.deliveryStatuses,
         deliveryStatus: p.deliveryStatus,
         query: p.query,
@@ -594,6 +602,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       jobId: jobId as string,
       statuses: p.statuses,
       status: p.status,
+      runId: p.runId,
       deliveryStatuses: p.deliveryStatuses,
       deliveryStatus: p.deliveryStatus,
       query: p.query,

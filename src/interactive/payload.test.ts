@@ -4,6 +4,7 @@ import {
   hasReplyContent,
   hasReplyPayloadContent,
   normalizeInteractiveReply,
+  normalizeMessagePresentation,
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
@@ -132,6 +133,38 @@ describe("interactive payload helpers", () => {
     );
   });
 
+  it("preserves web app presentation buttons for channel-native renderers", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+        },
+      ],
+    };
+    const normalized = normalizeMessagePresentation(presentation);
+
+    expect(normalized).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    });
+    expect(presentationToInteractiveReply(normalized!)).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    });
+    expect(renderMessagePresentationFallbackText({ presentation: normalized })).toBe(
+      "- Launch: https://example.com/app",
+    );
+  });
+
   it("converts only presentation controls for native component renderers", () => {
     const presentation = {
       title: "Deploy approval",
@@ -140,7 +173,14 @@ describe("interactive payload helpers", () => {
         { type: "divider" as const },
         {
           type: "buttons" as const,
-          buttons: [{ label: "Approve", value: "approve", style: "success" as const }],
+          buttons: [
+            {
+              label: "Approve",
+              value: "approve",
+              style: "success" as const,
+              reusable: true,
+            },
+          ],
         },
         {
           type: "select" as const,
@@ -156,7 +196,7 @@ describe("interactive payload helpers", () => {
         { type: "text", text: "Canary is ready." },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
         },
         {
           type: "select",
@@ -169,7 +209,7 @@ describe("interactive payload helpers", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
         },
         {
           type: "select",

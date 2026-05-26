@@ -95,7 +95,7 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
   );
 
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls.at(0)?.[0];
+  return registerProviderMock.mock.calls[0]?.[0];
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -106,7 +106,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function requireConfiguredStreamParams(): Record<string, unknown> {
-  return requireRecord(createConfiguredOllamaStreamFnMock.mock.calls.at(0)?.[0], "stream params");
+  return requireRecord(createConfiguredOllamaStreamFnMock.mock.calls[0]?.[0], "stream params");
 }
 
 function captureWrappedOllamaPayload(
@@ -572,6 +572,32 @@ describe("ollama plugin", () => {
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
   });
 
+  it.each(["docker.orb.internal", "host.docker.internal", "host.orb.internal"])(
+    "skips implicit localhost discovery when a custom host-backed Ollama provider is configured for %s",
+    async (hostname) => {
+      const provider = registerProvider();
+
+      const result = await provider.catalog.run({
+        config: {
+          models: {
+            providers: {
+              "ollama-orb": {
+                api: "ollama",
+                baseUrl: `http://${hostname}:11434`,
+                models: [{ id: "qwen3.5:27b", name: "Qwen 3.5 27B" }],
+              },
+            },
+          },
+        },
+        env: { NODE_ENV: "development", OLLAMA_API_KEY: "ollama-live" },
+        resolveProviderApiKey: () => ({ apiKey: "ollama-live" }),
+      } as never);
+
+      expect(result).toBeNull();
+      expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("treats custom 127/8 Ollama providers as loopback for implicit discovery", async () => {
     const provider = registerProvider();
     buildOllamaProviderMock.mockResolvedValueOnce({
@@ -783,8 +809,8 @@ describe("ollama plugin", () => {
       modelApi: "ollama",
       modelId: "qwen3.5:9b",
     } as never);
-    expect(nativePolicy?.sanitizeToolCallIds).toBe(true);
-    expect(nativePolicy?.toolCallIdMode).toBe("strict");
+    expect(nativePolicy?.sanitizeToolCallIds).toBe(false);
+    expect(nativePolicy?.toolCallIdMode).toBeUndefined();
     expect(nativePolicy?.applyAssistantFirstOrderingFix).toBe(true);
     expect(nativePolicy?.validateGeminiTurns).toBe(true);
     expect(nativePolicy?.validateAnthropicTurns).toBe(true);

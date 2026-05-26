@@ -47,7 +47,7 @@ Notes:
 - `openclaw chat` and `openclaw terminal` are aliases for `openclaw tui --local`.
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
-- `openclaw` and `openclaw crestodian` also use this TUI shell, with Crestodian as the local setup and repair chat backend.
+- After a config file has authored settings, `openclaw` and `openclaw crestodian` also use this TUI shell, with Crestodian as the local setup and repair chat backend.
 
 ## What you see
 
@@ -73,6 +73,7 @@ Notes:
 ## Sending + delivery
 
 - Messages are sent to the Gateway; delivery to providers is off by default.
+- The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`; explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
 - Turn delivery on:
   - `/deliver on`
   - or the Settings panel

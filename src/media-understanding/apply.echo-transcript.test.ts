@@ -29,7 +29,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 const getApiKeyForModelMock = vi.hoisted(() =>
   vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
 );
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -113,7 +113,7 @@ function disableImageUnderstanding(cfg: OpenClawConfig): void {
 
 function expectSingleEchoDeliveryCall() {
   expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-  const firstCall = mockDeliverOutboundPayloads.mock.calls.at(0);
+  const firstCall = mockDeliverOutboundPayloads.mock.calls[0];
   if (!firstCall) {
     throw new Error("Expected echo transcript delivery call");
   }
@@ -177,7 +177,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       resolveAuthProfileOrder: vi.fn(() => []),
     }));
     vi.doMock("../media/fetch.js", () => ({
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
       MediaFetchError: MediaFetchErrorMock,
     }));
     vi.doMock("../process/exec.js", () => ({
@@ -232,7 +232,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     resolveApiKeyForProviderMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
-    fetchRemoteMediaMock.mockClear();
+    readRemoteMediaBufferMock.mockClear();
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
