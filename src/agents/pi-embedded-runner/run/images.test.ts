@@ -277,7 +277,9 @@ what about these images?`,
     // These paths are written by OpenClaw itself during prior turns;
     // re-resolving them causes sticky image re-attachment on every
     // subsequent prompt replay. Must be skipped.
-    expectNoImageReferences("Called Read with /Users/trevor/.openclaw/workspace/.openclaw-cli-images/a1b2c3d4.png");
+    expectNoImageReferences(
+      "Called Read with /Users/trevor/.openclaw/workspace/.openclaw-cli-images/a1b2c3d4.png",
+    );
     expectNoImageReferences("System reminder: file_path /tmp/.openclaw-cli-images/e5f6g7h8.jpg");
     expectNoImageReferences("See ./.openclaw-cli-images/image.webp for details");
   });
