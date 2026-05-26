@@ -69,7 +69,7 @@ export const zh_CN: TranslationMap = {
     saving: "保存中…",
     saveAndPublish: "保存并发布",
     importing: "导入中…",
-    importFromRelays: "从 Relays 导入",
+    importFromRelays: "从中继导入",
     showAdvanced: "显示高级选项",
     hideAdvanced: "隐藏高级选项",
     unsavedChanges: "你有未保存的更改",
@@ -120,8 +120,8 @@ export const zh_CN: TranslationMap = {
       websiteHelp: "你的个人网站",
       nip05Identifier: "NIP-05 标识符",
       nip05Help: "可验证标识符（例如：you@domain.com）",
-      lightningAddress: "Lightning 地址",
-      lightningHelp: "用于接收打赏的 Lightning 地址（LUD-16）",
+      lightningAddress: "闪电网络地址",
+      lightningHelp: "用于接收打赏的闪电网络地址（LUD-16）",
     },
   },
   lazyView: {
@@ -431,7 +431,7 @@ export const zh_CN: TranslationMap = {
     aiAgents: "代理、模型、技能、工具、记忆和会话设置。",
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
-    dreams: "睡眠时进行记忆巩固。",
+    dreams: "记忆做梦、巩固与反思。",
   },
   activity: {
     title: "活动记录",
@@ -1017,7 +1017,7 @@ export const zh_CN: TranslationMap = {
         stepAvoidDisable: "避免为远程 HTTP 访问禁用设备认证。",
       },
       origin: {
-        title: "浏览器来源不被允许",
+        title: "浏览器来源不允许",
         summary: "Gateway 在接受 Control UI 连接前拒绝了此页面来源。",
         stepAllowedOrigins: "将此浏览器来源添加到 gateway.controlUi.allowedOrigins。",
         stepFullOrigin: "使用完整来源，例如 http://localhost:5173，不要使用通配符模式。",
@@ -1025,7 +1025,7 @@ export const zh_CN: TranslationMap = {
       },
       protocol: {
         title: "协议不匹配",
-        summary: "提供的 Control UI 与正在运行的 Gateway 对支持的连接协议不一致。",
+        summary: "Control UI 与 Gateway 支持的连接协议不一致。",
         stepDashboard:
           "使用 openclaw dashboard 重新打开提供的 dashboard，确保 UI 和 Gateway 来自同一安装。",
         stepDevUi: "如果使用 pnpm ui:dev，请基于当前 checkout 重新构建或重启开发 UI。",
