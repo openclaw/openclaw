@@ -21,6 +21,7 @@ import {
 } from "./outbound.js";
 import { channelBrokerStatus } from "./status.js";
 import {
+  buildCanonicalChannelBrokerTarget,
   inferChannelBrokerTargetChatType,
   normalizeBrokerTarget,
   parseChannelBrokerTarget,
@@ -61,16 +62,18 @@ function resolveBrokerSessionConversation(rawId: string) {
   try {
     const thread = parseThreadSessionSuffix(rawId);
     const rawTarget = thread.baseSessionKey ?? rawId;
-    const parsed = parseBrokerConversationTarget(rawTarget);
+    const normalizedTarget = normalizeBrokerTarget(rawTarget) ?? rawTarget;
+    const parsed = parseBrokerConversationTarget(normalizedTarget);
     if (parsed.conversationType === "direct") {
       return null;
     }
     const threadId = thread.threadId ?? parsed.threadId;
+    const conversationId = `${parsed.platform}:${parsed.conversationId}`;
     return {
-      id: parsed.conversationId,
+      id: conversationId,
       ...(threadId ? { threadId } : {}),
-      baseConversationId: parsed.conversationId,
-      parentConversationCandidates: [parsed.conversationId],
+      baseConversationId: conversationId,
+      parentConversationCandidates: [conversationId],
     };
   } catch {
     return null;
@@ -174,13 +177,16 @@ export const channelBrokerPlugin = createChatChannelPlugin({
         target,
         replyToId,
         threadId,
-        currentSessionKey,
       }) => {
         const account = resolveChannelBrokerAccount({ cfg: cfg as CoreConfig, accountId });
         const parsed = parseChannelBrokerTarget({ rawTarget: target, account, threadId });
         const brokerConversationType = parsed.conversationType ?? "channel";
         const chatType = brokerConversationType === "thread" ? "channel" : brokerConversationType;
-        const to = normalizeBrokerTarget(target) ?? target;
+        const to = buildCanonicalChannelBrokerTarget({
+          rawTarget: target,
+          account,
+          threadId,
+        });
         const route = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
@@ -198,9 +204,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
           route,
           replyToId,
           threadId: parsed.threadId ?? threadId,
-          currentSessionKey,
-          canRecoverCurrentThread: ({ route }) =>
-            route.chatType !== "direct" || (cfg.session?.dmScope ?? "main") !== "main",
+          precedence: ["threadId"],
         });
       },
       resolveSessionConversation: ({ rawId }) => resolveBrokerSessionConversation(rawId),
@@ -226,14 +230,16 @@ export const channelBrokerPlugin = createChatChannelPlugin({
           return { ok: false, error: new Error("Channel broker target is required.") };
         }
         try {
-          parseChannelBrokerTarget({ rawTarget: resolved, account });
+          return {
+            ok: true,
+            to: buildCanonicalChannelBrokerTarget({ rawTarget: resolved, account }),
+          };
         } catch (cause) {
           return {
             ok: false,
             error: new Error(`Invalid channel broker target: ${resolved}`, { cause }),
           };
         }
-        return { ok: true, to: normalizeBrokerTarget(resolved) ?? resolved };
       },
     },
     attachedResults: {

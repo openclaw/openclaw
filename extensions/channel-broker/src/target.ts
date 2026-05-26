@@ -30,7 +30,29 @@ export function normalizeBrokerTarget(raw: string): string | undefined {
   }
   try {
     const parsed = parseBrokerConversationTarget(trimmed);
-    return buildBrokerConversationTarget(parsed);
+    const brokerPrefixed = parsed.platform === "broker" || parsed.platform === "channel-broker";
+    if (brokerPrefixed) {
+      return parsed.conversationId.trim() ? trimmed : undefined;
+    }
+    const allowConversationTypeShorthand =
+      !parsed.conversationType && rawTargetUsesConversationTypeShorthand(trimmed, brokerPrefixed);
+    const colonParts = parsed.conversationId.split(":");
+    const explicitType = allowConversationTypeShorthand
+      ? normalizeConversationType(colonParts[0])
+      : undefined;
+    const rawId = explicitType ? colonParts.slice(1).join(":") : parsed.conversationId;
+    const conversationId = rawId.trim();
+    if (!conversationId) {
+      return undefined;
+    }
+    return buildBrokerConversationTarget({
+      platform: normalizeBrokerPlatformId(parsed.platform),
+      conversationId,
+      ...(explicitType ?? parsed.conversationType
+        ? { conversationType: explicitType ?? parsed.conversationType }
+        : {}),
+      ...(parsed.threadId ? { threadId: parsed.threadId } : {}),
+    });
   } catch {
     return undefined;
   }
@@ -48,6 +70,30 @@ function chatTypeFromConversationType(
   return undefined;
 }
 
+function rawTargetUsesConversationTypeShorthand(
+  rawTarget: string,
+  brokerPrefixed: boolean,
+): boolean {
+  const withoutQuery = rawTarget.trim().split("?", 1)[0] ?? "";
+  const platformSeparator = withoutQuery.indexOf(":");
+  if (platformSeparator < 0) {
+    return false;
+  }
+  let rawConversationId = withoutQuery.slice(platformSeparator + 1);
+  if (brokerPrefixed) {
+    const brokerPlatformSeparator = rawConversationId.indexOf(":");
+    if (brokerPlatformSeparator <= 0) {
+      return false;
+    }
+    rawConversationId = rawConversationId.slice(brokerPlatformSeparator + 1);
+  }
+  const typeSeparator = rawConversationId.indexOf(":");
+  if (typeSeparator <= 0) {
+    return false;
+  }
+  return Boolean(normalizeConversationType(rawConversationId.slice(0, typeSeparator)));
+}
+
 export function inferChannelBrokerTargetChatType(
   rawTarget: string,
 ): "direct" | "group" | "channel" | undefined {
@@ -58,6 +104,9 @@ export function inferChannelBrokerTargetChatType(
       return parsedType;
     }
     const brokerPrefixed = parsed.platform === "broker" || parsed.platform === "channel-broker";
+    if (!rawTargetUsesConversationTypeShorthand(rawTarget, brokerPrefixed)) {
+      return "channel";
+    }
     const rawConversationId =
       brokerPrefixed && parsed.conversationId.includes(":")
         ? parsed.conversationId.slice(parsed.conversationId.indexOf(":") + 1)
@@ -110,8 +159,13 @@ export function parseChannelBrokerTarget(params: {
       `Channel broker provider ${params.account.providerId} does not support platform ${platform}.`,
     );
   }
+  const allowConversationTypeShorthand =
+    !parsed.conversationType &&
+    rawTargetUsesConversationTypeShorthand(params.rawTarget, brokerPrefixed);
   const colonParts = rawConversationId.split(":");
-  const explicitType = normalizeConversationType(colonParts[0]);
+  const explicitType = allowConversationTypeShorthand
+    ? normalizeConversationType(colonParts[0])
+    : undefined;
   const rawId = explicitType ? colonParts.slice(1).join(":") : rawConversationId;
   const conversationId = rawId.trim();
   if (!conversationId) {
@@ -126,6 +180,19 @@ export function parseChannelBrokerTarget(params: {
       explicitType ?? parsed.conversationType ?? params.account.defaultConversationType,
     ...(threadId ? { threadId } : {}),
   };
+}
+
+export function buildCanonicalChannelBrokerTarget(params: {
+  rawTarget: string;
+  account: ResolvedChannelBrokerAccount;
+  threadId?: string | number | null;
+}): string {
+  const parsed = parseBrokerConversationTarget(params.rawTarget);
+  const target = parseChannelBrokerTarget(params);
+  const canonicalTarget = buildBrokerConversationTarget(target);
+  return parsed.platform === "broker" || parsed.platform === "channel-broker"
+    ? `${parsed.platform}:${canonicalTarget}`
+    : canonicalTarget;
 }
 
 export function resolveBrokerOutboundTo(params: {

@@ -45,9 +45,19 @@ describe("channel-broker plugin", () => {
   it("infers broker-prefixed platform DMs before defaulting to channel semantics", () => {
     expect(
       channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "slack:user:U12345678",
+      } as never),
+    ).toBe("direct");
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
         to: "broker:slack:user:U12345678",
       } as never),
     ).toBe("direct");
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "slack:user%3AU12345678",
+      } as never),
+    ).toBe("channel");
     expect(
       channelBrokerPlugin.messaging?.inferTargetChatType?.({
         to: "broker:discord:dm:123456789012345678",
@@ -105,11 +115,114 @@ describe("channel-broker plugin", () => {
         rawId: "slack:C123:thread:1716500000.000001",
       }),
     ).toEqual({
-      id: "C123",
+      id: "slack:C123",
       threadId: "1716500000.000001",
-      baseConversationId: "C123",
-      parentConversationCandidates: ["C123"],
+      baseConversationId: "slack:C123",
+      parentConversationCandidates: ["slack:C123"],
     });
+  });
+
+  it("uses explicit broker thread ids before reply ids for session routes", async () => {
+    const route = await channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      accountId: "acme",
+      target: "slack:C123?threadId=1716500000.000001",
+      replyToId: "native-parent",
+    } as never);
+
+    expect(route?.sessionKey).toBe(
+      "agent:main:channel-broker:channel:slack:c123:thread:1716500000.000001",
+    );
+    expect(route?.threadId).toBe("1716500000.000001");
+  });
+
+  it("does not persist broker reply ids as session thread routes", async () => {
+    const route = await channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      accountId: "acme",
+      target: "telegram:chat-1",
+      replyToId: "native-parent",
+    } as never);
+
+    expect(route?.sessionKey).toBe("agent:main:channel-broker:channel:telegram:chat-1");
+    expect(route?.threadId).toBeUndefined();
+  });
+
+  it("does not recover broker current-session threads without delivery thread ids", async () => {
+    const route = await channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      accountId: "acme",
+      target: "slack:C123",
+      currentSessionKey:
+        "agent:main:channel-broker:channel:slack:c123:thread:1716500000.000001",
+    } as never);
+
+    expect(route?.sessionKey).toBe("agent:main:channel-broker:channel:slack:c123");
+    expect(route?.threadId).toBeUndefined();
+  });
+
+  it("stores account-default broker targets canonically in session routes", async () => {
+    const route = await channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                defaultPlatform: "telegram",
+                defaultConversationType: "direct",
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      accountId: "acme",
+      target: "broker:12345",
+    } as never);
+
+    expect(route?.to).toBe("broker:telegram:12345?conversationType=direct");
+    expect(route?.chatType).toBe("direct");
   });
 
   it("delivers text through the configured provider and maps the provider receipt", async () => {
@@ -379,6 +492,69 @@ describe("channel-broker plugin", () => {
           message: "Channel broker provider acme does not support platform slack.",
         }),
       }),
+    });
+  });
+
+  it("canonicalizes unencoded DM shorthands without making them opaque ids", () => {
+    const cfg = {
+      channels: {
+        "channel-broker": {
+          accounts: {
+            acme: {
+              enabled: true,
+              baseUrl: "https://broker.example.test",
+              platforms: ["slack"],
+            },
+          },
+        },
+      },
+    };
+
+    const platformResult = channelBrokerPlugin.outbound?.resolveTarget?.({
+      cfg,
+      accountId: "acme",
+      to: "slack:user:U123",
+    } as never);
+    const brokerResult = channelBrokerPlugin.outbound?.resolveTarget?.({
+      cfg,
+      accountId: "acme",
+      to: "broker:slack:user:U123",
+    } as never);
+
+    expect(platformResult).toEqual({
+      ok: true,
+      to: "slack:U123?conversationType=direct",
+    });
+    expect(brokerResult).toEqual({
+      ok: true,
+      to: "broker:slack:U123?conversationType=direct",
+    });
+  });
+
+  it("applies account defaults only during outbound target resolution", () => {
+    const result = channelBrokerPlugin.outbound?.resolveTarget?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+                defaultPlatform: "telegram",
+                defaultConversationType: "direct",
+              },
+            },
+          },
+        },
+      },
+      accountId: "acme",
+      to: "broker:12345",
+    } as never);
+
+    expect(result).toEqual({
+      ok: true,
+      to: "broker:telegram:12345?conversationType=direct",
     });
   });
 
