@@ -1979,7 +1979,12 @@ export async function runCodexAppServerAttempt(
   };
 
   const fireTurnAttemptIdleTimeout = () => {
-    if (completed || runAbortController.signal.aborted || !turnAttemptIdleWatchArmed) {
+    if (
+      completed ||
+      terminalTurnNotificationQueued ||
+      runAbortController.signal.aborted ||
+      !turnAttemptIdleWatchArmed
+    ) {
       return;
     }
     const idleMs = Math.max(0, Date.now() - turnAttemptLastProgressAt);
@@ -2014,6 +2019,7 @@ export async function runCodexAppServerAttempt(
   const fireTurnCompletionIdleTimeout = () => {
     if (
       completed ||
+      terminalTurnNotificationQueued ||
       runAbortController.signal.aborted ||
       !turnCompletionIdleWatchArmed ||
       activeAppServerTurnRequests > 0
@@ -2053,6 +2059,7 @@ export async function runCodexAppServerAttempt(
   const fireTurnTerminalIdleTimeout = () => {
     if (
       completed ||
+      terminalTurnNotificationQueued ||
       runAbortController.signal.aborted ||
       !turnTerminalIdleWatchArmed ||
       activeAppServerTurnRequests > 0
@@ -2580,6 +2587,17 @@ export async function runCodexAppServerAttempt(
     }
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
       terminalTurnNotificationQueued = true;
+    }
+    // Touch idle-watch timestamps at receive time (not just at process time)
+    // so that the completion-idle timer sees live binary I/O even when the
+    // notification queue is backed up behind setImmediate yields under heavy
+    // event-loop load.  See openclaw/openclaw#86948.
+    if (correlation.matchesActiveTurn !== false) {
+      const now = Date.now();
+      turnCompletionLastActivityAt = now;
+      turnCompletionLastActivityReason = `notification:${notification.method}`;
+      turnAttemptLastProgressAt = now;
+      turnAttemptLastProgressReason = `notification:${notification.method}`;
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
