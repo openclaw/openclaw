@@ -121,7 +121,6 @@ export const forcedUnitFastTestFiles = [
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
   "src/pairing/pairing-challenge.test.ts",
-  "src/pairing/allow-from-store-read.test.ts",
   "src/pairing/pairing-store.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",

@@ -826,7 +826,7 @@ describe("buildIMessageInboundContext", () => {
       return;
     }
 
-    const { ctxPayload, inboundHistory } = buildIMessageInboundContext({
+    const { ctxPayload, inboundHistory } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
       decision,
       message: {
