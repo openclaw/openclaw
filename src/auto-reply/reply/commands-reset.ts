@@ -4,6 +4,7 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionStoreEntry } from "../../config/sessions/store.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -172,9 +173,9 @@ export async function maybeHandleResetCommand(
       ...(hookResult.routedReply
         ? {}
         : {
-            reply: {
+            reply: markReplyPayloadForSourceSuppressionDelivery({
               text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
-            },
+            }),
           }),
     };
   }
