@@ -247,9 +247,11 @@ export type {
   PluginConversationBindingRequestResult,
 } from "../plugins/conversation-binding.types.js";
 export type {
+  PluginHookHandlerMap,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookName,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
