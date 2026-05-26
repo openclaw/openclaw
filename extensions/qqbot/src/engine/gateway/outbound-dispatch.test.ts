@@ -287,4 +287,49 @@ describe("dispatchOutbound", () => {
     expect(finalized?.Surface).toBe("qqbot");
     expect(finalized?.ChatType).toBe("direct");
   });
+
+  it("persists the QQ group target as the inbound last route", async () => {
+    const runtime = makeRuntime({});
+    const inbound = makeInbound({
+      event: {
+        type: "group",
+        senderId: "user-openid",
+        messageId: "msg-group",
+        content: "hello group",
+        timestamp: "2026-04-25T00:00:00.000Z",
+        groupOpenid: "CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      },
+      route: {
+        sessionKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+        accountId: "qq-main",
+      },
+      isGroupChat: true,
+      peerId: "CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      qualifiedTarget: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      fromAddress: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      agentBody: "hello group",
+      body: "hello group",
+    });
+
+    await dispatchOutbound(inbound, { runtime, cfg: {}, account });
+
+    const turnRun = runtime.channel.turn.run as unknown as { mock: { calls: unknown[][] } };
+    const runParams = turnRun.mock.calls[0]?.[0] as
+      | {
+          adapter: {
+            resolveTurn: () => {
+              record?: { updateLastRoute?: unknown };
+            };
+          };
+        }
+      | undefined;
+    const turn = runParams?.adapter.resolveTurn();
+
+    expect(turn?.record?.updateLastRoute).toEqual({
+      sessionKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+      channel: "qqbot",
+      to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      accountId: "qq-main",
+    });
+  });
 });
