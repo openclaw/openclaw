@@ -1745,6 +1745,7 @@ describe("channel-broker HTTP routes", () => {
       cfg: brokerConfig("broker-secret", {
         platforms: ["telegram"],
         platformAliases: { tg: "telegram" },
+        allowFrom: ["tg:user-1"],
       }),
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res,
@@ -1779,7 +1780,10 @@ describe("channel-broker HTTP routes", () => {
       const res = createResponse();
 
       await handleChannelBrokerInboundHttpRequest({
-        cfg: brokerConfig("broker-secret", { platforms: [canonical] }),
+        cfg: brokerConfig("broker-secret", {
+          platforms: [canonical],
+          allowFrom: [`${alias}:user-1`],
+        }),
         req: createRequest({ body, signature: sign(body, "broker-secret") }),
         res,
       });

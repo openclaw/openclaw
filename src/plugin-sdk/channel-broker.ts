@@ -382,12 +382,52 @@ function normalizeBrokerPlatformCapabilities(
   capabilities: BrokerPlatformCapabilities,
 ): BrokerPlatformCapabilities {
   return {
-    platform: normalizeBrokerPlatformId(capabilities.platform),
+    platform: normalizeBrokerKnownPlatformId(capabilities.platform),
     ...(capabilities.delivery ? { delivery: { ...capabilities.delivery } } : {}),
     ...(capabilities.live ? { live: { ...capabilities.live } } : {}),
     ...(capabilities.receive ? { receive: { ...capabilities.receive } } : {}),
     ...(capabilities.native ? { native: { ...capabilities.native } } : {}),
   };
+}
+
+function mergeBrokerCapabilityFlags<T extends Record<string, boolean>>(
+  first: T | undefined,
+  second: T | undefined,
+): T | undefined {
+  const merged = { ...first, ...second } as T;
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeBrokerPlatformCapabilities(
+  first: BrokerPlatformCapabilities,
+  second: BrokerPlatformCapabilities,
+): BrokerPlatformCapabilities {
+  const delivery = mergeBrokerCapabilityFlags(first.delivery, second.delivery);
+  const live = mergeBrokerCapabilityFlags(first.live, second.live);
+  const receive = mergeBrokerCapabilityFlags(first.receive, second.receive);
+  const native = mergeBrokerCapabilityFlags(first.native, second.native);
+  return {
+    platform: first.platform,
+    ...(delivery ? { delivery } : {}),
+    ...(live ? { live } : {}),
+    ...(receive ? { receive } : {}),
+    ...(native ? { native } : {}),
+  };
+}
+
+function normalizeBrokerPlatformCapabilitiesList(
+  capabilities: BrokerPlatformCapabilities[],
+): BrokerPlatformCapabilities[] {
+  const byPlatform = new Map<string, BrokerPlatformCapabilities>();
+  for (const capability of capabilities) {
+    const normalized = normalizeBrokerPlatformCapabilities(capability);
+    const existing = byPlatform.get(normalized.platform);
+    byPlatform.set(
+      normalized.platform,
+      existing ? mergeBrokerPlatformCapabilities(existing, normalized) : normalized,
+    );
+  }
+  return [...byPlatform.values()];
 }
 
 export function normalizeBrokerProviderCapabilities(
@@ -397,7 +437,7 @@ export function normalizeBrokerProviderCapabilities(
     ...(normalizeOptionalBrokerString(capabilities.providerId)
       ? { providerId: capabilities.providerId?.trim() }
       : {}),
-    platforms: capabilities.platforms.map(normalizeBrokerPlatformCapabilities),
+    platforms: normalizeBrokerPlatformCapabilitiesList(capabilities.platforms),
     ...(capabilities.delivery ? { delivery: { ...capabilities.delivery } } : {}),
     ...(capabilities.live ? { live: { ...capabilities.live } } : {}),
     ...(capabilities.receive ? { receive: { ...capabilities.receive } } : {}),
@@ -493,7 +533,7 @@ export function resolveBrokerPlatformCapabilities(params: {
   platform: string;
 }): BrokerPlatformCapabilities | undefined {
   const normalized = normalizeBrokerProviderCapabilities(params.capabilities);
-  const platform = normalizeBrokerPlatformId(params.platform);
+  const platform = normalizeBrokerKnownPlatformId(params.platform);
   const platformCapabilities = normalized.platforms.find((entry) => entry.platform === platform);
   if (!platformCapabilities) {
     return undefined;

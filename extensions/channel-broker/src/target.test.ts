@@ -27,6 +27,18 @@ describe("parseChannelBrokerTarget", () => {
     expect(normalizeBrokerTarget("telegram:12345")).toBe("telegram:12345");
   });
 
+  it("canonicalizes known platform aliases during target normalization", () => {
+    expect(normalizeBrokerTarget("teams:19:meeting-channel")).toBe(
+      "microsoft-teams:19%3Ameeting-channel",
+    );
+    expect(normalizeBrokerTarget("broker:teams:19:meeting-channel")).toBe(
+      "broker:microsoft-teams:19:meeting-channel",
+    );
+    expect(normalizeBrokerTarget("broker:openclaw-weixin:direct:wxid_friend")).toBe(
+      "broker:wechat:direct:wxid_friend",
+    );
+  });
+
   it.each([
     ["slack:user:U12345678", "slack", "U12345678"],
     ["broker:slack:user:U12345678", "slack", "U12345678"],

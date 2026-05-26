@@ -101,6 +101,43 @@ describe("channel-broker SDK", () => {
     ).toBe(false);
   });
 
+  it("matches platform capability aliases against canonical platform lookups", () => {
+    const capabilities = {
+      providerId: "acme",
+      platforms: [
+        {
+          platform: "teams",
+          delivery: { text: true },
+          receive: { webhook: true },
+        },
+        {
+          platform: "microsoft-teams",
+          delivery: { thread: true },
+          live: { draftPreview: true },
+        },
+      ],
+    };
+
+    expect(resolveBrokerPlatformCapabilities({ capabilities, platform: "microsoft-teams" }))
+      .toEqual({
+        platform: "microsoft-teams",
+        delivery: { text: true, thread: true },
+        live: { draftPreview: true },
+        receive: { webhook: true },
+      });
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "msteams",
+        requirements: {
+          delivery: { text: true, thread: true },
+          live: { draftPreview: true },
+          receive: { webhook: true },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("creates a versioned outbound request for provider-owned delivery", () => {
     const request = createBrokerOutboundRequest({
       requestId: "send-1",

@@ -1,13 +1,4 @@
-import { normalizeBrokerPlatformId } from "openclaw/plugin-sdk/channel-broker";
-
-export const CHANNEL_BROKER_PLATFORM_ALIASES: Record<string, string> = {
-  googlechat: "google-chat",
-  msteams: "microsoft-teams",
-  "openclaw-weixin": "wechat",
-  teams: "microsoft-teams",
-  qq: "qqbot",
-  weixin: "wechat",
-};
+import { normalizeBrokerKnownPlatformId } from "openclaw/plugin-sdk/channel-broker";
 
 export const CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES = [
   "broker",
@@ -42,6 +33,5 @@ export const CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES = [
 ] as const;
 
 export function normalizeKnownChannelBrokerPlatformId(value: string): string {
-  const normalized = normalizeBrokerPlatformId(value);
-  return CHANNEL_BROKER_PLATFORM_ALIASES[normalized] ?? normalized;
+  return normalizeBrokerKnownPlatformId(value);
 }

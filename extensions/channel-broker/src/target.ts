@@ -33,7 +33,7 @@ export function normalizeBrokerTarget(raw: string): string | undefined {
     const parsed = parseBrokerConversationTarget(trimmed);
     const brokerPrefixed = parsed.platform === "broker" || parsed.platform === "channel-broker";
     if (brokerPrefixed) {
-      return parsed.conversationId.trim() ? trimmed : undefined;
+      return normalizeBrokerPrefixedTarget(trimmed, parsed);
     }
     const allowConversationTypeShorthand =
       !parsed.conversationType && rawTargetUsesConversationTypeShorthand(trimmed, brokerPrefixed);
@@ -47,7 +47,7 @@ export function normalizeBrokerTarget(raw: string): string | undefined {
       return undefined;
     }
     return buildBrokerConversationTarget({
-      platform: normalizeBrokerPlatformId(parsed.platform),
+      platform: normalizeKnownChannelBrokerPlatformId(parsed.platform),
       conversationId,
       ...((explicitType ?? parsed.conversationType)
         ? { conversationType: explicitType ?? parsed.conversationType }
@@ -57,6 +57,26 @@ export function normalizeBrokerTarget(raw: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function normalizeBrokerPrefixedTarget(
+  rawTarget: string,
+  parsed: BrokerConversationTarget,
+): string | undefined {
+  if (!parsed.conversationId.trim()) {
+    return undefined;
+  }
+  const queryStart = rawTarget.indexOf("?");
+  const head = queryStart < 0 ? rawTarget : rawTarget.slice(0, queryStart);
+  const query = queryStart < 0 ? "" : rawTarget.slice(queryStart);
+  const outerSeparator = head.indexOf(":");
+  const rawInner = outerSeparator < 0 ? "" : head.slice(outerSeparator + 1);
+  const innerSeparator = rawInner.indexOf(":");
+  if (innerSeparator <= 0) {
+    return rawTarget;
+  }
+  const platform = normalizeKnownChannelBrokerPlatformId(rawInner.slice(0, innerSeparator));
+  return `${parsed.platform}:${platform}:${rawInner.slice(innerSeparator + 1)}${query}`;
 }
 
 function chatTypeFromConversationType(

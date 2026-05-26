@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   buildBrokerInboundDedupeKey,
+  normalizeBrokerPlatformId,
   normalizeBrokerInboundEvent,
   type BrokerInboundEventV1,
 } from "openclaw/plugin-sdk/channel-broker";
@@ -66,6 +67,24 @@ function verifySignature(params: {
   );
 }
 
+function normalizePlatformQualifiedAllowFrom(
+  entry: string,
+  account: ResolvedChannelBrokerAccount,
+): string {
+  const separatorIndex = entry.indexOf(":");
+  if (separatorIndex <= 0) {
+    return entry;
+  }
+  try {
+    const rawPlatform = normalizeBrokerPlatformId(entry.slice(0, separatorIndex));
+    const platform =
+      account.platformAliases[rawPlatform] ?? normalizeKnownChannelBrokerPlatformId(rawPlatform);
+    return `${platform}:${entry.slice(separatorIndex + 1)}`;
+  } catch {
+    return entry;
+  }
+}
+
 function isSenderAllowed(params: {
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
@@ -80,12 +99,16 @@ function isSenderAllowed(params: {
   if (allowed.length === 0) {
     return false;
   }
+  const normalizedAllowed = new Set([
+    ...allowed,
+    ...allowed.map((entry) => normalizePlatformQualifiedAllowFrom(entry, params.account)),
+  ]);
   const candidates = new Set([
     params.event.sender.id,
     `${params.event.platform}:${params.event.sender.id}`,
     params.event.message.nativeIds?.from ?? "",
   ]);
-  return allowed.some((entry) => candidates.has(entry));
+  return [...normalizedAllowed].some((entry) => candidates.has(entry));
 }
 
 function isSelfOriginatedEvent(params: {

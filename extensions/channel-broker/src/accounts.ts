@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/account-core";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution-runtime";
-import { normalizeBrokerPlatformId } from "openclaw/plugin-sdk/channel-broker";
+import {
+  normalizeBrokerPlatformId,
+  type BrokerPlatformCapabilities,
+} from "openclaw/plugin-sdk/channel-broker";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
@@ -85,19 +88,47 @@ function normalizePlatformAliasMap(
   return normalized;
 }
 
+function mergeCapabilityFlags<T extends Record<string, boolean>>(
+  first: T | undefined,
+  second: T | undefined,
+): T | undefined {
+  const merged = { ...first, ...second } as T;
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergePlatformCapabilities(
+  first: BrokerPlatformCapabilities | undefined,
+  second: BrokerPlatformCapabilities,
+): BrokerPlatformCapabilities {
+  if (!first) {
+    return second;
+  }
+  const delivery = mergeCapabilityFlags(first.delivery, second.delivery);
+  const live = mergeCapabilityFlags(first.live, second.live);
+  const receive = mergeCapabilityFlags(first.receive, second.receive);
+  const native = mergeCapabilityFlags(first.native, second.native);
+  return {
+    platform: first.platform,
+    ...(delivery ? { delivery } : {}),
+    ...(live ? { live } : {}),
+    ...(receive ? { receive } : {}),
+    ...(native ? { native } : {}),
+  };
+}
+
 function normalizeCapabilities(
   capabilities: ChannelBrokerProviderConfig["capabilities"],
 ): NonNullable<ResolvedChannelBrokerAccount["capabilities"]> {
   const normalized: NonNullable<ResolvedChannelBrokerAccount["capabilities"]> = {};
   for (const [rawPlatform, value] of Object.entries(capabilities ?? {})) {
     const platform = normalizeKnownChannelBrokerPlatformId(value.platform ?? rawPlatform);
-    normalized[platform] = {
+    normalized[platform] = mergePlatformCapabilities(normalized[platform], {
       platform,
       ...(value.delivery ? { delivery: { ...value.delivery } } : {}),
       ...(value.live ? { live: { ...value.live } } : {}),
       ...(value.receive ? { receive: { ...value.receive } } : {}),
       ...(value.native ? { native: { ...value.native } } : {}),
-    };
+    });
   }
   return normalized;
 }

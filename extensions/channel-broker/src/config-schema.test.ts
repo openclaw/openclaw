@@ -36,10 +36,15 @@ describe("channel-broker config schema", () => {
           platforms: ["teams", "googlechat", "qq"],
           capabilities: {
             teams: {
-              delivery: { text: true, thread: true, replyTo: true },
+              delivery: { text: true, replyTo: true },
               live: { draftPreview: true, previewFinalization: true },
               receive: { webhook: true, ackAfterDurableSend: true },
               native: { appApi: true, workspaceHosted: true },
+            },
+            "microsoft-teams": {
+              delivery: { thread: true },
+              live: { progressUpdates: true },
+              native: { tenantScoped: true },
             },
             googlechat: {
               platform: "google-chat",
@@ -66,9 +71,9 @@ describe("channel-broker config schema", () => {
     expect(account.capabilities["microsoft-teams"]).toEqual({
       platform: "microsoft-teams",
       delivery: { text: true, thread: true, replyTo: true },
-      live: { draftPreview: true, previewFinalization: true },
+      live: { draftPreview: true, previewFinalization: true, progressUpdates: true },
       receive: { webhook: true, ackAfterDurableSend: true },
-      native: { appApi: true, workspaceHosted: true },
+      native: { appApi: true, tenantScoped: true, workspaceHosted: true },
     });
     expect(account.capabilities["google-chat"]?.delivery).toEqual({
       text: true,
