@@ -623,7 +623,7 @@ export const zh_CN: TranslationMap = {
       refresh: "刷新",
       refreshing: "刷新中…",
       on: "梦境已开启",
-      off: "梦境已关闭",
+      off: "梦境未开启",
     },
     restartConfirmation: {
       title: "重启 Gateway 以应用更改",
@@ -635,7 +635,7 @@ export const zh_CN: TranslationMap = {
     },
     status: {
       active: "做梦中",
-      idle: "等待做梦",
+      idle: "等待入梦",
       promotedSuffix: "已提升",
       nextSweepPrefix: "下次扫描",
     },
