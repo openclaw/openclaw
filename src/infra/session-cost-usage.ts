@@ -1033,6 +1033,24 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+type UsageCostResolver = (params: {
+  provider?: string;
+  model?: string;
+}) => ReturnType<typeof resolveModelCostConfig>;
+
+function createUsageCostResolver(config?: OpenClawConfig): UsageCostResolver {
+  const cache = new Map<string, ReturnType<typeof resolveModelCostConfig>>();
+  return ({ provider, model }) => {
+    const key = `${provider ?? ""}\0${model ?? ""}`;
+    if (cache.has(key)) {
+      return cache.get(key);
+    }
+    const cost = resolveModelCostConfig({ provider, model, config });
+    cache.set(key, cost);
+    return cost;
+  };
+}
+
 async function canReadJsonlFromOffset(filePath: string, startOffset: number): Promise<boolean> {
   if (startOffset <= 0) {
     return true;
@@ -1092,10 +1110,12 @@ async function* readJsonlRecords(
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
+  resolveCost?: UsageCostResolver;
   startOffset?: number;
   endOffset?: number;
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
+  const resolveCost = params.resolveCost ?? createUsageCostResolver(params.config);
   for await (const parsed of readJsonlRecords(
     params.filePath,
     params.startOffset,
@@ -1107,10 +1127,9 @@ async function scanTranscriptFile(params: {
     }
 
     if (entry.usage) {
-      const cost = resolveModelCostConfig({
+      const cost = resolveCost({
         provider: entry.provider,
         model: entry.model,
-        config: params.config,
       });
       if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
         // When tiered pricing is configured, always recompute to override
@@ -1146,6 +1165,7 @@ async function scanTranscriptFile(params: {
 async function scanUsageFile(params: {
   filePath: string;
   config?: OpenClawConfig;
+  resolveCost?: UsageCostResolver;
   startOffset?: number;
   endOffset?: number;
   onEntry: (entry: ParsedUsageEntry) => void;
@@ -1153,6 +1173,7 @@ async function scanUsageFile(params: {
   await scanTranscriptFile({
     filePath: params.filePath,
     config: params.config,
+    resolveCost: params.resolveCost,
     startOffset: params.startOffset,
     endOffset: params.endOffset,
     onEntry: (entry) => {
@@ -1260,6 +1281,7 @@ export async function loadCostUsageSummary(params?: {
 
   const dailyMap = new Map<string, CostUsageTotals>();
   const totals = emptyTotals();
+  const resolveCost = createUsageCostResolver(params?.config);
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
@@ -1286,6 +1308,7 @@ export async function loadCostUsageSummary(params?: {
     await scanUsageFile({
       filePath,
       config: params?.config,
+      resolveCost,
       onEntry: (entry) => {
         const ts = entry.timestamp?.getTime();
         if (!ts || ts < sinceTime || ts > untilTime) {
@@ -1329,6 +1352,7 @@ export async function loadCostUsageSummary(params?: {
 async function scanUsageFileForCache(params: {
   file: UsageCostTranscriptFile;
   config?: OpenClawConfig;
+  resolveCost?: UsageCostResolver;
   previous?: UsageCostCacheFileEntry;
   includeSessionSummary?: boolean;
 }): Promise<UsageCostCacheFileEntry> {
@@ -1364,6 +1388,7 @@ async function scanUsageFileForCache(params: {
   await scanTranscriptFile({
     filePath: params.file.filePath,
     config: params.config,
+    resolveCost: params.resolveCost,
     startOffset,
     endOffset: params.file.size,
     onEntry: (entry) => {
@@ -1519,11 +1544,13 @@ export async function refreshCostUsageCache(params?: {
         return aSession - bSession || a.size - b.size || a.filePath.localeCompare(b.filePath);
       })
       .slice(0, maxFiles);
+    const resolveCost = createUsageCostResolver(params?.config);
 
     for (const file of staleFiles) {
       cache.files[file.filePath] = await scanUsageFileForCache({
         file,
         config: params?.config,
+        resolveCost,
         previous: cache.files[file.filePath],
         includeSessionSummary: sessionSummaryFiles.has(file.filePath),
       });
@@ -1975,10 +2002,12 @@ export async function loadSessionCostSummary(params: {
   const latencyValues: number[] = [];
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
+  const resolveCost = createUsageCostResolver(params.config);
 
   await scanTranscriptFile({
     filePath: sessionFile,
     config: params.config,
+    resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
 
@@ -2264,10 +2293,12 @@ export async function loadSessionUsageTimeSeries(params: {
   const points: SessionUsageTimePoint[] = [];
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
+  const resolveCost = createUsageCostResolver(params.config);
 
   await scanUsageFile({
     filePath: sessionFile,
     config: params.config,
+    resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
       if (!ts) {
@@ -2374,6 +2405,7 @@ export async function loadSessionLogs(params: {
     }
   }
   const limit = params.limit ?? 50;
+  const resolveCost = createUsageCostResolver(params.config);
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
     try {
@@ -2488,10 +2520,9 @@ export async function loadSessionLogs(params: {
           if (breakdown?.total !== undefined) {
             cost = breakdown.total;
           } else {
-            const costConfig = resolveModelCostConfig({
+            const costConfig = resolveCost({
               provider: message.provider as string | undefined,
               model: message.model as string | undefined,
-              config: params.config,
             });
             cost = estimateUsageCost({ usage, cost: costConfig });
           }

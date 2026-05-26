@@ -10,6 +10,7 @@ import {
 } from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as usageFormat from "../utils/usage-format.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -147,6 +148,52 @@ describe("session cost usage", () => {
       expect(summary.totals.totalTokens).toBe(50);
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
     });
+  });
+
+  it("reuses resolved model costs while scanning repeated session usage entries", async () => {
+    const root = await makeSessionCostRoot("cost-resolver-cache");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-1.jsonl");
+    const now = new Date().toISOString();
+    const entries = Array.from({ length: 12 }, () => ({
+      type: "message",
+      timestamp: now,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: { input: 10, output: 20, totalTokens: 30 },
+      },
+    }));
+    await fs.writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const costSpy = vi.spyOn(usageFormat, "resolveModelCostConfig");
+    try {
+      await withStateDir(root, async () => {
+        const summary = await loadCostUsageSummary({ days: 30, config });
+        expect(summary.totals.totalTokens).toBe(360);
+        expect(summary.totals.totalCost).toBeCloseTo(0.0006, 8);
+      });
+      expect(costSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      costSpy.mockRestore();
+    }
   });
 
   it("counts token usage for an unpriced (unconfigured all-zero) model as missing, not a confident $0", async () => {
