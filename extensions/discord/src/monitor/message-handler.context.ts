@@ -414,6 +414,7 @@ export async function buildDiscordMessageProcessContext(params: {
       thread: {
         starterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
         label: threadLabel,
+        senderAllowed: true,
       },
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },
