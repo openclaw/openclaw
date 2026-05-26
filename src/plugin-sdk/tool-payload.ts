@@ -309,6 +309,27 @@ function consumeXmlishParameterBlock(
   return closeStart + XMLISH_PARAMETER_CLOSE.length;
 }
 
+function consumeXmlishParameterBlocks(
+  text: string,
+  start: number,
+  maxPayloadBytes: number,
+): number | null {
+  let cursor = start;
+  let consumed = false;
+  while (true) {
+    const next = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
+    if (next === null) {
+      break;
+    }
+    if (next - start > maxPayloadBytes) {
+      return null;
+    }
+    cursor = next;
+    consumed = true;
+  }
+  return consumed ? cursor : null;
+}
+
 function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
   const cursor = skipWhitespace(text, start);
   return text.slice(cursor).toLowerCase().startsWith("</function>")
@@ -331,7 +352,7 @@ function parseXmlishPlainTextToolCallBlockEndAt(
   if (allowedToolNames && !allowedToolNames.has(opening.name)) {
     return null;
   }
-  const payloadEnd = consumeXmlishParameterBlock(
+  const payloadEnd = consumeXmlishParameterBlocks(
     text,
     opening.end,
     options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
