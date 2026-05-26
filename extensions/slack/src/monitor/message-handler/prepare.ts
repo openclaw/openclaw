@@ -531,8 +531,14 @@ async function authorizeSlackInboundMessage(params: {
   conversation: SlackConversationContext;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
-  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
-    conversation;
+  const {
+    isDirectMessage,
+    isRoomish,
+    channelName,
+    resolvedChannelType,
+    isBotMessage,
+    allowBotsMode,
+  } = conversation;
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
@@ -567,7 +573,7 @@ async function authorizeSlackInboundMessage(params: {
   }
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
-    includePairingStore: isDirectMessage,
+    includePairingStore: isDirectMessage || isRoomish,
   });
 
   if (isDirectMessage) {
@@ -870,13 +876,17 @@ export async function prepareSlackMessage(params: {
   const hasAbortRequest = isAbortRequestText(textForCommandDetection);
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
+  const ownerAllowFromForIngress =
+    isRoom && isBotMessage && allowBotsMode !== "off" && !channelUsersAllowlistConfigured
+      ? ["*"]
+      : allowFromLower;
   const messageIngress = await resolveSlackCommandIngress({
     ctx,
     senderId,
     senderName: senderNameForAuth,
     channelType: conversation.resolvedChannelType ?? "channel",
     channelId: message.channel,
-    ownerAllowFromLower: allowFromLower,
+    ownerAllowFromLower: ownerAllowFromForIngress,
     channelUsers: isRoom ? channelConfig?.users : undefined,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,

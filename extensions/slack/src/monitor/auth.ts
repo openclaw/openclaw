@@ -339,6 +339,17 @@ function slackIngressConversationKind(
   return channelType === "im" ? "direct" : channelType === "mpim" ? "group" : "channel";
 }
 
+function resolveSlackRoomSenderAllowFrom(params: {
+  channelUsers: string[];
+  ownerAllowFromLower: string[];
+}): { groupPolicy: "allowlist"; groupAllowFrom: string[] } {
+  return {
+    groupPolicy: "allowlist",
+    groupAllowFrom:
+      params.channelUsers.length > 0 ? params.channelUsers : params.ownerAllowFromLower,
+  };
+}
+
 export async function resolveSlackCommandIngress(params: {
   ctx: SlackMonitorContext;
   senderId: string;
@@ -358,7 +369,12 @@ export async function resolveSlackCommandIngress(params: {
 }) {
   const isDirectMessage = params.channelType === "im";
   const channelUsers = normalizeAllowListLower(params.channelUsers);
-  const channelUsersConfigured = !isDirectMessage && channelUsers.length > 0;
+  const roomSenderGate = isDirectMessage
+    ? undefined
+    : resolveSlackRoomSenderAllowFrom({
+        channelUsers,
+        ownerAllowFromLower: params.ownerAllowFromLower,
+      });
   const result = await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
@@ -374,7 +390,7 @@ export async function resolveSlackCommandIngress(params: {
       mayPair: false,
     },
     dmPolicy: isDirectMessage ? "open" : "disabled",
-    groupPolicy: channelUsersConfigured ? "allowlist" : "open",
+    groupPolicy: roomSenderGate?.groupPolicy ?? "open",
     policy: {
       groupAllowFromFallbackToAllowFrom: false,
       mutableIdentifierMatching: params.ctx.allowNameMatching ? "enabled" : "disabled",
@@ -382,7 +398,7 @@ export async function resolveSlackCommandIngress(params: {
     },
     mentionFacts: params.mentionFacts,
     allowFrom: isDirectMessage ? ["*"] : params.ownerAllowFromLower,
-    groupAllowFrom: channelUsersConfigured ? channelUsers : [],
+    groupAllowFrom: roomSenderGate?.groupAllowFrom ?? [],
     command: {
       allowTextCommands: params.allowTextCommands,
       hasControlCommand: params.hasControlCommand,
@@ -411,6 +427,12 @@ async function decideSlackSystemIngress(params: {
       ? params.ownerAllowFromLower.filter((entry) => entry !== "*")
       : params.ownerAllowFromLower;
   const hasAnyCommandAllowlist = ownerAllowFrom.length > 0 || channelUsersConfigured;
+  const roomSenderGate = isDirectMessage
+    ? undefined
+    : resolveSlackRoomSenderAllowFrom({
+        channelUsers,
+        ownerAllowFromLower: ownerAllowFrom,
+      });
   const groupAllowFrom = (() => {
     if (isDirectMessage) {
       return [];
@@ -418,10 +440,9 @@ async function decideSlackSystemIngress(params: {
     if (params.interactiveEvent && hasAnyCommandAllowlist) {
       return channelUsersConfigured ? channelUsers : [];
     }
-    if (channelUsersConfigured) {
-      return channelUsers;
-    }
-    return params.channelId ? ["*"] : wildcardWhenOpen(params.ownerAllowFromLower);
+    return params.channelId
+      ? (roomSenderGate?.groupAllowFrom ?? [])
+      : wildcardWhenOpen(params.ownerAllowFromLower);
   })();
   const result = await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
@@ -441,14 +462,18 @@ async function decideSlackSystemIngress(params: {
     groupPolicy:
       params.interactiveEvent && hasAnyCommandAllowlist
         ? "open"
-        : channelUsersConfigured || (!params.channelId && params.ownerAllowFromLower.length > 0)
+        : params.channelId || (!params.channelId && params.ownerAllowFromLower.length > 0)
           ? "allowlist"
           : "open",
     policy: {
       groupAllowFromFallbackToAllowFrom: false,
       mutableIdentifierMatching: params.ctx.allowNameMatching ? "enabled" : "disabled",
     },
-    allowFrom: isDirectMessage ? wildcardWhenOpen(params.ownerAllowFromLower) : ownerAllowFrom,
+    allowFrom: isDirectMessage
+      ? wildcardWhenOpen(params.ownerAllowFromLower)
+      : params.channelId
+        ? ownerAllowFrom
+        : wildcardWhenOpen(params.ownerAllowFromLower),
     groupAllowFrom,
     command:
       params.interactiveEvent && hasAnyCommandAllowlist
@@ -554,8 +579,15 @@ export async function authorizeSlackSystemEventSender(params: {
   }
 
   const allowFromLower = await resolveSlackEffectiveAllowFrom(params.ctx, {
-    includePairingStore: ingressChannelType === "im",
+    includePairingStore: Boolean(channelId) || ingressChannelType === "im",
   });
+  if (!channelId && allowFromLower.length === 0) {
+    return {
+      allowed: true,
+      channelType,
+      channelName,
+    };
+  }
   const channelConfig = channelId
     ? resolveSlackChannelConfig({
         channelId,

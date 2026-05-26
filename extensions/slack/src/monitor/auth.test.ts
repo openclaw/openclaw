@@ -117,7 +117,7 @@ describe("authorizeSlackSystemEventSender", () => {
     clearSlackAllowFromCacheForTest();
   });
 
-  it("keeps non-interactive channel senders open when only global allowFrom is configured", async () => {
+  it("blocks non-interactive channel senders outside global allowFrom", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx({ allowFrom: ["U_OWNER"] }),
       senderId: "U_ATTACKER",
@@ -125,7 +125,8 @@ describe("authorizeSlackSystemEventSender", () => {
     });
 
     expect(result).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "sender-not-allowlisted",
       channelType: "channel",
       channelName: "general",
     });
@@ -190,7 +191,7 @@ describe("authorizeSlackSystemEventSender", () => {
     });
   });
 
-  it("keeps channel interactions open when no global or channel allowlists are configured", async () => {
+  it("blocks channel interactions when no global or channel allowlists are configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx(),
       senderId: "U_ANYONE",
@@ -198,7 +199,8 @@ describe("authorizeSlackSystemEventSender", () => {
     });
 
     expect(result).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "sender-not-allowlisted",
       channelType: "channel",
       channelName: "general",
     });
@@ -324,6 +326,35 @@ describe("resolveSlackCommandIngress", () => {
     expect(result.commandAccess.authorized).toBe(false);
     expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
   });
+
+  it("uses global allowFrom as the fallback channel sender gate", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_OWNER",
+      channelType: "channel",
+      channelId: "C1",
+      ownerAllowFromLower: ["u_owner"],
+      allowTextCommands: true,
+      hasControlCommand: false,
+    });
+
+    expect(result.ingress.decision).toBe("allow");
+  });
+
+  it("blocks channel senders outside the fallback global allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ATTACKER",
+      channelType: "channel",
+      channelId: "C1",
+      ownerAllowFromLower: ["u_owner"],
+      allowTextCommands: true,
+      hasControlCommand: false,
+    });
+
+    expect(result.ingress.decision).toBe("block");
+    expect(result.senderAccess.gate?.allowed).toBe(false);
+  });
 });
 
 describe("authorizeSlackSystemEventSender interactiveEvent", () => {
@@ -409,7 +440,7 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
   });
 
-  it("keeps interactive channel events open when no allowlists are configured", async () => {
+  it("blocks interactive channel events when no allowlists are configured", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx(),
       senderId: "U_ANYONE",
@@ -419,7 +450,8 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
 
     expect(result).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "sender-not-allowlisted",
       channelType: "channel",
       channelName: "general",
     });
@@ -547,8 +579,7 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
   });
 
-  it("does not apply interactiveEvent restrictions to non-interactive events", async () => {
-    // Same scenario as the denying test above, but without interactiveEvent flag
+  it("applies channel sender authorization to non-interactive events", async () => {
     const result = await authorizeSlackSystemEventSender({
       ctx: makeAuthorizeCtx(),
       senderId: "U_ANYONE",
@@ -556,7 +587,8 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     });
 
     expect(result).toEqual({
-      allowed: true,
+      allowed: false,
+      reason: "sender-not-allowlisted",
       channelType: "channel",
       channelName: "general",
     });

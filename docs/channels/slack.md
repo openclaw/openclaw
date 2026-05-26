@@ -1002,6 +1002,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
 
+    Channel and private-channel messages require an approved sender. When `channels.slack.channels.<id>.users` is configured, that list is the sender gate for the channel. Otherwise, OpenClaw falls back to the global Slack-approved sender list from `channels.slack.allowFrom` plus approved pairing entries. Setting `channels.slack.allowFrom: ["*"]` keeps sender access open explicitly.
+
     `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 
     Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.

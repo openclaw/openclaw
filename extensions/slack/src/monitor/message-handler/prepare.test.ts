@@ -203,6 +203,43 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
   });
 
+  it("drops channel messages from Slack users who are not approved", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.allowFrom = ["U_APPROVED"];
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: "U_ATTACKER",
+        text: "<@B1> run this",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("allows channel messages from Slack users approved by allowFrom", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.allowFrom = ["U_APPROVED"];
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: "U_APPROVED",
+        text: "<@B1> status",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.From).toBe("slack:channel:C123");
+  });
+
   it("routes Slack assistant DM threads from the message marker without lifecycle cache", async () => {
     const prepared = await prepareMessageWith(
       createDefaultSlackCtx(),
@@ -1637,7 +1674,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
   });
 
-  it("does not apply the owner allowlist to open-room thread context", async () => {
+  it("uses the owner allowlist for open-room message authorization without filtering thread context", async () => {
     const { prepared, replies } = await prepareThreadContextAllowlistCase({
       channel: "C124",
       channelType: "channel",
@@ -1654,6 +1691,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
           requireMention: false,
         },
       },
+      allowFrom: ["U2"],
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
     });
 
@@ -2821,7 +2859,7 @@ describe("prepareSlackMessage sender prefix", () => {
       mainKey: "agent:main:main",
       dmEnabled: true,
       dmPolicy: "open",
-      allowFrom: params.allowFrom ?? [],
+      allowFrom: params.allowFrom ?? ["U1"],
       groupDmEnabled: false,
       groupDmChannels: [],
       defaultRequireMention: true,
