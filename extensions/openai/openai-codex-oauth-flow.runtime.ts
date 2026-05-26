@@ -15,11 +15,13 @@ import type {
 } from "./openai-codex-oauth-types.runtime.js";
 import { generatePKCE } from "./openai-codex-pkce.runtime.js";
 
-const CALLBACK_HOST = process.env.OPENCLAW_OAUTH_CALLBACK_HOST || "127.0.0.1";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
+const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const CALLBACK_HOST = resolveCallbackHost();
+const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const SCOPE = "openid profile email offline_access";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
@@ -50,8 +52,25 @@ function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
   return nodeOAuthRuntimePromise;
 }
 
+function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
+  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || new URL(REDIRECT_URI).hostname;
+  if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
+    throw new Error(
+      "OpenAI Codex OAuth callback host must be localhost, 127.0.0.1, or ::1",
+    );
+  }
+  return host;
+}
+
 function createState(randomBytes: typeof import("node:crypto").randomBytes): string {
   return randomBytes(16).toString("hex");
+}
+
+function waitForManualPromptFallback(): Promise<null> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(null), MANUAL_PROMPT_FALLBACK_MS);
+    timeout.unref?.();
+  });
 }
 
 function parseAuthorizationInput(input: string): { code?: string; state?: string } {
@@ -371,10 +390,11 @@ export async function loginOpenAICodex(options: {
         }
       }
     } else {
-      // Original flow: wait for callback, then prompt if needed
-      const result = await server.waitForCode();
+      const result = await Promise.race([server.waitForCode(), waitForManualPromptFallback()]);
       if (result?.code) {
         code = result.code;
+      } else {
+        server.cancelWait();
       }
     }
 
@@ -461,7 +481,9 @@ export const openaiCodexOAuthProvider: OAuthProviderInterface = {
 };
 
 export const testing = {
+  callbackHost: CALLBACK_HOST,
   createAuthorizationFlow,
   exchangeAuthorizationCode,
   refreshAccessToken,
+  resolveCallbackHost,
 };

@@ -9,5 +9,14 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(flow.state).toMatch(/^[a-f0-9]{32}$/u);
     expect(url.searchParams.get("state")).toBe(flow.state);
     expect(url.searchParams.get("originator")).toBe("openclaw-test");
+    const redirectUri = url.searchParams.get("redirect_uri");
+    expect(redirectUri).toBeTruthy();
+    expect(testing.callbackHost).toBe(new URL(redirectUri ?? "").hostname);
+  });
+
+  it("rejects non-loopback callback bind hosts", () => {
+    expect(() =>
+      testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" }),
+    ).toThrow("callback host must be localhost, 127.0.0.1, or ::1");
   });
 });
