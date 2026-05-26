@@ -2869,6 +2869,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         async () => {
           applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
           const userTurnInput = await userTurnInputPromise;
+          const userTurnRecorder = await userTurnRecorderPromise;
           const dispatchResult = await dispatchInboundMessage({
             ctx,
             cfg,
@@ -2881,6 +2882,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
+              userTurnTranscriptRecorder: userTurnRecorder,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 const connId = typeof client?.connId === "string" ? client.connId : undefined;
@@ -2899,16 +2901,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }
                   }
                 }
-              },
-              onUserMessagePersisted: (message) => {
-                return userTurnRecorderPromise.then((userTurnRecorder) => {
-                  userTurnRecorder.markRuntimePersisted(message);
-                });
-              },
-              onUserMessagePersistencePending: (pending) => {
-                void userTurnRecorderPromise.then((userTurnRecorder) => {
-                  userTurnRecorder.markRuntimePersistencePending(pending);
-                });
               },
               onModelSelected: (modelSelection) => {
                 updateChatRunProvider(context.chatAbortControllers, {

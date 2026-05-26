@@ -697,6 +697,7 @@ export function createFollowupRunner(params: {
               message: Parameters<NonNullable<GetReplyOptions["onUserMessagePersisted"]>>[0],
             ) => {
               queuedUserMessagePersistedAcrossFallback = true;
+              opts?.userTurnTranscriptRecorder?.markRuntimePersisted(message);
               try {
                 const notification = opts?.onUserMessagePersisted?.(message);
                 if (notification) {
@@ -711,6 +712,10 @@ export function createFollowupRunner(params: {
                   `followup queue: user message persistence notification failed: ${formatErrorMessage(error)}`,
                 );
               }
+            };
+            const notifyUserMessagePersistencePending = (pending: Promise<void>) => {
+              opts?.userTurnTranscriptRecorder?.markRuntimePersistencePending(pending);
+              opts?.onUserMessagePersistencePending?.(pending);
             };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
@@ -846,7 +851,7 @@ export function createFollowupRunner(params: {
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                 onUserMessagePersisted: notifyUserMessagePersisted,
-                onUserMessagePersistencePending: opts?.onUserMessagePersistencePending,
+                onUserMessagePersistencePending: notifyUserMessagePersistencePending,
                 suppressTranscriptOnlyAssistantPersistence:
                   run.suppressTranscriptOnlyAssistantPersistence,
                 suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
