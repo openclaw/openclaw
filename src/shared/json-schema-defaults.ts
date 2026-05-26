@@ -120,6 +120,26 @@ function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<stri
   };
 }
 
+function normalizeAdditionalPropertiesSchema(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  if (
+    !isRecord(schema.additionalProperties) ||
+    isRecord(schema.properties) ||
+    isRecord(schema.patternProperties)
+  ) {
+    return schema;
+  }
+  const { additionalProperties, ...rest } = schema;
+  return {
+    ...rest,
+    patternProperties: {
+      ".*": additionalProperties,
+    },
+    additionalProperties: false,
+  };
+}
+
 function normalizeJsonSchemaNode(schema: unknown): unknown {
   if (Array.isArray(schema)) {
     return schema.map((entry) => normalizeJsonSchemaNode(entry));
@@ -127,7 +147,7 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
   if (!isRecord(schema)) {
     return schema;
   }
-  const normalizedSchema = expandJsonSchemaTypeArray(schema);
+  const normalizedSchema = normalizeAdditionalPropertiesSchema(expandJsonSchemaTypeArray(schema));
   return Object.fromEntries(
     Object.entries(normalizedSchema).map(([key, value]) => {
       if (schemaMapKeywords.has(key)) {

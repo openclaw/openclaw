@@ -837,6 +837,16 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
         continue;
       }
     }
+    if (keyword === "required") {
+      const missingProperty =
+        firstStringParam(err?.params?.missingProperty) ??
+        firstStringParam(err?.params?.requiredProperties);
+      if (missingProperty) {
+        const where = instancePath ? `at ${instancePath}: ` : "";
+        parts.push(`${where}must have required property '${missingProperty}'`);
+        continue;
+      }
+    }
 
     const failingKeyword =
       typeof err?.params?.failingKeyword === "string" ? err.params.failingKeyword : "";

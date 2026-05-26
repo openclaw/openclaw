@@ -218,10 +218,44 @@ function resolveAdditionalProperty(error: TypeBoxValidationError): string | unde
   if (error.keyword !== "additionalProperties") {
     return undefined;
   }
+  return firstStringParam(error.params?.additionalProperty) ?? undefined;
+}
+
+function resolveAdditionalProperties(error: TypeBoxValidationError): string[] {
+  if (error.keyword !== "additionalProperties") {
+    return [];
+  }
+  const additionalProperties = error.params?.additionalProperties;
+  if (Array.isArray(additionalProperties)) {
+    return additionalProperties.filter((entry): entry is string => typeof entry === "string");
+  }
+  const additionalProperty = error.params?.additionalProperty;
+  return typeof additionalProperty === "string" ? [additionalProperty] : [];
+}
+
+function formatRequiredMessage(error: TypeBoxValidationError): string | null {
+  const missingProperty = resolveMissingProperty(error);
+  if (!missingProperty) {
+    return null;
+  }
+  return `must have required property '${missingProperty}'`;
+}
+
+function formatAdditionalPropertiesMessage(error: TypeBoxValidationError): string | null {
+  const additionalProperties = resolveAdditionalProperties(error);
+  if (additionalProperties.length === 0) {
+    return null;
+  }
+  const quoted = additionalProperties.map((entry) => `"${entry}"`).join(", ");
+  return `must not have additional properties: ${quoted}`;
+}
+
+function formatValidationErrorMessage(error: TypeBoxValidationError): string {
   return (
-    firstStringParam(error.params?.additionalProperty) ??
-    firstStringParam(error.params?.additionalProperties) ??
-    undefined
+    formatRequiredMessage(error) ??
+    formatAdditionalPropertiesMessage(error) ??
+    error.message ??
+    "invalid"
   );
 }
 
@@ -233,7 +267,7 @@ function formatValidationErrors(
   }
   return errors.map((error) => {
     const path = resolveValidationErrorPath(error);
-    const baseMessage = error.message ?? "invalid";
+    const baseMessage = formatValidationErrorMessage(error);
     const allowedValuesSummary = getAllowedValuesSummary(error);
     const additionalProperty = resolveAdditionalProperty(error);
     const message = allowedValuesSummary

@@ -571,7 +571,7 @@ function isUnsupportedMutableSecretRefSchemaIssue(params: {
     return false;
   }
 
-  if (!/Unrecognized key/i.test(issue.message)) {
+  if (!/Unrecognized key|must not have additional properties/i.test(issue.message)) {
     return false;
   }
   const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
