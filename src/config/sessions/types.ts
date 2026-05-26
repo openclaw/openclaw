@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -78,6 +79,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  promptToolNamesHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
 };
@@ -107,6 +109,33 @@ export type SessionCompactionCheckpoint = {
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
   postCompaction: SessionCompactionTranscriptReference;
+};
+
+export type SessionContextBudgetStatusRoute =
+  | "fits"
+  | "compact_only"
+  | "truncate_tool_results_only"
+  | "compact_then_truncate";
+
+export type SessionContextBudgetStatus = {
+  schemaVersion: 1;
+  source: "pre-prompt-estimate";
+  updatedAt: number;
+  provider: string;
+  model: string;
+  route: SessionContextBudgetStatusRoute;
+  shouldCompact: boolean;
+  estimatedPromptTokens: number;
+  contextTokenBudget: number;
+  promptBudgetBeforeReserve: number;
+  reserveTokens: number;
+  effectiveReserveTokens: number;
+  remainingPromptBudgetTokens: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
+  messageCount: number;
+  unwindowedMessageCount: number;
+  sessionId?: string;
 };
 
 export type SessionPluginDebugEntry = {
@@ -290,14 +319,7 @@ export type SessionEntry = {
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
-  queueMode?:
-    | "steer"
-    | "followup"
-    | "collect"
-    | "steer-backlog"
-    | "steer+backlog"
-    | "queue"
-    | "interrupt";
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
   queueDebounceMs?: number;
   queueCap?: number;
   queueDrop?: "old" | "new" | "summarize";
@@ -341,6 +363,7 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
@@ -357,6 +380,7 @@ export type SessionEntry = {
   groupChannel?: string;
   space?: string;
   origin?: SessionOrigin;
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;
@@ -620,6 +644,12 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+    hash?: string;
+  };
+  currentTurn?: {
+    kind?: "user_request" | "room_event";
+    promptChars: number;
+    runtimeContextChars: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;
@@ -631,6 +661,7 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
+    hash?: string;
     entries: Array<{ name: string; blockChars: number }>;
   };
   tools: {
@@ -639,7 +670,9 @@ export type SessionSystemPromptReport = {
     entries: Array<{
       name: string;
       summaryChars: number;
+      summaryHash?: string;
       schemaChars: number;
+      schemaHash?: string;
       propertiesCount?: number | null;
     }>;
   };

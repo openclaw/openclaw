@@ -20,7 +20,10 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import {
@@ -371,7 +374,7 @@ function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
     }
   }
 
-  return Array.from(new Set(keys));
+  return uniqueStrings(keys);
 }
 
 function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
@@ -694,14 +697,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   const resolveCurrentConfig = (): OpenClawConfig =>
     (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
 
-  const resolveCurrentDreamingConfig = (): ShortTermPromotionDreamingConfig => {
-    const cfg = resolveCurrentConfig();
-    return resolveShortTermPromotionDreamingConfig({
-      pluginConfig: resolveMemoryCorePluginConfig(cfg),
-      cfg,
-    });
-  };
-
   const clearStartupCronRetry = (): void => {
     if (startupCronRetryTimer) {
       clearTimeout(startupCronRetryTimer);
@@ -823,8 +818,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     return config;
   };
 
-  const scheduleStartupCronRetry = (config: ShortTermPromotionDreamingConfig): void => {
-    if (disposed || !config.enabled || hasStartupCron()) {
+  const scheduleStartupCronRetry = (): void => {
+    if (disposed || hasStartupCron()) {
       clearStartupCronRetry();
       return;
     }
@@ -838,12 +833,12 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
       startupCronRetryAttempts += 1;
       void reconcileManagedDreamingCron({ reason: "runtime" })
-        .then((latestConfig) => {
-          if (disposed || !latestConfig.enabled || hasStartupCron()) {
+        .then(() => {
+          if (disposed || hasStartupCron()) {
             clearStartupCronRetry();
             return;
           }
-          scheduleStartupCronRetry(latestConfig);
+          scheduleStartupCronRetry();
         })
         .catch((err) => {
           if (disposed) {
@@ -852,13 +847,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           api.logger.error(
             `memory-core: deferred dreaming cron retry failed: ${formatErrorMessage(err)}`,
           );
-          try {
-            scheduleStartupCronRetry(resolveCurrentDreamingConfig());
-          } catch (configErr) {
-            api.logger.error(
-              `memory-core: deferred dreaming cron retry config refresh failed: ${formatErrorMessage(configErr)}`,
-            );
-          }
+          scheduleStartupCronRetry();
         });
     }, STARTUP_CRON_RETRY_DELAY_MS);
   };
@@ -868,12 +857,12 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     // Store the gateway context for runtime cron resolution retries.
     gatewayContext = ctx as unknown as { getCron?: () => CronServiceLike | null };
     try {
-      const config = await reconcileManagedDreamingCron({
+      await reconcileManagedDreamingCron({
         reason: "startup",
         startupConfig: ctx.config,
         startupCron: () => resolveCronServiceFromGatewayContext(ctx),
       });
-      scheduleStartupCronRetry(config);
+      scheduleStartupCronRetry();
     } catch (err) {
       api.logger.error(
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
@@ -925,7 +914,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   });
 }
 
-export const __testing = {
+export const testing = {
   buildManagedDreamingCronJob,
   buildManagedDreamingPatch,
   isManagedDreamingJob,
@@ -944,3 +933,4 @@ export const __testing = {
     STARTUP_CRON_RETRY_MAX_ATTEMPTS,
   },
 };
+export { testing as __testing };

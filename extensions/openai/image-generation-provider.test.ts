@@ -172,6 +172,42 @@ function createCodexOAuthAuthStore() {
   };
 }
 
+function createCodexApiKeyAuthStore() {
+  return {
+    version: 1 as const,
+    profiles: {
+      "openai-codex:manual": {
+        type: "api_key" as const,
+        provider: "openai-codex",
+        key: "codex-api-key",
+      },
+    },
+  };
+}
+
+function createCodexTokenAuthStore() {
+  return {
+    version: 1 as const,
+    profiles: {
+      "openai-codex:token": {
+        type: "token" as const,
+        provider: "openai-codex",
+        token: "codex-token",
+      },
+    },
+  };
+}
+
+function createMixedCodexAuthStore() {
+  return {
+    version: 1 as const,
+    profiles: {
+      ...createCodexTokenAuthStore().profiles,
+      ...createCodexApiKeyAuthStore().profiles,
+    },
+  };
+}
+
 type MockWithCalls = {
   mock: {
     calls: readonly (readonly unknown[])[];
@@ -437,6 +473,23 @@ describe("openai image generation provider", () => {
     expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 
+  it("wraps malformed successful OpenAI image responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI image generation response malformed");
+  });
+
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 
@@ -550,6 +603,28 @@ describe("openai image generation provider", () => {
     });
     expect(result.images[0]?.mimeType).toBe("image/jpeg");
     expect(result.images[0]?.fileName).toBe("image-1.jpg");
+  });
+
+  it("omits output compression for PNG direct generations", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Transparent PNG",
+      cfg: {},
+      outputFormat: "png",
+      providerOptions: {
+        openai: {
+          outputCompression: 60,
+        },
+      },
+    });
+
+    const body = jsonRequestCall().body as Record<string, unknown>;
+    expect(body.output_format).toBe("png");
+    expect(body.output_compression).toBeUndefined();
   });
 
   it("routes transparent default-model requests to the OpenAI image model that supports alpha", async () => {
@@ -824,6 +899,180 @@ describe("openai image generation provider", () => {
     });
   });
 
+  it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
+    mockGeneratedPngResponse();
+    resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
+      if (params?.provider === "openai") {
+        return { apiKey: "openai-key", source: "profile:openai", mode: "api-key" };
+      }
+      throw new Error(`Unexpected auth provider ${params?.provider ?? ""}`);
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw with OpenAI auth despite a Codex API key profile",
+      cfg: {},
+      authStore: createCodexApiKeyAuthStore(),
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
+    expect(authResolutionCall().provider).toBe("openai");
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
+    expect(httpConfigCall().provider).toBe("openai");
+    expect(logInfoMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("transport=codex-responses"),
+    );
+  });
+
+  it("uses native OpenAI image requests when only Codex API key auth is available", async () => {
+    mockGeneratedPngResponse();
+    resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
+      if (params?.provider === "openai") {
+        return {};
+      }
+      if (params?.provider === "openai-codex") {
+        return {
+          apiKey: "codex-api-key",
+          source: "profile:openai-codex:manual",
+          mode: "api-key",
+        };
+      }
+      return {};
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw through Codex API key auth",
+      cfg: {},
+      authStore: createCodexApiKeyAuthStore(),
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(2);
+    expect(authResolutionCall(0).provider).toBe("openai");
+    expect(authResolutionCall(1).provider).toBe("openai-codex");
+    const configCall = httpConfigCall();
+    expect(configCall.defaultBaseUrl).toBe("https://api.openai.com/v1");
+    expect(configCall.defaultHeaders).toEqual({
+      Authorization: "Bearer codex-api-key",
+    });
+    expect(configCall.provider).toBe("openai");
+    expect(configCall.api).toBeUndefined();
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
+    expect(postMultipartRequestMock).not.toHaveBeenCalled();
+    expect(logInfoMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("transport=codex-responses"),
+    );
+  });
+
+  it("uses native OpenAI image requests when mixed Codex profiles resolve to an API key", async () => {
+    mockGeneratedPngResponse();
+    resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
+      if (params?.provider === "openai-codex") {
+        return {
+          apiKey: "codex-api-key",
+          source: "profile:openai-codex:manual",
+          mode: "api-key",
+        };
+      }
+      throw new Error(`Unexpected auth provider ${params?.provider ?? ""}`);
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw through resolved Codex API key auth",
+      cfg: {},
+      authStore: createMixedCodexAuthStore(),
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
+    expect(authResolutionCall().provider).toBe("openai-codex");
+    expect(httpConfigCall().defaultBaseUrl).toBe("https://api.openai.com/v1");
+    expect(httpConfigCall().defaultHeaders).toEqual({
+      Authorization: "Bearer codex-api-key",
+    });
+    expect(httpConfigCall().provider).toBe("openai");
+    expect(jsonRequestCall().url).toBe("https://api.openai.com/v1/images/generations");
+    expect(logInfoMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("transport=codex-responses"),
+    );
+  });
+
+  it("keeps Codex token auth on the Codex image transport", async () => {
+    mockCodexImageStream({ imageData: "codex-token-image" });
+    resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
+      if (params?.provider === "openai") {
+        return {};
+      }
+      if (params?.provider === "openai-codex") {
+        return {
+          apiKey: "codex-token",
+          source: "profile:openai-codex:token",
+          mode: "token",
+        };
+      }
+      return {};
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw through Codex token auth",
+      cfg: {},
+      authStore: createCodexTokenAuthStore(),
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
+    expect(authResolutionCall().provider).toBe("openai-codex");
+    expect(httpConfigCall().defaultBaseUrl).toBe("https://chatgpt.com/backend-api/codex");
+    expect(httpConfigCall().provider).toBe("openai-codex");
+    expect(httpConfigCall().api).toBe("openai-codex-responses");
+    expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(postMultipartRequestMock).not.toHaveBeenCalled();
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-token-image"));
+  });
+
+  it("uses configured Codex token auth before probing an available OpenAI API key", async () => {
+    mockCodexImageStream({ imageData: "codex-token-image" });
+    resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
+      if (params?.provider === "openai") {
+        return { apiKey: "openai-key", source: "OPENAI_API_KEY", mode: "api-key" };
+      }
+      if (params?.provider === "openai-codex") {
+        return {
+          apiKey: "codex-token",
+          source: "profile:openai-codex:token",
+          mode: "token",
+        };
+      }
+      return {};
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw using configured Codex token auth",
+      cfg: {},
+      authStore: createCodexTokenAuthStore(),
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledTimes(1);
+    expect(authResolutionCall().provider).toBe("openai-codex");
+    expect(
+      resolveApiKeyForProviderMock.mock.calls.some(
+        ([call]) => (call as AuthResolutionCall).provider === "openai",
+      ),
+    ).toBe(false);
+    expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
+  });
+
   it("routes transparent default-model Codex OAuth requests to the alpha-capable image model", async () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-transparent-image" });
@@ -851,6 +1100,30 @@ describe("openai image generation provider", () => {
     expect(body.tools?.[0]?.output_format).toBe("png");
     expect(body.tools?.[0]?.background).toBe("transparent");
     expect(result.model).toBe("gpt-image-1.5");
+  });
+
+  it("omits output compression for PNG Codex image requests", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-png-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw a transparent Codex badge",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+      outputFormat: "png",
+      providerOptions: {
+        openai: {
+          outputCompression: 55,
+        },
+      },
+    });
+
+    const body = jsonRequestCall().body as { tools?: Array<Record<string, unknown>> };
+    expect(body.tools?.[0]?.output_format).toBe("png");
+    expect(body.tools?.[0]?.output_compression).toBeUndefined();
   });
 
   it("uses configured Codex OAuth directly instead of probing an available OpenAI API key", async () => {

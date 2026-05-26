@@ -281,6 +281,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an explicit re-authentication message for Codex app-server refresh failures", () => {
+    const msg = makeAssistantError(
+      "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
     const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
     expect(formatAssistantErrorText(msg)).toBe(
@@ -333,10 +342,17 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns re-authentication copy for HTML provider 401 auth failures", () => {
+    const msg = makeAssistantError("401 <!DOCTYPE html><html><body>Unauthorized</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+    );
+  });
+
   it("returns an HTML-403 auth message for HTML provider auth failures", () => {
     const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(formatAssistantErrorText(msg)).toBe(
-      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
     );
   });
 

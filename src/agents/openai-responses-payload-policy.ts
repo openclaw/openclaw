@@ -1,4 +1,5 @@
 import { readStringValue } from "../shared/string-coerce.js";
+import { asBoolean } from "../utils/boolean.js";
 import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -169,7 +170,6 @@ function resolveBundledOpenAIResponsesEndpointClass(
     case "aiplatform.googleapis.com":
       return "google-vertex";
     case "api.x.ai":
-    case "api.grok.x.ai":
       return "xai-native";
     case "api.z.ai":
       return "zai-native";
@@ -213,8 +213,7 @@ function readCompatPayloadBoolean(
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  const value = (compat as Record<string, unknown>)[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean((compat as Record<string, unknown>)[key]);
 }
 
 function resolveOpenAIResponsesPayloadCapabilities(

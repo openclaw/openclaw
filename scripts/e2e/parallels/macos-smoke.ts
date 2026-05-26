@@ -12,6 +12,7 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixProviderOnlyPluginIsolationScript,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
@@ -115,7 +116,7 @@ const defaultOptions = (): MacosOptions => ({
   modelId: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
-  snapshotHint: "macOS 26.3.1 latest",
+  snapshotHint: "macOS 26.5 latest",
   targetPackageSpec: "",
   vmName: "macOS Tahoe",
 });
@@ -126,7 +127,7 @@ function usage(): string {
 Options:
   --vm <name>                Parallels VM name. Default: "macOS Tahoe"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "macOS 26.3.1 latest"
+                             Default: "macOS 26.5 latest"
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for the agent-turn smoke.
@@ -977,6 +978,17 @@ echo "dashboard HTML did not become ready" >&2
 exit 1`);
   }
 
+  private restrictAgentTurnPlugins(): void {
+    this.guestSh(
+      posixProviderOnlyPluginIsolationScript({
+        fallbackPluginId: this.options.provider,
+        homeFallback: this.guestHome(),
+        modelId: this.auth.modelId,
+        nodeCommand: guestNode,
+      }),
+    );
+  }
+
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
@@ -1000,6 +1012,7 @@ rm -f "$provider_config_batch"`);
       "--strict-json",
     ]);
     this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
+    this.restrictAgentTurnPlugins();
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 agent_ok=false
@@ -1011,7 +1024,7 @@ for attempt in 1 2; do
   set +e
   /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
+  )} --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"

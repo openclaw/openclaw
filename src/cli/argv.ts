@@ -117,7 +117,7 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       continue;
     }
     if (arg.startsWith("-")) {
-      continue;
+      return false;
     }
     return false;
   }
@@ -384,5 +384,5 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
 }
 
 export function shouldMigrateState(argv: string[]): boolean {
-  return shouldMigrateStateFromPath(getCommandPath(argv, 2));
+  return shouldMigrateStateFromPath(getCommandPathWithRootOptions(argv, 2));
 }

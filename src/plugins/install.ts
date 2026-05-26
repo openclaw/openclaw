@@ -6,16 +6,21 @@ import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
+  createNpmMetadataEnv,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  type ManagedNpmRootPeerDependencySnapshot,
   readManagedNpmRootInstalledDependency,
+  readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
+  restoreManagedNpmRootPeerDependencySnapshot,
+  syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
@@ -167,6 +172,13 @@ function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
       code: PLUGIN_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_EXTENSIONS,
     };
   }
+  if (resolved.status === "invalid") {
+    return {
+      ok: false,
+      error: resolved.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+    };
+  }
   return {
     ok: true,
     entries: resolved.entries,
@@ -207,10 +219,7 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
     ["npm", "view", params.spec.name, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv(),
     },
   );
   if (versions.code !== 0) {
@@ -327,6 +336,7 @@ async function rollbackManagedNpmPluginInstall(params: {
   targetDir: string;
   timeoutMs: number;
   logger: PluginInstallLogger;
+  peerDependencySnapshot?: ManagedNpmRootPeerDependencySnapshot;
 }): Promise<void> {
   try {
     await runCommandWithTimeout(
@@ -345,6 +355,7 @@ async function rollbackManagedNpmPluginInstall(params: {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, {
           legacyPeerDeps: true,
+          npmConfigCwd: params.npmRoot,
           packageLock: true,
           quiet: true,
         }),
@@ -371,6 +382,83 @@ async function rollbackManagedNpmPluginInstall(params: {
     params.logger.warn?.(
       `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
     );
+  }
+  if (params.peerDependencySnapshot) {
+    try {
+      const preRestorePeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
+        npmRoot: params.npmRoot,
+      });
+      const restoredPeerDependencyNames = new Set(
+        params.peerDependencySnapshot.managedPeerDependencies,
+      );
+      const addedPeerDependencyNames =
+        preRestorePeerDependencySnapshot.managedPeerDependencies.filter(
+          (packageName) => !restoredPeerDependencyNames.has(packageName),
+        );
+      await restoreManagedNpmRootPeerDependencySnapshot({
+        npmRoot: params.npmRoot,
+        snapshot: params.peerDependencySnapshot,
+      });
+      const cleanupResult = await runCommandWithTimeout(
+        [
+          "npm",
+          "install",
+          "--omit=dev",
+          "--omit=peer",
+          "--loglevel=error",
+          "--legacy-peer-deps",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+        ],
+        {
+          cwd: params.npmRoot,
+          timeoutMs: Math.max(params.timeoutMs, 300_000),
+          env: createSafeNpmInstallEnv(process.env, {
+            legacyPeerDeps: true,
+            npmConfigCwd: params.npmRoot,
+            packageLock: true,
+            quiet: true,
+          }),
+        },
+      );
+      if (cleanupResult.code !== 0) {
+        params.logger.warn?.(
+          `npm install cleanup after rollback for ${params.packageName} exited ${cleanupResult.code}: ${cleanupResult.stderr.trim() || cleanupResult.stdout.trim()}`,
+        );
+        await Promise.all(
+          addedPeerDependencyNames.map(async (packageName) => {
+            try {
+              await fs.rm(resolveManagedNpmRootPackageDir(params.npmRoot, packageName), {
+                recursive: true,
+                force: true,
+              });
+            } catch (error) {
+              params.logger.warn?.(
+                `Failed to remove rolled-back managed peer dependency ${packageName}: ${String(error)}`,
+              );
+            }
+          }),
+        );
+      }
+    } catch (error) {
+      params.logger.warn?.(
+        `Failed to restore managed npm peer dependencies after rollback for ${params.packageName}: ${String(error)}`,
+      );
+    }
+  }
+  if (params.packageName !== "openclaw") {
+    try {
+      await repairManagedNpmRootOpenClawPeer({
+        npmRoot: params.npmRoot,
+        timeoutMs: params.timeoutMs,
+        logger: params.logger,
+      });
+    } catch (error) {
+      params.logger.warn?.(
+        `Failed to repair managed npm openclaw peer after rollback: ${String(error)}`,
+      );
+    }
   }
   try {
     await relinkOpenClawPeerDependenciesInManagedNpmRoot({
@@ -551,12 +639,50 @@ async function installPluginFromManagedNpmRoot(
   }
   const preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
   const managedOverrides = await readOpenClawManagedNpmRootOverrides();
+  const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
+    npmRoot,
+  });
+  const rollbackFailedManagedNpmInstall = async (error: string): Promise<InstallPluginResult> => {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: params.packageName,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
+    });
+    return { ok: false, error };
+  };
+  const syncManagedPeerDependenciesForInstall = async (options?: {
+    omitUnsupportedManagedOverrides?: boolean;
+  }): Promise<{ ok: true; changed: boolean } | { ok: false; error: string }> => {
+    try {
+      return {
+        ok: true,
+        changed: await syncManagedNpmRootPeerDependencies({
+          npmRoot,
+          managedOverrides,
+          omitUnsupportedManagedOverrides: options?.omitUnsupportedManagedOverrides,
+          timeoutMs,
+        }),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: `npm peer dependency planning failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  };
   await upsertManagedNpmRootDependency({
     npmRoot,
     packageName: params.packageName,
     dependencySpec: params.dependencySpec,
     managedOverrides,
   });
+  const initialPeerSync = await syncManagedPeerDependenciesForInstall();
+  if (!initialPeerSync.ok) {
+    return await rollbackFailedManagedNpmInstall(initialPeerSync.error);
+  }
   const npmInstallArgs = [
     "npm",
     ...createSafeNpmInstallArgs({
@@ -573,15 +699,18 @@ async function installPluginFromManagedNpmRoot(
     timeoutMs: Math.max(timeoutMs, 300_000),
     env: createSafeNpmInstallEnv(process.env, {
       legacyPeerDeps: true,
+      npmConfigCwd: npmRoot,
       packageLock: true,
       quiet: true,
     }),
   };
   let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+  let omitUnsupportedManagedOverrides = false;
   if (install.code !== 0 && isNpmAliasOverrideComparatorError(install)) {
     logger.warn?.(
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
     );
+    omitUnsupportedManagedOverrides = true;
     await upsertManagedNpmRootDependency({
       npmRoot,
       packageName: params.packageName,
@@ -589,6 +718,12 @@ async function installPluginFromManagedNpmRoot(
       managedOverrides,
       omitUnsupportedManagedOverrides: true,
     });
+    const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall({
+      omitUnsupportedManagedOverrides: true,
+    });
+    if (!aliasRetryPeerSync.ok) {
+      return await rollbackFailedManagedNpmInstall(aliasRetryPeerSync.error);
+    }
     install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
   }
   if (install.code !== 0) {
@@ -598,10 +733,64 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
       error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+    };
+  }
+  let settledManagedPeerDependencies = false;
+  for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
+    const peerSync = await syncManagedPeerDependenciesForInstall({
+      omitUnsupportedManagedOverrides,
+    });
+    if (!peerSync.ok) {
+      return await rollbackFailedManagedNpmInstall(peerSync.error);
+    }
+    const syncedPeerDependencies = peerSync.changed;
+    if (!syncedPeerDependencies) {
+      settledManagedPeerDependencies = true;
+      break;
+    }
+    install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+    if (install.code !== 0) {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: params.packageName,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        peerDependencySnapshot: rollbackPeerDependencySnapshot,
+      });
+      return {
+        ok: false,
+        error: `npm install failed after syncing managed peer dependencies: ${install.stderr.trim() || install.stdout.trim()}`,
+      };
+    }
+  }
+  if (!settledManagedPeerDependencies) {
+    const peerSync = await syncManagedPeerDependenciesForInstall({
+      omitUnsupportedManagedOverrides,
+    });
+    if (!peerSync.ok) {
+      return await rollbackFailedManagedNpmInstall(peerSync.error);
+    }
+    settledManagedPeerDependencies = !peerSync.changed;
+  }
+  if (!settledManagedPeerDependencies) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: params.packageName,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
+    });
+    return {
+      ok: false,
+      error:
+        "npm install could not settle managed peer dependencies after 10 sync passes; refusing to leave a partially reconciled plugin dependency tree.",
     };
   }
   if (params.packageName !== "openclaw") {
@@ -626,6 +815,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -639,6 +829,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -659,6 +850,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -677,6 +869,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -706,6 +899,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return result;
   }
@@ -751,6 +945,7 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
   dryRun?: boolean;
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
+  allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
 };
 
@@ -779,6 +974,7 @@ function pickPackageInstallCommonParams(
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
   };
 }
@@ -873,6 +1069,7 @@ async function installPluginDirectoryIntoExtensions(params: {
   dryRun: boolean;
   copyErrorPrefix: string;
   hasDeps: boolean;
+  sourceHardlinks?: "package-manager" | "reject";
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => Promise<void>;
   afterInstall?: (
@@ -921,6 +1118,7 @@ async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
     afterInstall: async (installedDir) => {
@@ -1119,6 +1317,7 @@ async function validatePackagePluginInstallSource(params: {
   packageDir: string;
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
+  allowSourceTypeScriptEntries?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   trustedSourceLinkedOfficialInstall?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
@@ -1228,6 +1427,7 @@ async function validatePackagePluginInstallSource(params: {
     packageDir: params.packageDir,
     extensions,
     manifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
   });
   if (!extensionValidation.ok) {
     return {
@@ -1337,6 +1537,7 @@ export async function installPluginFromInstalledPackageDir(
     packageDir: params.packageDir,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
@@ -1404,6 +1605,7 @@ async function installPluginFromPackageDir(
     packageDir: params.packageDir,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
+    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
@@ -1419,6 +1621,10 @@ async function installPluginFromPackageDir(
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
+  const shouldInstallRuntimeDeps =
+    plugin.hasRuntimeDependencies &&
+    !hasBundleManifest &&
+    params.installPolicyRequest?.kind === "plugin-archive";
 
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
@@ -1433,10 +1639,8 @@ async function installPluginFromPackageDir(
     mode: preparedTarget.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps:
-      plugin.hasRuntimeDependencies &&
-      !hasBundleManifest &&
-      params.installPolicyRequest?.kind === "plugin-archive",
+    hasDeps: shouldInstallRuntimeDeps,
+    sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {

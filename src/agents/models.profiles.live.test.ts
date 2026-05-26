@@ -14,11 +14,7 @@ import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
-import {
-  collectAnthropicApiKeys,
-  isAnthropicBillingError,
-  isAnthropicRateLimitError,
-} from "./live-auth-keys.js";
+import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
@@ -45,14 +41,21 @@ import {
   shouldSkipLiveModelImageProbe,
 } from "./live-model-turn-probes.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
+import {
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
+} from "./live-test-helpers.js";
+import {
+  isLiveBillingDrift,
+  isLiveRateLimitDrift,
+  shouldSkipLiveProviderDrift,
+} from "./live-test-provider-drift.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import {
-  isCloudflareOrHtmlErrorPage,
-  isRateLimitErrorMessage,
-} from "./pi-embedded-helpers/errors.js";
+import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -62,7 +65,6 @@ import {
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
 const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
@@ -250,39 +252,6 @@ describe("isModelNotFoundErrorMessage", () => {
   });
 });
 
-describe("isProviderUnavailableErrorMessage", () => {
-  it("matches raw HTML provider error pages from transient upstreams", () => {
-    expect(
-      isProviderUnavailableErrorMessage(
-        "Error: <html><head><title>Service Unavailable</title></head><body>try again</body></html>",
-      ),
-    ).toBe(true);
-  });
-
-  it("matches status-prefixed Cloudflare HTML pages", () => {
-    expect(
-      isProviderUnavailableErrorMessage(
-        "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
-      ),
-    ).toBe(true);
-  });
-
-  it("matches transient upstream 502 errors", () => {
-    expect(isProviderUnavailableErrorMessage("502 internal server error")).toBe(true);
-    expect(
-      isProviderUnavailableErrorMessage("provider returned error: 502 Internal Server Error"),
-    ).toBe(true);
-  });
-
-  it("matches xAI temporary capacity errors", () => {
-    expect(
-      isProviderUnavailableErrorMessage(
-        "Service temporarily unavailable. The model is at capacity and currently cannot serve this request. Please try again later.",
-      ),
-    ).toBe(true);
-  });
-});
-
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
@@ -306,36 +275,6 @@ function isOpenAiCodexHtmlInterruption(raw: string): boolean {
     /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed) &&
     (/<meta\s+name=["']viewport["']/i.test(trimmed) || /<body\b/i.test(trimmed))
   );
-}
-
-function isModelTimeoutError(raw: string): boolean {
-  return /model call timed out after \d+ms/i.test(raw);
-}
-
-function isProviderUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    isRawHtmlProviderErrorPage(raw) ||
-    isCloudflareOrHtmlErrorPage(raw) ||
-    msg.includes("no allowed providers are available") ||
-    msg.includes("provider unavailable") ||
-    msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google") ||
-    msg.includes("temporarily rate-limited upstream") ||
-    (msg.includes("service temporarily unavailable") && msg.includes("capacity")) ||
-    msg.includes("unable to access non-serverless model") ||
-    msg.includes("create and start a new dedicated endpoint") ||
-    msg.includes("no available capacity was found for the model") ||
-    (msg.includes("502") && msg.includes("internal server error"))
-  );
-}
-
-function isRawHtmlProviderErrorPage(raw: string): boolean {
-  const normalized = raw
-    .trim()
-    .replace(/^error:\s*/i, "")
-    .trim();
-  return /^(?:<!doctype\s+html\b|<html\b)/i.test(normalized) && /<\/html>/i.test(normalized);
 }
 
 function isOllamaUnavailableErrorMessage(raw: string): boolean {
@@ -434,12 +373,12 @@ function resolveLiveModelsJsonTimeoutMs(
   modelsJsonTimeoutRaw?: string,
   setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
 ): number {
-  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 180_000));
 }
 
 describe("resolveLiveModelsJsonTimeoutMs", () => {
   it("defaults models.json preparation to a longer setup timeout", () => {
-    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(180_000);
   });
 
   it("never goes below the shared live setup timeout", () => {
@@ -544,6 +483,34 @@ async function completeSimpleWithTimeout<TApi extends Api>(
     }
   }
 }
+
+function requireToolChoicePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const candidate = payload as { tools?: unknown; tool_choice?: unknown };
+  if (!Array.isArray(candidate.tools) || candidate.tools.length === 0) {
+    return undefined;
+  }
+  return {
+    ...candidate,
+    tool_choice: { type: "function", name: "noop" },
+  };
+}
+
+describe("requireToolChoicePayload", () => {
+  it("requires tool use when a Responses payload has tools", () => {
+    expect(requireToolChoicePayload({ model: "gpt", tools: [{ name: "noop" }] })).toEqual({
+      model: "gpt",
+      tools: [{ name: "noop" }],
+      tool_choice: { type: "function", name: "noop" },
+    });
+  });
+
+  it("leaves payloads without tools unchanged", () => {
+    expect(requireToolChoicePayload({ model: "gpt", tools: [] })).toBeUndefined();
+  });
+});
 
 async function completeOkWithRetry(params: {
   model: Model<Api>;
@@ -899,9 +866,15 @@ describeLive("live models (profile keys)", () => {
           const apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
-          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+          if (
+            requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+            !apiKeyInfo.source.startsWith("profile:")
+          ) {
             skipped.push({
               model: id,
               reason: `non-profile credential source: ${apiKeyInfo.source}`,
@@ -982,6 +955,7 @@ describeLive("live models (profile keys)", () => {
                   apiKey,
                   reasoning: resolveTestReasoning(model),
                   maxTokens: 128,
+                  onPayload: requireToolChoicePayload,
                 },
                 perModelTimeoutMs,
                 `${progressLabel}: tool-only regression first call`,
@@ -1012,6 +986,7 @@ describeLive("live models (profile keys)", () => {
                     apiKey,
                     reasoning: resolveTestReasoning(model),
                     maxTokens: 128,
+                    onPayload: requireToolChoicePayload,
                   },
                   perModelTimeoutMs,
                   `${progressLabel}: tool-only regression retry ${i + 1}`,
@@ -1025,6 +1000,11 @@ describeLive("live models (profile keys)", () => {
                   .trim();
               }
 
+              if (first.stopReason === "error") {
+                throw new Error(
+                  first.errorMessage || "tool-only regression returned error with no message",
+                );
+              }
               expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");
@@ -1167,18 +1147,18 @@ describeLive("live models (profile keys)", () => {
             const message = String(err);
             if (
               model.provider === "anthropic" &&
-              isAnthropicRateLimitError(message) &&
+              isLiveRateLimitDrift(message) &&
               attempt + 1 < attemptMax
             ) {
               logProgress(`${progressLabel}: rate limit, retrying with next key`);
               continue;
             }
-            if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+            if (model.provider === "anthropic" && isLiveRateLimitDrift(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (anthropic rate limit)`);
               break;
             }
-            if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+            if (model.provider === "anthropic" && isLiveBillingDrift(message)) {
               if (attempt + 1 < attemptMax) {
                 logProgress(`${progressLabel}: billing issue, retrying with next key`);
                 continue;
@@ -1269,14 +1249,16 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (codex html interruption)`);
               break;
             }
-            if (allowNotFoundSkip && isModelTimeoutError(message)) {
+            const driftSkip = shouldSkipLiveProviderDrift({
+              error: message,
+              allowAuth: allowNotFoundSkip,
+              allowModelNotFound: false,
+              allowProviderUnavailable: allowNotFoundSkip,
+              allowTimeout: allowNotFoundSkip,
+            });
+            if (driftSkip) {
               skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (timeout)`);
-              break;
-            }
-            if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
-              skipped.push({ model: id, reason: message });
-              logProgress(`${progressLabel}: skip (provider unavailable)`);
+              logProgress(`${progressLabel}: skip (${driftSkip.label})`);
               break;
             }
             if (

@@ -6,6 +6,7 @@ import { handleBashChatCommand } from "./bash-command.js";
 import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { type ConfigSnapshotMock } from "./commands.test-harness.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() =>
@@ -18,11 +19,12 @@ const validateConfigObjectWithPluginsMock = vi.hoisted(() =>
     issues: [],
   })),
 );
-const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
 const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
 const setConfigValueAtPathMock = vi.hoisted(() => vi.fn());
+const unsetConfigValueAtPathMock = vi.hoisted(() => vi.fn(() => true));
 const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
   vi.fn<(...args: never[]) => string | null>(() => null),
 );
@@ -75,13 +77,49 @@ vi.mock("../../config/config-paths.js", () => ({
   getConfigValueAtPath: getConfigValueAtPathMock,
   parseConfigPath: parseConfigPathMock,
   setConfigValueAtPath: setConfigValueAtPathMock,
-  unsetConfigValueAtPath: vi.fn(() => true),
+  unsetConfigValueAtPath: unsetConfigValueAtPathMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: async (params: {
+    afterWrite?: unknown;
+    transform: (
+      currentConfig: OpenClawConfig,
+      context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+    ) =>
+      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
+      | {
+          nextConfig: OpenClawConfig;
+          result?: unknown;
+        };
+  }) => {
+    const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+    const previousHash = snapshot.hash ?? null;
+    const currentConfig = structuredClone(
+      snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+    );
+    const transformed = await params.transform(currentConfig, {
+      snapshot,
+      previousHash,
+      attempt: 0,
+    });
+    const afterWrite = params.afterWrite ?? { mode: "auto" };
+    await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+    return {
+      path: snapshot.path ?? "/tmp/openclaw.json",
+      previousHash,
+      persistedHash: "persisted-hash",
+      snapshot,
+      nextConfig: transformed.nextConfig,
+      result: transformed.result,
+      attempts: 1,
+      afterWrite,
+      followUp: { action: "none" },
+    };
+  },
 }));
 
 vi.mock("../../config/runtime-overrides.js", () => ({
@@ -220,6 +258,7 @@ describe("command gating", () => {
         }
       },
     );
+    unsetConfigValueAtPathMock.mockReturnValue(true);
   });
 
   it("blocks disabled bash", async () => {
@@ -580,5 +619,24 @@ describe("command gating", () => {
       nextConfig: {},
       afterWrite: { mode: "auto" },
     });
+  });
+
+  it("does not write config when /config unset misses", async () => {
+    unsetConfigValueAtPathMock.mockReturnValue(false);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      parsed: { messages: {} },
+    });
+    const params = buildParams("/config unset messages.missing", {
+      commands: { config: true, text: true },
+    } as OpenClawConfig);
+    params.ctx.GatewayClientScopes = ["operator.admin"];
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("No config value found");
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 });

@@ -44,6 +44,7 @@ function run(command, args, cwd, options = {}) {
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      env: options.env ?? process.env,
     });
     let timedOut = false;
     const timeout =
@@ -73,6 +74,24 @@ function run(command, args, cwd, options = {}) {
       reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}`));
     });
   });
+}
+
+const PACKAGE_ARTIFACT_BUILD_STEPS = [
+  {
+    label: "Building OpenClaw package artifacts",
+    command: "node",
+    args: ["scripts/build-all.mjs"],
+  },
+];
+
+export async function buildPackageArtifacts(sourceDir, options = {}) {
+  const runImpl = options.runImpl ?? run;
+  for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
+    console.error(`==> ${step.label}`);
+    await runImpl(step.command, step.args, sourceDir, {
+      env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
+  }
 }
 
 async function runCapture(command, args, cwd) {
@@ -130,10 +149,7 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   if (!options.skipBuild) {
-    console.error("==> Building OpenClaw package artifacts");
-    await run("pnpm", ["build"], sourceDir);
-    console.error("==> Building OpenClaw Control UI artifacts");
-    await run("pnpm", ["ui:build"], sourceDir);
+    await buildPackageArtifacts(sourceDir);
   }
 
   console.error("==> Writing OpenClaw package inventory");
@@ -181,7 +197,9 @@ async function main() {
   process.stdout.write(`${tarball}\n`);
 }
 
-await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

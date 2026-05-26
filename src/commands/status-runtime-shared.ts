@@ -27,6 +27,7 @@ function loadGatewayCallModule() {
 export async function resolveStatusSecurityAudit(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  timeoutMs?: number;
 }) {
   const { runSecurityAudit } = await loadSecurityAuditModule();
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
@@ -37,6 +38,7 @@ export async function resolveStatusSecurityAudit(params: {
     config: params.config,
     sourceConfig: params.sourceConfig,
     deep: false,
+    ...(params.timeoutMs !== undefined ? { deepTimeoutMs: params.timeoutMs } : {}),
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
@@ -100,6 +102,29 @@ export async function resolveStatusGatewayHealthSafe(params: {
     config: params.config,
     ...params.callOverrides,
   }).catch((err) => ({ error: String(err) }));
+}
+
+export async function resolveStatusGatewayDiagnosticsSafe(params: {
+  config: OpenClawConfig;
+  timeoutMs?: number;
+  gatewayReachable: boolean;
+  callOverrides?: {
+    url: string;
+    token?: string;
+    password?: string;
+  };
+}) {
+  if (!params.gatewayReachable) {
+    return null;
+  }
+  const { callGateway } = await loadGatewayCallModule();
+  return await callGateway<unknown>({
+    method: "diagnostics.stability",
+    params: { limit: 1000 },
+    timeoutMs: params.timeoutMs,
+    config: params.config,
+    ...params.callOverrides,
+  }).catch(() => null);
 }
 
 export async function resolveStatusLastHeartbeat(params: {
@@ -198,6 +223,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   resolveSecurityAudit?: (input: {
     config: OpenClawConfig;
     sourceConfig: OpenClawConfig;
+    timeoutMs?: number;
   }) => Promise<StatusSecurityAudit>;
   resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
@@ -209,6 +235,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
     ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
         config: params.config,
         sourceConfig: params.sourceConfig,
+        timeoutMs: params.timeoutMs,
       })
     : undefined;
   const runtimeDetails = await resolveStatusRuntimeDetails({

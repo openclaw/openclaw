@@ -1,3 +1,4 @@
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { clearCredentialsCache, extractGeminiCliCredentials } from "./oauth.credentials.js";
 import {
   buildAuthUrl,
@@ -8,7 +9,7 @@ import {
   waitForLocalCallback,
 } from "./oauth.flow.js";
 import type { GeminiCliOAuthContext, GeminiCliOAuthCredentials } from "./oauth.shared.js";
-import { exchangeCodeForTokens } from "./oauth.token.js";
+import { exchangeCodeForTokens, refreshTokensForGeminiCli } from "./oauth.token.js";
 
 export { clearCredentialsCache, extractGeminiCliCredentials };
 export type { GeminiCliOAuthContext, GeminiCliOAuthCredentials };
@@ -41,10 +42,11 @@ export async function loginGeminiCliOAuth(
   }
 
   ctx.progress.update("Complete sign-in in browser...");
+  ctx.log(`\nOpen this URL in your browser:\n\n${authUrl}\n`);
   try {
     await ctx.openUrl(authUrl);
   } catch {
-    ctx.log(`\nOpen this URL in your browser:\n\n${authUrl}\n`);
+    // The URL is already visible; browser launch is best-effort.
   }
 
   try {
@@ -89,4 +91,15 @@ async function manualFlow(
   }
   ctx.progress.update("Exchanging authorization code for tokens...");
   return exchangeCodeForTokens(parsed.code, verifier);
+}
+
+export async function refreshGeminiCliOAuthToken(
+  credentials: Pick<GeminiCliOAuthCredentials, "refresh" | "email" | "projectId">,
+): Promise<OAuthCredential> {
+  const refreshed = await refreshTokensForGeminiCli(credentials);
+  return {
+    type: "oauth",
+    provider: "google-gemini-cli",
+    ...refreshed,
+  };
 }

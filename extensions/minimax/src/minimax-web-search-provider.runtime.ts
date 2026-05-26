@@ -1,6 +1,7 @@
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
+  readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_SEARCH_COUNT,
@@ -145,7 +146,10 @@ async function runMiniMaxSearch(params: {
         throw await createProviderHttpError(res, "MiniMax Search API error");
       }
 
-      const data = (await res.json()) as MiniMaxSearchResponse;
+      const data = await readProviderJsonResponse<MiniMaxSearchResponse>(
+        res,
+        "MiniMax Search API error",
+      );
 
       if (data.base_resp?.status_code && data.base_resp.status_code !== 0) {
         throw new Error(
@@ -255,10 +259,12 @@ export async function executeMiniMaxWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   MINIMAX_SEARCH_ENDPOINT_GLOBAL,
   MINIMAX_SEARCH_ENDPOINT_CN,
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
+  readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
 } as const;
+export { testing as __testing };

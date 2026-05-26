@@ -12,10 +12,11 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
+  isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
-import { isProtectedSessionMaintenanceEntry } from "./store-maintenance.js";
+import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionDiskBudgetConfig = {
@@ -175,14 +176,16 @@ function resolveReferencedSessionArtifactPaths(params: {
       referenced.add(resolved);
     }
     for (const checkpoint of entry.compactionCheckpoints ?? []) {
-      const checkpointFile = checkpoint.preCompaction.sessionFile?.trim();
-      if (!checkpointFile) {
-        continue;
-      }
-      const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
-      const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
-      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-        referenced.add(resolvedCheckpointPath);
+      const checkpointFiles = [
+        checkpoint.preCompaction.sessionFile?.trim(),
+        checkpoint.postCompaction.sessionFile?.trim(),
+      ].filter((filePath): filePath is string => Boolean(filePath));
+      for (const checkpointFile of checkpointFiles) {
+        const resolvedCheckpointPath = canonicalizePathForComparison(checkpointFile);
+        const relative = path.relative(resolvedSessionsDir, resolvedCheckpointPath);
+        if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+          referenced.add(resolvedCheckpointPath);
+        }
       }
     }
   }
@@ -228,10 +231,23 @@ function isUnreferencedSessionArtifactFile(
   );
 }
 
+// An orphaned `sessions.json.<pid>.<uuid>.tmp` older than this is never a live
+// atomic write (those rename within milliseconds), so it is safe to reclaim
+// regardless of the general unreferenced-artifact age threshold (#56827).
+const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
+
 function isDiskBudgetRemovableSessionFile(
-  file: Pick<SessionsDirFileStat, "canonicalPath" | "name">,
+  file: Pick<SessionsDirFileStat, "canonicalPath" | "name" | "mtimeMs">,
   referencedPaths: ReadonlySet<string>,
+  tempStaleCutoffMs: number,
+  storeBasename: string,
 ): boolean {
+  // Store temps are only removable once clearly stale, even under disk pressure:
+  // `replaceFileAtomic` uses this exact path as the live source before its rename,
+  // so deleting a fresh in-flight temp would make another process's save fail.
+  if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
+    return file.mtimeMs <= tempStaleCutoffMs;
+  }
   return (
     isSessionArchiveArtifactName(file.name) ||
     isUnreferencedSessionArtifactFile(file, referencedPaths)
@@ -294,13 +310,20 @@ export async function pruneUnreferencedSessionArtifacts(params: {
     store: params.store,
   });
   const cutoffMs = Date.now() - olderThanMs;
+  const tempCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
+  const storeBasename = path.basename(params.storePath);
   const removableFiles = files
-    .filter(
-      (file) =>
-        !params.excludeCanonicalPaths?.has(file.canonicalPath) &&
-        file.mtimeMs <= cutoffMs &&
-        isUnreferencedSessionArtifactFile(file, referencedPaths),
-    )
+    .filter((file) => {
+      if (params.excludeCanonicalPaths?.has(file.canonicalPath)) {
+        return false;
+      }
+      // Orphaned store atomic-write temps are reclaimed on their own short
+      // staleness window, independent of the unreferenced-artifact age (#56827).
+      if (isSessionStoreTempArtifactName(file.name, storeBasename)) {
+        return file.mtimeMs <= tempCutoffMs;
+      }
+      return file.mtimeMs <= cutoffMs && isUnreferencedSessionArtifactFile(file, referencedPaths);
+    })
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
 
   let removedFiles = 0;
@@ -332,6 +355,7 @@ export async function enforceSessionDiskBudget(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   activeSessionKey?: string;
+  preserveKeys?: ReadonlySet<string>;
   maintenance: SessionDiskBudgetConfig;
   warnOnly: boolean;
   dryRun?: boolean;
@@ -395,8 +419,12 @@ export async function enforceSessionDiskBudget(params: {
     sessionsDir,
     store: params.store,
   });
+  const tempStaleCutoffMs = Date.now() - SESSION_STORE_TEMP_STALE_MS;
+  const storeBasename = path.basename(params.storePath);
   const removableFileQueue = files
-    .filter((file) => isDiskBudgetRemovableSessionFile(file, referencedPaths))
+    .filter((file) =>
+      isDiskBudgetRemovableSessionFile(file, referencedPaths, tempStaleCutoffMs, storeBasename),
+    )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of removableFileQueue) {
     if (total <= highWaterBytes) {
@@ -438,7 +466,7 @@ export async function enforceSessionDiskBudget(params: {
       if (!entry) {
         continue;
       }
-      if (isProtectedSessionMaintenanceEntry(key, entry)) {
+      if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;

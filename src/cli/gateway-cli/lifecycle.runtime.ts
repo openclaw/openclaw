@@ -1,8 +1,11 @@
 export {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,
@@ -11,6 +14,7 @@ export {
 export {
   resolveGatewayRestartDeferralTimeoutMs,
   consumeGatewayRestartIntentPayloadSync,
+  consumeGatewaySigusr1RestartIntent,
   consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,

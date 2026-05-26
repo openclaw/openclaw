@@ -5,6 +5,8 @@ import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringEntries,
+  sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
@@ -44,7 +46,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
 };
 
 function uniqSorted(values: string[]): string[] {
-  return [...new Set(values.map((v) => v.trim()).filter(Boolean))].toSorted();
+  return sortUniqueStrings(normalizeStringEntries(values));
 }
 
 function resolveCommandsForGroup(group: ArmGroup): string[] {
@@ -230,13 +232,15 @@ async function disarmNow(params: {
   }
 
   if (removed.length > 0 || restored.length > 0) {
-    const next = patchConfigNodeLists(cfg, {
-      allowCommands: uniqSorted([...allow]),
-      denyCommands: uniqSorted([...deny]),
-    });
-    await api.runtime.config.replaceConfigFile({
-      nextConfig: next,
+    await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        const next = patchConfigNodeLists(draft, {
+          allowCommands: uniqSorted([...allow]),
+          denyCommands: uniqSorted([...deny]),
+        });
+        Object.assign(draft, next);
+      },
     });
   }
   await writeArmState(statePath, null);
@@ -428,13 +432,15 @@ export default definePluginEntry({
               removedFromDeny.push(cmd);
             }
           }
-          const next = patchConfigNodeLists(cfg, {
-            allowCommands: uniqSorted([...allowSet]),
-            denyCommands: uniqSorted([...denySet]),
-          });
-          await api.runtime.config.replaceConfigFile({
-            nextConfig: next,
+          await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              const next = patchConfigNodeLists(draft, {
+                allowCommands: uniqSorted([...allowSet]),
+                denyCommands: uniqSorted([...denySet]),
+              });
+              Object.assign(draft, next);
+            },
           });
 
           await writeArmState(statePath, {

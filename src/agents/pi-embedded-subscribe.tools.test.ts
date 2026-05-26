@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
+  buildToolLifecycleErrorResult,
+  extractToolErrorCode,
   extractToolErrorMessage,
   sanitizeToolArgs,
   sanitizeToolResult,
@@ -34,13 +36,88 @@ describe("extractToolErrorMessage", () => {
     ).toBe("SYSTEM_RUN_DENIED: approval required");
   });
 
-  it("uses result text before generic failed status when details omit aggregated output", () => {
+  it("does not promote prose-only denial output ahead of generic failed status", () => {
     expect(
       extractToolErrorMessage({
         content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
         details: { status: "failed" },
       }),
-    ).toBe("SYSTEM_RUN_DENIED: approval required");
+    ).toBe("failed");
+  });
+
+  it("extracts structured tool error codes", () => {
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          error: {
+            code: "SYSTEM_RUN_DENIED",
+            message: "approval required",
+          },
+        },
+      }),
+    ).toBe("SYSTEM_RUN_DENIED");
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          gatewayCode: "UNAVAILABLE",
+          nodeError: {
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_DENIED: approval required",
+          },
+        },
+      }),
+    ).toBe("SYSTEM_RUN_DENIED");
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          nodeError: {
+            code: "INVALID_REQUEST",
+            message: "approval expired",
+          },
+        },
+      }),
+    ).toBe("INVALID_REQUEST");
+  });
+
+  it("does not extract error codes from prose-only tool output", () => {
+    expect(
+      extractToolErrorCode({
+        content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+        details: { status: "failed" },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          error: "SYSTEM_RUN_DENIED: approval required",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves structured codes from thrown gateway errors", () => {
+    const error = new Error("UNAVAILABLE: SYSTEM_RUN_DENIED: approval required") as Error & {
+      gatewayCode?: string;
+      details?: unknown;
+    };
+    error.gatewayCode = "UNAVAILABLE";
+    error.details = {
+      nodeError: {
+        code: "UNAVAILABLE",
+        message: "SYSTEM_RUN_DENIED: approval required",
+      },
+    };
+
+    const result = buildToolLifecycleErrorResult(error);
+
+    expect(extractToolErrorCode(result)).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorMessage(result)).toBe(
+      "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+    );
   });
 });
 
@@ -109,6 +186,23 @@ describe("sanitizeToolResult", () => {
     const text = getTextContent(sanitizeToolResult(result));
     expect(text).not.toContain("sk-or-v1-abcdef0123456789");
     expect(text).toContain("MODEL=gpt-4");
+  });
+
+  it("preserves env placeholders in tool output text", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: 'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"\nTELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"',
+        },
+      ],
+    };
+
+    const text = getTextContent(sanitizeToolResult(result));
+
+    expect(text).toBe(
+      'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"\nTELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"',
+    );
   });
 
   it("redacts Bearer authorization tokens", () => {
@@ -239,6 +333,26 @@ describe("sanitizeToolArgs", () => {
     expect(sanitized.command).not.toContain("sk-or-v1-abcdef0123456789");
     expect(sanitized.flags.join(" ")).not.toContain("sk-1234567890abcdefXYZ");
     expect(sanitized.flags[0]).toBe("--api-key");
+  });
+
+  it("preserves structured env placeholders in args", () => {
+    const args = {
+      DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN:-}",
+      nested: {
+        apiKey: "${OPENAI_API_KEY:-}",
+        GITHUB_TOKEN: "${GITHUB_TOKEN:-literalgithub1234567890}",
+      },
+    };
+    const sanitized = sanitizeToolArgs(args) as {
+      DISCORD_BOT_TOKEN: string;
+      nested: {
+        apiKey: string;
+        GITHUB_TOKEN: string;
+      };
+    };
+    expect(sanitized.DISCORD_BOT_TOKEN).toBe("${DISCORD_BOT_TOKEN:-}");
+    expect(sanitized.nested.apiKey).toBe("${OPEN…Y:-}");
+    expect(sanitized.nested.GITHUB_TOKEN).toBe("${GITHUB_TOKEN:-liter…890}");
   });
 
   it("passes through null/undefined and non-string primitives unchanged", () => {

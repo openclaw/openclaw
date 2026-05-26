@@ -8,6 +8,7 @@ export {
   finalizeTaskRunByRunId,
   getTaskById,
   hasActiveTaskForChildSessionKey,
+  listFreshTasksForOwnerKey,
   listTaskRecords,
   listTasksForFlowId,
   listTasksForOwnerKey,
@@ -28,3 +29,4 @@ export {
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
+export type { TaskRecord } from "./task-registry.types.js";

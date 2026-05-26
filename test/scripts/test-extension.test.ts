@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -13,10 +13,14 @@ import {
   resolveExtensionBatchPlan,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
+import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mjs";
 import {
+  parseExtensionIds,
+  parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
@@ -63,6 +67,20 @@ function expectPositiveIntegerMetric(value: number) {
 }
 
 describe("scripts/test-extension.mjs", () => {
+  let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
+  let balancedExpectedExtensionIds: string[];
+
+  beforeAll(() => {
+    balancedExtensionShards = createExtensionTestShards({
+      cwd: process.cwd(),
+      shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+    });
+    balancedExpectedExtensionIds = listAvailableExtensionIds().filter(
+      (extensionId) =>
+        resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
+    );
+  });
+
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
 
@@ -252,6 +270,25 @@ describe("scripts/test-extension.mjs", () => {
     );
   });
 
+  it("lists available extension ids from git without reading extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      changed: string[];
+      ids: number;
+    }>(`
+      const { detectChangedExtensionIds, listAvailableExtensionIds } =
+        await import("./scripts/lib/changed-extensions.mjs");
+      const ids = listAvailableExtensionIds();
+      const changed = detectChangedExtensionIds([
+        "extensions/slack/src/channel.ts",
+        "src/line/message.test.ts",
+        "extensions/not-real/package.json",
+      ]);
+      return { changed, ids: ids.length };
+    `);
+    expect(payload.changed).toEqual(["line", "slack"]);
+    expect(payload.ids).toBeGreaterThan(0);
+  });
+
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
       base: "refs/heads/openclaw-test-missing-base",
@@ -424,11 +461,33 @@ describe("scripts/test-extension.mjs", () => {
     ]);
   });
 
+  it("counts tracked extension tests without walking extension directories", () => {
+    const payload = expectNoNodeFsScans<{
+      batchTests: number;
+      shards: number;
+      shardTests: number;
+    }>(
+      `
+        const { createExtensionTestShards, resolveExtensionBatchPlan } =
+          await import("./scripts/lib/extension-test-plan.mjs");
+        const extensionIds = ["matrix", "openai", "slack", "telegram"];
+        const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
+        const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
+        return {
+          batchTests: batch.testFileCount,
+          shards: shards.length,
+          shardTests: shards.reduce((total, shard) => total + shard.testFileCount, 0),
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+    expect(payload.batchTests).toBeGreaterThan(0);
+    expect(payload.shards).toBe(2);
+    expect(payload.shardTests).toBe(payload.batchTests);
+  });
+
   it("balances extension test shards by estimated CI cost", () => {
-    const shards = createExtensionTestShards({
-      cwd: process.cwd(),
-      shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-    });
+    const shards = balancedExtensionShards;
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
@@ -437,15 +496,11 @@ describe("scripts/test-extension.mjs", () => {
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
     const uniqueAssigned = [...new Set(assigned)];
-    const expected = listAvailableExtensionIds().filter(
-      (extensionId) =>
-        resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
-    );
 
     expect(uniqueAssigned.toSorted((left, right) => left.localeCompare(right))).toEqual(
-      expected.toSorted((left, right) => left.localeCompare(right)),
+      balancedExpectedExtensionIds.toSorted((left, right) => left.localeCompare(right)),
     );
-    expect(assigned).toHaveLength(expected.length);
+    expect(assigned).toHaveLength(balancedExpectedExtensionIds.length);
 
     const totals = shards.map((shard) => shard.estimatedCost);
     expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);
@@ -536,6 +591,80 @@ describe("scripts/test-extension.mjs", () => {
     expect(resolveExtensionBatchParallelism(3, { OPENCLAW_EXTENSION_BATCH_PARALLEL: "nope" })).toBe(
       1,
     );
+  });
+
+  it("preserves positional Vitest args after the extension batch separator", () => {
+    expect(
+      parseExtensionIds([
+        "telegram",
+        "--coverage",
+        "--",
+        "extensions/telegram/src/index.test.ts",
+        "--run",
+      ]),
+    ).toEqual({
+      extensionIds: ["telegram"],
+      passthroughArgs: ["--coverage", "extensions/telegram/src/index.test.ts", "--run"],
+    });
+  });
+
+  it("places Vitest passthrough options before batch target roots", () => {
+    expect(
+      buildVitestBatchPnpmArgs({
+        args: ["--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+        config: "test/vitest/vitest.extensions.config.ts",
+        targets: ["extensions/codex"],
+      }),
+    ).toEqual([
+      "exec",
+      "vitest",
+      "run",
+      "--config",
+      "test/vitest/vitest.extensions.config.ts",
+      "--exclude",
+      "extensions/codex/src/app-server/run-attempt.test.ts",
+      "extensions/codex",
+    ]);
+  });
+
+  it("expands extension batch roots before applying exact Vitest excludes", async () => {
+    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    await runExtensionBatchPlan(
+      {
+        extensionCount: 1,
+        extensionIds: ["codex"],
+        estimatedCost: 1,
+        hasTests: true,
+        planGroups: [
+          {
+            config: "test/vitest/vitest.extensions.config.ts",
+            estimatedCost: 1,
+            extensionIds: ["codex"],
+            roots: [bundledPluginRoot("codex")],
+            testFileCount: 1,
+          },
+        ],
+        testFileCount: 1,
+      },
+      {
+        runGroup,
+        vitestArgs: ["--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+      },
+    );
+
+    const runParams = requireFirstMockArg<RunGroupParams>(runGroup);
+    expect(runParams.targets).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
+    expect(runParams.targets).toContain("extensions/codex/src/app-server/client.test.ts");
+  });
+
+  it("detects exact Vitest excludes in extension batch args", () => {
+    expect([
+      ...parseExactVitestExcludePaths([
+        "--exclude",
+        "extensions/codex/src/app-server/run-attempt.test.ts",
+      ]),
+    ]).toEqual(["extensions/codex/src/app-server/run-attempt.test.ts"]);
+    expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
   });
 
   it("treats extensions without tests as a no-op by default", () => {

@@ -1,19 +1,25 @@
 import * as fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  formatControlUiSshHint,
   handleReset,
+  moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
   probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  summarizeExistingConfig,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
+  movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
   runCommandWithTimeout: vi.fn<
     (
       argv: string[],
@@ -28,6 +34,10 @@ const mocks = vi.hoisted(() => ({
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   probeGateway: vi.fn(),
+}));
+
+vi.mock("../infra/fs-safe.js", () => ({
+  movePathToTrash: mocks.movePathToTrash,
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -61,6 +71,10 @@ function requireFirstRunCommandCall(): RunCommandCall {
   return call as RunCommandCall;
 }
 
+function expectedTrashSourcePath(targetPath: string): string {
+  return path.join(fs.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
+}
+
 describe("handleReset", () => {
   it("uses active profile paths for destructive reset targets", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
@@ -85,17 +99,96 @@ describe("handleReset", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", profileConfigPath);
 
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    await handleReset("full", workspaceDir, runtime);
-
-    const trashedPaths = mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv[1]);
-    expect(trashedPaths).toEqual([
+    const expectedTrashedPaths = [
       profileConfigPath,
       profileCredentialsDir,
       profileSessionsDir,
       workspaceDir,
-    ]);
-    expect(trashedPaths).not.toContain(defaultCredentialsDir);
+    ].map(expectedTrashSourcePath);
+    const expectedDefaultCredentialsDir = expectedTrashSourcePath(defaultCredentialsDir);
+
+    try {
+      await handleReset("full", workspaceDir, runtime);
+    } finally {
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+
+    const trashedPaths = mocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+    expect(trashedPaths).toEqual(expectedTrashedPaths);
+    expect(trashedPaths).not.toContain(expectedDefaultCredentialsDir);
+  });
+});
+
+describe("moveToTrash", () => {
+  it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
+    const targetPath = path.join(testRoot, "target");
+    fs.mkdirSync(targetPath, { recursive: true });
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+    const sourcePath = expectedTrashSourcePath(targetPath);
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [path.dirname(sourcePath)],
+    });
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(`Moved to Trash: ${targetPath}`);
+  });
+
+  it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
+    const targetPath = path.join(testRoot, "target-link");
+    const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
+    fs.writeFileSync(targetPath, "link placeholder");
+    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
+      isSymbolicLink: () => true,
+    } as fs.Stats);
+    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
+      String(candidate) === path.dirname(targetPath) ? path.dirname(targetPath) : outsideTarget,
+    );
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
+      allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
+    });
+  });
+
+  it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
+    const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
+    const lexicalParent = path.join(testRoot, "state-link");
+    const realParent = path.join(testRoot, "state-real");
+    const targetPath = path.join(lexicalParent, "openclaw.json");
+    const sourcePath = path.join(realParent, "openclaw.json");
+    fs.mkdirSync(lexicalParent, { recursive: true });
+    fs.writeFileSync(targetPath, "{}\n");
+    vi.spyOn(fsPromises, "realpath").mockImplementation(async (candidate) =>
+      String(candidate) === lexicalParent ? realParent : String(candidate),
+    );
+    vi.spyOn(fsPromises, "lstat").mockResolvedValue({
+      isSymbolicLink: () => false,
+    } as fs.Stats);
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    try {
+      await moveToTrash(targetPath, runtime);
+    } finally {
+      fs.rmSync(testRoot, { recursive: true, force: true });
+    }
+
+    expect(mocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
+      allowedRoots: [realParent],
+    });
   });
 });
 
@@ -104,49 +197,57 @@ describe("openUrl", () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "");
     vi.stubEnv("SystemRoot", "C:\\Windows");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("NODE_ENV", "development");
     const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
 
     const url =
       "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost";
 
-    const ok = await openUrl(url);
-    expect(ok).toBe(true);
+    await withMockedPlatform("win32", async () => {
+      const ok = await openUrl(url);
+      expect(ok).toBe(true);
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = requireFirstRunCommandCall();
-    expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
-    expect(options?.timeoutMs).toBe(5_000);
-    expect(options?.windowsVerbatimArguments).toBeUndefined();
-
-    platformSpy.mockRestore();
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
+      const [argv, options] = requireFirstRunCommandCall();
+      expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
+      expect(options?.timeoutMs).toBe(5_000);
+      expect(options?.windowsVerbatimArguments).toBeUndefined();
+    });
   });
 
   it("does not pass non-http URLs to the OS browser handler", async () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    const ok = await openUrl("file://C:/Users/test/secrets.txt");
+    await withMockedPlatform("win32", async () => {
+      const ok = await openUrl("file://C:/Users/test/secrets.txt");
 
-    expect(ok).toBe(false);
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-
-    platformSpy.mockRestore();
+      expect(ok).toBe(false);
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    });
   });
 });
 
 describe("resolveBrowserOpenCommand", () => {
   it("uses trusted rundll32 on win32", async () => {
     vi.stubEnv("SystemRoot", "C:\\Windows");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
 
-    const resolved = await resolveBrowserOpenCommand();
-    expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-    expect(resolved.command).toBe(rundll32);
-    platformSpy.mockRestore();
+    await withMockedPlatform("win32", async () => {
+      const resolved = await resolveBrowserOpenCommand();
+      expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
+      expect(resolved.command).toBe(rundll32);
+    });
+  });
+});
+
+describe("formatControlUiSshHint", () => {
+  it("includes the IPv4-only BYOH note and workaround", () => {
+    const hint = formatControlUiSshHint({ port: 18789 });
+    expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
+    expect(hint).toContain(
+      "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
+    );
   });
 });
 
@@ -203,6 +304,59 @@ describe("probeGatewayReachable", () => {
       ok: false,
       detail: "connect failed: timeout",
     });
+  });
+});
+
+describe("summarizeExistingConfig", () => {
+  it("collapses gateway fields into a friendly remote summary", () => {
+    expect(
+      summarizeExistingConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789");
+  });
+
+  it("uses the port when no remote gateway URL is configured", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("does not show a stale remote URL as active for local gateway mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("surfaces missing remote URL instead of falling back to port for remote mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+        },
+      }),
+    ).toBe("Gateway: remote via LAN (missing remote URL)");
   });
 });
 

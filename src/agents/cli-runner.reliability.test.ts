@@ -4,7 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
@@ -145,8 +145,15 @@ function buildPreparedContext(params?: {
       env: {},
     },
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    hadSessionFile: false,
+    contextEngineConfig: {},
     modelId: "gpt-5.4",
     normalizedModel: "gpt-5.4",
+    contextWindowInfo: {
+      tokens: 150_000,
+      referenceTokens: 200_000,
+      source: "agentContextTokens",
+    },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
@@ -665,13 +672,22 @@ describe("runCliAgent reliability", () => {
       expect(llmOutputEvent.sessionId).toBe("s1");
       expect(llmOutputEvent.provider).toBe("codex-cli");
       expect(llmOutputEvent.model).toBe("gpt-5.4");
+      expect(llmOutputEvent.contextTokenBudget).toBe(150_000);
+      expect(llmOutputEvent.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputEvent.contextWindowReferenceTokens).toBe(200_000);
       expect(llmOutputEvent.assistantTexts).toEqual(["hello from cli"]);
       const lastAssistant = requireRecord(llmOutputEvent.lastAssistant, "last assistant");
       expect(lastAssistant.role).toBe("assistant");
       expect(lastAssistant.content).toEqual([{ type: "text", text: "hello from cli" }]);
       expect(lastAssistant.provider).toBe("codex-cli");
       expect(lastAssistant.model).toBe("gpt-5.4");
-      expect(callArg(hookRunner.runLlmOutput, 0, 1, "llm_output context")).toBeTypeOf("object");
+      const llmOutputContext = requireRecord(
+        callArg(hookRunner.runLlmOutput, 0, 1, "llm_output context"),
+        "llm_output context",
+      );
+      expect(llmOutputContext.contextTokenBudget).toBe(150_000);
+      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
 
       const agentEndEvent = requireRecord(
         callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
@@ -690,8 +706,114 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("waits for agent_end hooks before resolving successful CLI runs", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    let resolved = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it("does not wait for agent_end hooks before resolving channel-backed CLI runs", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const context = buildPreparedContext();
+    let resolved = false;
+    const run = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        messageProvider: "acp",
+        messageChannel: "telegram",
+      },
+    }).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(resolved).toBe(true);
+    });
+
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(callArg(hookRunner.runAgentEnd, 0, 2, "agent_end options")).toEqual({
+      unrefTimeout: true,
+    });
+
+    releaseAgentEnd();
+  });
+
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
     supervisorSpawnMock.mockClear();
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["before_agent_run", "llm_input", "agent_end"].includes(hookName),
@@ -705,7 +827,7 @@ describe("runCliAgent reliability", () => {
         },
       })),
       runLlmInput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile({
@@ -713,7 +835,8 @@ describe("runCliAgent reliability", () => {
     });
 
     try {
-      const result = await runPreparedCliAgent({
+      let resolved = false;
+      const run = runPreparedCliAgent({
         ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
         params: {
           ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
@@ -723,7 +846,19 @@ describe("runCliAgent reliability", () => {
           workspaceDir: dir,
           prompt: "secret prompt",
         },
+      }).then((result) => {
+        resolved = true;
+        return result;
       });
+
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      releaseAgentEnd();
+      const result = await run;
 
       expect(result.payloads).toEqual([
         {
@@ -753,9 +888,7 @@ describe("runCliAgent reliability", () => {
       expect(beforeRunContext.runId).toBe("run-blocked-cli");
       expect(beforeRunContext.agentId).toBe("main");
       expect(beforeRunContext.sessionKey).toBe("agent:main:main");
-      await vi.waitFor(() => {
-        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
-      });
+      expect(resolved).toBe(true);
       const agentEndEvent = requireRecord(
         callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
         "agent_end event",
@@ -785,9 +918,11 @@ describe("runCliAgent reliability", () => {
       );
       expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
       expect(JSON.stringify(blockedLine)).not.toContain("matched secret prompt");
-      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked.blockedBy).toBe("policy-plugin");
-      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).not.toHaveProperty("reason");
-      expect(Object.hasOwn(blockedLine.message.__openclaw, "beforeAgentRunBlocked")).toBe(true);
+      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked.blockedBy).toBe(
+        "policy-plugin",
+      );
+      expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked).not.toHaveProperty("reason");
+      expect(Object.hasOwn(blockedLine.message["__openclaw"], "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -815,18 +950,22 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    const result = await runPreparedCliAgent(buildPreparedContext());
-
-    expect(result.payloads).toBeUndefined();
+    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
+      "CLI backend returned an empty response.",
+    );
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 
   it("emits agent_end with failure details when the CLI run fails", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
       runLlmInput: vi.fn(async () => undefined),
       runLlmOutput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
 
@@ -843,15 +982,22 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
-      "rate limit exceeded",
-    );
+    let settled = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).finally(() => {
+      settled = true;
+    });
 
     await vi.waitFor(() => {
       expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
       expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
       expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
     });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseAgentEnd();
+    await expect(run).rejects.toThrow("rate limit exceeded");
+    expect(settled).toBe(true);
 
     const agentEndEvent = requireRecord(
       callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),

@@ -1,7 +1,7 @@
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import {
-  MIGRATION_SKILL_SELECTION_SKIP,
+  MIGRATION_SKILL_SELECTION_ACCEPT,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
 } from "./selection.js";
@@ -29,11 +29,11 @@ async function runPromptWithKeys(params: {
   const result = promptMigrationSkillSelectionValues({
     message: "Select Codex skills",
     options: [
-      { value: MIGRATION_SKILL_SELECTION_SKIP, label: "Skip for now" },
-      { value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, label: "Toggle all on" },
-      { value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF, label: "Toggle all off" },
+      { value: MIGRATION_SKILL_SELECTION_ACCEPT, label: "Accept recommended" },
       { value: "skill:alpha", label: "alpha" },
       { value: "skill:beta", label: "beta" },
+      { value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, label: "Toggle all on" },
+      { value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF, label: "Toggle all off" },
     ],
     initialValues: params.initialValues,
     required: false,
@@ -70,15 +70,6 @@ async function runPromptWithReturn(params: {
 }
 
 describe("promptMigrationSkillSelectionValues", () => {
-  it("activates Skip for now before submitting with return", async () => {
-    await expect(
-      runPromptWithReturn({
-        cursorAt: MIGRATION_SKILL_SELECTION_SKIP,
-        initialValues: ["skill:alpha", "skill:beta"],
-      }),
-    ).resolves.toEqual([MIGRATION_SKILL_SELECTION_SKIP]);
-  });
-
   it("keeps the cursor item selected when submitting with return", async () => {
     await expect(
       runPromptWithReturn({
@@ -114,5 +105,28 @@ describe("promptMigrationSkillSelectionValues", () => {
         initialValues: [],
       }),
     ).resolves.toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
+  });
+
+  it("submits the initial recommended set when Enter is pressed on Accept recommended", async () => {
+    await expect(
+      runPromptWithReturn({
+        cursorAt: MIGRATION_SKILL_SELECTION_ACCEPT,
+        initialValues: ["skill:alpha", "skill:beta"],
+      }),
+    ).resolves.toEqual(["skill:alpha", "skill:beta"]);
+  });
+
+  it("snaps the visual selection to the recommended set when Space is pressed on Accept recommended", async () => {
+    // Space on Accept overwrites the current selection with `initialValues` so
+    // the visible checkboxes match the recommended set. The Enter that follows
+    // then submits that same set; Accept itself is never persisted in the
+    // submitted value list.
+    await expect(
+      runPromptWithKeys({
+        cursorAt: MIGRATION_SKILL_SELECTION_ACCEPT,
+        initialValues: ["skill:alpha", "skill:beta"],
+        keys: [" ", "\r"],
+      }),
+    ).resolves.toEqual(["skill:alpha", "skill:beta"]);
   });
 });

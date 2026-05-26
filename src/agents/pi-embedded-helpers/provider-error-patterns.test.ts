@@ -210,10 +210,8 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     );
   });
 
-  it("classifies 403 HTML runtime failures as auth_html_403", () => {
-    expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe(
-      "auth_html_403",
-    );
+  it("classifies 403 HTML runtime failures as auth_html", () => {
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe("auth_html");
   });
 
   it("classifies 407 HTML runtime failures as proxy", () => {

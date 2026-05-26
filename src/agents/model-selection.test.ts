@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { migrateLegacyRuntimeModelRef } from "./model-runtime-aliases.js";
 import { isModelKeyAllowedBySet, providerWildcardModelKey } from "./model-selection-shared.js";
 import {
@@ -47,7 +48,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
               "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
-              "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+              "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
               "gemini-3.1-flash": "gemini-3-flash-preview",
               "gemini-3.1-flash-preview": "gemini-3-flash-preview",
             },
@@ -57,7 +58,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
               "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
-              "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+              "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
               "gemini-3.1-flash": "gemini-3-flash-preview",
               "gemini-3.1-flash-preview": "gemini-3-flash-preview",
             },
@@ -329,10 +330,10 @@ describe("model-selection", () => {
         expected: { provider: "google-gemini-cli", model: "gemini-3.1-pro-preview" },
       },
       {
-        name: "normalizes gemini 3.1 flash-lite ids",
+        name: "keeps stable GA gemini 3.1 flash-lite ids",
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",
-        expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
+        expected: { provider: "google", model: "gemini-3.1-flash-lite" },
       },
       {
         name: "normalizes deprecated xai grok 4.20 beta ids",
@@ -404,10 +405,10 @@ describe("model-selection", () => {
         expected: { provider: "openai", model: "gpt-5.4-codex-codex" },
       },
       {
-        name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
+        name: "keeps stable GA gemini 3.1 flash-lite ids for google-vertex",
         variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google-vertex",
-        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
+        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite" },
       },
       {
         name: "normalizes anthropic-cli refs to the Claude CLI provider alias",
@@ -692,6 +693,25 @@ describe("model-selection", () => {
           model: "qwen-max",
         }),
       ).toBe("qwen-dashscope");
+    });
+
+    it("infers provider from raw configured ids when manifest policies add prefixes", () => {
+      const cfg = {
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "llama-fast",
+        }),
+      ).toBe("nvidia");
     });
 
     it("infers Google provider from canonicalized configured provider catalogs", () => {
@@ -1565,9 +1585,8 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
 
-    it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should fall back to the configured default provider and warn if provider is missing for non-alias", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -1584,13 +1603,13 @@ describe("model-selection", () => {
         });
 
         expect(result).toEqual({ provider: "google", model: "claude-3-5-sonnet" });
-        expect(warnSpy).toHaveBeenCalledWith(
-          '[model-selection] Model "claude-3-5-sonnet" specified without provider. Falling back to "google/claude-3-5-sonnet". Please use "google/claude-3-5-sonnet" in your config.',
-        );
+        expect(
+          await warnLogs.findText(
+            'Model "claude-3-5-sonnet" specified without provider. Falling back to "google/claude-3-5-sonnet". Please use "google/claude-3-5-sonnet" in your config.',
+          ),
+        ).toBeDefined();
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 
@@ -1654,6 +1673,34 @@ describe("model-selection", () => {
       }
     });
 
+    it("normalizes bare configured default model strings with manifest policies", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "llama-fast" },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/llama-fast",
+      });
+    });
+
     it("prefers slash-form aliases for configured default models", () => {
       const cfg = {
         agents: {
@@ -1675,6 +1722,52 @@ describe("model-selection", () => {
       });
 
       expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+    });
+
+    it("prefers slash-form aliases before applying auth profile suffixes", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "xiaomi/mimo-v2-pro-mit@work" },
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+    });
+
+    it("prefers exact aliases that contain auth-profile-like suffixes", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "gpt@prod" },
+            models: {
+              "openai/gpt-5.5": {
+                alias: "gpt@prod",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
     });
 
     it("should use default provider/model if config is empty", () => {
@@ -1737,7 +1830,7 @@ describe("model-selection", () => {
 
       expect(result).toEqual({
         provider: "google-vertex",
-        model: "gemini-3.1-flash-lite-preview",
+        model: "gemini-3.1-flash-lite",
       });
     });
 
@@ -1820,9 +1913,8 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
     });
 
-    it("should warn when specified model cannot be resolved and falls back to default", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should warn when specified model cannot be resolved and falls back to default", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -1839,13 +1931,13 @@ describe("model-selection", () => {
         });
 
         expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
-        expect(warnSpy).toHaveBeenCalledWith(
-          '[model-selection] Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
-        );
+        expect(
+          await warnLogs.findText(
+            'Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
+          ),
+        ).toBeDefined();
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 
@@ -2127,6 +2219,38 @@ describe("model-selection", () => {
         }),
       ).toBe("medium");
     });
+
+    it("honors configured provider models that disable reasoning", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "gemma-4-26b-a4b-it",
+                  name: "Gemma 4 26B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "google",
+          model: "gemma-4-26b-a4b-it",
+        }),
+      ).toBe("off");
+    });
   });
 });
 
@@ -2186,7 +2310,7 @@ describe("normalizeModelSelection", () => {
 });
 
 describe("resolveSubagentConfiguredModelSelection", () => {
-  it("prefers the agent primary model over agents.defaults.subagents.model", () => {
+  it("prefers agents.defaults.subagents.model over the agent primary model", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -2203,7 +2327,7 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     } as OpenClawConfig;
 
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
-      "anthropic/claude-opus-4-6",
+      "openai/gpt-5.4",
     );
   });
 
@@ -2227,6 +2351,34 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
     );
+  });
+
+  it("keeps runtime policy attached to the configured default subagent model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: { model: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        list: [{ id: "research", model: "anthropic/claude-opus-4-7" }],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" });
+
+    expect(resolved).toBe("anthropic/claude-sonnet-4-6");
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config: cfg,
+      }),
+    ).toEqual({
+      runtime: "claude-cli",
+      runtimeSource: "model",
+    });
   });
 });
 

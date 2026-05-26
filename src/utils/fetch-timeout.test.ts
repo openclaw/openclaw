@@ -9,7 +9,8 @@ vi.mock("../logging/subsystem.js", () => ({
   })),
 }));
 
-import { buildTimeoutAbortSignal } from "./fetch-timeout.js";
+import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timer-delay.js";
 
 function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
   const call = warn.mock.calls[callIndex];
@@ -142,6 +143,50 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
+  it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing signal"));
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+
+    const result = fetchWithTimeout("https://example.com/v1/audio", {}, 25, fetchFn);
+    const assertion = expect(result).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    await vi.advanceTimersByTimeAsync(25);
+
+    await assertion;
+  });
+
+  it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const response = new Response("ok");
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal?.aborted).toBe(false);
+      return response;
+    });
+
+    try {
+      await expect(
+        fetchWithTimeout("https://example.com/v1/slow", {}, MAX_SAFE_TIMEOUT_DELAY_MS + 1, fetchFn),
+      ).resolves.toBe(response);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy.mock.calls[0]?.[1]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+      expect(timeoutSpy.mock.calls[0]?.[3]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("does not log when a parent signal aborts first", async () => {
     const parent = new AbortController();
     const { signal, cleanup } = buildTimeoutAbortSignal({
@@ -154,6 +199,7 @@ describe("buildTimeoutAbortSignal", () => {
     await vi.advanceTimersByTimeAsync(25);
 
     expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).not.toMatchObject({ name: "TimeoutError" });
     expect(warn).not.toHaveBeenCalled();
 
     cleanup();
@@ -195,5 +241,26 @@ describe("buildTimeoutAbortSignal", () => {
     expect(warn).toHaveBeenCalledTimes(1);
 
     cleanup();
+  });
+
+  it("clamps oversized timeouts before arming Node timers", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const { signal, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS + 1,
+      operation: "unit-test",
+    });
+
+    try {
+      expect(timeoutSpy.mock.calls[0]?.[1]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+      expect(timeoutSpy.mock.calls[0]?.[3]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal?.aborted).toBe(false);
+    } finally {
+      cleanup();
+      timeoutSpy.mockRestore();
+    }
   });
 });

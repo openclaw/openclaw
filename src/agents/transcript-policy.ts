@@ -32,17 +32,26 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+export function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
+}
+
 export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
+  provider?: string | null;
   policy: Pick<
     TranscriptPolicy,
     "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >;
 }): boolean {
+  const hasProviderOwnedSignedThinking =
+    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
   return (
     isAnthropicApi(params.modelApi) &&
     params.policy.validateAnthropicTurns &&
-    params.policy.preserveSignatures &&
+    hasProviderOwnedSignedThinking &&
     !params.policy.dropThinkingBlocks
   );
 }
@@ -143,7 +152,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelDisablesReasoningEffort(params.model)
       ? { dropThinkingBlocks: true }
       : {}),
-    ...(isStrictOpenAiCompatible ? { dropReasoningFromHistory: true } : {}),
+    ...(isStrictOpenAiCompatible
+      ? { dropReasoningFromHistory: !requiresReasoningContentReplay(params.modelId) }
+      : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
@@ -153,6 +164,34 @@ function buildUnownedProviderTransportReplayFallback(params: {
       ? { allowSyntheticToolResults: true }
       : {}),
   };
+}
+
+const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "kimi-for-coding",
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2-thinking",
+  "kimi-k2-thinking-turbo",
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+
+function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  if (!normalized) {
+    return false;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  const candidates = [finalPart];
+  const colonParts = finalPart.split(":").filter(Boolean);
+  if (colonParts.length > 1) {
+    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  return candidates.some((candidate) => REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate));
 }
 
 function mergeTranscriptPolicy(

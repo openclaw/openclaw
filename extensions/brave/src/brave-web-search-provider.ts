@@ -5,6 +5,7 @@ import type {
   WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
 
@@ -61,10 +62,6 @@ const BraveSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function resolveProviderWebSearchPluginConfig(
   config: unknown,
   pluginId: string,
@@ -77,6 +74,28 @@ function resolveProviderWebSearchPluginConfig(
   const entry = isRecord(entries?.[pluginId]) ? entries[pluginId] : undefined;
   const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
   return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
+}
+
+function resolveLegacyTopLevelBraveCredential(
+  config: unknown,
+): { path: string; value: unknown } | undefined {
+  if (!isRecord(config)) {
+    return undefined;
+  }
+  const tools = isRecord(config.tools) ? config.tools : undefined;
+  const web = isRecord(tools?.web) ? tools.web : undefined;
+  const search = isRecord(web?.search) ? web.search : undefined;
+  if (!search || !("apiKey" in search)) {
+    return undefined;
+  }
+  return { path: "tools.web.search.apiKey", value: search.apiKey };
+}
+
+function resolveConfiguredBraveCredential(config: unknown): unknown {
+  return (
+    resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey ??
+    resolveLegacyTopLevelBraveCredential(config)?.value
+  );
 }
 
 function mergeScopedSearchConfig(
@@ -148,6 +167,8 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
       searchCredential: { type: "top-level" },
       configuredCredential: { pluginId: "brave" },
     }),
+    getConfiguredCredentialValue: resolveConfiguredBraveCredential,
+    getConfiguredCredentialFallback: resolveLegacyTopLevelBraveCredential,
     createTool: (ctx) =>
       createBraveToolDefinition(
         mergeScopedSearchConfig(

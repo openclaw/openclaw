@@ -19,7 +19,7 @@ import {
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { testing } from "./compaction-safeguard.js";
 
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
@@ -56,14 +56,14 @@ const {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
-} = __testing;
+} = testing;
 
 beforeEach(() => {
-  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+  testing.setSummarizeInStagesForTest(mockSummarizeInStages);
 });
 
 afterEach(() => {
-  __testing.setSummarizeInStagesForTest();
+  testing.setSummarizeInStagesForTest();
   clearCompactionProviders();
 });
 
@@ -1429,7 +1429,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
     expect(summaryCall.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
     expect(summaryCall.headers?.["Openai-Organization"]).toBe("github-copilot");
-    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
+    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.35.0");
     expect(summaryCall.headers?.["X-Test"]).toBe("1");
     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
@@ -2262,6 +2262,75 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(true);
   });
 
+  it("recovers user and assistant branch turns when compaction preparation has only tool output", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("branch summary with visible turns");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          message: {
+            role: "user",
+            content: "what is the deployment status?",
+            timestamp: now,
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "I will check the deploy." }],
+            timestamp: now + 1,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "status",
+            content: [{ type: "text", text: "deploy green" }],
+            timestamp: now + 2,
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-6",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("branch summary with visible turns");
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(messages.map((message) => requireRecord(message).role)).toEqual(["user", "assistant"]);
+  });
+
   it("continues when messages include real conversation content", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -2282,7 +2351,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
     expect(
-      __testing.isRealConversationMessage(
+      testing.isRealConversationMessage(
         {
           role: "toolResult",
           toolCallId: "t1",
@@ -2303,7 +2372,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     ).toBe(false);
 
     expect(
-      __testing.isRealConversationMessage(
+      testing.isRealConversationMessage(
         {
           role: "toolResult",
           toolCallId: "t2",
@@ -2326,7 +2395,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not treat assistant-only tool calls as meaningful conversation", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       } as AgentMessage),
@@ -2335,14 +2404,14 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("does not treat reasoning-only assistant blocks as meaningful conversation", () => {
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "thinking", thinking: "checking" }],
       } as AgentMessage),
     ).toBe(false);
 
     expect(
-      __testing.hasMeaningfulConversationContent({
+      testing.hasMeaningfulConversationContent({
         role: "assistant",
         content: [{ type: "reasoning", summary: [] }],
       } as unknown as AgentMessage),
@@ -2351,7 +2420,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 
   it("treats markup-wrapped heartbeat tokens as boilerplate", () => {
     expect(
-      __testing.hasMeaningfulConversationContent(
+      testing.hasMeaningfulConversationContent(
         castAgentMessage({
           role: "assistant",
           content: "<b>HEARTBEAT_OK</b>",
@@ -2370,7 +2439,9 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+    await expect(readWorkspaceContextForSummary(["Session Startup", "Red Lines"])).resolves.toBe(
+      "",
+    );
   } finally {
     cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
@@ -2378,6 +2449,83 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
 }
 
 describe("readWorkspaceContextForSummary", () => {
+  async function withWorkspaceSummary(
+    content: string,
+    sectionNames: string[] | undefined,
+  ): Promise<string> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), content);
+      return await readWorkspaceContextForSummary(sectionNames);
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("returns empty when post-compaction sections are not configured", async () => {
+    const result = await withWorkspaceSummary(
+      "## Session Startup\n\nRead AGENTS.md\n\n## Red Lines\n\nBe careful.\n",
+      undefined,
+    );
+
+    expect(result).toBe("");
+  });
+
+  it("returns empty when post-compaction sections are explicitly disabled", async () => {
+    const result = await withWorkspaceSummary("## Session Startup\n\nRead AGENTS.md\n", []);
+
+    expect(result).toBe("");
+  });
+
+  it("injects workspace critical rules only for explicit section opt-in", async () => {
+    const result = await withWorkspaceSummary(
+      "## Session Startup\n\nRead AGENTS.md\n\n## Other\n\nIgnore me.\n",
+      ["Session Startup", "Red Lines"],
+    );
+
+    expect(result).toContain("<workspace-critical-rules>");
+    expect(result).toContain("## Session Startup");
+    expect(result).toContain("Read AGENTS.md");
+    expect(result).not.toContain("Ignore me");
+  });
+
+  it("reads workspace context from the configured workspace instead of process cwd", async () => {
+    const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
+    try {
+      fs.writeFileSync(
+        path.join(processRoot, "AGENTS.md"),
+        "## Session Startup\n\nWrong cwd rules.\n",
+      );
+      fs.writeFileSync(
+        path.join(workspaceRoot, "AGENTS.md"),
+        "## Session Startup\n\nUse the run workspace rules.\n",
+      );
+
+      const result = await readWorkspaceContextForSummary(["Session Startup"], workspaceRoot);
+
+      expect(result).toContain("Use the run workspace rules.");
+      expect(result).not.toContain("Wrong cwd rules.");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(processRoot, { recursive: true, force: true });
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves legacy fallback only for the explicit default section pair", async () => {
+    const result = await withWorkspaceSummary(
+      "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
+      ["Red Lines", "Session Startup"],
+    );
+
+    expect(result).toContain("Do startup things");
+    expect(result).toContain("Be safe");
+  });
+
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {

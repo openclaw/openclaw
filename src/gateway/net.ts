@@ -2,12 +2,14 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import {
-  __resetContainerEnvironmentCacheForTest,
+  resetContainerEnvironmentCacheForTest,
   isContainerEnvironment,
 } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
+  safeNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
@@ -55,6 +57,40 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+export function isLocalInterfaceAddress(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
+
+  for (const entries of Object.values(effectiveSnapshot)) {
+    for (const entry of entries ?? []) {
+      if (normalizeIp(entry.address) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -208,7 +244,7 @@ export function resolveRequestClientIp(
 
 export {
   isContainerEnvironment,
-  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
 };
 
 /**
@@ -440,8 +476,8 @@ function parseHostForAddressChecks(
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - ws:// is secure for loopback, private IP literals, .local, and Tailnet hosts
+ * - optional break-glass: other private-DNS ws:// hostnames can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -473,11 +509,15 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  // Default policy stays strict: loopback-only plaintext ws://.
+  // Default policy allows local/Tailnet endpoints that cannot be given public TLS
+  // without extra operator setup. Public DNS hostnames still require wss://.
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
-  // Optional break-glass for trusted private-network overlays.
+  if (isTrustedPlaintextWebSocketHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
@@ -491,4 +531,12 @@ export function isSecureWebSocketUrl(
     return net.isIP(hostForIpCheck) === 0;
   }
   return false;
+}
+
+function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+  if (isPrivateOrLoopbackHost(hostname)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
+  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
 }

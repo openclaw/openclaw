@@ -4,7 +4,10 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "../../plugin-sdk/provider-stream-shared.js";
+import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createThinkingOnlyFinalTextWrapper,
+} from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   type ProviderRuntimePluginHandle,
@@ -12,6 +15,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -44,8 +48,9 @@ const providerRuntimeDeps = {
 };
 
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
+const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat"]);
 
-export const __testing = {
+export const testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
   ): void {
@@ -112,6 +117,20 @@ export function resolveExtraParams(params: {
     delete merged.textVerbosity;
   }
 
+  const resolvedResponseFormat = resolveAliasedParamValue(
+    [defaultParams, globalParams, agentParams],
+    "response_format",
+    "responseFormat",
+  );
+  if (resolvedResponseFormat !== undefined) {
+    merged.response_format = resolvedResponseFormat;
+    delete merged.responseFormat;
+  }
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [defaultParams, globalParams, agentParams],
+  });
+
   const resolvedCachedContent = resolveAliasedParamValue(
     [defaultParams, globalParams, agentParams],
     "cached_content",
@@ -133,6 +152,11 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
+  topP?: number;
+  responseFormat?: Record<string, unknown>;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
 };
 export type SupportedTransport = AgentRuntimeTransport;
 
@@ -192,7 +216,8 @@ function resolvePreparedExtraParamsCacheKey(params: {
     workspaceDir: params.workspaceDir ?? "",
     thinkingLevel: params.thinkingLevel ?? "",
     resolvedTransport: params.resolvedTransport ?? "",
-    extraParamsOverride: params.extraParamsOverride ?? null,
+    extraParamsOverride:
+      stripRequestScopedExtraParams(sanitizeExtraParamsRecord(params.extraParamsOverride)) ?? null,
     resolvedExtraParams: params.resolvedExtraParams ?? null,
     model: fingerprintPreparedExtraParamsModel(params.model),
   });
@@ -222,9 +247,11 @@ export function resolvePreparedExtraParams(params: {
     });
   const override =
     params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? sanitizeExtraParamsRecord(
-          Object.fromEntries(
-            Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+      ? stripRequestScopedExtraParams(
+          sanitizeExtraParamsRecord(
+            Object.fromEntries(
+              Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+            ),
           ),
         )
       : undefined;
@@ -232,6 +259,10 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [resolvedExtraParams, override],
+  });
   const resolvedCachedContent = resolveAliasedParamValue(
     [resolvedExtraParams, override],
     "cached_content",
@@ -286,6 +317,10 @@ export function resolvePreparedExtraParams(params: {
     },
   })?.patch;
   const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  canonicalizeMaxTokensParam({
+    merged: result,
+    sources: [prepared, transportPatch ?? undefined],
+  });
   if (cacheKey) {
     let bucket = preparedExtraParamsCache.get(cfg!);
     if (!bucket) {
@@ -310,6 +345,24 @@ function sanitizeExtraParamsRecord(
   );
 }
 
+function stripRequestScopedExtraParams(
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const filtered = Object.fromEntries(
+    Object.entries(value).filter(([key]) => !REQUEST_SCOPED_EXTRA_PARAM_KEYS.has(key)),
+  );
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
+function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
+}
 function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
   provider: string;
   modelId: string;
@@ -379,8 +432,24 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
+  if (typeof extraParams.topP === "number") {
+    streamParams.topP = extraParams.topP;
+  }
+  const maxTokens = resolveMaxTokensParam(extraParams);
+  if (maxTokens !== undefined) {
+    streamParams.maxTokens = maxTokens;
+  }
+  const resolvedResponseFormat = resolveAliasedParamValue(
+    [extraParams],
+    "response_format",
+    "responseFormat",
+  );
+  if (
+    resolvedResponseFormat &&
+    typeof resolvedResponseFormat === "object" &&
+    !Array.isArray(resolvedResponseFormat)
+  ) {
+    streamParams.responseFormat = resolvedResponseFormat as Record<string, unknown>;
   }
   const transport = resolveSupportedTransport(extraParams.transport);
   if (transport) {
@@ -401,6 +470,30 @@ function createStreamFnWithExtraParams(
   if (typeof cachedContent === "string" && cachedContent.trim()) {
     streamParams.cachedContent = cachedContent.trim();
   }
+
+  // Resolve sampling / repetition params and add to streamParams
+  // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
+  // Resolve aliased params: camelCase (runtime/request) checked first so
+  // per-request gateway overrides take priority over configured snake_case values.
+  const resolvedFrequencyPenalty = resolveAliasedParamValueFromKeys(
+    [extraParams],
+    ["frequencyPenalty", "frequency_penalty"],
+  );
+  const resolvedPresencePenalty = resolveAliasedParamValueFromKeys(
+    [extraParams],
+    ["presencePenalty", "presence_penalty"],
+  );
+  const resolvedSeed = extraParams.seed;
+  if (typeof resolvedFrequencyPenalty === "number") {
+    streamParams.frequencyPenalty = resolvedFrequencyPenalty;
+  }
+  if (typeof resolvedPresencePenalty === "number") {
+    streamParams.presencePenalty = resolvedPresencePenalty;
+  }
+  if (typeof resolvedSeed === "number") {
+    streamParams.seed = resolvedSeed;
+  }
+
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
     provider,
@@ -422,9 +515,11 @@ function createStreamFnWithExtraParams(
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
     );
-    if (Object.keys(streamParams).length === 0 && !cacheRetention) {
+    const hasStreamParams = Object.keys(streamParams).length > 0 || cacheRetention;
+    if (!hasStreamParams) {
       return underlying(callModel, context, options);
     }
+
     return underlying(callModel, context, {
       ...streamParams,
       ...(cacheRetention ? { cacheRetention } : {}),
@@ -657,9 +752,14 @@ type ApplyExtraParamsContext = {
 };
 
 function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
+  const baseExtraParams =
+    ctx.override && hasRequestScopedExtraParams(ctx.override)
+      ? stripRequestScopedExtraParams(ctx.effectiveExtraParams)
+      : ctx.effectiveExtraParams;
+  const streamParams = ctx.override ? { ...baseExtraParams, ...ctx.override } : baseExtraParams;
   const wrappedStreamFn = createStreamFnWithExtraParams(
     ctx.agent.streamFn,
-    ctx.effectiveExtraParams,
+    streamParams,
     ctx.provider,
     ctx.model,
   );
@@ -696,6 +796,23 @@ function applyPostPluginStreamWrappers(
       baseStreamFn: ctx.agent.streamFn,
       thinkingLevel: ctx.thinkingLevel,
       shouldPatchModel: isDeepSeekV4OpenAICompatibleModel,
+    });
+
+    // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
+    // format. When MiMo is reached through an unowned proxy/custom provider
+    // (e.g. `xiaomi-orbit` pointed at token-plan-*.xiaomimimo.com), the bundled
+    // xiaomi plugin's wrapStreamFn does not fire, so apply the shared wrapper
+    // here as a fallback so multi-turn tool calls succeed.
+    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      thinkingLevel: ctx.thinkingLevel,
+      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
+    });
+    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
+    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
+    ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
     });
 
     // Guard Google-family payloads against invalid negative thinking budgets
@@ -777,6 +894,35 @@ function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): bool
   );
 }
 
+const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
+
+function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
+  );
+}
+
+function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+  model: Parameters<StreamFn>[0],
+): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
+  );
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
@@ -805,8 +951,10 @@ export function applyExtraParamsToAgent(
   });
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
-      ? Object.fromEntries(
-          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+      ? sanitizeExtraParamsRecord(
+          Object.fromEntries(
+            Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+          ),
         )
       : undefined;
   const effectiveExtraParams =
@@ -867,3 +1015,4 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
+export { testing as __testing };

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
@@ -11,6 +13,16 @@ type SerializedStoreCacheEntry = {
   configJson?: string;
   stateJson?: string;
   needsSplitMigration: boolean;
+};
+
+export type PreservedCronConfigJob = {
+  index: number;
+  job: Record<string, unknown>;
+};
+
+export type LoadedCronStore = {
+  store: CronStoreFile;
+  configJobs: Array<Record<string, unknown>>;
 };
 
 const serializedStoreCache = new Map<string, SerializedStoreCacheEntry>();
@@ -50,13 +62,82 @@ type CronStateFile = {
   jobs: Record<string, CronStateFileEntry>;
 };
 
-function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
+function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
+  const rawJobs = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.jobs)
+      ? parsed.jobs
+      : [];
+  return {
+    version: 1,
+    jobs: rawJobs.filter(isRecord) as never as CronStoreFile["jobs"],
+  };
+}
+
+function cloneConfigJobs(jobs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return jobs.map((job) => structuredClone(job));
+}
+
+function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
+  const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
+  return { ...rest, state: {} };
+}
+
+function persistedJobId(job: Record<string, unknown>): string | null {
+  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId) ?? null;
+}
+
+function mergePreservedConfigJobs(
+  jobs: Array<Record<string, unknown>>,
+  preservedConfigJobs: PreservedCronConfigJob[] | undefined,
+): Array<Record<string, unknown>> {
+  if (!preservedConfigJobs?.length) {
+    return jobs;
+  }
+
+  const occupiedIds = new Set<string>();
+  for (const job of jobs) {
+    const id = persistedJobId(job);
+    if (id) {
+      occupiedIds.add(id);
+    }
+  }
+
+  const seenPreservedIds = new Set<string>();
+  const preserved = preservedConfigJobs
+    .filter((entry) => {
+      const id = persistedJobId(entry.job);
+      if (!id) {
+        return true;
+      }
+      if (occupiedIds.has(id) || seenPreservedIds.has(id)) {
+        return false;
+      }
+      seenPreservedIds.add(id);
+      return true;
+    })
+    .toSorted((a, b) => a.index - b.index);
+
+  if (preserved.length === 0) {
+    return jobs;
+  }
+
+  const merged = jobs.slice();
+  for (const entry of preserved) {
+    const index = Math.max(0, Math.min(entry.index, merged.length));
+    merged.splice(index, 0, { ...entry.job });
+  }
+  return merged;
+}
+
+function stripRuntimeOnlyCronFields(
+  store: CronStoreFile,
+  preservedConfigJobs?: PreservedCronConfigJob[],
+): unknown {
+  const jobs = store.jobs.map(stripJobRuntimeFields);
   return {
     version: store.version,
-    jobs: store.jobs.map((job) => {
-      const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
-      return { ...rest, state: {} };
-    }),
+    jobs: mergePreservedConfigJobs(jobs, preservedConfigJobs),
   };
 }
 
@@ -152,17 +233,12 @@ function loadStateFileSync(statePath: string): CronStateFile | null {
 
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
   return jobs.some(
-    (job) =>
-      job != null &&
-      job.state !== undefined &&
-      typeof job.state === "object" &&
-      job.state !== null &&
-      Object.keys(job.state as Record<string, unknown>).length > 0,
+    (job) => job != null && isRecord(job.state) && Object.keys(job.state).length > 0,
   );
 }
 
 function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
-  if (!job.state || typeof job.state !== "object") {
+  if (!isRecord(job.state)) {
     job.state = {} as never;
   }
 }
@@ -186,9 +262,13 @@ function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unk
     : Date.now();
 }
 
-function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStateFileEntry): void {
+function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown): void {
+  if (!isRecord(entry)) {
+    backfillMissingRuntimeFields(job);
+    return;
+  }
   job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-  job.state = (entry.state ?? {}) as never;
+  job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
   if (
     typeof entry.scheduleIdentity === "string" &&
     entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
@@ -198,7 +278,7 @@ function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStat
   }
 }
 
-export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
+export async function loadCronStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
     let parsed: unknown;
@@ -209,21 +289,14 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
         cause: err,
       });
     }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
+    const store = normalizeCronStoreFile(parsed);
+    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
+    const configJobs = cloneConfigJobs(jobs);
 
     // Load state file and merge.
     const statePath = resolveStatePath(storePath);
     const stateFile = await loadStateFile(statePath);
-    const hasLegacyInlineState =
-      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
+    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
 
     if (stateFile) {
       // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
@@ -256,14 +329,18 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       needsSplitMigration: hasLegacyInlineState,
     });
 
-    return store;
+    return { store, configJobs };
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
-      return { version: 1, jobs: [] };
+      return { store: { version: 1, jobs: [] }, configJobs: [] };
     }
     throw err;
   }
+}
+
+export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
+  return (await loadCronStoreWithConfigJobs(storePath)).store;
 }
 
 export function loadCronStoreSync(storePath: string): CronStoreFile {
@@ -277,19 +354,11 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
         cause: err,
       });
     }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
+    const store = normalizeCronStoreFile(parsed);
+    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
 
     const stateFile = loadStateFileSync(resolveStatePath(storePath));
-    const hasLegacyInlineState =
-      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
+    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
 
     if (stateFile) {
       for (const job of store.jobs) {
@@ -322,6 +391,7 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
 type SaveCronStoreOptions = {
   skipBackup?: boolean;
   stateOnly?: boolean;
+  preservedConfigJobs?: PreservedCronConfigJob[];
 };
 
 async function setSecureFileMode(filePath: string): Promise<void> {
@@ -365,7 +435,11 @@ export async function saveCronStore(
   opts?: SaveCronStoreOptions,
 ) {
   const stateOnly = opts?.stateOnly === true;
-  const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
+  const configJson = JSON.stringify(
+    stripRuntimeOnlyCronFields(store, opts?.preservedConfigJobs),
+    null,
+    2,
+  );
   const stateFile = extractStateFile(store);
   const stateJson = JSON.stringify(stateFile, null, 2);
 

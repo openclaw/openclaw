@@ -10,6 +10,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -70,6 +71,43 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
+function shouldPreserveSessionAuthProfileOverride(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  currentProvider: string;
+  provider: string;
+}): boolean {
+  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileOverride) {
+    return false;
+  }
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (!provider) {
+    return false;
+  }
+  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
+    const candidate = normalizeOptionalLowercaseString(rawProvider);
+    if (!candidate) {
+      return false;
+    }
+    return (
+      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
+      resolveProviderIdForAuth(provider, { config: params.cfg })
+    );
+  };
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return resolvesToTargetProvider(params.currentProvider);
+  }
+  const profileProvider = normalizeOptionalLowercaseString(
+    profileOverride.slice(0, delimiterIndex),
+  );
+  if (!profileProvider) {
+    return false;
+  }
+  return resolvesToTargetProvider(profileProvider);
+}
+
 function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
@@ -119,12 +157,21 @@ export async function applySessionsPatchToStore(params: {
   };
 
   const existing = store[storeKey];
-  const next: SessionEntry = existing
+  const next: SessionEntry = existing?.sessionId
     ? {
         ...existing,
         updatedAt: Math.max(existing.updatedAt ?? 0, now),
       }
-    : { sessionId: randomUUID(), updatedAt: now };
+    : {
+        ...existing,
+        sessionId: randomUUID(),
+        sessionFile: undefined,
+        updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      };
+  if (existing && !existing.sessionId) {
+    delete next.label;
+    delete next.displayName;
+  }
 
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;
@@ -452,6 +499,12 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+          entry: next,
+          provider: resolvedDefault.provider,
+        }),
         markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
@@ -492,6 +545,12 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+          entry: next,
+          provider: resolved.ref.provider,
+        }),
         markLiveSwitchPending: true,
       });
     }

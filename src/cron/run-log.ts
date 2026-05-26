@@ -10,10 +10,12 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronFailureNotificationDelivery,
   CronRunDiagnostics,
   CronRunStatus,
   CronRunTelemetry,
@@ -30,6 +32,7 @@ export type CronRunLogEntry = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
@@ -46,6 +49,7 @@ type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
+  runId?: string;
   status?: CronRunLogStatusFilter;
   statuses?: CronRunStatus[];
   deliveryStatus?: CronDeliveryStatus;
@@ -143,10 +147,7 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   }
 
   const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
   await privateFileStore(path.dirname(filePath)).writeText(
     path.basename(filePath),
@@ -238,7 +239,7 @@ function normalizeRunStatuses(opts?: {
         status === "ok" || status === "error" || status === "skipped",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   const status = normalizeRunStatusFilter(opts?.status);
@@ -261,7 +262,7 @@ function normalizeDeliveryStatuses(opts?: {
         status === "not-requested",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   if (
@@ -350,6 +351,29 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
       if (typeof obj.deliveryError === "string") {
         entry.deliveryError = obj.deliveryError;
       }
+      if (obj.failureNotificationDelivery && typeof obj.failureNotificationDelivery === "object") {
+        const failureNotificationDelivery = obj.failureNotificationDelivery as {
+          delivered?: unknown;
+          status?: unknown;
+          error?: unknown;
+        };
+        if (
+          failureNotificationDelivery.status === "delivered" ||
+          failureNotificationDelivery.status === "not-delivered" ||
+          failureNotificationDelivery.status === "unknown" ||
+          failureNotificationDelivery.status === "not-requested"
+        ) {
+          entry.failureNotificationDelivery = {
+            status: failureNotificationDelivery.status,
+            ...(typeof failureNotificationDelivery.delivered === "boolean"
+              ? { delivered: failureNotificationDelivery.delivered }
+              : {}),
+            ...(typeof failureNotificationDelivery.error === "string"
+              ? { error: failureNotificationDelivery.error }
+              : {}),
+          };
+        }
+      }
       if (obj.delivery && typeof obj.delivery === "object") {
         entry.delivery = obj.delivery;
       }
@@ -367,9 +391,15 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
   return parsed;
 }
 
+function runIdMatches(entry: CronRunLogEntry, runId?: string): boolean {
+  const normalized = normalizeOptionalString(runId);
+  return !normalized || entry.runId === normalized;
+}
+
 function filterRunLogEntries(
   entries: CronRunLogEntry[],
   opts: {
+    runId?: string;
     statuses: CronRunStatus[] | null;
     deliveryStatuses: CronDeliveryStatus[] | null;
     query: string;
@@ -377,6 +407,9 @@ function filterRunLogEntries(
   },
 ): CronRunLogEntry[] {
   return entries.filter((entry) => {
+    if (!runIdMatches(entry, opts.runId)) {
+      return false;
+    }
     if (opts.statuses && (!entry.status || !opts.statuses.includes(entry.status))) {
       return false;
     }
@@ -406,6 +439,7 @@ export async function readCronRunLogEntriesPage(
   const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
   const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
   const filtered = filterRunLogEntries(all, {
+    runId: opts?.runId,
     statuses,
     deliveryStatuses,
     query,
@@ -492,6 +526,7 @@ export async function readCronRunLogEntriesPageAll(
   );
   const all = chunks.flat();
   const filtered = filterRunLogEntries(all, {
+    runId: opts.runId,
     statuses,
     deliveryStatuses,
     query,

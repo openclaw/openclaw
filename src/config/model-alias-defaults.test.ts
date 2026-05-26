@@ -122,7 +122,7 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
       "gemini-flash",
     );
-    expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite-preview"]?.alias).toBe(
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite"]?.alias).toBe(
       "gemini-flash-lite",
     );
   });
@@ -162,6 +162,35 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+  });
+
+  it("normalizes retired Gemini per-agent model refs", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": {},
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
     });
   });
 

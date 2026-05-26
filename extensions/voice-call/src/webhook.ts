@@ -3,7 +3,10 @@ import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
   WEBHOOK_BODY_READ_DEFAULTS,
@@ -100,12 +103,8 @@ function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void
   };
 }
 
-function buildRequestUrl(
-  requestUrl: string | undefined,
-  requestHost: string | undefined,
-  fallbackHost = "localhost",
-): URL {
-  return new URL(requestUrl ?? "/", `http://${requestHost ?? fallbackHost}`);
+function buildRequestUrl(requestUrl: string | undefined): URL {
+  return new URL(requestUrl ?? "/", "http://localhost");
 }
 
 function normalizeProxyIp(value: string | undefined): string | undefined {
@@ -135,10 +134,7 @@ function resolveForwardedClientIp(
   );
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
-    const forwardedIps = forwardedFor
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
+    const forwardedIps = normalizeStringEntries(forwardedFor.split(","));
     if (forwardedIps.length > 0) {
       if (normalizedTrustedProxyIps.size === 0) {
         return forwardedIps[0];
@@ -603,7 +599,7 @@ export class VoiceCallWebhookServer {
 
   private getUpgradePathname(request: http.IncomingMessage): string | null {
     try {
-      return buildRequestUrl(request.url, request.headers.host).pathname;
+      return buildRequestUrl(request.url).pathname;
     } catch {
       return null;
     }
@@ -644,7 +640,7 @@ export class VoiceCallWebhookServer {
     req: http.IncomingMessage,
     webhookPath: string,
   ): Promise<WebhookResponsePayload> {
-    const url = buildRequestUrl(req.url, req.headers.host);
+    const url = buildRequestUrl(req.url);
 
     if (url.pathname === "/voice/hold-music") {
       return {
@@ -800,7 +796,7 @@ export class VoiceCallWebhookServer {
 
   private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
     try {
-      const pathname = buildRequestUrl(req.url, req.headers.host).pathname;
+      const pathname = buildRequestUrl(req.url).pathname;
       const pattern = this.realtimeHandler?.getStreamPathPattern();
       return Boolean(pattern && pathname.startsWith(pattern));
     } catch {
