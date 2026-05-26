@@ -14,6 +14,7 @@ describe("provider-usage.shared", () => {
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
     { value: "minimax-portal-cn", expected: "minimax" },
+    { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
     { value: "unknown-provider", expected: undefined },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },
