@@ -1,5 +1,5 @@
 // Covers task registry store persistence, in-memory behavior, and observer notifications.
-import { statSync } from "node:fs";
+import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1115,5 +1115,91 @@ describe("task-registry store runtime", () => {
     expect(backing.deliveryStates.has("task-restored")).toBe(false);
     expect(deleteTask).not.toHaveBeenCalled();
     expect(deleteDeliveryState).not.toHaveBeenCalled();
+  });
+
+  it("recovers from corrupted sqlite by quarantining and recreating fresh database", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-corrupt-" },
+      async () => {
+        const sqlitePath = resolveOpenClawStateSqlitePath(process.env);
+        openOpenClawStateDatabase();
+        closeOpenClawStateDatabase();
+        writeFileSync(sqlitePath, Buffer.from("not a valid sqlite database file at all"));
+
+        resetTaskRegistryForTests({ persist: false });
+
+        // Gateway should recover: fresh empty database created
+        const snapshot = getTaskRegistrySnapshot();
+        expect(snapshot.tasks.length).toBe(0);
+
+        const dirEntries = readdirSync(path.dirname(sqlitePath));
+        const quarantineFiles = dirEntries.filter((name) =>
+          name.startsWith("openclaw.sqlite.corrupted."),
+        );
+        expect(quarantineFiles.length).toBe(1);
+        expect(existsSync(sqlitePath)).toBe(true);
+        const created = createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          sourceId: "job-post-recovery",
+          runId: "run-post-recovery",
+          task: "Post-recovery task",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+
+        const restored = findTaskByRunId("run-post-recovery");
+        expect(restored?.taskId).toBe(created.taskId);
+        expect(restored?.task).toBe("Post-recovery task");
+      },
+    );
+  });
+
+  it("recovers from corrupted sqlite that also has WAL sidecar files", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-corrupt-wal-" },
+      async () => {
+        const sqlitePath = resolveOpenClawStateSqlitePath(process.env);
+        openOpenClawStateDatabase();
+        closeOpenClawStateDatabase();
+        writeFileSync(sqlitePath, Buffer.from("corrupted main database"));
+        writeFileSync(`${sqlitePath}-wal`, Buffer.from("corrupted wal"));
+        writeFileSync(`${sqlitePath}-shm`, Buffer.from("corrupted shm"));
+
+        resetTaskRegistryForTests({ persist: false });
+
+        // Should recover with fresh database
+        const snapshot = getTaskRegistrySnapshot();
+        expect(snapshot.tasks.length).toBe(0);
+
+        const dirEntries = readdirSync(path.dirname(sqlitePath));
+        const quarantineFiles = dirEntries.filter((name) =>
+          name.startsWith("openclaw.sqlite.corrupted."),
+        );
+        expect(
+          quarantineFiles.some((name) => !name.endsWith("-wal") && !name.endsWith("-shm")),
+        ).toBe(true);
+
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          runId: "run-post-wal-recovery",
+          task: "Post-WAL-recovery task",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+
+        const restored = findTaskByRunId("run-post-wal-recovery");
+        expect(restored?.task).toBe("Post-WAL-recovery task");
+      },
+    );
   });
 });
