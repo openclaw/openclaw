@@ -1439,12 +1439,12 @@ describe("channel-broker plugin", () => {
     expect(dmRoute).toMatchObject({
       chatType: "direct",
       peer: { kind: "direct", id: "slack:U12345678" },
-      to: "slack:direct%3AU12345678",
+      to: "broker:slack:U12345678?conversationType=direct",
     });
     expect(threadRoute).toMatchObject({
       chatType: "channel",
       peer: { kind: "channel", id: "slack:C12345678" },
-      to: "slack:C12345678?threadId=1716500000.000001",
+      to: "broker:slack:C12345678?conversationType=channel&threadId=1716500000.000001",
       threadId: "1716500000.000001",
     });
   });
