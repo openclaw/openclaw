@@ -289,36 +289,6 @@ function deleteTaskRowsWithDeliveryState(db: DatabaseSync, taskId: string): void
   executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
 }
 
-function isSqliteCorruptionError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const msg = error.message?.toLowerCase() ?? "";
-  const code = (error as NodeJS.ErrnoException).code ?? "";
-  return (
-    code === "SQLITE_CORRUPT" ||
-    msg.includes("malformed") ||
-    msg.includes("corrupt") ||
-    msg.includes("database disk image") ||
-    msg.includes("file is not a database")
-  );
-}
-
-function quarantineCorruptedDatabase(pathname: string): void {
-  const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
-  try {
-    renameSync(pathname, quarantinePath);
-    for (const suffix of ["-shm", "-wal"]) {
-      const sidecar = `${pathname}${suffix}`;
-      if (existsSync(sidecar)) {
-        renameSync(sidecar, `${quarantinePath}${suffix}`);
-      }
-    }
-  } catch {
-    // best-effort rename; if it fails, the fresh open will overwrite
-  }
-}
-
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const database = openOpenClawStateDatabase();
   const pathname = database.path;
