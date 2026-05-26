@@ -42,6 +42,14 @@ export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
+
+/**
+ * Yield control to the event loop so other sessions can make progress
+ * while lock contention callbacks run synchronous I/O.
+ */
+function yieldEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
 // A payload-less lock can be left behind if shutdown lands between open("wx")
 // and the owner metadata write. Keep the grace short so 10s callers recover.
 const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
@@ -768,6 +776,9 @@ export async function acquireSessionWriteLock(params: {
           return lockPayload as Record<string, unknown>;
         },
         shouldReclaim: async ({ payload, nowMs, heldByThisProcess }) => {
+          // Yield to the event loop before synchronous process inspection
+          // to prevent lock contention retries from starving other sessions.
+          await yieldEventLoop();
           const inspected = inspectLockPayloadForSession({
             payload: payload as LockFilePayload | null,
             staleMs,
@@ -780,6 +791,7 @@ export async function acquireSessionWriteLock(params: {
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
         shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
+          await yieldEventLoop();
           const nowMs = Date.now();
           const heldByThisProcess = sessionLockHeldByThisProcess(normalizedTargetPath);
           const inspected = inspectLockPayloadForSession({
