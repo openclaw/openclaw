@@ -31,6 +31,12 @@ function cleanupFailedMessage(note?: string): string {
   return note ? `${prefix} Latest note: ${note}` : prefix;
 }
 
+export function leaseNotScheduledMessage(reason?: string, note?: string): string {
+  const suffix = reason ? ` (${reason})` : "";
+  const prefix = `Could not schedule the next goal continuation${suffix}; waiting for approval.`;
+  return note ? `${prefix} Latest note: ${note}` : prefix;
+}
+
 async function clearGoalContinuationLease(params: {
   workflow: GoalWorkflowDeps;
   session: { sessionKey?: string };
@@ -96,10 +102,19 @@ export async function applyGoalStatus(params: {
     delayMs: GOAL_CONTINUATION_DELAY_MS,
     deliveryMode: "announce",
   });
+  if (!lease.scheduled) {
+    const next = updateGoalState(params.state, {
+      status: "waiting_approval",
+      note: leaseNotScheduledMessage(lease.reason, params.note),
+      continuationScheduled: false,
+    });
+    await params.store.write(next);
+    return next;
+  }
   const next = updateGoalState(params.state, {
     status: "continue",
     note: params.note,
-    continuationScheduled: lease.scheduled,
+    continuationScheduled: true,
   });
   await params.store.write(next);
   return next;

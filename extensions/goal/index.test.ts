@@ -4,6 +4,10 @@ import { handleGoalCommand } from "./src/command.js";
 import { GOAL_MAX_CONTINUATIONS, type GoalState, type GoalStore } from "./src/state.js";
 import { createGoalStatusTool } from "./src/tool.js";
 
+type ContinuationLeaseResult = Awaited<
+  ReturnType<OpenClawPluginApi["session"]["workflow"]["requestSessionContinuationLease"]>
+>;
+
 function createMemoryGoalStore(): GoalStore & { states: Map<string, GoalState> } {
   const states = new Map<string, GoalState>();
   return {
@@ -21,16 +25,18 @@ function createMemoryGoalStore(): GoalStore & { states: Map<string, GoalState> }
 }
 
 function createApi(store = createMemoryGoalStore()) {
-  const requestSessionContinuationLease = vi.fn(async () => ({
-    scheduled: true as const,
-    handle: {
-      id: "lease-job",
-      pluginId: "goal",
-      sessionKey: "agent:main:main",
-      kind: "session-turn" as const,
-    },
-    replaced: { removed: 0, failed: 0 },
-  }));
+  const requestSessionContinuationLease = vi.fn(
+    async (): Promise<ContinuationLeaseResult> => ({
+      scheduled: true as const,
+      handle: {
+        id: "lease-job",
+        pluginId: "goal",
+        sessionKey: "agent:main:main",
+        kind: "session-turn" as const,
+      },
+      replaced: { removed: 0, failed: 0 },
+    }),
+  );
   const clearSessionContinuationLease = vi.fn(async () => ({ removed: 1, failed: 0 }));
   const api = {
     runtime: {
@@ -96,6 +102,27 @@ describe("goal plugin", () => {
         deliveryMode: "announce",
       }),
     );
+  });
+
+  it("does not keep a started goal continuing when the first lease is not scheduled", async () => {
+    const { api, store, requestSessionContinuationLease } = createApi();
+    requestSessionContinuationLease.mockResolvedValueOnce({
+      scheduled: false,
+      reason: "scheduler_unavailable",
+    });
+
+    const result = await handleGoalCommand(
+      api,
+      commandCtx("start finish the workflow lab report"),
+      { store },
+    );
+
+    expect(result.text).toContain("Continuation: not scheduled (scheduler_unavailable)");
+    expect(store.states.get("agent:main:main")).toMatchObject({
+      objective: "finish the workflow lab report",
+      status: "waiting_approval",
+      lastNote: expect.stringContaining("scheduler_unavailable"),
+    });
   });
 
   it("shows a recent decision trail with /goal events", async () => {
@@ -195,6 +222,38 @@ describe("goal plugin", () => {
     expect(store.states.get("agent:main:main")).toMatchObject({
       objective: "inspect the stuck session",
       status: "continue",
+    });
+  });
+
+  it("does not persist continue when goal_status cannot schedule the next lease", async () => {
+    const { api, store, requestSessionContinuationLease } = createApi();
+    await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });
+    requestSessionContinuationLease.mockResolvedValueOnce({
+      scheduled: false,
+      reason: "scheduler_unavailable",
+    });
+
+    const tool = createGoalStatusTool(
+      api,
+      { sessionKey: "agent:main:main" } as Parameters<typeof createGoalStatusTool>[1],
+      { store },
+    );
+
+    await expect(
+      tool?.execute("call-unscheduled", {
+        status: "continue",
+        note: "need one more pass",
+      }),
+    ).resolves.toMatchObject({
+      content: [
+        expect.objectContaining({
+          text: expect.stringContaining('"status": "waiting_approval"'),
+        }),
+      ],
+    });
+    expect(store.states.get("agent:main:main")).toMatchObject({
+      status: "waiting_approval",
+      lastNote: expect.stringContaining("scheduler_unavailable"),
     });
   });
 

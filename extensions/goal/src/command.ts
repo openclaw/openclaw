@@ -13,7 +13,11 @@ import {
   type GoalState,
   type GoalStore,
 } from "./state.js";
-import { applyGoalStatus, buildGoalContinuationMessage } from "./workflow.js";
+import {
+  applyGoalStatus,
+  buildGoalContinuationMessage,
+  leaseNotScheduledMessage,
+} from "./workflow.js";
 
 type GoalCommandDeps = {
   store?: GoalStore;
@@ -97,6 +101,14 @@ async function startGoal(params: {
       updateGoalState(initial, {
         status: "continue",
         continuationScheduled: true,
+      }),
+    );
+  } else {
+    await params.store.write(
+      updateGoalState(initial, {
+        status: "waiting_approval",
+        note: leaseNotScheduledMessage(lease.reason),
+        continuationScheduled: false,
       }),
     );
   }
