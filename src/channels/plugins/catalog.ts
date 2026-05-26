@@ -415,7 +415,13 @@ export function buildChannelUiCatalog(
   return { entries, order, labels, detailLabels, systemImages, byId };
 }
 
-export function listChannelPluginCatalogEntries(
+/**
+ * Exported for trusted-catalog helpers that apply their own filtering.
+ * Execution-facing callers should use `listTrustedChannelPluginCatalogEntries`.
+ *
+ * @internal
+ */
+export function listChannelPluginCatalogEntriesUnfiltered(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
   const manifestEntries = listChannelCatalogEntries({
@@ -482,6 +488,17 @@ export function listChannelPluginCatalogEntries(
     });
 }
 
+/**
+ * @deprecated Use `listTrustedChannelPluginCatalogEntries` for execution-facing
+ * paths, or `listChannelPluginCatalogEntriesUnfiltered` for internal plumbing
+ * that applies its own trust filtering.
+ */
+export function listChannelPluginCatalogEntries(
+  options: CatalogOptions = {},
+): ChannelPluginCatalogEntry[] {
+  return listChannelPluginCatalogEntriesUnfiltered(options);
+}
+
 export function getChannelPluginCatalogEntry(
   id: string,
   options: CatalogOptions = {},
@@ -490,5 +507,5 @@ export function getChannelPluginCatalogEntry(
   if (!trimmed) {
     return undefined;
   }
-  return listChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
+  return listChannelPluginCatalogEntriesUnfiltered(options).find((entry) => entry.id === trimmed);
 }
