@@ -42,10 +42,27 @@ describe("parseChannelBrokerTarget", () => {
   it.each([
     "slack:user%3AU123?conversationType=channel",
     "broker:slack:user%3AU123?conversationType=channel",
+    "discord:user%3A123?conversationType=channel",
+    "broker:discord:user%3A123?conversationType=channel",
   ])("preserves type-like opaque conversation ids from %s", (rawTarget) => {
+    const platform = rawTarget.includes("discord") ? "discord" : "slack";
+    const conversationId = platform === "discord" ? "user:123" : "user:U123";
     expect(parseChannelBrokerTarget({ rawTarget, account })).toEqual({
-      platform: "slack",
-      conversationId: "user:U123",
+      platform,
+      conversationId,
+      conversationType: "channel",
+    });
+  });
+
+  it("does not strip type-like Discord id prefixes after explicit shorthand", () => {
+    expect(
+      parseChannelBrokerTarget({
+        rawTarget: "broker:discord:channel:user:123",
+        account,
+      }),
+    ).toEqual({
+      platform: "discord",
+      conversationId: "user:123",
       conversationType: "channel",
     });
   });
