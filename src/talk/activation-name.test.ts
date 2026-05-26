@@ -50,6 +50,14 @@ describe("realtime voice activation names", () => {
     });
   });
 
+  it("does not accept fuzzy trailing matches in ambient speech", () => {
+    expect(
+      matchRealtimeVoiceActivationName("I miss the nonsensical German ranting from Multy.", [
+        "molty",
+      ]),
+    ).toBeUndefined();
+  });
+
   it("does not fuzzy match inside a larger phrase without an edge boundary", () => {
     expect(matchRealtimeVoiceActivationName("maltiness is not a wake name", ["molty"])).toBe(
       undefined,

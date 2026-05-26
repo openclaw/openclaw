@@ -76,6 +76,7 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   "matrix-js-sdk",
   // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
   // Discord plugin remains externalized from the root package.
+  "opus-decoder",
   "opusscript",
   // Public plugin SDK contract helpers are intentionally test-only entrypoints.
   // Consumers importing them run under their own Vitest dev dependency.

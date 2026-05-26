@@ -197,6 +197,9 @@ vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
   QA-lab through a local OTLP/HTTP receiver and verifies trace, metric, and log
   export plus bounded trace attributes and content/identifier redaction without
   requiring Opik, Langfuse, or another external collector.
+- Run `pnpm qa:otel:collector-smoke` when validating collector compatibility.
+  It routes the same QA-lab OTLP export through a real OpenTelemetry Collector
+  Docker container before the local receiver assertions.
 - Run `pnpm qa:prometheus:smoke` when validating protected Prometheus scraping.
   It exercises QA-lab, rejects unauthenticated scrapes, and verifies
   release-critical metric families stay free of prompt content, raw identifiers,
@@ -529,7 +532,8 @@ Release QA Lab coverage includes:
   baseline using the agentic parity pack
 - fast live Matrix QA profile using the `qa-live-shared` environment
 - live Telegram QA lane using Convex CI credential leases
-- `pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, or
+- `pnpm qa:otel:smoke`, `pnpm qa:otel:collector-smoke`,
+  `pnpm qa:prometheus:smoke`, or
   `pnpm qa:observability:smoke` when release telemetry needs explicit local
   proof
 

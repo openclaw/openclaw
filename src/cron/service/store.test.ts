@@ -360,17 +360,18 @@ describe("cron service store seam coverage", () => {
     expect(after).toBe(before);
   });
 
-  it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
+  it("loads persisted jobs with opaque custom session ids containing separators", async () => {
     const { storePath } = await makeStorePath();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 
     await writeSingleJobStore(storePath, {
-      id: "unsafe-session-target-job",
-      name: "unsafe session target job",
+      id: "opaque-session-target-job",
+      name: "opaque session target job",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,
       updatedAtMs: STORE_TEST_NOW - 60_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "session:../../outside",
+      sessionTarget,
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "ping" },
       state: {},
@@ -380,13 +381,18 @@ describe("cron service store seam coverage", () => {
 
     await ensureLoaded(state, { skipRecompute: true });
 
-    const job = findJobOrThrow(state, "unsafe-session-target-job");
-    expect(job.sessionTarget).toBe("session:../../outside");
-    expectWarnedJob({
-      storePath,
-      jobId: "unsafe-session-target-job",
-      message: "invalid persisted sessionTarget",
-    });
+    const job = findJobOrThrow(state, "opaque-session-target-job");
+    expect(job.sessionTarget).toBe(sessionTarget);
+    const warnCalls = logger.warn.mock.calls as unknown as Array<
+      [{ storePath?: string; jobId?: string }, string]
+    >;
+    expect(
+      warnCalls.some(
+        ([metadata, message]) =>
+          metadata.jobId === "opaque-session-target-job" &&
+          message.includes("invalid persisted sessionTarget"),
+      ),
+    ).toBe(false);
   });
 
   it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {

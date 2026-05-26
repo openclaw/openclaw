@@ -748,6 +748,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
   });
 
   it("enforces output limits before suspending runs", async () => {
@@ -787,7 +788,52 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
+  it("preserves guest output when a run fails", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await tools[0].execute("code-call-output-before-error", {
+        code: 'text("before"); throw new Error("boom");',
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("boom");
+    expect(details.output).toEqual([{ type: "text", text: "before" }]);
+  });
+
+  it("classifies snapshot limit failures", async () => {
+    const config = resolveCodeModeConfig({
+      tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
+    } as never);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
+        config,
+        catalog: [],
+      },
+      1000,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "snapshot_limit_exceeded",
+      error: "code mode snapshot limit exceeded",
+    });
   });
 
   it("terminates hostile infinite loops outside the main event loop", async () => {

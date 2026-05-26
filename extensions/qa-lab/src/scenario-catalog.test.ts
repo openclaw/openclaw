@@ -200,6 +200,10 @@ describe("qa scenario catalog", () => {
     expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
       .toContain("EmbeddedAttemptSessionTakeoverError");
     expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("AbortError");
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("This operation was aborted");
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
       .toContain("liveTurnTimeoutMs(env, 180000)");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",

@@ -5,6 +5,7 @@ import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/ap
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -586,7 +587,7 @@ function buildSlackQaConfig(
     sutBotToken: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "slack"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "slack"]);
   const approvalOverrides = params.overrides?.approvals;
   const approvalForwardingConfig =
     approvalOverrides?.exec || approvalOverrides?.plugin

@@ -15,6 +15,8 @@ import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shar
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { asOptionalRecord as asMutableRecord } from "../../../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString as normalizeString } from "../../../shared/string-coerce.js";
 
 type CodexRouteHit = {
   path: string;
@@ -65,19 +67,9 @@ type CodexSessionRouteRepairSummary = {
   changes: string[];
 };
 
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
 function normalizeRuntimeString(value: unknown): string | undefined {
   const normalized = normalizeString(value);
   return normalized ? normalizeEmbeddedAgentRuntime(normalized) : undefined;
-}
-
-function asMutableRecord(value: unknown): MutableRecord | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as MutableRecord)
-    : undefined;
 }
 
 function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {

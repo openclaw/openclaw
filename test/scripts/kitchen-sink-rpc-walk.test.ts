@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  appendBoundedOutput,
   assertResourceCeiling,
   cleanupKitchenSinkEnv,
   extractPluginCommandNames,
@@ -20,11 +21,26 @@ describe("kitchen-sink RPC isolated state", () => {
     const { root, env } = makeEnv();
 
     expect(root).toContain("openclaw-kitchen-sink-rpc-");
-    expect(existsSync(env.OPENCLAW_HOME)).toBe(true);
+    expect(env.HOME).toBe(path.join(root, "home"));
+    expect(env.USERPROFILE).toBe(env.HOME);
+    expect(env.OPENCLAW_HOME).toBe(env.HOME);
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join(env.HOME, ".openclaw"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"));
+    expect(existsSync(env.OPENCLAW_STATE_DIR)).toBe(true);
 
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
     expect(existsSync(root)).toBe(false);
+  });
+});
+
+describe("kitchen-sink RPC command output capture", () => {
+  it("keeps a bounded tail and tracks truncated output", () => {
+    const first = appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
+    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
+
+    const second = appendBoundedOutput(first, "ghij", 5);
+    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 });
 

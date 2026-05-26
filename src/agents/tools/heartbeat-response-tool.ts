@@ -6,6 +6,7 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../../auto-reply/heartbeat-tool-response.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
@@ -22,10 +23,6 @@ const HeartbeatResponseToolSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function readRequiredBoolean(params: Record<string, unknown>, key: string): boolean {
   const raw = readSnakeCaseParamRaw(params, key);

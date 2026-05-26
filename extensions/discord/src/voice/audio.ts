@@ -13,15 +13,16 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16;
 
 type OpusDecoder = {
-  decode: (buffer: Buffer) => Buffer;
+  decode: (buffer: Buffer) => Buffer | Promise<Buffer>;
+  free?: () => Promise<void> | void;
 };
 
 type OpusDecoderFactory = {
-  load: () => OpusDecoder;
+  load: () => OpusDecoder | Promise<OpusDecoder>;
   name: string;
 };
 
-type OpusDecoderPreference = "native" | "opusscript";
+type OpusDecoderPreference = "native" | "opusscript" | "wasm";
 
 let warnedOpusMissing = false;
 let cachedOpusDecoderFactory: OpusDecoderFactory | null | "unresolved" = "unresolved";
@@ -46,9 +47,45 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-function resolveOpusDecoderFactory(params: {
-  onWarn: (message: string) => void;
-}): OpusDecoderFactory | null {
+function resolveOpusDecoderFactories(): OpusDecoderFactory[] {
+  const wasmFactory: OpusDecoderFactory = {
+    name: "opus-decoder",
+    load: async () => {
+      const { OpusDecoder } = require("opus-decoder") as {
+        OpusDecoder: new (options: {
+          channels: number;
+          forceStereo: boolean;
+          sampleRate: number;
+        }) => {
+          decodeFrame: (buffer: Buffer) => {
+            channelData: readonly Float32Array[];
+            errors?: readonly { message?: string }[];
+            samplesDecoded: number;
+          };
+          free: () => Promise<void> | void;
+          ready: Promise<void>;
+        };
+      };
+      const decoder = new OpusDecoder({
+        channels: CHANNELS,
+        forceStereo: true,
+        sampleRate: SAMPLE_RATE,
+      });
+      await decoder.ready;
+      return {
+        decode: (buffer) => {
+          const decoded = decoder.decodeFrame(buffer);
+          if (decoded.errors?.length) {
+            throw new Error(
+              decoded.errors.map((error) => error.message ?? "opus decode failed").join("; "),
+            );
+          }
+          return convertFloat32StereoToPcm(decoded.channelData, decoded.samplesDecoded);
+        },
+        free: () => decoder.free(),
+      };
+    },
+  };
   const nativeFactory: OpusDecoderFactory = {
     name: "@discordjs/opus",
     load: () => {
@@ -73,28 +110,14 @@ function resolveOpusDecoderFactory(params: {
       return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
     },
   };
-  const factories: OpusDecoderFactory[] =
-    resolveOpusDecoderPreference() === "native"
-      ? [nativeFactory, opusscriptFactory]
-      : [opusscriptFactory, nativeFactory];
-
-  const failures: string[] = [];
-  for (const factory of factories) {
-    try {
-      factory.load();
-      return factory;
-    } catch (err) {
-      failures.push(`${factory.name}: ${formatErrorMessage(err)}`);
-    }
+  const preference = resolveOpusDecoderPreference();
+  if (preference === "native") {
+    return [nativeFactory];
   }
-
-  if (!warnedOpusMissing) {
-    warnedOpusMissing = true;
-    params.onWarn(
-      `discord voice: no usable opus decoder available (${failures.join("; ")}); cannot decode voice audio`,
-    );
+  if (preference === "opusscript") {
+    return [opusscriptFactory];
   }
-  return null;
+  return [wasmFactory, nativeFactory];
 }
 
 export function resolveOpusDecoderPreference(
@@ -104,34 +127,75 @@ export function resolveOpusDecoderPreference(
   if (normalized === "native" || normalized === "@discordjs/opus") {
     return "native";
   }
-  return "opusscript";
-}
-
-function getOrCreateOpusDecoderFactory(params: {
-  onWarn: (message: string) => void;
-}): OpusDecoderFactory | null {
-  if (cachedOpusDecoderFactory !== "unresolved") {
-    return cachedOpusDecoderFactory;
+  if (normalized === "opusscript") {
+    return "opusscript";
   }
-  cachedOpusDecoderFactory = resolveOpusDecoderFactory(params);
-  return cachedOpusDecoderFactory;
+  return "wasm";
 }
 
-function createOpusDecoder(params: {
+async function createOpusDecoder(params: {
   onWarn: (message: string) => void;
-}): { decoder: OpusDecoder; name: string } | null {
-  const factory = getOrCreateOpusDecoderFactory(params);
-  if (!factory) {
+}): Promise<{ decoder: OpusDecoder; name: string } | null> {
+  if (cachedOpusDecoderFactory === null) {
     return null;
   }
-  return { decoder: factory.load(), name: factory.name };
+  const factories =
+    cachedOpusDecoderFactory === "unresolved"
+      ? resolveOpusDecoderFactories()
+      : [cachedOpusDecoderFactory];
+  const failures: string[] = [];
+
+  for (const factory of factories) {
+    try {
+      const decoder = await factory.load();
+      cachedOpusDecoderFactory = factory;
+      return { decoder, name: factory.name };
+    } catch (err) {
+      failures.push(`${factory.name}: ${formatErrorMessage(err)}`);
+    }
+  }
+
+  cachedOpusDecoderFactory = null;
+  if (!warnedOpusMissing) {
+    warnedOpusMissing = true;
+    params.onWarn(
+      `discord voice: no usable opus decoder available (${failures.join("; ")}); cannot decode voice audio`,
+    );
+  }
+  return null;
+}
+
+function convertFloat32StereoToPcm(
+  channels: readonly Float32Array[],
+  samplesDecoded: number,
+): Buffer {
+  const left = channels[0];
+  if (!left || samplesDecoded <= 0) {
+    return Buffer.alloc(0);
+  }
+  const right = channels[1] ?? left;
+  const pcm = Buffer.alloc(samplesDecoded * CHANNELS * 2);
+  for (let index = 0; index < samplesDecoded; index += 1) {
+    const frameOffset = index * CHANNELS * 2;
+    pcm.writeInt16LE(floatToInt16(left[index] ?? 0), frameOffset);
+    pcm.writeInt16LE(floatToInt16(right[index] ?? left[index] ?? 0), frameOffset + 2);
+  }
+  return pcm;
+}
+
+function floatToInt16(value: number): number {
+  return Math.max(-32768, Math.min(32767, Math.round(value * 32767)));
 }
 
 export async function decodeOpusStream(
   stream: Readable,
-  params: { onVerbose: (message: string) => void; onWarn: (message: string) => void },
+  params: {
+    onError?: (err: unknown) => void;
+    onVerbose: (message: string) => void;
+    onWarn: (message: string) => void;
+  },
 ): Promise<Buffer> {
-  const selected = createOpusDecoder({ onWarn: params.onWarn });
+  const selected = await createOpusDecoder({ onWarn: params.onWarn });
   if (!selected) {
     return Buffer.alloc(0);
   }
@@ -142,15 +206,18 @@ export async function decodeOpusStream(
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
         continue;
       }
-      const decoded = selected.decoder.decode(chunk);
+      const decoded = await selected.decoder.decode(chunk);
       if (decoded && decoded.length > 0) {
         chunks.push(Buffer.from(decoded));
       }
     }
   } catch (err) {
+    params.onError?.(err);
     if (shouldLogVerbose()) {
       logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
     }
+  } finally {
+    await selected.decoder.free?.();
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
 }
@@ -159,11 +226,12 @@ export async function decodeOpusStreamChunks(
   stream: Readable,
   params: {
     onChunk: (pcm48kStereo: Buffer) => void;
+    onError?: (err: unknown) => void;
     onVerbose: (message: string) => void;
     onWarn: (message: string) => void;
   },
 ): Promise<void> {
-  const selected = createOpusDecoder({ onWarn: params.onWarn });
+  const selected = await createOpusDecoder({ onWarn: params.onWarn });
   if (!selected) {
     return;
   }
@@ -173,15 +241,18 @@ export async function decodeOpusStreamChunks(
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
         continue;
       }
-      const decoded = selected.decoder.decode(chunk);
+      const decoded = await selected.decoder.decode(chunk);
       if (decoded && decoded.length > 0) {
         params.onChunk(Buffer.from(decoded));
       }
     }
   } catch (err) {
+    params.onError?.(err);
     if (shouldLogVerbose()) {
       logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
     }
+  } finally {
+    await selected.decoder.free?.();
   }
 }
 

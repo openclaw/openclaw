@@ -9,6 +9,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
@@ -521,14 +522,11 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
 }
 
 function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
-  return [
-    ...new Set(
-      [
-        normalizeOptionalString(task.ownerKey),
-        normalizeOptionalString(task.childSessionKey),
-      ].filter(Boolean) as string[],
-    ),
-  ];
+  return uniqueStrings(
+    [normalizeOptionalString(task.ownerKey), normalizeOptionalString(task.childSessionKey)].filter(
+      Boolean,
+    ) as string[],
+  );
 }
 
 function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
