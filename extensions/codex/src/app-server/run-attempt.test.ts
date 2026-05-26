@@ -52,6 +52,7 @@ import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
+import { CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES } from "./dynamic-tool-profile.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -2097,34 +2098,55 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
-  it("enables Codex native tool surfaces when toolsAllow explicitly includes native-owned tools", () => {
+  it("keeps partial native-owned toolsAllow lists from widening to the full native surface", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
 
-    // Single native tool
     params.toolsAllow = ["read"];
-    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
-    // Multiple native tools
     params.toolsAllow = ["write", "edit"];
-    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
-    // Mix of native and non-native tools
     params.toolsAllow = ["memory_search", "read", "web_search"];
-    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
-    // Exec alias should work
     params.toolsAllow = ["bash"];
-    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
-    // apply-patch alias should work
     params.toolsAllow = ["apply-patch"];
-    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
 
-    // Non-native only should remain disabled
     params.toolsAllow = ["memory_search", "message", "web_search"];
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("enables Codex native tool surfaces for wildcard or complete native-owned toolsAllow lists", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    params.toolsAllow = ["*"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = [...CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = [
+      "read",
+      "write",
+      "edit",
+      "apply-patch",
+      "bash",
+      "process",
+      "update_plan",
+      "tool_call",
+      "tool_describe",
+      "tool_search",
+      "tool_search_code",
+    ];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
   });
 
   it("disables Codex native tool surfaces when the effective exec target is node", () => {

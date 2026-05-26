@@ -3980,18 +3980,23 @@ function shouldEnableCodexAppServerNativeToolSurface(
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   }
-  // Enable native surface if toolsAllow has wildcard OR explicitly requests any
-  // native-owned tool (read, write, edit, exec, etc.). This ensures that when
-  // users request native tools in their allowlist, they actually get them.
-  const hasNativeRequest = toolsAllow.some((name) =>
-    (CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES as readonly string[]).includes(
-      normalizeCodexDynamicToolName(name),
-    ),
-  );
+  const enablesCompleteNativeSurface =
+    hasWildcardCodexToolsAllow(toolsAllow) ||
+    explicitlyAllowsCompleteCodexNativeToolSurface(toolsAllow);
   return (
-    (hasWildcardCodexToolsAllow(toolsAllow) || hasNativeRequest) &&
-    canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
+    enablesCompleteNativeSurface && canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
+}
+
+function explicitlyAllowsCompleteCodexNativeToolSurface(toolsAllow: readonly string[]): boolean {
+  const normalized = new Set<string>();
+  for (const name of toolsAllow) {
+    const toolName = normalizeCodexDynamicToolName(name);
+    if (toolName) {
+      normalized.add(toolName);
+    }
+  }
+  return CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES.every((toolName) => normalized.has(toolName));
 }
 
 function isCodexNativeExecutionBlockedByNodeExecHost(
