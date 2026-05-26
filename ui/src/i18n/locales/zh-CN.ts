@@ -479,7 +479,7 @@ export const zh_CN: TranslationMap = {
       passwordPlaceholder: "系统或共享密码",
       sessionKey: "默认会话密钥",
       language: "语言",
-      connectHint: "点击连接以应用连接更改。",
+      connectHint: "点击连接以应用更改。",
       trustedProxy: "通过受信任代理认证。",
       showToken: "显示令牌",
       hideToken: "隐藏令牌",
@@ -1068,7 +1068,7 @@ export const zh_CN: TranslationMap = {
     switchedSession: "已切换到 {session}",
     welcome: {
       ready: "准备好聊天",
-      hintBeforeShortcut: "在下方输入消息 · 输入",
+      hintBeforeShortcut: "在下方输入消息 · Enter 发送",
       hintAfterShortcut: "查看命令",
       suggestions: {
         whatCanYouDo: "你能做什么？",
