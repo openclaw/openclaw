@@ -1845,10 +1845,16 @@ export async function runAgentTurnWithFallback(params: {
             const cliThinkingBridge = (() => {
               let delivery = Promise.resolve<void>(undefined);
               const rawUnsubscribe = onAgentEvent((evt) => {
-                if (evt.runId !== runId || evt.stream !== "thinking") {return;}
-                if (params.followupRun.run.silentExpected) {return;}
+                if (evt.runId !== runId || evt.stream !== "thinking") {
+                  return;
+                }
+                if (params.followupRun.run.silentExpected) {
+                  return;
+                }
                 const text = typeof evt.data?.text === "string" ? evt.data.text : undefined;
-                if (!text) {return;}
+                if (!text) {
+                  return;
+                }
                 cliThinkingArrived = true;
                 delivery = delivery
                   .then(() => params.opts?.onReasoningStream?.({ text }) ?? Promise.resolve())
@@ -1878,20 +1884,10 @@ export async function runAgentTurnWithFallback(params: {
                   // Skip when the cli-interactive MITM proxy is already feeding
                   // thinking_delta into the reasoning lane (cliThinkingBridge
                   // above) — otherwise we'd double-deliver.
-                  if (cliThinkingArrived) {return;}
+                  if (cliThinkingArrived) {
+                    return;
+                  }
                   await params.opts?.onReasoningStream?.({ text });
-                },
-                onToolEvent: async ({ name, phase, args }) => {
-                  const toolStartProgressPromise = params.opts?.onToolStart?.({
-                    name,
-                    phase,
-                    args,
-                    detailMode: params.toolProgressDetail,
-                  });
-                  await Promise.all([
-                    params.typingSignals.signalToolStart(),
-                    toolStartProgressPromise,
-                  ]);
                 },
                 onErrorBeforeLifecycle: async () => {
                   if (!rollbackFallbackCandidateSelection) {
@@ -1907,48 +1903,48 @@ export async function runAgentTurnWithFallback(params: {
                   }
                 },
                 runParams: {
-                sessionId: params.followupRun.run.sessionId,
-                sessionKey: params.sessionKey,
-                agentId: params.followupRun.run.agentId,
-                trigger: params.isHeartbeat ? "heartbeat" : "user",
-                sessionFile: params.followupRun.run.sessionFile,
-                workspaceDir: params.followupRun.run.workspaceDir,
-                config: runtimeConfig,
-                prompt: params.commandBody,
-                transcriptPrompt: params.transcriptCommandBody,
-                currentInboundEventKind: params.followupRun.currentInboundEventKind,
-                currentInboundContext: params.followupRun.currentInboundContext,
-                inputProvenance: params.followupRun.run.inputProvenance,
-                provider: cliExecutionProvider,
-                model,
-                thinkLevel: params.followupRun.run.thinkLevel,
-                timeoutMs: params.followupRun.run.timeoutMs,
-                runId,
-                lane: runLane,
-                extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
-                silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
-                extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
-                ownerNumbers: params.followupRun.run.ownerNumbers,
-                cliSessionId: cliSessionBinding?.sessionId,
-                cliSessionBinding,
-                authProfileId: authProfile.authProfileId,
-                bootstrapPromptWarningSignaturesSeen,
-                bootstrapPromptWarningSignature:
-                  bootstrapPromptWarningSignaturesSeen[
-                    bootstrapPromptWarningSignaturesSeen.length - 1
-                  ],
-                images: currentTurnImages.images,
-                imageOrder: currentTurnImages.imageOrder,
-                skillsSnapshot: params.followupRun.run.skillsSnapshot,
-                messageChannel: params.followupRun.originatingChannel ?? undefined,
-                messageProvider: hookMessageProvider,
-                agentAccountId: params.followupRun.run.agentAccountId,
-                senderIsOwner: params.followupRun.run.senderIsOwner,
-                disableTools: params.opts?.disableTools,
-                abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-                replyOperation: params.replyOperation,
-              },
+                  sessionId: params.followupRun.run.sessionId,
+                  sessionKey: params.sessionKey,
+                  agentId: params.followupRun.run.agentId,
+                  trigger: params.isHeartbeat ? "heartbeat" : "user",
+                  sessionFile: params.followupRun.run.sessionFile,
+                  workspaceDir: params.followupRun.run.workspaceDir,
+                  config: runtimeConfig,
+                  prompt: params.commandBody,
+                  transcriptPrompt: params.transcriptCommandBody,
+                  currentInboundEventKind: params.followupRun.currentInboundEventKind,
+                  currentInboundContext: params.followupRun.currentInboundContext,
+                  inputProvenance: params.followupRun.run.inputProvenance,
+                  provider: cliExecutionProvider,
+                  model,
+                  thinkLevel: params.followupRun.run.thinkLevel,
+                  timeoutMs: params.followupRun.run.timeoutMs,
+                  runId,
+                  lane: runLane,
+                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                  silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                  extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                  ownerNumbers: params.followupRun.run.ownerNumbers,
+                  cliSessionId: cliSessionBinding?.sessionId,
+                  cliSessionBinding,
+                  authProfileId: authProfile.authProfileId,
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature:
+                    bootstrapPromptWarningSignaturesSeen[
+                      bootstrapPromptWarningSignaturesSeen.length - 1
+                    ],
+                  images: currentTurnImages.images,
+                  imageOrder: currentTurnImages.imageOrder,
+                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                  messageChannel: params.followupRun.originatingChannel ?? undefined,
+                  messageProvider: hookMessageProvider,
+                  agentAccountId: params.followupRun.run.agentAccountId,
+                  senderIsOwner: params.followupRun.run.senderIsOwner,
+                  disableTools: params.opts?.disableTools,
+                  abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                  replyOperation: params.replyOperation,
+                },
                 transformResult: (rawResult) =>
                   isRoomEventCliRun && rawResult.meta.agentMeta
                     ? (() => {
