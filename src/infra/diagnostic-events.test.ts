@@ -3,12 +3,14 @@ import {
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
   formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
@@ -699,6 +701,47 @@ describe("diagnostic-events", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(publicEvents).toStrictEqual([]);
     expect(internalEvents).toEqual(["log.record"]);
+  });
+
+  it("keeps trusted private data off shared internal diagnostic listeners", async () => {
+    const internalEvents: DiagnosticEventPayload[] = [];
+    const trustedEvents: Array<{
+      event: DiagnosticEventPayload;
+      privateData: unknown;
+    }> = [];
+    onInternalDiagnosticEvent((event) => {
+      internalEvents.push(event);
+    });
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      trustedEvents.push({ event, privateData });
+    });
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      {
+        modelContent: {
+          inputMessages: ["secret prompt"],
+          systemPrompt: "secret system",
+        },
+      },
+    );
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(JSON.stringify(internalEvents)).not.toContain("secret");
+    expect(JSON.stringify(trustedEvents[0]?.event)).not.toContain("secret");
+    expect(trustedEvents[0]?.privateData).toEqual({
+      modelContent: {
+        inputMessages: ["secret prompt"],
+        systemPrompt: "secret system",
+      },
+    });
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

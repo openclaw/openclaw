@@ -2,7 +2,9 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
@@ -18,6 +20,30 @@ async function collectModelCallEvents(run: () => Promise<void>): Promise<Diagnos
   const stop = onInternalDiagnosticEvent((event) => {
     if (event.type.startsWith("model.call.")) {
       events.push(event);
+    }
+  });
+  try {
+    await run();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return events;
+  } finally {
+    stop();
+  }
+}
+
+async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
+  Array<{
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  }>
+> {
+  const events: Array<{
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  }> = [];
+  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type.startsWith("model.call.")) {
+      events.push({ event, privateData });
     }
   });
   try {
@@ -196,6 +222,76 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-original-secret");
+  });
+
+  it("captures model input, tools, and output only when content capture is enabled", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "trace reply" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    async function* stream() {
+      yield { type: "done", reason: "stop", message: assistant };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        contentCapture: {
+          inputMessages: true,
+          outputMessages: true,
+          toolInputs: false,
+          toolOutputs: false,
+          systemPrompt: true,
+          toolDefinitions: true,
+          anyModelContent: true,
+        },
+        nextCallId: () => "call-content",
+      },
+    );
+
+    const inputMessages = [{ role: "user", content: "trace prompt", timestamp: 1 }];
+    const tools = [{ name: "lookup", description: "Lookup data", parameters: { type: "object" } }];
+    const events = await collectTrustedModelCallEvents(async () => {
+      const streamResult = wrapped(
+        {} as never,
+        {
+          systemPrompt: "trace system",
+          messages: inputMessages,
+          tools,
+        } as never,
+        {},
+      );
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const startedEvent = getEvent(
+      events.map((entry) => entry.event),
+      0,
+    );
+    expect(startedEvent.type).toBe("model.call.started");
+    expect(startedEvent.inputMessages).toBeUndefined();
+    expect(startedEvent.systemPrompt).toBeUndefined();
+    expect(startedEvent.toolDefinitions).toBeUndefined();
+    expect(events[0]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
+    expect(events[0]?.privateData.modelContent?.systemPrompt).toBe("trace system");
+    expect(events[0]?.privateData.modelContent?.toolDefinitions).toEqual(tools);
+    const completedEvent = getEvent(
+      events.map((entry) => entry.event),
+      1,
+    );
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.outputMessages).toBeUndefined();
+    expect(events[1]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
+    expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
   });
 
   it("propagates the trusted model-call traceparent without mutating caller headers", async () => {

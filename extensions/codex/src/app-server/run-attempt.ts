@@ -48,9 +48,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  createDiagnosticTraceContextFromActiveScope,
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+  freezeDiagnosticTraceContext,
   hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
+  resolveDiagnosticModelContentCapturePolicy,
+  type DiagnosticModelCallContent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
@@ -824,6 +829,14 @@ function readCodexAppServerRolloutTokenUsageLine(line: string): number | undefin
   }
 }
 
+function utf8JsonByteLength(value: unknown): number | undefined {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 function maxFiniteNumber(values: Array<number | undefined>): number | undefined {
   const nums = values.filter(
     (value): value is number => typeof value === "number" && Number.isFinite(value),
@@ -938,6 +951,15 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
+  const codexModelCallTrace = freezeDiagnosticTraceContext(
+    createDiagnosticTraceContextFromActiveScope(),
+  );
+  const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(params.config);
+  const codexModelCallId = `${params.runId}:codex-model:1`;
+  let codexModelCallStartedAt = attemptStartedAt;
+  let codexModelCallStarted = false;
+  let codexModelCallTerminalEmitted = false;
+  let codexModelCallRequestPayloadBytes: number | undefined;
   const attemptClientFactory = options.clientFactory ?? defaultCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
@@ -2679,33 +2701,147 @@ export async function runCodexAppServerAttempt(
     prompt: codexTurnPromptText,
     historyMessages,
     imagesCount: params.images?.length ?? 0,
+    tools,
   });
   const buildTurnStartFailureMessages = () => [
     ...historyMessages,
     buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
   ];
+  const codexModelCallBaseFields = {
+    runId: params.runId,
+    callId: codexModelCallId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.modelId,
+    api: params.model.api,
+    transport: appServer.start.transport,
+    ...hookContextWindowFields,
+    trace: codexModelCallTrace,
+  };
+  const codexDiagnosticToolDefinitions = codexModelContentCapture.toolDefinitions
+    ? buildCodexDiagnosticToolDefinitions(tools)
+    : undefined;
+  const codexModelContentPrivateData = (
+    modelContent: DiagnosticModelCallContent | undefined,
+  ) => (modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined);
+  const buildCodexModelCallDiagnosticContent = (): DiagnosticModelCallContent | undefined => {
+    const modelContent = {
+      ...(codexModelContentCapture.inputMessages
+        ? { inputMessages: buildTurnStartFailureMessages() }
+        : {}),
+      ...(codexModelContentCapture.systemPrompt
+        ? { systemPrompt: buildRenderedCodexDeveloperInstructions() }
+        : {}),
+      ...(codexDiagnosticToolDefinitions
+        ? { toolDefinitions: codexDiagnosticToolDefinitions }
+        : {}),
+    };
+    return Object.keys(modelContent).length > 0 ? modelContent : undefined;
+  };
+  const emitCodexModelCallStarted = () => {
+    codexModelCallStartedAt = Date.now();
+    codexModelCallStarted = true;
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.started",
+        ...codexModelCallBaseFields,
+      },
+      codexModelContentPrivateData(buildCodexModelCallDiagnosticContent()),
+    );
+  };
+  const emitCodexModelCallCompleted = (result: EmbeddedRunAttemptResult) => {
+    if (!codexModelCallStarted || codexModelCallTerminalEmitted) {
+      return;
+    }
+    codexModelCallTerminalEmitted = true;
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.completed",
+        ...codexModelCallBaseFields,
+        durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
+        ...(codexModelCallRequestPayloadBytes !== undefined
+          ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
+          : {}),
+      },
+      codexModelContentPrivateData({
+        ...buildCodexModelCallDiagnosticContent(),
+        ...(codexModelContentCapture.outputMessages
+          ? {
+              outputMessages: result.lastAssistant
+                ? [result.lastAssistant]
+                : result.assistantTexts,
+            }
+          : {}),
+      }),
+    );
+  };
+  const emitCodexModelCallError = (
+    error: unknown,
+    fields: { failureKind?: "aborted" | "timeout" } = {},
+  ) => {
+    if (!codexModelCallStarted || codexModelCallTerminalEmitted) {
+      return;
+    }
+    codexModelCallTerminalEmitted = true;
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "model.call.error",
+        ...codexModelCallBaseFields,
+        durationMs: Math.max(0, Date.now() - codexModelCallStartedAt),
+        errorCategory: fields.failureKind ?? "error",
+        ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
+        ...(codexModelCallRequestPayloadBytes !== undefined
+          ? { requestPayloadBytes: codexModelCallRequestPayloadBytes }
+          : {}),
+      },
+      codexModelContentPrivateData({
+        ...buildCodexModelCallDiagnosticContent(),
+        ...(codexModelContentCapture.outputMessages ? { outputMessages: [] } : {}),
+      }),
+    );
+    embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
+      error: formatErrorMessage(error),
+    });
+  };
+  const classifyCodexModelCallFailureKind = (error: unknown): "aborted" | "timeout" | undefined => {
+    if (timedOut || turnCompletionIdleTimedOut) {
+      return "timeout";
+    }
+    const errorMessage = error ? formatErrorMessage(error).toLowerCase() : "";
+    if (errorMessage.includes("timed out") || errorMessage.includes("timeout")) {
+      return "timeout";
+    }
+    if (runAbortController.signal.aborted && !clientClosedAbort) {
+      const abortReason = String(runAbortController.signal.reason ?? "").toLowerCase();
+      return abortReason.includes("timeout") ? "timeout" : "aborted";
+    }
+    return errorMessage.includes("aborted") ? "aborted" : undefined;
+  };
 
   let turn: CodexTurnStartResponse | undefined;
-  const startCodexTurn = async (): Promise<CodexTurnStartResponse> =>
-    assertCodexTurnStartResponse(
-      await client.request(
-        "turn/start",
-        buildTurnStartParams(params, {
-          threadId: thread.threadId,
-          cwd: codexExecutionCwd,
-          appServer: pluginAppServer,
-          promptText: codexTurnPromptText,
-          sandboxPolicy: codexSandboxPolicy,
-          environmentSelection: codexEnvironmentSelection,
-          turnScopedDeveloperInstructions:
-            workspaceBootstrapContext.turnScopedDeveloperInstructions,
-          heartbeatCollaborationInstructions:
-            workspaceBootstrapContext.heartbeatCollaborationInstructions,
-        }),
-        { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
-      ),
+  const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+    const turnStartParams = buildTurnStartParams(params, {
+      threadId: thread.threadId,
+      cwd: codexExecutionCwd,
+      appServer: pluginAppServer,
+      promptText: codexTurnPromptText,
+      sandboxPolicy: codexSandboxPolicy,
+      environmentSelection: codexEnvironmentSelection,
+      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      heartbeatCollaborationInstructions:
+        workspaceBootstrapContext.heartbeatCollaborationInstructions,
+    });
+    codexModelCallRequestPayloadBytes = utf8JsonByteLength(turnStartParams);
+    return assertCodexTurnStartResponse(
+      await client.request("turn/start", turnStartParams, {
+        timeoutMs: params.timeoutMs,
+        signal: runAbortController.signal,
+      }),
     );
+  };
   try {
+    emitCodexModelCallStarted();
     runAgentHarnessLlmInputHook({
       event: buildLlmInputEvent(),
       ctx: hookContext,
@@ -2799,6 +2935,11 @@ export async function runCodexAppServerAttempt(
         },
         ctx: hookContext,
       });
+      const turnStartFailureKind = classifyCodexModelCallFailureKind(turnStartError);
+      emitCodexModelCallError(
+        turnStartErrorMessage,
+        turnStartFailureKind ? { failureKind: turnStartFailureKind } : {},
+      );
       await runCodexAgentEndHook(params, {
         event: {
           messages: buildTurnStartFailureMessages(),
@@ -2834,12 +2975,14 @@ export async function runCodexAppServerAttempt(
           authProfileId: startupAuthProfileId,
           rateLimits: usageLimitError.rateLimitsForProfile,
         });
-        return buildCodexTurnStartFailureResult({
-          params,
-          message: usageLimitError.message,
-          messagesSnapshot: buildTurnStartFailureMessages(),
-          systemPromptReport,
-        });
+        return {
+          ...buildCodexTurnStartFailureResult({
+            params,
+            message: usageLimitError.message,
+            messagesSnapshot: buildTurnStartFailureMessages(),
+            systemPromptReport,
+          }),
+        };
       }
       throw turnStartError;
     }
@@ -3023,6 +3166,17 @@ export async function runCodexAppServerAttempt(
       result,
       turnCompletionIdleTimedOut,
     });
+    const modelCallFailureKind =
+      classifyCodexModelCallFailureKind(finalPromptError) ?? (finalAborted ? "aborted" : undefined);
+    if (modelCallFailureKind) {
+      emitCodexModelCallError(finalPromptError ?? "codex app-server attempt interrupted", {
+        failureKind: modelCallFailureKind,
+      });
+    } else if (finalPromptError) {
+      emitCodexModelCallError(finalPromptError);
+    } else {
+      emitCodexModelCallCompleted(result);
+    }
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -3155,6 +3309,7 @@ export async function runCodexAppServerAttempt(
       systemPromptReport,
     };
   } finally {
+    emitCodexModelCallError("codex app-server run completed without model-call terminal event");
     emitLifecycleTerminal({
       phase: "error",
       error: "codex app-server run completed without lifecycle terminal event",
@@ -5133,6 +5288,28 @@ function buildCodexSkillReportEntries(
       blockChars: block.length,
     }))
     .filter((entry) => entry.blockChars > 0);
+}
+
+function readCodexDiagnosticToolParameters(tool: {
+  inputSchema?: unknown;
+  parameters?: unknown;
+}): unknown {
+  return tool.inputSchema ?? tool.parameters;
+}
+
+function buildCodexDiagnosticToolDefinitions(
+  tools: readonly {
+    name: string;
+    description: string;
+    inputSchema?: unknown;
+    parameters?: unknown;
+  }[],
+) {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: readCodexDiagnosticToolParameters(tool),
+  }));
 }
 
 function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {

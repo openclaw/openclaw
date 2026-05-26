@@ -26,6 +26,7 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContextFromActiveScope,
@@ -3177,6 +3178,7 @@ export async function runEmbeddedAttempt(
             ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
             : {}),
           trace: runTrace,
+          contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
           onStarted: () => {
             params.onExecutionPhase?.({
