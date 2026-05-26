@@ -130,7 +130,7 @@ import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from ".
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -431,6 +431,10 @@ function createReplyDispatchEvent(
     get: shouldSendToolSummaries,
   }) as PluginHookReplyDispatchEvent;
 }
+
+export const testing = {
+  createReplyDispatchEvent,
+};
 
 function resolveHarnessDefaultChannel(params: {
   ctx: FinalizedMsgContext;
@@ -788,6 +792,12 @@ export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  if (params.replyOptions?.abortSignal?.aborted) {
+    return {
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    };
+  }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
@@ -885,6 +895,16 @@ export async function dispatchReplyFromConfig(
   // ACP routing uses acpDispatchSessionKey.
   const dispatchOperationSessionKey =
     initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
+  if (
+    params.replyOptions?.isHeartbeat === true &&
+    dispatchOperationSessionKey &&
+    replyRunRegistry.get(dispatchOperationSessionKey)
+  ) {
+    return {
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    };
+  }
   const markProgress = () => {
     if (!canTrackSession || !sessionKey) {
       return;

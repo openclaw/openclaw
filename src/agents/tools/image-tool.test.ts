@@ -2467,60 +2467,94 @@ describe("image compression policy", () => {
   });
 
   it("keeps runtime Anthropic media limits for dated model variants", async () => {
-    await expect(
-      testing.resolveImageCompressionPolicy({
-        cfg: {},
-        imageModelConfig: {
-          primary: "anthropic/claude-opus-4.7-20260219",
-          fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
-        },
-        imageCount: 1,
+    testing.setProviderDepsForTest({
+      resolveModelAsync: async (_provider, model) => ({
+        model: {
+          mediaInput: {
+            image: model.includes("opus")
+              ? { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }
+              : { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+          },
+        } as never,
+        authStorage: {} as never,
+        modelRegistry: {} as never,
       }),
-    ).resolves.toEqual({
-      imageCount: 1,
-      models: [
-        { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
-      ],
     });
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg: {},
+          imageModelConfig: {
+            primary: "anthropic/claude-opus-4.7-20260219",
+            fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
+          },
+          imageCount: 1,
+        }),
+      ).resolves.toEqual({
+        imageCount: 1,
+        models: [
+          { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        ],
+      });
+    } finally {
+      testing.setProviderDepsForTest();
+    }
   });
 
   it("merges partial configured Anthropic media policy with runtime side limits", async () => {
-    await expect(
-      testing.resolveImageCompressionPolicy({
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "https://api.anthropic.com",
-                api: "anthropic-messages",
-                models: [
-                  {
-                    id: "claude-opus-4.7-20260219",
-                    name: "Claude Opus 4.7 dated",
-                    reasoning: true,
-                    input: ["text", "image"],
-                    contextWindow: 200_000,
-                    maxTokens: 64_000,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    mediaInput: { image: { maxBytes: 1_000_000 } },
-                  },
-                ],
+    testing.setProviderDepsForTest({
+      resolveModelAsync: async (_provider, _model, _agentDir, _cfg, options) => ({
+        model: {
+          mediaInput: {
+            image: options?.skipProviderRuntimeHooks
+              ? { maxBytes: 1_000_000 }
+              : { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+          },
+        } as never,
+        authStorage: {} as never,
+        modelRegistry: {} as never,
+      }),
+    });
+    try {
+      await expect(
+        testing.resolveImageCompressionPolicy({
+          cfg: {
+            models: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-opus-4.7-20260219",
+                      name: "Claude Opus 4.7 dated",
+                      reasoning: true,
+                      input: ["text", "image"],
+                      contextWindow: 200_000,
+                      maxTokens: 64_000,
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      mediaInput: { image: { maxBytes: 1_000_000 } },
+                    },
+                  ],
+                },
               },
             },
+          } satisfies OpenClawConfig,
+          imageModelConfig: {
+            primary: "anthropic/claude-opus-4.7-20260219",
           },
-        } satisfies OpenClawConfig,
-        imageModelConfig: {
-          primary: "anthropic/claude-opus-4.7-20260219",
-        },
+          imageCount: 1,
+        }),
+      ).resolves.toEqual({
         imageCount: 1,
-      }),
-    ).resolves.toEqual({
-      imageCount: 1,
-      models: [
-        { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-      ],
-    });
+        models: [
+          { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        ],
+      });
+    } finally {
+      testing.setProviderDepsForTest();
+    }
   });
 
   it("uses a model override as the compression candidate", async () => {

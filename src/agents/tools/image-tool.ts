@@ -41,6 +41,10 @@ import {
 } from "../model-fallback.js";
 import { resolveModelAsync } from "../pi-embedded-runner/model.js";
 import {
+  bundledStaticCatalogProviderUsesRuntimeAugment,
+  resolveBundledStaticCatalogModel,
+} from "../pi-embedded-runner/model.static-catalog.js";
+import {
   coerceImageAssistantText,
   coerceImageModelConfig,
   decodeDataUrl,
@@ -81,6 +85,8 @@ const imageToolProviderDeps = {
   describeImagesWithModel,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
+  resolveBundledStaticCatalogModel,
+  resolveModelAsync,
 };
 
 function hasExplicitDefaultPrimaryModel(cfg?: OpenClawConfig): boolean {
@@ -140,6 +146,8 @@ export const testing = {
     describeImagesWithModel?: typeof describeImagesWithModel;
     resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
+    resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
+    resolveModelAsync?: typeof resolveModelAsync;
   }) {
     imageToolProviderDeps.buildProviderRegistry =
       overrides?.buildProviderRegistry ?? buildProviderRegistry;
@@ -153,6 +161,9 @@ export const testing = {
       overrides?.resolveAutoMediaKeyProviders ?? resolveAutoMediaKeyProviders;
     imageToolProviderDeps.resolveDefaultMediaModel =
       overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
+    imageToolProviderDeps.resolveBundledStaticCatalogModel =
+      overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
+    imageToolProviderDeps.resolveModelAsync = overrides?.resolveModelAsync ?? resolveModelAsync;
   },
 } as const;
 
@@ -314,10 +325,7 @@ function resolveCompressionModelCandidates(params: {
 }
 
 function imageCompressionPolicyHasDimensionLimit(policy: ImageCompressionModelPolicy): boolean {
-  return (
-    typeof policy.maxSidePx === "number" ||
-    typeof policy.maxPixels === "number"
-  );
+  return typeof policy.maxSidePx === "number" || typeof policy.maxPixels === "number";
 }
 
 function mergeImageCompressionPolicies(params: {
@@ -330,6 +338,21 @@ function mergeImageCompressionPolicies(params: {
   };
 }
 
+function resolveBundledStaticCompressionModelPolicy(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+  workspaceDir?: string;
+}): ImageCompressionModelPolicy {
+  const model = imageToolProviderDeps.resolveBundledStaticCatalogModel({
+    provider: params.provider,
+    modelId: params.model,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  return (model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
+}
+
 function providerUsesRuntimeModelAugment(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -338,6 +361,9 @@ function providerUsesRuntimeModelAugment(params: {
   const provider = normalizeMediaProviderId(params.provider);
   if (!provider) {
     return false;
+  }
+  if (bundledStaticCatalogProviderUsesRuntimeAugment({ provider })) {
+    return true;
   }
   const config = params.cfg ?? {};
   const snapshot = loadManifestMetadataSnapshot({
@@ -376,7 +402,7 @@ async function resolveCompressionModelPolicyWithHooks(params: {
   skipProviderRuntimeHooks: boolean;
 }): Promise<ImageCompressionModelPolicy> {
   try {
-    const resolved = await resolveModelAsync(
+    const resolved = await imageToolProviderDeps.resolveModelAsync(
       params.provider,
       params.model,
       params.agentDir,
@@ -401,9 +427,13 @@ async function resolveCompressionModelPolicy(params: {
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<ImageCompressionModelPolicy> {
-  const staticPolicy = await resolveCompressionModelPolicyWithHooks({
+  const configuredStaticPolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
     skipProviderRuntimeHooks: true,
+  });
+  const staticPolicy = mergeImageCompressionPolicies({
+    runtimePolicy: resolveBundledStaticCompressionModelPolicy(params),
+    staticPolicy: configuredStaticPolicy,
   });
   if (
     imageCompressionPolicyHasDimensionLimit(staticPolicy) ||

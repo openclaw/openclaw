@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoLocal = resolveCrabboxBinary(process.env, process.platform);
+const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
+const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const binary =
   repoLocal ??
