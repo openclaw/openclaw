@@ -1349,6 +1349,29 @@ describe("handleToolExecutionEnd derived tool events", () => {
       statusLabel: "No matches found",
       exitCode: 123,
     });
+    const commandItemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => {
+          const candidate = event as {
+            stream?: string;
+            data?: { itemId?: string; phase?: string };
+          };
+          return (
+            candidate.stream === "item" &&
+            candidate.data?.itemId === "command:tool-exec-rg-no-match" &&
+            candidate.data?.phase === "end"
+          );
+        }),
+      "command item event",
+    );
+    const commandItemData = requireRecord(commandItemEvent.data, "command item event data");
+    expectRecordFields(commandItemData, "command item event data", {
+      itemId: "command:tool-exec-rg-no-match",
+      phase: "end",
+      summary: "No matches found",
+    });
+    expect(String(commandItemData.summary)).not.toContain("Command exited with code 123");
   });
 
   it("emits patch summary events for apply_patch results", async () => {

@@ -1493,7 +1493,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
   });
 
-  it("renders benign Slack no-results when command item and command-output events both arrive", async () => {
+  it("renders benign Slack command no-results when item and command-output events both arrive", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
@@ -1503,8 +1503,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       {
         kind: "item",
         itemKind: "command",
-        name: "exec",
         phase: "end",
+        name: "exec",
         status: "completed",
         title: "command find docs -name '*.md' -print0 | xargs -0 rg 'missing phrase'",
         summary: "No matches found",
