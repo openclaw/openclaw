@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -63,6 +63,14 @@ async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
 async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryRemBackfill(opts);
+}
+
+function parseMemoryCliNumberOption(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new InvalidArgumentError(`${flag} must be a finite number.`);
+  }
+  return parsed;
 }
 
 export function registerMemoryCli(program: Command) {
@@ -142,8 +150,12 @@ export function registerMemoryCli(program: Command) {
     .argument("[query]", "Search query")
     .option("--query <text>", "Search query (alternative to positional argument)")
     .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--max-results <n>", "Max results", (value: string) => Number(value))
-    .option("--min-score <n>", "Minimum score", (value: string) => Number(value))
+    .option("--max-results <n>", "Max results", (value: string) =>
+      parseMemoryCliNumberOption(value, "--max-results"),
+    )
+    .option("--min-score <n>", "Minimum score", (value: string) =>
+      parseMemoryCliNumberOption(value, "--min-score"),
+    )
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
       await runMemorySearch(queryArg, opts);
@@ -153,21 +165,23 @@ export function registerMemoryCli(program: Command) {
     .command("promote")
     .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
     .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--limit <n>", "Max candidates", (value: string) => Number(value))
+    .option("--limit <n>", "Max candidates", (value: string) =>
+      parseMemoryCliNumberOption(value, "--limit"),
+    )
     .option(
       "--min-score <n>",
       `Minimum weighted score (default: ${DEFAULT_PROMOTION_MIN_SCORE})`,
-      (value: string) => Number(value),
+      (value: string) => parseMemoryCliNumberOption(value, "--min-score"),
     )
     .option(
       "--min-recall-count <n>",
       `Minimum recall count (default: ${DEFAULT_PROMOTION_MIN_RECALL_COUNT})`,
-      (value: string) => Number(value),
+      (value: string) => parseMemoryCliNumberOption(value, "--min-recall-count"),
     )
     .option(
       "--min-unique-queries <n>",
       `Minimum distinct query count (default: ${DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES})`,
-      (value: string) => Number(value),
+      (value: string) => parseMemoryCliNumberOption(value, "--min-unique-queries"),
     )
     .option("--apply", "Append selected candidates to MEMORY.md", false)
     .option("--include-promoted", "Include already promoted candidates", false)

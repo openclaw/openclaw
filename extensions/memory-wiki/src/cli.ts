@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   isRecord,
@@ -431,14 +431,20 @@ function addWikiSearchConfigOptions<T extends Command>(command: T): T {
     );
 }
 
+function parseWikiConfidenceOption(value: string): number {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    throw new InvalidArgumentError("--confidence must be a number between 0 and 1.");
+  }
+  return confidence;
+}
+
 function addWikiApplyMutationOptions<T extends Command>(command: T): T {
   return command
     .option("--source-id <id>", "Source id", collectCliValues)
     .option("--contradiction <text>", "Contradiction note", collectCliValues)
     .option("--question <text>", "Open question", collectCliValues)
-    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
-      Number(value),
-    )
+    .option("--confidence <n>", "Confidence score between 0 and 1", parseWikiConfidenceOption)
     .option("--status <status>", "Page status");
 }
 
