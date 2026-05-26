@@ -2,40 +2,40 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import type { MeetingNotesSessionDescriptor } from "openclaw/plugin-sdk/meeting-notes";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveStateDir } from "../../config/paths.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 
-type MeetingNotesCliOptions = {
+type TranscriptsCliOptions = {
   json?: boolean;
 };
 
-type MeetingNotesPathOptions = MeetingNotesCliOptions & {
+type TranscriptsPathOptions = TranscriptsCliOptions & {
   dir?: boolean;
   metadata?: boolean;
   transcript?: boolean;
 };
 
-type StoredMeetingNotesSession = {
-  session: MeetingNotesSessionDescriptor;
+type StoredTranscriptsSession = {
+  session: TranscriptSessionDescriptor;
   sessionDir: string;
   date: string;
   summaryPath: string;
   hasSummary: boolean;
 };
 
-const MEETING_NOTES_STATE_SUBDIR = "meeting-notes";
+const TRANSCRIPTS_STATE_SUBDIR = "transcripts";
 
 function safeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
 }
 
 function stateRootDir(): string {
-  return path.join(resolveStateDir(), MEETING_NOTES_STATE_SUBDIR);
+  return path.join(resolveStateDir(), TRANSCRIPTS_STATE_SUBDIR);
 }
 
 function dateFromSessionId(sessionId: string): string | undefined {
   return sessionId
-    .match(/^meeting-(\d{4})-(\d{2})-(\d{2})T/)
+    .match(/^transcript-(\d{4})-(\d{2})-(\d{2})T/)
     ?.slice(1, 4)
     .join("-");
 }
@@ -47,12 +47,12 @@ function sessionDir(date: string, sessionId: string): string {
 function readDateFromSessionDir(sessionDir: string): string {
   const candidate = path.basename(path.dirname(sessionDir));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
-    throw new Error(`invalid meeting notes date directory: ${candidate}`);
+    throw new Error(`invalid transcripts date directory: ${candidate}`);
   }
   return candidate;
 }
 
-function formatSelector(entry: StoredMeetingNotesSession): string {
+function formatSelector(entry: StoredTranscriptsSession): string {
   return `${entry.date}/${entry.session.sessionId}`;
 }
 
@@ -99,10 +99,10 @@ function formatErrorMessage(err: unknown): string {
 async function readStoredSession(
   sessionDir: string,
   options: { ignoreInvalid?: boolean } = {},
-): Promise<StoredMeetingNotesSession | null> {
+): Promise<StoredTranscriptsSession | null> {
   const metadataPath = path.join(sessionDir, "metadata.json");
   try {
-    const session = await readJsonFile<MeetingNotesSessionDescriptor>(metadataPath);
+    const session = await readJsonFile<TranscriptSessionDescriptor>(metadataPath);
     const summaryPath = path.join(sessionDir, "summary.md");
     return {
       session,
@@ -118,12 +118,9 @@ async function readStoredSession(
     if (options.ignoreInvalid) {
       return null;
     }
-    throw new Error(
-      `invalid meeting notes metadata at ${metadataPath}: ${formatErrorMessage(err)}`,
-      {
-        cause: err,
-      },
-    );
+    throw new Error(`invalid transcripts metadata at ${metadataPath}: ${formatErrorMessage(err)}`, {
+      cause: err,
+    });
   }
 }
 
@@ -157,23 +154,23 @@ async function listStoredSessionDirs(): Promise<string[]> {
 }
 
 function assertRequestedSession(
-  entry: StoredMeetingNotesSession,
+  entry: StoredTranscriptsSession,
   sessionId: string,
-): StoredMeetingNotesSession {
+): StoredTranscriptsSession {
   if (entry.session.sessionId !== sessionId) {
     throw new Error(
-      `meeting notes metadata mismatch for ${sessionId}: found ${entry.session.sessionId}`,
+      `transcripts metadata mismatch for ${sessionId}: found ${entry.session.sessionId}`,
     );
   }
   return entry;
 }
 
-async function requireStoredSession(selector: string): Promise<StoredMeetingNotesSession> {
+async function requireStoredSession(selector: string): Promise<StoredTranscriptsSession> {
   const qualified = parseQualifiedSelector(selector);
   if (qualified) {
     const session = await readStoredSession(sessionDir(qualified.date, qualified.sessionId));
     if (!session) {
-      throw new Error(`meeting notes session not found: ${selector}`);
+      throw new Error(`transcripts session not found: ${selector}`);
     }
     return assertRequestedSession(session, qualified.sessionId);
   }
@@ -190,15 +187,15 @@ async function requireStoredSession(selector: string): Promise<StoredMeetingNote
   }
   if (matches.length > 1) {
     throw new Error(
-      `multiple meeting notes sessions match ${selector}; use one of: ${matches
+      `multiple transcripts sessions match ${selector}; use one of: ${matches
         .map(formatSelector)
         .join(", ")}`,
     );
   }
-  throw new Error(`meeting notes session not found: ${selector}`);
+  throw new Error(`transcripts session not found: ${selector}`);
 }
 
-async function listStoredSessions(): Promise<StoredMeetingNotesSession[]> {
+async function listStoredSessions(): Promise<StoredTranscriptsSession[]> {
   const dirs = await listStoredSessionDirs();
   const sessions = await Promise.all(
     dirs.map((dir) =>
@@ -208,20 +205,20 @@ async function listStoredSessions(): Promise<StoredMeetingNotesSession[]> {
     ),
   );
   return sessions
-    .filter((session): session is StoredMeetingNotesSession => session !== null)
+    .filter((session): session is StoredTranscriptsSession => session !== null)
     .toSorted((left, right) =>
       (right.session.startedAt ?? "").localeCompare(left.session.startedAt ?? ""),
     );
 }
 
-function formatSessionLine(entry: StoredMeetingNotesSession): string {
-  const title = entry.session.title?.trim() || "Meeting notes";
+function formatSessionLine(entry: StoredTranscriptsSession): string {
+  const title = entry.session.title?.trim() || "Transcripts";
   const started = entry.session.startedAt || "unknown";
   const summary = entry.hasSummary ? entry.summaryPath : "no summary.md";
   return `${formatSelector(entry)}\t${started}\t${title}\t${summary}`;
 }
 
-async function listCommand(options: MeetingNotesCliOptions): Promise<void> {
+async function listCommand(options: TranscriptsCliOptions): Promise<void> {
   const sessions = await listStoredSessions();
   if (options.json) {
     writeJson(
@@ -241,7 +238,7 @@ async function listCommand(options: MeetingNotesCliOptions): Promise<void> {
     return;
   }
   if (sessions.length === 0) {
-    writeLine("No meeting notes found.");
+    writeLine("No transcripts found.");
     return;
   }
   for (const session of sessions) {
@@ -249,7 +246,7 @@ async function listCommand(options: MeetingNotesCliOptions): Promise<void> {
   }
 }
 
-async function showCommand(sessionId: string, options: MeetingNotesCliOptions): Promise<void> {
+async function showCommand(sessionId: string, options: TranscriptsCliOptions): Promise<void> {
   const session = await requireStoredSession(sessionId);
   if (options.json) {
     const summary = session.hasSummary ? await fs.readFile(session.summaryPath, "utf8") : null;
@@ -263,12 +260,12 @@ async function showCommand(sessionId: string, options: MeetingNotesCliOptions): 
     return;
   }
   if (!session.hasSummary) {
-    throw new Error(`summary.md not found for meeting notes session: ${sessionId}`);
+    throw new Error(`summary.md not found for transcripts session: ${sessionId}`);
   }
   process.stdout.write(await fs.readFile(session.summaryPath, "utf8"));
 }
 
-async function pathCommand(selector: string, options: MeetingNotesPathOptions): Promise<void> {
+async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {
   const session = await requireStoredSession(selector);
   const selectedPath = options.dir
     ? session.sessionDir
@@ -289,35 +286,35 @@ async function pathCommand(selector: string, options: MeetingNotesPathOptions): 
   writeLine(selectedPath);
 }
 
-export function registerMeetingNotesCli(program: Command): void {
-  const meetingNotes = program.command("meeting-notes").description("Inspect stored meeting notes");
+export function registerTranscriptsCli(program: Command): void {
+  const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 
-  meetingNotes
+  transcripts
     .command("list")
-    .description("List stored meeting note sessions")
+    .description("List stored transcript sessions")
     .option("--json", "Print JSON")
-    .action(async (options: MeetingNotesCliOptions) => {
+    .action(async (options: TranscriptsCliOptions) => {
       await listCommand(options);
     });
 
-  meetingNotes
+  transcripts
     .command("show")
-    .description("Print a meeting summary markdown file")
-    .argument("<session>", "Meeting notes session id or YYYY-MM-DD/session selector")
+    .description("Print a transcript summary markdown file")
+    .argument("<session>", "Transcripts session id or YYYY-MM-DD/session selector")
     .option("--json", "Print JSON")
-    .action(async (sessionId: string, options: MeetingNotesCliOptions) => {
+    .action(async (sessionId: string, options: TranscriptsCliOptions) => {
       await showCommand(sessionId, options);
     });
 
-  meetingNotes
+  transcripts
     .command("path")
-    .description("Print a stored meeting notes artifact path")
-    .argument("<session>", "Meeting notes session id or YYYY-MM-DD/session selector")
+    .description("Print a stored transcripts artifact path")
+    .argument("<session>", "Transcripts session id or YYYY-MM-DD/session selector")
     .option("--dir", "Print the session directory")
     .option("--metadata", "Print metadata.json")
     .option("--transcript", "Print transcript.jsonl")
     .option("--json", "Print JSON")
-    .action(async (sessionId: string, options: MeetingNotesPathOptions) => {
+    .action(async (sessionId: string, options: TranscriptsPathOptions) => {
       await pathCommand(sessionId, options);
     });
 }

@@ -56,7 +56,7 @@ openclaw_e2e_maybe_timeout() {
     "$@"
     return
   fi
-  "$timeout_bin" --foreground --kill-after=30s "$timeout_value" "$@"
+  "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
 }
 openclaw_e2e_install_package() {
   local log_file="$1"

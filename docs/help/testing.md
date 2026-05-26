@@ -557,6 +557,10 @@ Native dependency policy:
       processes by default to reduce V8 compile churn during big local runs.
       Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` to compare against stock V8
       behavior.
+    - `scripts/run-vitest.mjs` terminates explicit non-watch Vitest runs after
+      5 minutes with no stdout or stderr output. Set
+      `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for an
+      intentionally silent investigation.
 
   </Accordion>
 

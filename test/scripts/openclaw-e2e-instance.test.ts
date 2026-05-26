@@ -106,7 +106,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Installing fixture package...");
       expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
-        `--foreground --kill-after=30s 42s npm install -g ${packagePath} --no-fund --no-audit`,
+        `--kill-after=30s 42s npm install -g ${packagePath} --no-fund --no-audit`,
       );
       expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
         `install -g ${packagePath} --no-fund --no-audit`,

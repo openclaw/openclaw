@@ -245,7 +245,7 @@ jobs:
           DOCKER_BUILDKIT: "1"
         run: |
           set -euo pipefail
-          timeout --foreground --kill-after=30s 35m docker build \
+          timeout --kill-after=30s 35m docker build \
             --target runtime-assets \
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .

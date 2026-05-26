@@ -267,7 +267,7 @@ npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
 if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
   npm install -g "$install_source" --no-fund --no-audit
 elif command -v timeout >/dev/null 2>&1; then
-  timeout --foreground --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  timeout --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
 else
   echo "timeout command not found; running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT" >&2
   npm install -g "$install_source" --no-fund --no-audit
