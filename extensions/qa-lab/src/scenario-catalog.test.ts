@@ -283,12 +283,7 @@ describe("qa scenario catalog", () => {
       pluginRelation: "older",
     });
     expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
-      matrixCells: [
-        "oauth-only",
-        "mixed-no-pin",
-        "mixed-defaults-legacy-pin",
-        "mixed-main-agent-legacy-pin",
-      ],
+      matrixCells: ["oauth-only", "mixed-no-pin"],
     });
   });
 
