@@ -460,6 +460,10 @@ const STATIC_TOOLS = [
             "plot",
             "table",
             "markdown",
+            "slides",
+            "presentation",
+            "spreadsheet",
+            "xlsx",
             "model_weights",
             "paper_pdf",
             "dataset",
@@ -467,9 +471,29 @@ const STATIC_TOOLS = [
             "podcast_episode",
           ],
         },
-        content: { type: "string" },
+        content: {
+          type: "string",
+          description: "Text content, or raw base64 bytes when content_encoding is 'base64'.",
+        },
         title: { type: "string", minLength: 1, maxLength: 200 },
         notebook_id: { type: "string" },
+        content_encoding: {
+          type: "string",
+          enum: ["base64"],
+          description: "Required for binary office artifacts. Send raw base64, not a data URI.",
+        },
+        filename: {
+          type: "string",
+          description: "Safe output basename. Required for slides/spreadsheet office artifacts.",
+        },
+        mime_type: {
+          type: "string",
+          description: "Required for office artifacts; must match the filename extension.",
+        },
+        metadata: {
+          type: "object",
+          additionalProperties: true,
+        },
         destinations: {
           type: "array",
           items: {

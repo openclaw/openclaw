@@ -199,9 +199,18 @@ RUN command -v gh && gh --version
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
       'huggingface_hub>=0.36.0'
 
+# Lightweight office artifact generators for the productized Excel and
+# PowerPoint skills. `rockie-pptagent` is the lean fork wrapper only; it
+# must not pull DeepPresenter/model-download/GPU dependencies.
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+      'xlsxwriter==3.2.9' \
+      'rockie-pptagent @ git+https://github.com/saml212/platform-pptx-agent.git@c5200c33c8c36f30a817b36d2dff23e615e06b88'
+
 # Verify both `hf` and the SDK resolved (cheap fail-fast at build time).
 RUN command -v hf && hf --version && \
-    python3 -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)"
+    python3 -c "import huggingface_hub; print('huggingface_hub', huggingface_hub.__version__)" && \
+    python3 -c "import xlsxwriter; print('xlsxwriter', xlsxwriter.__version__)" && \
+    python3 -c "from rockie_pptagent.wrapper import render_presentation; print(render_presentation)"
 
 # ── rockie-workspace#457: forbid local torch/triton/tensorflow/jax ──
 # Tenant Fly machines cannot host inference; GPU work routes via /experiment
