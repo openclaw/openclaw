@@ -1042,14 +1042,14 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
 });
 
 describe("buildLiveGatewayConfig", () => {
-  it("pins selected live gateway models to the Pi runtime", () => {
+  it("pins selected live gateway models to the OpenClaw runtime", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {},
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
     });
 
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
-      agentRuntime: { id: "pi" },
+      agentRuntime: { id: "openclaw" },
     });
   });
 });
@@ -2170,7 +2170,7 @@ function buildLiveGatewayConfig(params: {
         models: Object.fromEntries(
           params.candidates.map((m) => [
             `${m.provider}/${m.id}`,
-            { agentRuntime: { id: "pi" as const } },
+            { agentRuntime: { id: "openclaw" as const } },
           ]),
         ),
       },

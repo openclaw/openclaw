@@ -17,7 +17,6 @@ successCriteria:
   - Mock trace stops after the write-side reasoning-only terminal turn instead of attempting a continuation.
 docsRefs:
   - docs/help/testing.md
-  - docs/help/gpt55-codex-agentic-parity.md
 codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
   - src/agents/embedded-agent-runner/run/incomplete-turn.ts
