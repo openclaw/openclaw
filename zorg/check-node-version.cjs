@@ -305,8 +305,9 @@ function printManualInstallHelp() {
     [
       "[openclaw] Node.js " + process.version + " is too old for this package.",
       "[openclaw] Required: Node.js >=22.19.0; recommended: Node.js " + recommendedMajor + ".",
-      "[openclaw] On fresh Linux hosts, the direct npm install now tries to upgrade Node automatically during preinstall.",
-      "[openclaw] If auto-repair is unavailable on this OS/user, run the Zorg MemoryDB installer first:",
+      "[openclaw] On fresh Linux hosts, use the Zorg MemoryDB installer first so Node is repaired before npm evaluates OpenClaw dependencies.",
+      "[openclaw] Direct npm can only auto-repair Node when npm runs this lifecycle script with root/sudo privileges.",
+      "[openclaw] If auto-repair is unavailable on this OS/user, run:",
       "[openclaw]   curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash",
       "[openclaw] Then rerun the npm install after node --version reports v22.19.0 or newer.",
     ].join("\n"),

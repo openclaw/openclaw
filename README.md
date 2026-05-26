@@ -95,18 +95,36 @@ Works with npm, pnpm, or bun.
 
 Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](docs/start/wizard.md).
 
-## Install (recommended)
+## Install (recommended for fresh Linux hosts)
 
-Runtime: **Node 24 (recommended) or Node 22.19+**.
+Use the Zorg MemoryDB installer first on a new Linux host or any host that may
+have missing/old system prerequisites. It installs or repairs Node, npm, Git,
+Python, PostgreSQL, OpenClaw, Zorg MemoryDB, and LAN command chat in the correct
+order before OpenClaw's npm package is executed.
 
 ```bash
-npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
-# or: pnpm add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
 
 openclaw onboard --install-daemon
 ```
 
 OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+
+## Direct npm install
+
+Use direct npm only after node --version reports **v22.19.0 or newer** and
+global npm permissions are already working. Direct npm starts inside npm itself,
+so it is not the supported first command on old hosts such as Node v12 systems.
+
+~~~bash
+node --version
+npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+# or: pnpm add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+~~~
+
+If a direct npm attempt on an old host already produced EBADENGINE warnings,
+run the recommended installer above, then retry direct npm only after Node has
+been repaired.
 
 ## Quick start (TL;DR)
 

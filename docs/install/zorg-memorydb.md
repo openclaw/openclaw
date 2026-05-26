@@ -40,7 +40,7 @@ curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush
 
 Install order is intentional: OpenClaw is installed first from the normal OpenClaw package, then the Zorg MemoryDB add-on and LAN command chat are applied from this repository. This is the supported first-run path for hosts with missing or old software.
 
-Direct npm installs the OpenClaw package only. Use it only on systems that already have Node >=22.19.0 and working global npm permissions, then run the packaged Zorg add-on script as a separate step:
+Direct npm installs the OpenClaw package only. Use it only on systems that already have Node >=22.19.0 and working global npm permissions, then run the packaged Zorg add-on script as a separate step. Do not use direct npm as the first command on old hosts such as Node v12 systems; use the first-run installer above so Node is repaired before npm evaluates OpenClaw's dependency tree.
 
 ```bash
 node --version
@@ -59,9 +59,9 @@ npm error ENOTEMPTY: directory not empty, rename '/usr/lib/node_modules/openclaw
 
 That is still an existing-install collision, not the clean first-run path. Do not add `--force` for a fresh Zorg install; use the first-run installer on a clean host or explicitly choose existing repair mode.
 
-If `node --version` prints Node 12, Node 18, or any version below 22.19.0, the direct npm lifecycle helper attempts to upgrade Node first on supported Linux package managers. When that repair succeeds, the helper exits before the old npm process continues, because npm itself was launched under the old Node runtime. Rerun the same npm command after the repair message. If automatic repair is unavailable, run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.
+If `node --version` prints Node 12, Node 18, or any version below 22.19.0, do not repeat direct npm as the first repair path. The direct npm lifecycle helper can sometimes upgrade Node on supported Linux package managers, but npm may drop root privileges for lifecycle scripts or resolve dependencies before the helper can safely take over. The reliable repair path is the first-run installer above, which upgrades Node before npm executes OpenClaw lifecycle scripts.
 
-Observed failure on old hosts: npm resolves the package dependency tree before the OpenClaw lifecycle script can run. On Node v12.22.9 this produces a long `npm WARN EBADENGINE` cascade. If the lifecycle script does run and upgrades Node during the same npm process, npm can still continue inside the temporary git package tree it already prepared. Zorg keeps a copy of the Node prerequisite repair script under `zorg/check-node-version.cjs`, which is part of the packaged add-on tree, so the lifecycle path remains available during direct git installs. After a successful runtime repair, that helper now stops the old npm process with a clear retry instruction instead of pretending the original process can continue safely.
+Observed failure on old hosts: npm resolves the package dependency tree before a safe host repair can complete. On Node v12.22.9 this produces a long `npm WARN EBADENGINE` cascade. Zorg keeps a copy of the Node prerequisite repair script under `zorg/check-node-version.cjs`, which is part of the packaged add-on tree, so the lifecycle path remains available during direct git installs. If that helper can repair the runtime, it stops the old npm process with a retry instruction instead of pretending the original process can continue safely. If npm runs lifecycle scripts as an unprivileged user, the helper cannot repair system Node; use the first-run installer instead.
 
 If direct npm has already repaired Node or failed once on an old host, verify the repaired runtime and rerun:
 
