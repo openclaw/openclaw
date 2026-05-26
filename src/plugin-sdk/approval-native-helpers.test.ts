@@ -4,6 +4,7 @@ import {
   createChannelNativeOriginTargetResolver,
   type NativeApprovalTarget,
   nativeApprovalTargetsMatch,
+  shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-native-helpers.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
@@ -269,5 +270,91 @@ describe("createChannelApproverDmTargetResolver", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+});
+
+describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
+  const payload = {
+    text: "Approval required.",
+    channelData: {
+      execApproval: {
+        approvalId: "12345678-1234-1234-1234-123456789012",
+        approvalSlug: "12345678",
+        approvalKind: "exec",
+        agentId: "main",
+        sessionKey: "agent:main:discord:direct:123",
+      },
+    },
+  };
+  const activeExecHint = {
+    kind: "approval-pending",
+    approvalKind: "exec",
+    nativeRouteActive: true,
+  } as const;
+
+  it("supports strict top-level native exec suppression", () => {
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            exec: {
+              enabled: true,
+              agentFilter: ["main"],
+            },
+          },
+        },
+        payload,
+        hint: activeExecHint,
+        isTransportEnabled: () => true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            exec: {
+              enabled: true,
+              agentFilter: ["other"],
+            },
+          },
+        },
+        payload,
+        hint: activeExecHint,
+        isTransportEnabled: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it("supports channel-specific native exec client gates", () => {
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {},
+        payload,
+        hint: activeExecHint,
+        isNativeDeliveryEnabled: () => true,
+        resolveApprovalConfig: () => ({
+          enabled: true,
+          sessionFilter: ["discord:direct"],
+        }),
+        enforceForwardingMode: false,
+        fallbackAgentIdFromSessionKey: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {},
+        payload,
+        hint: activeExecHint,
+        isNativeDeliveryEnabled: () => false,
+        resolveApprovalConfig: () => ({
+          enabled: true,
+          sessionFilter: ["discord:direct"],
+        }),
+        enforceForwardingMode: false,
+        fallbackAgentIdFromSessionKey: false,
+      }),
+    ).toBe(false);
   });
 });

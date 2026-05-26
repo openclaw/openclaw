@@ -10,11 +10,9 @@ import {
   createChannelNativeOriginTargetResolver,
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestSessionTarget,
-} from "openclaw/plugin-sdk/approval-native-runtime";
-import {
-  buildApprovalReactionPendingContentForRequest,
   shouldSuppressLocalNativeExecApprovalPrompt,
-} from "openclaw/plugin-sdk/approval-reaction-runtime";
+} from "openclaw/plugin-sdk/approval-native-runtime";
+import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
   type ExecApprovalRequest,
   type PluginApprovalRequest,

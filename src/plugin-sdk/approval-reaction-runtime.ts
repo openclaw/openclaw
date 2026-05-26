@@ -1,12 +1,10 @@
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
-import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
 import {
   buildExecApprovalPendingReplyPayload,
   formatExecApprovalExpiresIn,
-  getExecApprovalReplyMetadata,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
@@ -15,9 +13,9 @@ import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
-import type { ChannelOutboundPayloadHint } from "./channel-contract.js";
-import type { OpenClawConfig } from "./config-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
+
+export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 
 type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
@@ -529,59 +527,4 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
       persistentStoreDisabled = false;
     },
   };
-}
-
-export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  payload: ReplyPayload;
-  hint?: ChannelOutboundPayloadHint;
-  isTransportEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
-  isSessionRouteEligible?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    metadata: NonNullable<ReturnType<typeof getExecApprovalReplyMetadata>>;
-  }) => boolean;
-  hasExactTargetProof?: boolean;
-}): boolean {
-  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
-    return false;
-  }
-  if (params.hint.nativeRouteActive !== true) {
-    return false;
-  }
-  const metadata = getExecApprovalReplyMetadata(params.payload);
-  if (!metadata || metadata.approvalKind !== "exec") {
-    return false;
-  }
-  if (!params.isTransportEnabled({ cfg: params.cfg, accountId: params.accountId })) {
-    return false;
-  }
-  const config = params.cfg.approvals?.exec;
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = config.mode ?? "session";
-  if (mode !== "session" && mode !== "both" && !params.hasExactTargetProof) {
-    return false;
-  }
-  if (
-    params.isSessionRouteEligible &&
-    !params.isSessionRouteEligible({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      metadata,
-    })
-  ) {
-    return false;
-  }
-  return matchesApprovalRequestFilters({
-    request: {
-      agentId: metadata.agentId,
-      sessionKey: metadata.sessionKey,
-    },
-    agentFilter: config.agentFilter,
-    sessionFilter: config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
 }

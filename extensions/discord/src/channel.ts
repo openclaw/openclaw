@@ -3,6 +3,7 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -60,7 +61,7 @@ import {
   loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
 } from "./channel.loaders.js";
-import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
+import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -726,11 +727,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       preferFinalAssistantVisibleText: true,
       shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
       shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
-        shouldSuppressLocalDiscordExecApprovalPrompt({
+        shouldSuppressLocalNativeExecApprovalPrompt({
           cfg,
           accountId,
           payload,
           hint,
+          isNativeDeliveryEnabled: isDiscordExecApprovalClientEnabled,
+          resolveApprovalConfig: ({ cfg, accountId }) =>
+            resolveDiscordAccount({ cfg, accountId }).config.execApprovals,
+          enforceForwardingMode: false,
+          fallbackAgentIdFromSessionKey: false,
         }),
     },
   });

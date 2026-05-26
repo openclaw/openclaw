@@ -1,12 +1,25 @@
+import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
+import {
+  getExecApprovalReplyMetadata,
+  type ExecApprovalReplyMetadata,
+} from "../infra/exec-approval-reply.js";
 import type { ExecApprovalSessionTarget } from "../infra/exec-approval-session-target.js";
 import { resolveApprovalRequestOriginTarget } from "../infra/exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { ChannelOutboundPayloadHint } from "./channel-contract.js";
 import { channelRouteTargetsMatchExact } from "./channel-route.js";
 import type { OpenClawConfig } from "./config-runtime.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
+type LocalNativeExecApprovalConfig = {
+  enabled?: boolean | "auto";
+  mode?: string | null;
+  agentFilter?: string[];
+  sessionFilter?: string[];
+};
 
 type ApprovalResolverParams = {
   cfg: OpenClawConfig;
@@ -72,6 +85,82 @@ export function nativeApprovalTargetsMatch(params: {
       accountId: params.right.accountId,
       threadId: params.right.threadId,
     },
+  });
+}
+
+export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  payload: ReplyPayload;
+  hint?: ChannelOutboundPayloadHint;
+  isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  isNativeDeliveryEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  resolveApprovalConfig?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    metadata: ExecApprovalReplyMetadata;
+  }) => LocalNativeExecApprovalConfig | undefined;
+  requireApprovalConfigEnabled?: boolean;
+  enforceForwardingMode?: boolean;
+  isSessionRouteEligible?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    metadata: ExecApprovalReplyMetadata;
+  }) => boolean;
+  hasExactTargetProof?: boolean;
+  fallbackAgentIdFromSessionKey?: boolean;
+}): boolean {
+  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
+    return false;
+  }
+  if (params.hint.nativeRouteActive !== true) {
+    return false;
+  }
+  const metadata = getExecApprovalReplyMetadata(params.payload);
+  if (!metadata || metadata.approvalKind !== "exec") {
+    return false;
+  }
+  const isDeliveryEnabled = params.isNativeDeliveryEnabled ?? params.isTransportEnabled;
+  if (!isDeliveryEnabled?.({ cfg: params.cfg, accountId: params.accountId })) {
+    return false;
+  }
+  const config =
+    params.resolveApprovalConfig?.({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      metadata,
+    }) ?? params.cfg.approvals?.exec;
+  const requireConfigEnabled =
+    params.requireApprovalConfigEnabled ?? params.resolveApprovalConfig === undefined;
+  if (requireConfigEnabled && !config?.enabled) {
+    return false;
+  }
+  const enforceForwardingMode =
+    params.enforceForwardingMode ?? params.resolveApprovalConfig === undefined;
+  if (enforceForwardingMode) {
+    const mode = config?.mode ?? "session";
+    if (mode !== "session" && mode !== "both" && !params.hasExactTargetProof) {
+      return false;
+    }
+  }
+  if (
+    params.isSessionRouteEligible &&
+    !params.isSessionRouteEligible({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      metadata,
+    })
+  ) {
+    return false;
+  }
+  return matchesApprovalRequestFilters({
+    request: {
+      agentId: metadata.agentId,
+      sessionKey: metadata.sessionKey,
+    },
+    agentFilter: config?.agentFilter,
+    sessionFilter: config?.sessionFilter,
+    fallbackAgentIdFromSessionKey: params.fallbackAgentIdFromSessionKey ?? true,
   });
 }
 
