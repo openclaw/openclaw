@@ -1238,6 +1238,7 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await memoryDeps.updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          preserveActivity: true,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount: flushedCompactionCount,
