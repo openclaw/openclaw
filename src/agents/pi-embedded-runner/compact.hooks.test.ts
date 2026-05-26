@@ -381,6 +381,34 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
+  it("uses the caller context token budget during runtime compaction", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      contextTokenBudget: 64_000,
+    });
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      modelContextWindowTokens: 64_000,
+    });
+  });
+
+  it("clamps the caller context token budget to the compaction model", async () => {
+    resolveContextWindowInfoMock.mockReturnValueOnce({ tokens: 32_000 });
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      contextTokenBudget: 64_000,
+    });
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      modelContextWindowTokens: 32_000,
+    });
+  });
+
   it("uses the session model fallback chain when overflow compaction fails", async () => {
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },

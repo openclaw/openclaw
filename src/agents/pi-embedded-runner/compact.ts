@@ -268,6 +268,12 @@ function normalizeObservedTokenCount(value: unknown): number | undefined {
     : undefined;
 }
 
+function normalizeContextTokenBudget(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
 function getMessageTextChars(msg: AgentMessage): number {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -697,10 +703,19 @@ async function compactEmbeddedPiSessionDirectOnce(
       modelContextWindow: runtimeModelWithContext.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
+    const resolvedContextTokenBudget =
+      normalizeContextTokenBudget(ctxInfo.tokens) ?? DEFAULT_CONTEXT_TOKENS;
+    const requestedContextTokenBudget =
+      normalizeContextTokenBudget(params.contextTokenBudget) ??
+      normalizeContextTokenBudget(params.tokenBudget);
+    const contextTokenBudget = Math.min(
+      requestedContextTokenBudget ?? resolvedContextTokenBudget,
+      resolvedContextTokenBudget,
+    );
     const effectiveModel = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
-        ctxInfo.tokens < (runtimeModelWithContext.contextWindow ?? Infinity)
-          ? { ...runtimeModelWithContext, contextWindow: ctxInfo.tokens }
+        contextTokenBudget < (runtimeModelWithContext.contextWindow ?? Infinity)
+          ? { ...runtimeModelWithContext, contextWindow: contextTokenBudget }
           : runtimeModelWithContext,
         apiKeyInfo,
       ),
@@ -761,7 +776,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       modelId,
       modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
-      modelContextWindowTokens: ctxInfo.tokens,
+      modelContextWindowTokens: contextTokenBudget,
       skillsSnapshot: skillsSnapshotForRun,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
         workspaceDir: effectiveWorkspace,
@@ -1012,7 +1027,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         config: params.config,
-        contextWindowTokens: ctxInfo.tokens,
+        contextWindowTokens: contextTokenBudget,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         missingToolResultText:
           model.api === "openai-responses" ||
@@ -1037,7 +1052,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           env: process.env,
           workspaceDir: effectiveWorkspace,
         }),
-        contextTokenBudget: ctxInfo.tokens,
+        contextTokenBudget,
       });
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
@@ -1064,7 +1079,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
-        contextTokenBudget: ctxInfo.tokens,
+        contextTokenBudget,
       });
       // contextEngineInfo is intentionally omitted: this guard runs inside the
       // compaction LLM session, which is not the user-facing agent session and
