@@ -1115,7 +1115,7 @@ function applySchemaDefaults(
   if (value === undefined) {
     const defaultValue = getDefault(schema);
     if (defaultValue !== undefined) {
-      return defaultValue;
+      value = defaultValue;
     }
   }
   if (!isRecord(schema)) {

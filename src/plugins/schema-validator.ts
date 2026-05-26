@@ -80,20 +80,28 @@ function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
   return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
 }
 
-function stripConditionalKeywords(schema: JsonSchemaValue): JsonSchemaValue {
+function relaxConditionalRequiredKeywords(
+  schema: JsonSchemaValue,
+  insideConditionalBranch = false,
+): JsonSchemaValue {
   if (Array.isArray(schema)) {
-    return schema.map((entry) => stripConditionalKeywords(entry as JsonSchemaValue)) as never;
+    return schema.map((entry) =>
+      relaxConditionalRequiredKeywords(entry as JsonSchemaValue, insideConditionalBranch),
+    ) as never;
   }
   if (!schema || typeof schema !== "object") {
     return schema;
   }
   return Object.fromEntries(
     Object.entries(schema)
-      .filter(([key]) => key !== "if" && key !== "then" && key !== "else")
+      .filter(([key]) => !(insideConditionalBranch && key === "required"))
       .map(([key, value]) => [
         key,
         typeof value === "boolean" || (value && typeof value === "object")
-          ? stripConditionalKeywords(value as JsonSchemaValue)
+          ? relaxConditionalRequiredKeywords(
+              value as JsonSchemaValue,
+              insideConditionalBranch || key === "then" || key === "else",
+            )
           : value,
       ]),
   ) as JsonSchemaValue;
@@ -134,8 +142,10 @@ function isDefaultActivatedConditionalFailure(params: {
   originalValue: unknown;
   defaultedValue: unknown;
 }): boolean {
-  const nonConditionalValidator = compileSchema(stripConditionalKeywords(params.schema));
-  if (checkSchema(nonConditionalValidator, params.defaultedValue)) {
+  const relaxedConditionalValidator = compileSchema(
+    relaxConditionalRequiredKeywords(params.schema),
+  );
+  if (checkSchema(relaxedConditionalValidator, params.defaultedValue)) {
     return false;
   }
   const originalValidator = compileSchema(params.schema);

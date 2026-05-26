@@ -826,6 +826,32 @@ describe("schema validator", () => {
       },
       expectedValue: ["mode", 1],
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.tuple-item-nested-default",
+        schema: {
+          type: "array",
+          items: [
+            {
+              type: "object",
+              default: {},
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+              required: ["mode"],
+            },
+          ],
+          minItems: 1,
+        },
+        value: [],
+        applyDefaults: true,
+      },
+      expectedValue: [{ mode: "auto" }],
+    });
   });
 
   it("applies defaults for untyped object schemas", () => {
@@ -1369,6 +1395,35 @@ describe("schema validator", () => {
             },
           },
           required: ["explicit"],
+        },
+      },
+      value: {},
+      applyDefaults: true,
+    });
+
+    expectValidationFailure({
+      cacheKey: "schema-validator.test.defaults.conditional-invalid-branch-default",
+      schema: {
+        type: "object",
+        properties: {
+          flag: {
+            type: "boolean",
+            default: true,
+          },
+        },
+        if: {
+          properties: {
+            flag: { const: true },
+          },
+          required: ["flag"],
+        },
+        [jsonSchemaThenKeyword]: {
+          properties: {
+            mode: {
+              type: "number",
+              default: "bad",
+            },
+          },
         },
       },
       value: {},
