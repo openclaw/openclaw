@@ -119,6 +119,12 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import {
+  appendReasoningBody,
+  appendStatusLine,
+  renderInterleavedMessage,
+  resolveInterleavedProgressEnabled,
+} from "./interleaved-progress.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
@@ -1195,11 +1201,11 @@ export const dispatchTelegramMessage = async ({
   // lane existing. Never changes prompts, routing, tools, auth, or default
   // visibility. Every event line is whitespace-collapsed and length-capped, and
   // callers fall back to pushStreamToolProgress when this returns false.
-  const interleavedProgressEnabled =
-    streamToolProgressEnabled &&
-    telegramCfg.streaming?.preview?.interleavedProgress === true &&
-    Boolean(reasoningLane.stream);
-  const INTERLEAVED_LINE_MAX_CHARS = 200;
+  const interleavedProgressEnabled = resolveInterleavedProgressEnabled({
+    toolProgressEnabled: streamToolProgressEnabled,
+    configEnabled: telegramCfg.streaming?.preview?.interleavedProgress,
+    hasReasoningLane: Boolean(reasoningLane.stream),
+  });
   let interleavedBody = "";
   let interleavedReasoningCheckpoint = 0;
   let interleavedTimer: ReturnType<typeof setInterval> | undefined;
@@ -1211,37 +1217,33 @@ export const dispatchTelegramMessage = async ({
     }
     interleavedTimerStartedAt = undefined;
   };
-  const renderInterleavedText = (): string => {
-    const timerSuffix =
-      interleavedTimerStartedAt !== undefined
-        ? `\n_${Math.floor((Date.now() - interleavedTimerStartedAt) / 1000)}s — still running_`
-        : "";
-    return `Thinking\n\n${interleavedBody.trimEnd()}${timerSuffix}`;
-  };
   const updateInterleavedLane = (): boolean => {
     if (!interleavedProgressEnabled || !reasoningLane.stream) {
       return false;
     }
     reasoningLane.hasStreamedMessage = true;
     reasoningLane.finalized = true;
-    reasoningLane.lastPartialText = renderInterleavedText();
+    reasoningLane.lastPartialText = renderInterleavedMessage({
+      body: interleavedBody,
+      timerStartedAt: interleavedTimerStartedAt,
+    });
     reasoningLane.stream.update(reasoningLane.lastPartialText);
     return true;
   };
   // Append a status line to the interleaved body and optionally arm the rolling
   // timer. Returns false when interleaved mode is off so callers fall back to
-  // the default tool-progress lane. The line is whitespace-collapsed + capped
-  // here; callers must pass already-sanitized text (no raw tool args/output).
+  // the default tool-progress lane. Callers must pass already-safe text (tool
+  // name / event title — never raw tool args or command output).
   const appendInterleavedLine = (line: string, opts?: { startTimer?: boolean }): boolean => {
     if (!interleavedProgressEnabled) {
       return false;
     }
     clearInterleavedTimer();
-    const text = line.replace(/\s+/gu, " ").trim().slice(0, INTERLEAVED_LINE_MAX_CHARS);
-    if (text) {
-      const ts = new Date().toLocaleTimeString();
-      interleavedBody += `\n[${ts}] ${text}\n`;
-    }
+    interleavedBody = appendStatusLine({
+      body: interleavedBody,
+      line,
+      timestamp: new Date().toLocaleTimeString(),
+    });
     if (opts?.startTimer) {
       interleavedTimerStartedAt = Date.now();
       interleavedTimer = setInterval(() => {
@@ -1252,21 +1254,21 @@ export const dispatchTelegramMessage = async ({
     }
     return updateInterleavedLane();
   };
-  // Append the reasoning body (with formatReasoningMessage's "Thinking" header
-  // stripped, since renderInterleavedText supplies the single header) to the
-  // interleaved message. Returns false when interleaved mode is off.
+  // Append the reasoning body to the interleaved message. The body is stored
+  // header-stripped (appendReasoningBody) so updateInterleavedLane's single
+  // "Thinking" header is not duplicated. Returns false when interleaved off.
   const appendInterleavedReasoning = (rawText: string): boolean => {
     if (!interleavedProgressEnabled) {
       return false;
     }
     clearInterleavedTimer();
-    const formatted = splitTelegramReasoningText(rawText, true).reasoningText ?? "";
-    const bodyOnly = formatted.replace(/^Thinking\n\n/u, "");
-    const newPart = bodyOnly.slice(interleavedReasoningCheckpoint);
-    if (newPart) {
-      interleavedBody += newPart;
-      interleavedReasoningCheckpoint = bodyOnly.length;
-    }
+    const next = appendReasoningBody({
+      body: interleavedBody,
+      checkpoint: interleavedReasoningCheckpoint,
+      formattedReasoning: splitTelegramReasoningText(rawText, true).reasoningText ?? "",
+    });
+    interleavedBody = next.body;
+    interleavedReasoningCheckpoint = next.checkpoint;
     return updateInterleavedLane();
   };
 
