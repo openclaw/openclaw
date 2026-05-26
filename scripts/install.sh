@@ -1129,6 +1129,8 @@ NO_ONBOARD=${OPENCLAW_NO_ONBOARD:-0}
 NO_PROMPT=${OPENCLAW_NO_PROMPT:-0}
 DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
+ZORG_INSTALL_MODE=${ZORG_INSTALL_MODE:-first-run}
+ZORG_ALLOW_EXISTING_UPGRADE=${ZORG_ALLOW_EXISTING_UPGRADE:-0}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
 GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
@@ -1163,6 +1165,7 @@ Options:
   --verify                              Run a post-install smoke verify
   --dry-run                             Print what would happen (no changes)
   --verbose                             Print debug output (set -x, npm verbose)
+  --existing-install                    Explicitly allow updating an existing host OpenClaw install
   --help, -h                            Show this help
 
 Environment variables:
@@ -1175,6 +1178,8 @@ Environment variables:
   OPENCLAW_VERIFY_INSTALL=1
   OPENCLAW_DRY_RUN=1
   OPENCLAW_NO_ONBOARD=1
+  ZORG_INSTALL_MODE=first-run|existing   Default: first-run
+  ZORG_ALLOW_EXISTING_UPGRADE=0|1         Default: 0
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
@@ -1205,6 +1210,11 @@ parse_args() {
                 ;;
             --verbose)
                 VERBOSE=1
+                shift
+                ;;
+            --existing-install)
+                ZORG_INSTALL_MODE="existing"
+                ZORG_ALLOW_EXISTING_UPGRADE=1
                 shift
                 ;;
             --verify)
@@ -2004,6 +2014,12 @@ ensure_openclaw_bin_link() {
 # Check for existing OpenClaw installation
 check_existing_openclaw() {
     if [[ -n "$(type -P openclaw 2>/dev/null || true)" ]]; then
+        if [[ "$ZORG_INSTALL_MODE" == "first-run" && "$ZORG_ALLOW_EXISTING_UPGRADE" != "1" ]]; then
+            ui_warn "Existing host OpenClaw installation detected; first-run mode will not upgrade it"
+            ui_info "For a clean first-run install, remove or isolate the existing host install and rerun this installer."
+            ui_info "To intentionally repair an existing host install, rerun with --existing-install or ZORG_INSTALL_MODE=existing."
+            exit 3
+        fi
         ui_info "Existing OpenClaw installation detected, upgrading"
         return 0
     fi
@@ -2983,7 +2999,7 @@ run_zorg_memorydb_bootstrap() {
     for candidate in "${candidates[@]}"; do
         if [[ -n "$candidate" && -f "$candidate" ]]; then
             ui_stage "Installing Zorg MemoryDB and LAN command chat"
-            OPENCLAW_INSTALL_IN_PROGRESS=1 bash "$candidate" --from-openclaw-install
+            OPENCLAW_INSTALL_IN_PROGRESS=1 ZORG_INSTALL_MODE="$ZORG_INSTALL_MODE" bash "$candidate" --from-openclaw-install
             return $?
         fi
     done
@@ -3014,7 +3030,7 @@ run_zorg_memorydb_bootstrap() {
         return 1
     fi
 
-    OPENCLAW_INSTALL_IN_PROGRESS=1 bash "$candidate" --from-openclaw-install
+    OPENCLAW_INSTALL_IN_PROGRESS=1 ZORG_INSTALL_MODE="$ZORG_INSTALL_MODE" bash "$candidate" --from-openclaw-install
 }
 
 

@@ -234,6 +234,40 @@ function shouldAutoInstall() {
   return lifecycle === "preinstall" || process.env.OPENCLAW_AUTO_INSTALL_NODE === "1";
 }
 
+function envTruthy(name) {
+  return /^(1|true|yes|on)$/i.test(String(process.env[name] || ""));
+}
+
+function isGlobalNpmLifecycle() {
+  return envTruthy("npm_config_global") || envTruthy("NPM_CONFIG_GLOBAL");
+}
+
+function existingOpenClawBinary() {
+  if (process.platform === "win32") {
+    return "";
+  }
+  return firstPathCommand("openclaw");
+}
+
+function failClosedOnAccidentalExistingInstallUpgrade() {
+  var lifecycle = String(process.env.npm_lifecycle_event || "");
+  if (lifecycle !== "preinstall" || !isGlobalNpmLifecycle()) {
+    return;
+  }
+  if (process.env.ZORG_INSTALL_MODE === "existing" || envTruthy("ZORG_ALLOW_EXISTING_UPGRADE")) {
+    return;
+  }
+  var existing = existingOpenClawBinary();
+  if (!existing) {
+    return;
+  }
+  console.error("[openclaw] Existing host OpenClaw binary detected: " + existing);
+  console.error("[openclaw] Refusing to treat this direct GitHub npm command as a first-run install because it would upgrade an existing host install.");
+  console.error("[openclaw] For a clean first-run install, remove or isolate the existing host install first, then install OpenClaw before applying Zorg MemoryDB and LAN command chat.");
+  console.error("[openclaw] To intentionally repair an existing host install, rerun with ZORG_INSTALL_MODE=existing ZORG_ALLOW_EXISTING_UPGRADE=1.");
+  process.exit(3);
+}
+
 function printManualInstallHelp() {
   console.error(
     [
@@ -248,6 +282,7 @@ function printManualInstallHelp() {
 }
 
 var current = parseVersion(process.version);
+failClosedOnAccidentalExistingInstallUpgrade();
 if (!isAtLeast(current, minimum)) {
   if (shouldAutoInstall()) {
     console.error("[openclaw] Node.js " + process.version + " is too old; attempting automatic Node.js >=22.19.0 install.");

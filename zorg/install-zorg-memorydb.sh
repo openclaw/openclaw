@@ -15,6 +15,8 @@ ZORG_DB_PASSWORD="${ZORG_DB_PASSWORD:-}"
 LAN_CHAT_PORT="${LAN_CHAT_PORT:-3001}"
 LAN_CHAT_HOST="${LAN_CHAT_HOST:-0.0.0.0}"
 OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH="${OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH:-true}"
+ZORG_INSTALL_MODE="${ZORG_INSTALL_MODE:-first-run}"
+ZORG_PATCH_EXISTING_DOCKER_CONFIG="${ZORG_PATCH_EXISTING_DOCKER_CONFIG:-0}"
 
 OPENCLAW_EFFECTIVE_HOME="${OPENCLAW_HOME:-$HOME}"
 if [[ "$OPENCLAW_EFFECTIVE_HOME" == "~" ]]; then
@@ -448,6 +450,14 @@ main() {
   while [[ "${1:-}" == --* ]]; do
     case "$1" in
       --from-openclaw-install) shift ;;
+      --install-mode)
+        ZORG_INSTALL_MODE="${2:-first-run}"
+        shift 2
+        ;;
+      --patch-existing-docker-config)
+        ZORG_PATCH_EXISTING_DOCKER_CONFIG=1
+        shift
+        ;;
       *) warn "Ignoring unknown option: $1"; shift ;;
     esac
   done
@@ -456,7 +466,11 @@ main() {
   copy_packaged_components
   ensure_postgres_database
   write_memory_config
-  write_gateway_tui_compat_config
+  if [[ "$ZORG_PATCH_EXISTING_DOCKER_CONFIG" == "1" ]]; then
+    write_gateway_tui_compat_config
+  else
+    log "Skipping existing Docker/TUI gateway config patch; set ZORG_PATCH_EXISTING_DOCKER_CONFIG=1 only for an intentional existing Docker repair."
+  fi
   install_agent_readable_markdown
   import_markdown_rules
   prepare_lan_chat
