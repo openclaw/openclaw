@@ -7,9 +7,11 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  fetchClawHubSkillCard,
   fetchClawHubPackageArtifact,
   fetchClawHubPackageReadiness,
   fetchClawHubPackageSecurity,
+  fetchClawHubSkillVerification,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -297,6 +299,110 @@ describe("clawhub helpers", () => {
     expect(url.origin).toBe("https://internal.example.com");
     expect(url.pathname).toBe("/clawhub/api/v1/search");
     expect(url.searchParams.get("q")).toBe("calendar");
+  });
+
+  it("fetches skill verification reports and lets version take precedence over tag", async () => {
+    let requestedUrl = "";
+    const envelope = {
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
+      publisher: { handle: "openclaw" },
+      version: { version: "1.2.3", tag: "stable" },
+      card: {
+        available: true,
+        url: "https://clawhub.ai/api/v1/skills/agentreceipt/card?version=1.2.3",
+      },
+      artifact: {
+        sourceFingerprint: "source-fp",
+        bundleFingerprints: ["generated-bundle-fp"],
+      },
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    };
+
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "agentreceipt",
+        version: "1.2.3",
+        tag: "stable",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(JSON.stringify(envelope), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      }),
+    ).resolves.toEqual(envelope);
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/agentreceipt/verify");
+    expect(url.searchParams.get("version")).toBe("1.2.3");
+    expect(url.searchParams.has("tag")).toBe(false);
+  });
+
+  it("returns failed skill verification reports with missing card reasons", async () => {
+    const envelope = {
+      schema: "clawhub.skill.verify.v1",
+      ok: false,
+      decision: "fail",
+      reasons: ["card.missing"],
+      skill: { slug: "agentreceipt" },
+      publisher: null,
+      version: { version: "1.2.3" },
+      card: { available: false },
+      artifact: null,
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    };
+
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "agentreceipt",
+        fetchImpl: async () =>
+          new Response(JSON.stringify(envelope), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).resolves.toEqual(envelope);
+  });
+
+  it("fetches generated Skill Card markdown and applies tag queries", async () => {
+    let requestedUrl = "";
+
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        tag: "latest",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response("# Agent Receipt\n\nVerified by ClawHub.\n", {
+            status: 200,
+            headers: { "content-type": "text/markdown; charset=utf-8" },
+          });
+        },
+      }),
+    ).resolves.toBe("# Agent Receipt\n\nVerified by ClawHub.\n");
+
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe("/api/v1/skills/agentreceipt/card");
+    expect(url.searchParams.get("tag")).toBe("latest");
+    expect(url.searchParams.has("version")).toBe(false);
+  });
+
+  it("wraps non-200 skill verification responses", async () => {
+    await expect(
+      fetchClawHubSkillVerification({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response("not found", { status: 404 }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 
   it("fetches typed package readiness reports", async () => {

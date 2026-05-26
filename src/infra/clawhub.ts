@@ -303,6 +303,23 @@ export type ClawHubSkillDetail = {
   } | null;
 };
 
+export type ClawHubSkillVerificationDecision = "pass" | "fail" | (string & {});
+
+export type ClawHubSkillVerificationResponse = {
+  schema: "clawhub.skill.verify.v1";
+  ok: boolean;
+  decision: ClawHubSkillVerificationDecision;
+  reasons: string[];
+  skill: unknown;
+  publisher: unknown;
+  version: unknown;
+  card: unknown;
+  artifact: unknown;
+  provenance: unknown;
+  security: unknown;
+  signature: unknown;
+};
+
 export type ClawHubSkillListResponse = {
   items: Array<{
     slug: string;
@@ -658,6 +675,18 @@ export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
 }
 
+function buildVersionOrTagSearch(params: {
+  version?: string;
+  tag?: string;
+}): { version?: string; tag?: string } | undefined {
+  const version = normalizeOptionalString(params.version);
+  if (version) {
+    return { version };
+  }
+  const tag = normalizeOptionalString(params.tag);
+  return tag ? { tag } : undefined;
+}
+
 function formatSha256Integrity(bytes: Uint8Array): string {
   const digest = createHash("sha256").update(bytes).digest("base64");
   return `sha256-${digest}`;
@@ -873,6 +902,53 @@ export async function fetchClawHubSkillDetail(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
   });
+}
+
+export async function fetchClawHubSkillVerification(params: {
+  slug: string;
+  version?: string;
+  tag?: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubSkillVerificationResponse> {
+  return await fetchJson<ClawHubSkillVerificationResponse>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    search: buildVersionOrTagSearch(params),
+  });
+}
+
+export async function fetchClawHubSkillCard(params: {
+  slug: string;
+  version?: string;
+  tag?: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<string> {
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/card`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    search: buildVersionOrTagSearch(params),
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `skill card for ${params.slug}`,
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 export async function listClawHubSkills(params: {
