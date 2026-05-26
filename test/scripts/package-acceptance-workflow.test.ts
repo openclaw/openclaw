@@ -88,7 +88,9 @@ describe("package acceptance workflow", () => {
     expect(packageJson.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+\+sha512\.[a-f0-9]+$/u);
     expect(setupPnpmAction).toContain("uses: pnpm/action-setup@");
     expect(setupPnpmAction).toContain("package_json_file: ${{ inputs.package-manager-file }}");
-    expect(setupPnpmAction).toContain("cache: ${{ inputs.use-actions-cache }}");
+    expect(setupPnpmAction).toContain(
+      "cache: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
+    );
     expect(setupPnpmAction).toContain("cache_dependency_path: ${{ inputs.lockfile-path }}");
     expect(setupPnpmAction).not.toContain("actions/cache");
     expect(setupPnpmAction).not.toContain("shasum");
