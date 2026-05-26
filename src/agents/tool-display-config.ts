@@ -516,6 +516,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    transcripts: {
+      emoji: "📝",
+      title: "Transcripts",
+      detailKeys: ["sessionId", "sessionSelector", "source", "provider", "path"],
+    },
     music_generate: {
       emoji: "🎵",
       title: "Music Generation",

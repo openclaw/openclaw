@@ -818,6 +818,17 @@
         }
       }
     },
+    "transcripts": {
+      "emoji": "📝",
+      "title": "Transcripts",
+      "detailKeys": [
+        "sessionId",
+        "sessionSelector",
+        "source",
+        "provider",
+        "path"
+      ]
+    },
     "music_generate": {
       "emoji": "🎵",
       "title": "Music Generation",

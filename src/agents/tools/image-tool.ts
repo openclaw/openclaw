@@ -586,11 +586,11 @@ async function runImagePrompt(params: {
         cfg: providerCfg,
         provider,
         model: modelId,
-        providerRegistry: providerRegistry as Map<string, MediaUnderstandingProvider>,
+        providerRegistry,
       });
       const imageProvider = imageToolProviderDeps.getMediaUnderstandingProvider(
         provider,
-        providerRegistry as Map<string, MediaUnderstandingProvider>,
+        providerRegistry,
       );
       if (
         params.images.length > 1 &&
