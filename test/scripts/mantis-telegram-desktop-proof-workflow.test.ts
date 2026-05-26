@@ -332,6 +332,19 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
   });
 
+  it("passes AWS capacity regions to Crabbox warmup", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const regions = "eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2";
+
+    expect(workflow.env?.CRABBOX_CAPACITY_REGIONS).toBe(regions);
+
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+    expect(agent.env?.CRABBOX_CAPACITY_REGIONS).toBe("${{ env.CRABBOX_CAPACITY_REGIONS }}");
+
+    const prepare = workflowStep("Prepare Codex user");
+    expect(prepare.run).toContain("CRABBOX_PROVIDER CRABBOX_CAPACITY_REGIONS");
+  });
+
   it("runs the Mantis Codex agent in fast medium-effort mode", () => {
     const agent = workflowStep("Run Codex Mantis Telegram agent");
 
