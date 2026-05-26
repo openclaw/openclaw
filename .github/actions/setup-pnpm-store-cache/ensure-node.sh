@@ -101,10 +101,16 @@ openclaw_node_download_platform() {
     Linux:aarch64 | Linux:arm64) printf 'linux-arm64\n' ;;
     Darwin:x86_64) printf 'darwin-x64\n' ;;
     Darwin:arm64) printf 'darwin-arm64\n' ;;
+    MINGW*:x86_64 | MSYS*:x86_64 | CYGWIN*:x86_64) printf 'win-x64\n' ;;
+    MINGW*:aarch64 | MINGW*:arm64 | MSYS*:aarch64 | MSYS*:arm64 | CYGWIN*:aarch64 | CYGWIN*:arm64) printf 'win-arm64\n' ;;
     *)
       return 1
       ;;
   esac
+}
+
+openclaw_windows_path() {
+  cygpath -w "$1" 2>/dev/null || printf '%s\n' "$1"
 }
 
 openclaw_download_node() {
@@ -113,11 +119,26 @@ openclaw_download_node() {
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
   install_root="${RUNNER_TEMP:-/tmp}/openclaw-node-${version}-${platform}"
-  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
   mkdir -p "$install_root"
-  echo "Downloading Node ${version} from ${archive_url}"
-  curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
-  openclaw_prepend_node_bin "$install_root/bin"
+  if [[ "$platform" == win-* ]]; then
+    local archive_path extracted_dir
+    archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
+    archive_path="$install_root/node.zip"
+    extracted_dir="$install_root/node-${version}-${platform}"
+    echo "Downloading Node ${version} from ${archive_url}"
+    curl -fsSL "$archive_url" -o "$archive_path"
+    pwsh -NoProfile -Command "Expand-Archive -LiteralPath '$(openclaw_windows_path "$archive_path")' -DestinationPath '$(openclaw_windows_path "$install_root")' -Force"
+    if [[ -d "$extracted_dir" ]]; then
+      openclaw_prepend_node_bin "$extracted_dir"
+    else
+      openclaw_prepend_node_bin "$install_root"
+    fi
+  else
+    archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
+    echo "Downloading Node ${version} from ${archive_url}"
+    curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
+    openclaw_prepend_node_bin "$install_root/bin"
+  fi
 }
 
 openclaw_ensure_node() {
