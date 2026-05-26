@@ -1826,6 +1826,7 @@
     "express": "5.2.1",
     "file-type": "22.0.1",
     "grammy": "1.43.0",
+    "global-agent": "4.1.3",
     "ipaddr.js": "2.4.0",
     "jiti": "2.7.0",
     "json5": "2.2.3",
