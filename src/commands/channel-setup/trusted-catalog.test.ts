@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 
-const listChannelPluginCatalogEntriesUnfiltered = vi.hoisted(() =>
+const listRawChannelPluginCatalogEntries = vi.hoisted(() =>
   vi.fn((_opts?: unknown): ChannelPluginCatalogEntry[] => []),
 );
 const getChannelPluginCatalogEntry = vi.hoisted(() =>
@@ -16,8 +16,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntriesUnfiltered: (opts?: unknown) =>
-    listChannelPluginCatalogEntriesUnfiltered(opts),
+  listRawChannelPluginCatalogEntries: (opts?: unknown) => listRawChannelPluginCatalogEntries(opts),
   getChannelPluginCatalogEntry: (id?: unknown, opts?: unknown) =>
     getChannelPluginCatalogEntry(id, opts),
 }));
@@ -125,7 +124,7 @@ describe("trusted catalog helpers", () => {
       pluginId: "my-cool-plugin",
       origin: "workspace",
     });
-    listChannelPluginCatalogEntriesUnfiltered.mockImplementation((opts?: unknown) =>
+    listRawChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
       (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
         ? []
         : [workspaceOnlyEntry],
@@ -146,7 +145,7 @@ describe("trusted catalog helpers", () => {
       pluginId: "my-cool-plugin",
       origin: "workspace",
     });
-    listChannelPluginCatalogEntriesUnfiltered.mockImplementation((opts?: unknown) =>
+    listRawChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
       (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
         ? []
         : [workspaceOnlyEntry],
