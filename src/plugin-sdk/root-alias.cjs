@@ -362,10 +362,13 @@ function normalizeDiagnosticEventsModule(mod) {
   if (typeof mod.onDiagnosticEvent === "function") {
     return mod;
   }
-  if (typeof mod.r === "function") {
+  const fn = Object.values(mod).find(
+    (v) => typeof v === "function" && v.name === "onDiagnosticEvent",
+  );
+  if (fn) {
     return {
       ...mod,
-      onDiagnosticEvent: mod.r,
+      onDiagnosticEvent: fn,
     };
   }
   return mod;
