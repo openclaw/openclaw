@@ -88,3 +88,4 @@ struct RootTabs: View {
             cameraHUDKind: self.appModel.cameraHUDKind)
     }
 }
+
