@@ -139,6 +139,7 @@ export type SessionMessageSubscriberRegistry = {
   unsubscribe: (connId: string, sessionKey: string) => void;
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
+  getSessionsForConn: (connId: string) => ReadonlySet<string>;
   clear: () => void;
 };
 
@@ -247,6 +248,13 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         return empty;
       }
       return sessionToConnIds.get(normalizedSessionKey) ?? empty;
+    },
+    getSessionsForConn: (connId: string) => {
+      const normalizedConnId = normalize(connId);
+      if (!normalizedConnId) {
+        return empty;
+      }
+      return connToSessionKeys.get(normalizedConnId) ?? empty;
     },
     clear: () => {
       sessionToConnIds.clear();

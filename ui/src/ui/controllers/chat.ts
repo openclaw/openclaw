@@ -29,6 +29,7 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const pendingChatDrafts = new WeakMap<object, { runId: string; text: string }>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -565,6 +566,7 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  pendingChatDrafts.set(state as object, { runId, text: message });
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -580,6 +582,7 @@ export async function sendChatMessage(
       clearChatStream: true,
     });
     state.lastError = error;
+    pendingChatDrafts.delete(state as object);
     state.chatMessages = [
       ...state.chatMessages,
       {
@@ -757,8 +760,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
+    const pendingDraft = pendingChatDrafts.get(state as object);
+    if (
+      pendingDraft?.runId === payload.runId &&
+      !state.chatMessage.trim() &&
+      pendingDraft.text.trim()
+    ) {
+      state.chatMessage = pendingDraft.text;
+    }
     reconcileTerminalRun("interrupted", "failed");
     state.lastError = payload.errorMessage ?? "chat error";
+    pendingChatDrafts.delete(state as object);
   }
   return payload.state;
 }

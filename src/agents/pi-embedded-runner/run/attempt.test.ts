@@ -520,6 +520,24 @@ describe("resolveAttemptToolPolicyMessageProvider", () => {
   it("falls back to message channel when provider is omitted", () => {
     expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
   });
+
+  it("prefers deliverable messageChannel over internal webchat provider", () => {
+    expect(
+      resolveAttemptToolPolicyMessageProvider({
+        messageChannel: "discord",
+        messageProvider: "webchat",
+      }),
+    ).toBe("discord");
+  });
+
+  it("prefers deliverable messageChannel over internal provider", () => {
+    expect(
+      resolveAttemptToolPolicyMessageProvider({
+        messageChannel: "discord",
+        messageProvider: "internal",
+      }),
+    ).toBe("discord");
+  });
 });
 
 describe("shouldRunLlmOutputHooksForAttempt", () => {

@@ -1005,7 +1005,86 @@ function findExistingTranscriptPath(
   agentId?: string,
 ): string | null {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  return candidates.find((p) => fs.existsSync(p)) ?? null;
+  let emptyCandidate: string | null = null;
+  for (const candidate of candidates) {
+    try {
+      const stat = fs.statSync(candidate);
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (stat.size > 0) {
+        return candidate;
+      }
+      emptyCandidate ??= candidate;
+    } catch {
+      // Ignore unreadable or missing candidates and keep scanning.
+    }
+  }
+  const archivedCandidate = findLatestArchivedTranscriptCandidate(candidates);
+  if (archivedCandidate) {
+    return archivedCandidate;
+  }
+  return emptyCandidate;
+}
+
+function findLatestArchivedTranscriptCandidate(candidates: readonly string[]): string | null {
+  let latest: { path: string; mtimeMs: number; archiveStamp: string } | null = null;
+  for (const candidate of candidates) {
+    const archived = findLatestArchivedTranscriptSibling(candidate);
+    if (!archived) {
+      continue;
+    }
+    if (
+      !latest ||
+      archived.mtimeMs > latest.mtimeMs ||
+      (archived.mtimeMs === latest.mtimeMs && archived.archiveStamp > latest.archiveStamp)
+    ) {
+      latest = archived;
+    }
+  }
+  return latest?.path ?? null;
+}
+
+function findLatestArchivedTranscriptSibling(
+  candidate: string,
+): { path: string; mtimeMs: number; archiveStamp: string } | null {
+  const baseName = path.basename(candidate);
+  const dir = path.dirname(candidate);
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  let latest: { path: string; mtimeMs: number; archiveStamp: string } | null = null;
+  for (const name of names) {
+    const archiveStamp =
+      name.startsWith(`${baseName}.reset.`)
+        ? name.slice((`${baseName}.reset.`).length)
+        : name.startsWith(`${baseName}.deleted.`)
+          ? name.slice((`${baseName}.deleted.`).length)
+          : null;
+    if (!archiveStamp) {
+      continue;
+    }
+    const archivedPath = path.join(dir, name);
+    try {
+      const stat = fs.statSync(archivedPath);
+      if (!stat.isFile() || stat.size === 0) {
+        continue;
+      }
+      if (
+        !latest ||
+        stat.mtimeMs > latest.mtimeMs ||
+        (stat.mtimeMs === latest.mtimeMs && archiveStamp > latest.archiveStamp)
+      ) {
+        latest = { path: archivedPath, mtimeMs: stat.mtimeMs, archiveStamp };
+      }
+    } catch {
+      // Ignore per-file stat failures and keep scanning siblings.
+    }
+  }
+  return latest;
 }
 
 function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | null): T | null {

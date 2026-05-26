@@ -47,6 +47,9 @@ type GatewayRequestContextParams = {
   unsubscribeSessionEvents: GatewayRequestContext["unsubscribeSessionEvents"];
   subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"];
   unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"];
+  getSessionMessageSubscriptionsForConn: NonNullable<
+    GatewayRequestContext["getSessionMessageSubscriptionsForConn"]
+  >;
   unsubscribeAllSessionEvents: GatewayRequestContext["unsubscribeAllSessionEvents"];
   getSessionEventSubscriberConnIds: GatewayRequestContext["getSessionEventSubscriberConnIds"];
   registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
@@ -167,6 +170,7 @@ export function createGatewayRequestContext(
     unsubscribeSessionEvents: params.unsubscribeSessionEvents,
     subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
+    getSessionMessageSubscriptionsForConn: params.getSessionMessageSubscriptionsForConn,
     unsubscribeAllSessionEvents: params.unsubscribeAllSessionEvents,
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,

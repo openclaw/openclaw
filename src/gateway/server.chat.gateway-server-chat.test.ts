@@ -1305,6 +1305,50 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.history backfills usage family messages from reset archives", async () => {
+    await withMainSessionStore(async (dir) => {
+      const currentSessionId = "sess-current";
+      const previousSessionId = "sess-previous";
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: currentSessionId,
+            updatedAt: Date.now(),
+            usageFamilySessionIds: [previousSessionId, currentSessionId],
+          },
+        },
+      });
+
+      await fs.writeFile(
+        path.join(dir, `${currentSessionId}.jsonl`),
+        [
+          JSON.stringify({ type: "session", version: 1, id: currentSessionId }),
+          JSON.stringify({ message: { role: "assistant", content: "current reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(dir, `${previousSessionId}.jsonl.reset.2026-05-26T00-36-56.919Z`),
+        [
+          JSON.stringify({ type: "session", version: 1, id: previousSessionId }),
+          JSON.stringify({ message: { role: "user", content: "older prompt" } }),
+          JSON.stringify({ message: { role: "assistant", content: "older reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(res.ok).toBe(true);
+      const texts = collectHistoryTextValues(res.payload?.messages ?? []);
+      expect(texts).toContain("older prompt");
+      expect(texts).toContain("older reply");
+      expect(texts).toContain("current reply");
+    });
+  });
+
   test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {

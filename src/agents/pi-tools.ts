@@ -604,8 +604,10 @@ export function createOpenClawCodingTools(options?: {
     mergeToolSearchControlAllowlist(agentProviderPolicy);
   const groupPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(groupPolicy);
   const senderPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(senderPolicy);
-  const sandboxToolPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(sandboxToolPolicy);
+  const sandboxToolPolicyWithToolSearchControls = mergeAlsoAllowPolicy(sandboxToolPolicy, [
+    ...(options?.forceMessageTool ? ["message"] : []),
+    ...toolSearchControlAllowlist,
+  ]);
   const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,

@@ -322,6 +322,69 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(respond)?.[0]).toBe(true);
   });
 
+  it("prefers deliveryContext.channel over webchat origin for discord channel sessions", async () => {
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "agent:main:discord:channel:1491697090458292415",
+      entry: {
+        sessionId: "session-discord-channel",
+        updatedAt: 1,
+        lastChannel: "discord",
+        lastAccountId: "default",
+        lastTo: "channel:1491697090458292415",
+        lastThreadId: "1491697090458292415",
+        origin: {
+          provider: "webchat",
+          accountId: "default",
+          chatType: "direct",
+          threadId: "1491697090458292415",
+        },
+        groupId: "1491697090458292415",
+        groupChannel: "#openclaw-setup",
+        space: "1490538114534608968",
+        chatType: "channel",
+        modelProvider: "openai",
+        model: "gpt-5.4-mini",
+      },
+    } as never);
+    runtimeMocks.deliveryContextFromSession.mockReturnValueOnce({
+      channel: "discord",
+      to: "channel:1491697090458292415",
+      accountId: "default",
+      threadId: "1491697090458292415",
+    });
+    runtimeMocks.resolveSessionModelRef.mockReturnValueOnce({
+      provider: "openai",
+      model: "gpt-5.4-mini",
+    });
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "agent:main:discord:channel:1491697090458292415",
+    });
+    await invoke();
+
+    const inventoryParams = resolveEffectiveToolInventoryArg();
+    expect(inventoryParams?.messageProvider).toBe("discord");
+    expect(inventoryParams?.currentChannelId).toBe("channel:1491697090458292415");
+    expect(inventoryParams?.currentThreadTs).toBe("1491697090458292415");
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+  });
+
+  it("passes senderIsOwner=true for admin-scoped callers", async () => {
+    const respond = vi.fn();
+    await toolsEffectiveHandlers["tools.effective"]({
+      params: { sessionKey: "main:abc" },
+      respond: respond as never,
+      context: { getRuntimeConfig: () => ({}) } as never,
+      client: {
+        connect: { scopes: ["operator.admin"] },
+      } as never,
+      req: { type: "req", id: "req-1", method: "tools.effective" },
+      isWebchatConnect: () => false,
+    });
+    expect(resolveEffectiveToolInventoryArg()?.senderIsOwner).toBe(true);
+  });
+
   it("rejects agent ids that do not match the session agent", async () => {
     const { respond, invoke } = createInvokeParams({
       sessionKey: "main:abc",

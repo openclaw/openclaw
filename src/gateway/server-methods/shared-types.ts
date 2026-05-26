@@ -96,6 +96,7 @@ export type GatewayRequestContext = {
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  getSessionMessageSubscriptionsForConn?: (connId: string) => ReadonlySet<string>;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;

@@ -231,6 +231,47 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("forces the message tool in inventory for channel sessions with message_tool visibility", async () => {
+    const { resolveEffectiveToolInventory, createToolsMock } = await loadHarness();
+
+    resolveEffectiveToolInventory({
+      cfg: {
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "message_tool" },
+        },
+      },
+      sessionKey: "agent:main:discord:channel:C123",
+    });
+
+    expect(createToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:C123",
+        forceMessageTool: true,
+      }),
+    );
+  });
+
+  it("forces the message tool in inventory for direct sessions with message_tool visibility", async () => {
+    const { resolveEffectiveToolInventory, createToolsMock } = await loadHarness();
+
+    resolveEffectiveToolInventory({
+      cfg: {
+        messages: {
+          visibleReplies: "message_tool",
+        },
+      },
+      sessionKey: "agent:main:discord:direct:U123",
+    });
+
+    expect(createToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:direct:U123",
+        forceMessageTool: true,
+      }),
+    );
+  });
+
   it("does not let one plugin project metadata onto another plugin tool", async () => {
     const registry = createEmptyPluginRegistry();
     registry.toolMetadata = [

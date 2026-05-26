@@ -100,6 +100,19 @@ const TASK_RUN_SELECT_COLUMNS = `
   terminal_outcome
 `;
 
+function isReadonlyTaskRegistryError(error: unknown): boolean {
+  const errno = error as NodeJS.ErrnoException | undefined;
+  if (errno?.code === "EPERM" || errno?.code === "EACCES" || errno?.code === "EROFS") {
+    return true;
+  }
+  const errstr =
+    typeof errno === "object" && errno && "errstr" in errno && typeof errno.errstr === "string"
+      ? errno.errstr
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return /readonly database/i.test(errstr) || /readonly database/i.test(message);
+}
+
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
     return Number(value);
@@ -493,6 +506,30 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
   return cachedDatabase;
 }
 
+function loadTaskRegistryStateReadOnlyFromSqlite(pathname: string): TaskRegistryStoreSnapshot {
+  if (!existsSync(pathname)) {
+    return {
+      tasks: new Map(),
+      deliveryStates: new Map(),
+    };
+  }
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(pathname, { readOnly: true });
+  try {
+    const statements = createStatements(db);
+    const taskRows = statements.selectAll.all() as TaskRegistryRow[];
+    const deliveryRows = statements.selectAllDeliveryStates.all() as TaskDeliveryStateRow[];
+    return {
+      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      deliveryStates: new Map(
+        deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+      ),
+    };
+  } finally {
+    db.close();
+  }
+}
+
 function withWriteTransaction(write: (statements: TaskRegistryStatements) => void) {
   const { db, path, statements } = openTaskRegistryDatabase();
   db.exec("BEGIN IMMEDIATE");
@@ -507,13 +544,27 @@ function withWriteTransaction(write: (statements: TaskRegistryStatements) => voi
 }
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
-  const { statements } = openTaskRegistryDatabase();
-  const taskRows = statements.selectAll.all() as TaskRegistryRow[];
-  const deliveryRows = statements.selectAllDeliveryStates.all() as TaskDeliveryStateRow[];
-  return {
-    tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
-    deliveryStates: new Map(deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)])),
-  };
+  try {
+    const { statements } = openTaskRegistryDatabase();
+    const taskRows = statements.selectAll.all() as TaskRegistryRow[];
+    const deliveryRows = statements.selectAllDeliveryStates.all() as TaskDeliveryStateRow[];
+    return {
+      tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
+      deliveryStates: new Map(
+        deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)]),
+      ),
+    };
+  } catch (error) {
+    if (!isReadonlyTaskRegistryError(error)) {
+      throw error;
+    }
+    const pathname = resolveTaskRegistrySqlitePath(process.env);
+    log.debug("task-registry sqlite snapshot falling back to read-only open", {
+      path: pathname,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return loadTaskRegistryStateReadOnlyFromSqlite(pathname);
+  }
 }
 
 export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {

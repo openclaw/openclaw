@@ -1228,6 +1228,23 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).not.toContain("browser");
   });
 
+  it("re-allows message through sandbox only for forced source reply delivery", () => {
+    const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
+    const sandbox = createPiToolsSandboxContext({
+      workspaceDir: sandboxDir,
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
+      tools: {
+        allow: ["read"],
+        deny: [],
+      },
+    });
+
+    expect(toolNameList(createOpenClawCodingTools({ sandbox }))).not.toContain("message");
+    expect(toolNameList(createOpenClawCodingTools({ sandbox, forceMessageTool: true }))).toContain(
+      "message",
+    );
+  });
+
   it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
     const sandboxDir = path.join(os.tmpdir(), "openclaw-sandbox");
     const sandbox = createPiToolsSandboxContext({

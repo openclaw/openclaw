@@ -57,45 +57,8 @@ function pruneStaleRuntimeSymlinks() {
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
 }
 
-export function cleanTsdownOutputRoots(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  const fsImpl = params.fs ?? fs;
-  for (const root of TSDOWN_OUTPUT_ROOTS) {
-    const rootPath = path.join(cwd, root);
-    try {
-      fsImpl.rmSync(rootPath, { force: true, recursive: true });
-    } catch {
-      // Best-effort cleanup. tsdown will recreate the output tree it needs.
-    }
-  }
-}
-
-export function pruneStaleRootChunkFiles(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  const fsImpl = params.fs ?? fs;
-  const roots = TSDOWN_OUTPUT_ROOTS.map((root) => path.join(cwd, root));
-  for (const root of roots) {
-    let entries = [];
-    try {
-      entries = fsImpl.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      if (!HASHED_ROOT_JS_RE.test(entry.name)) {
-        continue;
-      }
-      try {
-        fsImpl.rmSync(path.join(root, entry.name), { force: true });
-      } catch {
-        // Best-effort cleanup. The subsequent build will overwrite any stragglers.
-      }
-    }
-  }
+export function prepareTsdownOutputRoots(params = {}) {
+  void params;
 }
 
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
@@ -437,7 +400,10 @@ if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
+  // Do not pre-delete root chunks before a --no-clean build. A failed or
+  // interrupted build can otherwise leave stable aliases or entrypoints
+  // importing missing hashed files, which breaks the live gateway/CLI.
+  prepareTsdownOutputRoots();
   const invocation = resolveTsdownBuildInvocation();
   const result = await runTsdownBuildInvocation(invocation);
 

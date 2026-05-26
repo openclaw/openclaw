@@ -3,10 +3,9 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  prepareTsdownOutputRoots,
   pruneSourceCheckoutBundledPluginNodeModules,
-  pruneStaleRootChunkFiles,
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   runTsdownBuildInvocation,
@@ -139,11 +138,12 @@ describe("resolveTsdownBuildInvocation", () => {
     rmSync.mockRestore();
   });
 
-  it("prunes stale hashed root chunk files but keeps stable aliases and nested assets", async () => {
+  it("prepares output roots without removing stable aliases or nested runtime entries", async () => {
     const rootDir = createTempDir("openclaw-tsdown-build-");
     const distDir = path.join(rootDir, "dist");
     const distRuntimeDir = path.join(rootDir, "dist-runtime");
     await fsPromises.mkdir(path.join(distDir, "control-ui"), { recursive: true });
+    await fsPromises.mkdir(path.join(distDir, "extensions", "telegram"), { recursive: true });
     await fsPromises.mkdir(distRuntimeDir, { recursive: true });
     await fsPromises.writeFile(path.join(distDir, "delegate-BPjCe4gC.js"), "old delegate\n");
     await fsPromises.writeFile(path.join(distDir, "compact.runtime-2DiEmVcA.js"), "old runtime\n");
@@ -151,12 +151,16 @@ describe("resolveTsdownBuildInvocation", () => {
     await fsPromises.writeFile(path.join(distDir, "entry.js"), "entry\n");
     await fsPromises.writeFile(path.join(distDir, "control-ui", "index.html"), "asset\n");
     await fsPromises.writeFile(
+      path.join(distDir, "extensions", "telegram", "index.js"),
+      "stable plugin entry\n",
+    );
+    await fsPromises.writeFile(
       path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"),
       "old runtime\n",
     );
     await fsPromises.writeFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "alias\n");
 
-    pruneStaleRootChunkFiles({ cwd: rootDir });
+    prepareTsdownOutputRoots({ cwd: rootDir });
 
     await expect(
       fsPromises.readFile(path.join(distDir, "compact.runtime.js"), "utf8"),
@@ -168,34 +172,38 @@ describe("resolveTsdownBuildInvocation", () => {
       fsPromises.readFile(path.join(distDir, "control-ui", "index.html"), "utf8"),
     ).resolves.toBe("asset\n");
     await expect(
+      fsPromises.readFile(path.join(distDir, "extensions", "telegram", "index.js"), "utf8"),
+    ).resolves.toBe("stable plugin entry\n");
+    await expect(
       fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "utf8"),
     ).resolves.toBe("alias\n");
-    await expectPathMissing(path.join(distDir, "delegate-BPjCe4gC.js"));
-    await expectPathMissing(path.join(distDir, "compact.runtime-2DiEmVcA.js"));
-    await expectPathMissing(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"));
+    await expect(fsPromises.readFile(path.join(distDir, "delegate-BPjCe4gC.js"), "utf8")).resolves.toBe(
+      "old delegate\n",
+    );
+    await expect(
+      fsPromises.readFile(path.join(distDir, "compact.runtime-2DiEmVcA.js"), "utf8"),
+    ).resolves.toBe("old runtime\n");
+    await expect(
+      fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"), "utf8"),
+    ).resolves.toBe("old runtime\n");
   });
 
-  it("cleans tsdown output roots before using tsdown --no-clean", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-clean-");
-    const distFile = path.join(rootDir, "dist", "stale.js");
-    const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
-    const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
-    const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
-    await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
-    await fsPromises.writeFile(distFile, "stale\n");
-    await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
-    await fsPromises.writeFile(distRuntimeFile, "stale\n");
-    await fsPromises.writeFile(unrelatedFile, "keep\n");
+  it("keeps hashed root chunks that do not have a stable alias companion", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-build-no-alias-");
+    const distDir = path.join(rootDir, "dist");
+    await fsPromises.mkdir(distDir, { recursive: true });
+    await fsPromises.writeFile(path.join(distDir, "entry.js"), "entry\n");
+    await fsPromises.writeFile(path.join(distDir, "env-D-tqTs3-.js"), "env chunk\n");
+    await fsPromises.writeFile(path.join(distDir, "argv-BHL8kwwH.js"), "argv chunk\n");
 
-    cleanTsdownOutputRoots({ cwd: rootDir });
+    prepareTsdownOutputRoots({ cwd: rootDir });
 
-    await expectPathMissing(distFile);
-    await expectPathMissing(pluginGeneratedFile);
-    await expectPathMissing(path.join(rootDir, "dist-runtime"));
-    await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+    await expect(fsPromises.readFile(path.join(distDir, "env-D-tqTs3-.js"), "utf8")).resolves.toBe(
+      "env chunk\n",
+    );
+    await expect(fsPromises.readFile(path.join(distDir, "argv-BHL8kwwH.js"), "utf8")).resolves.toBe(
+      "argv chunk\n",
+    );
   });
 
   it("prunes untracked generated declaration files that shadow source entries", async () => {

@@ -6,6 +6,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import {
+  isDirectSessionKey,
+  parseRawSessionConversationRef,
+} from "../sessions/session-key-utils.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
@@ -92,6 +96,27 @@ function policyDeniesTool(policy: { deny?: string[] } | undefined, toolName: str
 
 function hasExplicitBrowserIntent(cfg: OpenClawConfig): boolean {
   return cfg.browser?.enabled !== false && Boolean(cfg.browser || cfg.plugins?.entries?.browser);
+}
+
+function shouldForceMessageToolForInventory(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+}): boolean {
+  const messages = params.cfg.messages;
+  if (!messages) {
+    return false;
+  }
+  if (isDirectSessionKey(params.sessionKey)) {
+    return messages.visibleReplies === "message_tool";
+  }
+  const conversation = parseRawSessionConversationRef(params.sessionKey);
+  if (!conversation) {
+    return false;
+  }
+  if (conversation.kind === "group" || conversation.kind === "channel") {
+    return (messages.groupChat?.visibleReplies ?? messages.visibleReplies) === "message_tool";
+  }
+  return false;
 }
 
 function buildToolInventoryNotices(params: {
@@ -232,6 +257,10 @@ export function resolveEffectiveToolInventory(
     modelHasVision: params.modelHasVision,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
+    forceMessageTool: shouldForceMessageToolForInventory({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    }),
   });
   const effectivePolicy = resolveEffectiveToolPolicy({
     config: params.cfg,

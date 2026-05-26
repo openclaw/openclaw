@@ -123,6 +123,23 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+function resolveCurrentSessionKeyForClient(params: {
+  client: GatewayClient | null;
+  context: Pick<GatewayRequestContext, "getSessionMessageSubscriptionsForConn">;
+}): string | undefined {
+  const connId = normalizeOptionalString(params.client?.connId);
+  if (!connId) {
+    return undefined;
+  }
+  const subscribedSessionKeys = Array.from(
+    params.context.getSessionMessageSubscriptionsForConn?.(connId) ?? [],
+  ).filter((key): key is string => typeof key === "string" && key.trim().length > 0);
+  if (subscribedSessionKeys.length !== 1) {
+    return undefined;
+  }
+  return subscribedSessionKeys[0];
+}
+
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
   store: Record<string, SessionEntry>,
@@ -1186,14 +1203,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     respond(true, { session: row }, undefined);
   },
-  "sessions.resolve": async ({ params, respond, context }) => {
+  "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
 
-    const resolved = await resolveSessionKeyFromResolveParams({ cfg, p });
+    const resolved = await resolveSessionKeyFromResolveParams({
+      cfg,
+      p,
+      currentSessionKey: resolveCurrentSessionKeyForClient({ client, context }),
+    });
     if (!resolved.ok) {
       respond(false, undefined, resolved.error);
       return;

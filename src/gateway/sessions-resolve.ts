@@ -93,6 +93,7 @@ function findVisibleSessionIdMatches(params: {
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
+  currentSessionKey?: string;
 }): Promise<SessionsResolveResult> {
   const { cfg, p } = params;
 
@@ -119,6 +120,12 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
+    if (key === "current") {
+      const currentSessionKey = normalizeOptionalString(params.currentSessionKey);
+      if (currentSessionKey) {
+        return { ok: true, key: currentSessionKey };
+      }
+    }
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {

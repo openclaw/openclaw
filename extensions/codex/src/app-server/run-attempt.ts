@@ -4076,8 +4076,12 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
-  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const shouldForceMessage = shouldForceMessageTool(params);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(
+    visionFilteredTools,
+    params.toolsAllow,
+    shouldForceMessage ? ["message"] : undefined,
+  );
   return normalizeAgentRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
     tools: filteredTools,
@@ -4393,12 +4397,10 @@ function addNodeShellDynamicToolsIfNeeded(
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
+  preserveNames?: readonly string[],
 ): T[] {
-  if (!toolsAllow) {
+  if (!toolsAllow || toolsAllow.length === 0) {
     return tools;
-  }
-  if (toolsAllow.length === 0) {
-    return [];
   }
   if (hasWildcardCodexToolsAllow(toolsAllow)) {
     return tools;
@@ -4406,13 +4408,12 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   const allowSet = new Set(
     toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
   );
+  const preserveSet = new Set(
+    (preserveNames ?? []).map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
+  );
   return tools.filter((tool) => {
     const normalized = normalizeCodexDynamicToolName(tool.name);
-    return (
-      allowSet.has(normalized) ||
-      (normalized === "sandbox_exec" && allowSet.has("exec")) ||
-      (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process")))
-    );
+    return allowSet.has(normalized) || preserveSet.has(normalized);
   });
 }
 
@@ -4421,9 +4422,23 @@ function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
 }
 
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
-  return (
-    params.disableMessageTool !== true && params.sourceReplyDeliveryMode === "message_tool_only"
-  );
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    return true;
+  }
+  const messages = params.config?.messages as
+    | { groupChat?: { visibleReplies?: string }; visibleReplies?: string }
+    | undefined;
+  if (!messages) {
+    return false;
+  }
+  const sessionKey = params.sessionKey ?? "";
+  const isGroupOrChannel =
+    sessionKey.includes(":channel:") || sessionKey.includes(":group:");
+  if (isGroupOrChannel) {
+    const groupVisibleReplies = messages.groupChat?.visibleReplies ?? messages.visibleReplies;
+    return groupVisibleReplies === "message_tool";
+  }
+  return messages.visibleReplies === "message_tool";
 }
 
 function shouldProjectMirroredHistoryForCodexStart(params: {
