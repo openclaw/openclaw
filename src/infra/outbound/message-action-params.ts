@@ -114,6 +114,58 @@ function readAttachmentFileHint(args: Record<string, unknown>): string | undefin
   );
 }
 
+// The message tool exposes a structured `attachments: [{path, mimeType, name}]`
+// shape that already worked for the `send` action (see
+// collectMessageAttachmentMediaHints in message-action-runner). Single-attachment
+// actions (`reply`, `sendAttachment`, `setGroupIcon`, `upload-file`) hydrate via
+// top-level `media|mediaUrl|path|filePath|fileUrl`, so without this lift an
+// agent calling `message(action:"reply", attachments:[{...}])` had its file
+// silently dropped: hydration found no hint, no buffer was loaded, and the
+// channel handler shipped text-only. Backward-compatible: only fills slots when
+// they are empty.
+function liftFirstAttachmentToTopLevel(args: Record<string, unknown>): void {
+  if (!Array.isArray(args.attachments) || args.attachments.length === 0) {
+    return;
+  }
+  for (const attachment of args.attachments) {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      continue;
+    }
+    const record = attachment as Record<string, unknown>;
+    const source =
+      normalizeOptionalString(record.path) ??
+      normalizeOptionalString(record.filePath) ??
+      normalizeOptionalString(record.media) ??
+      normalizeOptionalString(record.mediaUrl) ??
+      normalizeOptionalString(record.fileUrl) ??
+      normalizeOptionalString(record.url);
+    if (!source) {
+      continue;
+    }
+    if (
+      !readAttachmentMediaHint(args) &&
+      !readAttachmentFileHint(args) &&
+      !readStringParam(args, "buffer", { trim: false })
+    ) {
+      args.path = source;
+    }
+    const mimeType =
+      normalizeOptionalString(record.mimeType) ?? normalizeOptionalString(record.contentType);
+    if (mimeType && !readStringParam(args, "mimeType") && !readStringParam(args, "contentType")) {
+      // Write to `contentType` (canonical) — hydration treats it as the
+      // primary content type and falls back to `mimeType`. Downstream channel
+      // handlers read `args.contentType`.
+      args.contentType = mimeType;
+    }
+    const filename =
+      normalizeOptionalString(record.name) ?? normalizeOptionalString(record.filename);
+    if (filename && !readStringParam(args, "filename")) {
+      args.filename = filename;
+    }
+    return;
+  }
+}
+
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -361,6 +413,7 @@ async function hydrateAttachmentActionPayload(params: {
   mediaPolicy: AttachmentMediaPolicy;
   optimizeImages?: boolean;
 }): Promise<void> {
+  liftFirstAttachmentToTopLevel(params.args);
   const mediaHint = readAttachmentMediaHint(params.args);
   const fileHint = readAttachmentFileHint(params.args);
   const contentTypeParam =

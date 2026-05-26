@@ -774,6 +774,57 @@ describe("runMessageAction media behavior", () => {
       expect(handlerParams.caption).toBeUndefined();
       expect(handlerParams.message).toBe("look at this");
     });
+
+    it("hydrates buffer/filename/contentType from attachments[] on reply", async () => {
+      // Regression: agents calling message(action:"reply", attachments:[{path,mimeType,name}])
+      // previously had the attachment silently dropped because the reply
+      // hydration path only read top-level media/mediaUrl/path/filePath/fileUrl.
+      const result = await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          text: "look at this",
+          attachments: [
+            {
+              path: "https://example.com/pic.png",
+              mimeType: "image/png",
+              name: "mug.png",
+            },
+          ],
+        },
+      });
+
+      expect(result.kind).toBe("action");
+      expect(handleActionMock).toHaveBeenCalledTimes(1);
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
+      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
+      expect(handlerParams.filename).toBe("mug.png");
+      expect(handlerParams.contentType).toBe("image/png");
+    });
+
+    it("prefers an explicit top-level hint over attachments[] entries", async () => {
+      await runMessageAction({
+        cfg,
+        action: "reply",
+        params: {
+          channel: "replychat",
+          target: "+15551234567",
+          messageId: "parent-id",
+          text: "look at this",
+          media: "https://example.com/explicit.png",
+          attachments: [{ path: "https://example.com/ignored.png" }],
+        },
+      });
+
+      expect(handleActionMock).toHaveBeenCalledTimes(1);
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
+      // hint resolution preserved the explicit `media` and didn't overwrite
+      // it with the attachments[] entry.
+      expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
+    });
   });
 
   describe("plugin-owned media-source discovery routing", () => {
