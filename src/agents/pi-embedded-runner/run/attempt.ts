@@ -865,6 +865,7 @@ async function cancelQueuedSteeringMessage(
 
 export const testing = {
   cancelQueuedSteeringMessage,
+  insertRuntimeContextMessageForPrompt,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveAttemptStreamAuthProfileId,
   steerAndWaitForTranscriptCommit,
@@ -1025,7 +1026,10 @@ function installRuntimeContextMessageForPrompt(params: {
   }
   const install = () => {
     if (!session.messages.includes(message)) {
-      session.agent.state.messages = [...session.messages, message];
+      session.agent.state.messages = insertRuntimeContextMessageForPrompt({
+        message,
+        messages: session.messages,
+      });
     }
   };
   install();
@@ -1040,6 +1044,24 @@ function installRuntimeContextMessageForPrompt(params: {
     agent.continue = originalContinue;
     session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
   };
+}
+
+function insertRuntimeContextMessageForPrompt(params: {
+  message: RuntimeContextCustomMessage;
+  messages: AgentMessage[];
+}): AgentMessage[] {
+  if (params.messages.includes(params.message)) {
+    return params.messages;
+  }
+  const activeUserMessageIndex = findActiveUserMessageIndex(params.messages);
+  if (activeUserMessageIndex === -1) {
+    return [...params.messages, params.message];
+  }
+  return [
+    ...params.messages.slice(0, activeUserMessageIndex),
+    params.message,
+    ...params.messages.slice(activeUserMessageIndex),
+  ];
 }
 
 function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
