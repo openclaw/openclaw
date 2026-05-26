@@ -1348,7 +1348,10 @@ describe("agent request events", () => {
 
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(1);
     expect(emitSessionTranscriptUpdateMock).toHaveBeenCalledTimes(1);
-    const transcriptCall = mockCallArg(emitSessionTranscriptUpdateMock);
+    const transcriptCall = mockCallArg(emitSessionTranscriptUpdateMock) as Record<
+      string,
+      Record<string, unknown>
+    >;
     expect(transcriptCall.message.MediaPaths).toEqual([
       inlineSaved.path,
       "/tmp/media/offloaded.bin",
@@ -1377,7 +1380,10 @@ describe("agent request events", () => {
 
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
     expect(emitSessionTranscriptUpdateMock).toHaveBeenCalledTimes(1);
-    const transcriptCall = mockCallArg(emitSessionTranscriptUpdateMock);
+    const transcriptCall = mockCallArg(emitSessionTranscriptUpdateMock) as Record<
+      string,
+      Record<string, unknown>
+    >;
     expect(transcriptCall.message.MediaPath).toBeUndefined();
     expect(transcriptCall.message.MediaPaths).toBeUndefined();
     expect(transcriptCall.message.role).toBe("user");
