@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
@@ -90,6 +91,712 @@ describe("legacy silent reply config migrate", () => {
       "Removed agents.defaults.silentReplyRewrite",
       "Removed surfaces.telegram.silentReplyRewrite",
     ]);
+  });
+});
+
+describe("profile configured tool section migrate", () => {
+  it("adds explicit global alsoAllow grants for configured tool sections under profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["read", "write"],
+        exec: { security: "allowlist" },
+        fs: { workspaceOnly: true },
+      },
+    });
+
+    expect(res.config?.tools?.alsoAllow).toEqual(["read", "write", "exec", "process", "edit"]);
+    expect(res.changes).toContain(
+      'Added tools.alsoAllow entries (exec, process, edit) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("adds explicit agent alsoAllow grants for configured tool sections under profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              profile: "messaging",
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("does not change profiled tool sections when explicit grants already cover them", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["exec", "process", "read", "write", "edit"],
+        exec: { security: "allowlist" },
+        fs: { workspaceOnly: true },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("adds missing grants to allow when an allowlist already exists", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).toContain(
+      'Set tools.profile to "full" so tools.allow controls configured tool sections directly.',
+    );
+    expect(res.changes).toContain(
+      'Added tools.allow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("sets profile full when an existing allowlist already contains configured section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "exec", "process"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.changes).toEqual([
+      'Replaced tools.allow entries with profile "messaging" grants plus configured tool sections.',
+      'Set tools.profile to "full" so tools.allow controls configured tool sections directly.',
+    ]);
+  });
+
+  it("narrows broad allowlists before making them authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["*"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.allow).toContain("message");
+    expect(res.config?.tools?.allow).toContain("exec");
+    expect(res.config?.tools?.allow).toContain("process");
+    expect(res.config?.tools?.allow).not.toContain("*");
+    expect(res.config?.tools?.allow).not.toContain("read");
+    expect(res.changes).toContain(
+      'Replaced tools.allow entries with profile "messaging" grants plus configured tool sections.',
+    );
+  });
+
+  it("concretizes profile-bound glob allowlists before making them authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["sessions_*"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.allow).toEqual([
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.tools?.allow).not.toContain("session_status");
+    expect(res.config?.tools?.allow).not.toContain("sessions_*");
+  });
+
+  it("preserves plugin allow entries when making profiles authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["gmail_search"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.allow).toEqual(["gmail_search", "exec", "process"]);
+  });
+
+  it("adds missing allow grants even when the selected profile already covers them", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "coding",
+        allow: ["message"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.changes).toContain(
+      'Added tools.allow entries (exec, process) for configured tool sections under profile "coding".',
+    );
+  });
+
+  it("drops allow entries blocked by the original profile before making them authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "web_search"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.allow).not.toContain("web_search");
+    expect(res.changes).toContain(
+      'Replaced tools.allow entries with profile "messaging" grants plus configured tool sections.',
+    );
+  });
+
+  it("adds provider-scoped alsoAllow grants for configured tool sections under profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.changes).toContain(
+      'Added tools.byProvider.openai.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("sets provider profile full when provider allow already contains configured section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+            allow: ["message", "exec", "process"],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.tools?.byProvider?.openai?.profile).toBe("full");
+    expect(res.changes).toContain(
+      'Set tools.byProvider.openai.profile to "full" so tools.byProvider.openai.allow controls configured tool sections directly.',
+    );
+  });
+
+  it("narrows broad provider allowlists before making them authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+            allow: ["group:openclaw"],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.profile).toBe("full");
+    expect(res.config?.tools?.byProvider?.openai?.allow).toContain("message");
+    expect(res.config?.tools?.byProvider?.openai?.allow).toContain("exec");
+    expect(res.config?.tools?.byProvider?.openai?.allow).toContain("process");
+    expect(res.config?.tools?.byProvider?.openai?.allow).not.toContain("group:openclaw");
+    expect(res.config?.tools?.byProvider?.openai?.allow).not.toContain("read");
+    expect(res.changes).toContain(
+      'Replaced tools.byProvider.openai.allow entries with profile "messaging" grants plus configured tool sections.',
+    );
+  });
+
+  it("drops provider allow entries blocked by the original profile", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+            allow: ["message", "web_search"],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.tools?.byProvider?.openai?.profile).toBe("full");
+    expect(res.config?.tools?.byProvider?.openai?.allow).not.toContain("web_search");
+    expect(res.changes).toContain(
+      'Replaced tools.byProvider.openai.allow entries with profile "messaging" grants plus configured tool sections.',
+    );
+  });
+
+  it("updates restrictive provider allowlists that inherit the active profile", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        byProvider: {
+          openai: {
+            allow: ["message"],
+          },
+        },
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.config?.tools?.byProvider?.openai?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.tools?.byProvider?.openai).not.toHaveProperty("profile");
+    expect(res.changes).toContain(
+      'Added tools.byProvider.openai.allow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("does not use parent alsoAllow as provider profile alsoAllow", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["exec", "process"],
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.changes).toContain(
+      'Added tools.byProvider.openai.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("adds agent grants when configured sections inherit the global profile", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("does not grant global configured sections to an agent-owned profile", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        exec: { security: "allowlist" },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.tools?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.config?.agents?.list?.[0]?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).not.toContain(
+      'Added agents.list.0.tools.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("preserves inherited alsoAllow when creating an agent override", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        exec: { security: "allowlist" },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.tools?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.config?.agents?.list?.[0]?.tools?.alsoAllow).toEqual([
+      "exec",
+      "process",
+      "read",
+      "write",
+      "edit",
+    ]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.alsoAllow entries (exec, process, read, write, edit) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("overrides an inherited profile when an agent allowlist already exists", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              allow: ["message"],
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.profile).toBe("full");
+    expect(res.config?.agents?.list?.[0]?.tools?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).toContain(
+      'Set agents.list.0.tools.profile to "full" so agents.list.0.tools.allow controls configured tool sections directly.',
+    );
+  });
+
+  it("adds agent allow grants even when inherited alsoAllow already covers them", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["exec", "process"],
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              allow: ["message"],
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.profile).toBe("full");
+    expect(res.config?.agents?.list?.[0]?.tools?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools).not.toHaveProperty("alsoAllow");
+  });
+
+  it("respects an explicit empty agent alsoAllow override", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["exec", "process"],
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              alsoAllow: [],
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.alsoAllow).toEqual(["exec", "process"]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("adds agent allow grants for globally configured sections", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        exec: { security: "allowlist" },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              allow: ["message"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.profile).toBe("full");
+    expect(res.config?.agents?.list?.[0]?.tools?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+  });
+
+  it("adds agent provider-scoped grants for configured tool sections under profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+              byProvider: {
+                openai: {
+                  profile: "messaging",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.openai?.alsoAllow).toEqual([
+      "exec",
+      "process",
+    ]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.byProvider.openai.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("adds agent provider-scoped grants for globally configured tool sections", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              byProvider: {
+                openai: {
+                  profile: "messaging",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.openai?.alsoAllow).toEqual([
+      "exec",
+      "process",
+    ]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.byProvider.openai.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+  });
+
+  it("inherits provider profiles through model-scoped provider overrides", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              byProvider: {
+                "openai/gpt-5": {
+                  allow: ["message"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["openai/gpt-5"]?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["openai/gpt-5"]?.profile).toBe(
+      "full",
+    );
+  });
+
+  it("materializes inherited provider profile grants for agent configured sections", () => {
+    const raw = {
+      tools: {
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.openai?.alsoAllow).toEqual([
+      "exec",
+      "process",
+    ]);
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.byProvider.openai.alsoAllow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
+  });
+
+  it("adds provider-wide inherited grants even when a model override is also repaired", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+              byProvider: {
+                "openai/gpt-5": {
+                  allow: ["message"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["openai/gpt-5"]?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.openai?.alsoAllow).toEqual([
+      "exec",
+      "process",
+    ]);
+  });
+
+  it("prefers canonical inherited provider policy keys when materializing grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        byProvider: {
+          modelstudio: {
+            profile: "coding",
+          },
+          qwen: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+              byProvider: {
+                "qwen/qwen-plus": {
+                  allow: ["message"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+      "full",
+    );
+    expect(res.changes).toContain(
+      'Added agents.list.0.tools.byProvider.qwen/qwen-plus.allow entries (exec, process) for configured tool sections under profile "messaging".',
+    );
   });
 });
 

@@ -6,6 +6,7 @@ describe("legacy config migrate validation", () => {
   let partialValidationResult: ReturnType<typeof migrateLegacyConfig>;
   let agentModelTimeoutResult: ReturnType<typeof migrateLegacyConfig>;
   let modelThinkingFormatResult: ReturnType<typeof migrateLegacyConfig>;
+  let profileConfiguredToolAllowResult: ReturnType<typeof migrateLegacyConfig>;
 
   beforeAll(() => {
     groupChatRoutingResult = migrateLegacyConfig({
@@ -89,6 +90,13 @@ describe("legacy config migrate validation", () => {
         },
       },
     });
+    profileConfiguredToolAllowResult = migrateLegacyConfig({
+      tools: {
+        profile: "messaging",
+        allow: ["message"],
+        exec: { security: "allowlist" },
+      },
+    });
   });
 
   it("returns valid migrated config for legacy group chat routing drift", () => {
@@ -167,5 +175,19 @@ describe("legacy config migrate validation", () => {
     expect(res.config?.models?.providers?.bailian?.models?.[1]?.compat).toEqual({
       thinkingFormat: "qwen",
     });
+  });
+
+  it("returns valid config when migrating profiled tool sections with an existing allowlist", () => {
+    const res = profileConfiguredToolAllowResult;
+
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.alsoAllow).toBeUndefined();
+    expect(res.changes).toStrictEqual([
+      'Replaced tools.allow entries with profile "messaging" grants plus configured tool sections.',
+      'Set tools.profile to "full" so tools.allow controls configured tool sections directly.',
+      'Added tools.allow entries (exec, process) for configured tool sections under profile "messaging".',
+    ]);
   });
 });
