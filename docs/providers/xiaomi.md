@@ -150,7 +150,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Flash",
             reasoning: false,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 8192,
           },
@@ -159,7 +158,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Pro",
             reasoning: true,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1048576,
             maxTokens: 32000,
           },
@@ -168,7 +166,6 @@ Opus with `ffmpeg` before delivery.
             name: "Xiaomi MiMo V2 Omni",
             reasoning: true,
             input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 32000,
           },
@@ -178,6 +175,8 @@ Opus with `ffmpeg` before delivery.
   },
 }
 ```
+
+Pricing and compat flags come from the bundled plugin manifest, so the config example omits `cost` and `compat` to avoid diverging from runtime behavior.
 
 Token Plan:
 
@@ -198,7 +197,6 @@ Token Plan:
             name: "Xiaomi MiMo V2.5 Pro",
             reasoning: true,
             input: ["text"],
-            cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
             contextWindow: 1048576,
             maxTokens: 32000,
           },
@@ -207,7 +205,6 @@ Token Plan:
             name: "Xiaomi MiMo V2.5",
             reasoning: true,
             input: ["text", "image"],
-            cost: { input: 0.4, output: 2, cacheRead: 0.08, cacheWrite: 0 },
             contextWindow: 1048576,
             maxTokens: 32000,
           },
@@ -217,6 +214,8 @@ Token Plan:
   },
 }
 ```
+
+Pricing comes from the bundled manifest (Token Plan models include tiered cache-read pricing), so the config example omits `cost`.
 
 <AccordionGroup>
   <Accordion title="Auto-injection behavior">
