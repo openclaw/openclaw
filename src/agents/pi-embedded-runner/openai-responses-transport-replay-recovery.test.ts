@@ -175,6 +175,55 @@ describe("runEmbeddedPiAgent OpenAI Responses continuation recovery", () => {
     },
   );
 
+  it("preserves message-tool delivery evidence when blocking unsafe recovery", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      corruptedPromptAttempt({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["already sent"],
+        messagingToolSentMediaUrls: ["https://example.test/image.png"],
+        messagingToolSentTargets: [{ tool: "message", provider: "test", to: "test-channel" }],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "responses-continuation-message-tool-unsafe",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["already sent"]);
+    expect(result.messagingToolSentMediaUrls).toEqual(["https://example.test/image.png"]);
+    expect(result.messagingToolSentTargets).toHaveLength(1);
+  });
+
+  it("preserves cron and session-spawn evidence when blocking unsafe recovery", async () => {
+    const acceptedSessionSpawns = [{ runId: "child-run", childSessionKey: "child-session" }];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      corruptedPromptAttempt({
+        successfulCronAdds: 1,
+        acceptedSessionSpawns,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "responses-continuation-cron-session-unsafe",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.successfulCronAdds).toBe(1);
+    expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+  });
+
   it("also recovers continuation corruption surfaced as an assistant error", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(corruptedAssistantAttempt())

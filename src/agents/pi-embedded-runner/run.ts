@@ -1746,6 +1746,14 @@ export async function runEmbeddedPiAgent(
               `responses_continuation_recovery_blocked provider=${sanitizeForLog(activeErrorContext.provider)} ` +
                 `model=${sanitizeForLog(activeErrorContext.model)} source=${failure.source} reason=${blockedReason}`,
             );
+            const blockedAttemptToolSummary = buildTraceToolSummary({
+              toolMetas: attempt.toolMetas,
+              hadFailure: Boolean(attempt.lastToolError),
+            });
+            const blockedFailureSignal = resolveEmbeddedRunFailureSignal({
+              trigger: params.trigger,
+              lastToolError: attempt.lastToolError,
+            });
             attempt.setTerminalLifecycleMeta?.({
               replayInvalid: true,
               livenessState: "blocked",
@@ -1776,11 +1784,23 @@ export async function runEmbeddedPiAgent(
                 finalPromptText: attempt.finalPromptText,
                 replayInvalid: true,
                 livenessState: "blocked",
+                toolSummary: blockedAttemptToolSummary,
+                ...(blockedFailureSignal ? { failureSignal: blockedFailureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
                 error: {
                   kind: "responses_continuation_corruption",
                   message: "OpenAI Responses continuation state is invalid.",
                 },
               },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           };
           const canRestartForLiveSwitch =
