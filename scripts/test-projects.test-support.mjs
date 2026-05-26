@@ -86,6 +86,8 @@ const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
   "test/vitest/vitest.extension-active-memory.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
+const EXTENSION_CHANNEL_BROKER_VITEST_CONFIG =
+  "test/vitest/vitest.extension-channel-broker.config.ts";
 const EXTENSION_CODEX_VITEST_CONFIG = "test/vitest/vitest.extension-codex.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
@@ -163,6 +165,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.wizard.config.ts", 130],
   [UNIT_SRC_VITEST_CONFIG, 125],
   [EXTENSION_MATRIX_VITEST_CONFIG, 100],
+  [EXTENSION_CHANNEL_BROKER_VITEST_CONFIG, 99],
   [EXTENSION_DISCORD_VITEST_CONFIG, 98],
   [EXTENSION_PROVIDERS_VITEST_CONFIG, 96],
   [EXTENSION_TELEGRAM_VITEST_CONFIG, 94],
@@ -279,6 +282,7 @@ const VITEST_CONFIG_BY_KIND = {
   extensionActiveMemory: EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
   extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
+  extensionChannelBroker: EXTENSION_CHANNEL_BROKER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionCodex: EXTENSION_CODEX_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
@@ -1844,6 +1848,7 @@ export function buildVitestRunPlans(
     "extensionIrc",
     "extensionLine",
     "extensionMattermost",
+    "extensionChannelBroker",
     "extensionChannel",
     "extensionTelegram",
     "extensionVoiceCall",

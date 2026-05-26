@@ -374,6 +374,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes channel-broker changes to the channel-broker extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/channel-broker/src/channel.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-channel-broker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/channel-broker/src/channel.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("keeps shared test helpers cheap by default when no precise target exists", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
