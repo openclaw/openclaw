@@ -361,6 +361,12 @@ export const icons = {
       <line x1="12" x2="12" y1="15" y2="3" />
     </svg>
   `,
+  video: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m22 8-6 4 6 4V8z" />
+      <rect width="14" height="12" x="2" y="6" rx="2" ry="2" />
+    </svg>
+  `,
   mic: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />

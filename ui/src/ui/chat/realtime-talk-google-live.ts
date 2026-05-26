@@ -5,6 +5,7 @@ import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
   createRealtimeTalkEventEmitter,
   steerRealtimeTalkActiveConsult,
   shouldAutoControlRealtimeVoiceAgentText,
@@ -308,6 +309,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         args: call.args ?? {},
         emitTalkEvent: this.emitTalkEvent,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+      });
+      return;
+    }
+    if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
+      this.submitToolResult(callId, {
+        error: "describe_view is only available in Video Talk (WebRTC) mode.",
       });
       return;
     }

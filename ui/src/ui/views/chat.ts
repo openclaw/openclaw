@@ -112,6 +112,7 @@ export type ChatProps = {
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+  realtimeTalkVideoStream?: MediaStream | null;
   realtimeTalkOptionsOpen?: boolean;
   realtimeTalkOptions?: {
     provider: string;
@@ -157,6 +158,7 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeTalkWithVideo?: () => void;
   onToggleRealtimeTalkOptions?: () => void;
   onRealtimeTalkOptionsChange?: (
     next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
@@ -2084,15 +2086,41 @@ export function renderChat(props: ChatProps) {
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
+                ${props.realtimeTalkVideoStream
+                  ? html`<video
+                      class="agent-chat__talk-video-pip-source"
+                      autoplay
+                      muted
+                      playsinline
+                      .srcObject=${props.realtimeTalkVideoStream}
+                      @play=${async (e: Event) => {
+                        const video = e.target as HTMLVideoElement;
+                        if (document.pictureInPictureEnabled && !document.pictureInPictureElement) {
+                          const entered = await video.requestPictureInPicture().then(
+                            () => true,
+                            () => false,
+                          );
+                          if (entered) {
+                            return;
+                          }
+                        }
+                        // PiP not supported or failed: fall back to inline preview.
+                        video.classList.add("agent-chat__talk-video-inline");
+                        video.parentElement?.classList.add("agent-chat__talk-status--video");
+                      }}
+                    ></video>`
+                  : nothing}
+                <span class="agent-chat__talk-status-text">
+                  ${props.realtimeTalkDetail ??
+                  ((props.realtimeTalkConversation?.length ?? 0) === 0
+                    ? props.realtimeTalkTranscript
+                    : null) ??
+                  (props.realtimeTalkStatus === "thinking"
+                    ? "Asking OpenClaw..."
+                    : props.realtimeTalkStatus === "connecting"
+                      ? "Connecting Talk..."
+                      : "Talk live")}
+                </span>
               </div>
             `
           : nothing}
@@ -2164,6 +2192,20 @@ export function renderChat(props: ChatProps) {
                         ? t("chat.composer.stopTalk")
                         : t("chat.composer.startTalk")}</span
                     >
+                  </button>
+                `
+              : nothing}
+            ${!props.realtimeTalkActive && props.onToggleRealtimeTalkWithVideo
+              ? html`
+                  <button
+                    class="agent-chat__input-btn"
+                    @click=${props.onToggleRealtimeTalkWithVideo}
+                    title="Video Talk"
+                    aria-label="Video Talk"
+                    ?disabled=${!props.connected}
+                  >
+                    ${icons.video}
+                    <span class="agent-chat__control-label">Video Talk</span>
                   </button>
                 `
               : nothing}

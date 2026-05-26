@@ -307,6 +307,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
   @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
+  @state() realtimeTalkVideoStream: MediaStream | null = null;
   @state() realtimeTalkOptionsOpen = false;
   @state() realtimeTalkOptions = {
     provider: "",
@@ -1199,7 +1200,7 @@ export class OpenClawApp extends LitElement {
     };
   }
 
-  async toggleRealtimeTalk() {
+  async toggleRealtimeTalk(opts?: Pick<RealtimeTalkLaunchOptions, "videoEnabled" | "transport">) {
     if (this.realtimeTalkSession) {
       if (this.realtimeTalkStatus === "error") {
         this.realtimeTalkSession.stop();
@@ -1248,8 +1249,19 @@ export class OpenClawApp extends LitElement {
           );
           this.realtimeTalkConversation = this.realtimeTalkConversationState.entries;
         },
+        onVideoStream: (stream) => {
+          if (
+            !stream &&
+            document.pictureInPictureElement?.classList.contains(
+              "agent-chat__talk-video-pip-source",
+            )
+          ) {
+            document.exitPictureInPicture().catch(() => {});
+          }
+          this.realtimeTalkVideoStream = stream;
+        },
       },
-      this.buildRealtimeTalkLaunchOptions(),
+      { ...this.buildRealtimeTalkLaunchOptions(), ...opts },
     );
     this.realtimeTalkSession = session;
     try {

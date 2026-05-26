@@ -79,7 +79,7 @@ describe("setDefaultSecurityHeaders", () => {
     setDefaultSecurityHeaders(res);
     expect(setHeader).toHaveBeenCalledWith(
       "Permissions-Policy",
-      "camera=(), microphone=(self), geolocation=()",
+      "camera=(self), microphone=(self), geolocation=()",
     );
   });
 

@@ -32,6 +32,7 @@ export type RealtimeTalkLaunchOptions = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  videoEnabled?: boolean;
 };
 
 function createTransport(
@@ -65,10 +66,17 @@ function resolveTransport(session: RealtimeTalkSessionResult): string {
   return normalizeTalkTransport((session as { transport?: string }).transport) ?? "webrtc";
 }
 
+const CLIENT_ONLY_LAUNCH_KEYS = new Set<keyof RealtimeTalkLaunchOptions>(["videoEnabled"]);
+
 function compactLaunchParams(
   params: RealtimeTalkLaunchOptions & { sessionKey: string; mode?: string; brain?: string },
 ): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(params).filter(([, value]) => value !== undefined));
+  return Object.fromEntries(
+    Object.entries(params).filter(
+      ([key, value]) =>
+        value !== undefined && !CLIENT_ONLY_LAUNCH_KEYS.has(key as keyof RealtimeTalkLaunchOptions),
+    ),
+  );
 }
 
 export class RealtimeTalkSession {
@@ -95,6 +103,7 @@ export class RealtimeTalkSession {
       callbacks: this.callbacks,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
+      videoEnabled: this.options.videoEnabled,
     });
     await this.transport.start();
   }

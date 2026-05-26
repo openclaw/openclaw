@@ -1574,6 +1574,13 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Video Talk"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Workspace files"
     },
     {
@@ -1624,6 +1631,13 @@
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Unpin"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Video Talk"
     },
     {
       "count": 1,
@@ -1771,6 +1785,13 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Talk settings"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Video Talk"
     },
     {
       "count": 1,

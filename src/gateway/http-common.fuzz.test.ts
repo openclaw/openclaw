@@ -118,7 +118,7 @@ describe("fuzz: setDefaultSecurityHeaders", () => {
       expect(setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
       expect(setHeader).toHaveBeenCalledWith(
         "Permissions-Policy",
-        "camera=(), microphone=(self), geolocation=()",
+        "camera=(self), microphone=(self), geolocation=()",
       );
     }
   });
