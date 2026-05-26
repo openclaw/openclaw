@@ -43,6 +43,10 @@ type DiscordModelPickerCurrentModelRef = {
 };
 
 type DiscordModelPickerRow = Row<Button> | Row<StringSelectMenu>;
+type CompactRuntimeState = {
+  runtime?: string;
+  runtimeIndex?: number;
+};
 
 type DiscordModelPickerRenderShellParams = {
   layout: DiscordModelPickerLayout;
@@ -145,9 +149,9 @@ function createModelSelect(params: {
  * Build the alpha-bucket select row that appears above the provider/model
  * surface when the list exceeds {@link DISCORD_MODEL_PICKER_BUCKET_THRESHOLD}.
  *
- * Selecting a bucket emits a `nav` action with `providerBucket` or
- * `modelBucket` populated and `page` reset to 1; the interaction handler
- * already routes `nav` to a re-render with the new state.
+ * Selecting a bucket emits action=bucket. The chosen bucket travels in the
+ * select value, while the custom_id carries only the stable context needed to
+ * rebuild the picker under Discord's 100-character custom_id limit.
  */
 function buildBucketSelectRow(params: {
   command: DiscordModelPickerCommandContext;
@@ -250,6 +254,27 @@ function resolveExplicitRuntimeState(params: {
     return current;
   }
   return undefined;
+}
+
+function getActiveBucketId(
+  bucket: DiscordModelPickerBucket | null | undefined,
+): string | undefined {
+  return bucket && bucket.id !== "all" ? bucket.id : undefined;
+}
+
+function resolveCompactRuntimeState(params: {
+  choices: ModelsRuntimeChoice[];
+  currentRuntime?: string;
+  pendingRuntime?: string;
+}): CompactRuntimeState {
+  const stateRuntime = resolveExplicitRuntimeState(params);
+  const stateRuntimeIndex = stateRuntime
+    ? params.choices.findIndex((choice) => choice.id === stateRuntime)
+    : -1;
+  if (stateRuntimeIndex >= 0) {
+    return { runtimeIndex: stateRuntimeIndex + 1 };
+  }
+  return stateRuntime ? { runtime: stateRuntime } : {};
 }
 
 function buildRenderedShell(
@@ -427,19 +452,10 @@ function buildModelRows(params: {
     value: provider.id,
     default: provider.id === params.modelPage.provider,
   }));
-  const activeProviderBucket =
-    providerPage.bucket && providerPage.bucket.id !== "all" ? providerPage.bucket.id : undefined;
-  const activeModelBucket =
-    params.modelPage.bucket && params.modelPage.bucket.id !== "all"
-      ? params.modelPage.bucket.id
-      : undefined;
-  // Codex P1: Discord caps a message at 5 action rows. The model view
-  // already spends rows on the provider select, runtime select (when >1
-  // choice), model select, pagination, and the trailing button row — so
-  // when the model list is bucketed (adding a bucket select row), the
-  // in-view provider select pushes the layout to 6 rows. Drop the
-  // provider select in that case; the Providers button on the trailing
-  // action row is the supported way to return to the providers view.
+  const activeProviderBucket = getActiveBucketId(providerPage.bucket);
+  const activeModelBucket = getActiveBucketId(params.modelPage.bucket);
+  // Discord caps messages at 5 action rows. Model bucketing adds its own row,
+  // so the in-view provider switcher has to yield to the Providers button.
   const modelBucketingActive = (params.modelPage.buckets?.length ?? 0) > 1;
   if (!modelBucketingActive) {
     rows.push(
@@ -472,16 +488,11 @@ function buildModelRows(params: {
     currentRuntime: params.currentRuntime,
     pendingRuntime: params.pendingRuntime,
   });
-  const stateRuntime = resolveExplicitRuntimeState({
+  const compactRuntime = resolveCompactRuntimeState({
     choices: runtimeChoices,
     currentRuntime: params.currentRuntime,
     pendingRuntime: params.pendingRuntime,
   });
-  const stateRuntimeIndex = stateRuntime
-    ? runtimeChoices.findIndex((choice) => choice.id === stateRuntime)
-    : -1;
-  const compactRuntime = stateRuntimeIndex >= 0 ? undefined : stateRuntime;
-  const compactRuntimeIndex = stateRuntimeIndex >= 0 ? stateRuntimeIndex + 1 : undefined;
 
   if (runtimeChoices.length > 1) {
     // The selected runtime travels in the select interaction value; omitting
@@ -542,8 +553,7 @@ function buildModelRows(params: {
           action: "model",
           view: "models",
           provider: params.modelPage.provider,
-          runtime: compactRuntime,
-          runtimeIndex: compactRuntimeIndex,
+          ...compactRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
           userId: params.userId,
@@ -563,8 +573,7 @@ function buildModelRows(params: {
     hasPrev: params.modelPage.hasPrev,
     hasNext: params.modelPage.hasNext,
     provider: params.modelPage.provider,
-    runtime: compactRuntime,
-    runtimeIndex: compactRuntimeIndex,
+    ...compactRuntime,
     providerPage: providerPage.page,
     modelIndex: params.pendingModelIndex,
     // Model navigation derives providerBucket from provider on interaction;
@@ -611,8 +620,7 @@ function buildModelRows(params: {
         action: "cancel",
         view: "models",
         provider: params.modelPage.provider,
-        runtime: compactRuntime,
-        runtimeIndex: compactRuntimeIndex,
+        ...compactRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,
@@ -627,8 +635,7 @@ function buildModelRows(params: {
         action: "reset",
         view: "models",
         provider: params.modelPage.provider,
-        runtime: compactRuntime,
-        runtimeIndex: compactRuntimeIndex,
+        ...compactRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,
@@ -646,8 +653,7 @@ function buildModelRows(params: {
           action: "recents",
           view: "recents",
           provider: params.modelPage.provider,
-          runtime: compactRuntime,
-          runtimeIndex: compactRuntimeIndex,
+          ...compactRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
           modelBucket: activeModelBucket,
@@ -667,8 +673,7 @@ function buildModelRows(params: {
         action: "submit",
         view: "models",
         provider: params.modelPage.provider,
-        runtime: compactRuntime,
-        runtimeIndex: compactRuntimeIndex,
+        ...compactRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         modelIndex: params.pendingModelIndex,
