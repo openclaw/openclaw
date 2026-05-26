@@ -40,6 +40,7 @@ import {
 } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
+import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-codex-jwt.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,
@@ -53,7 +54,6 @@ import { buildBaseOptions } from "./simple-options.js";
 // ============================================================================
 
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-const JWT_CLAIM_PATH = "https://api.openai.com/auth" as const;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -105,12 +105,6 @@ interface RequestBody {
   prompt_cache_key?: string;
   [key: string]: unknown;
 }
-
-type CodexJwtPayload = {
-  [JWT_CLAIM_PATH]?: {
-    chatgpt_account_id?: unknown;
-  };
-};
 
 // ============================================================================
 // Retry Helpers
@@ -1464,26 +1458,9 @@ async function parseErrorResponse(
 // Auth & Headers
 // ============================================================================
 
-function decodeCodexJwtPayload(token: string): CodexJwtPayload | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) {
-    return null;
-  }
-
-  try {
-    const decoded = Buffer.from(parts[1] ?? "", "base64url").toString("utf8");
-    const parsed = JSON.parse(decoded);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as CodexJwtPayload)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 export function extractOpenAICodexAccountId(token: string): string {
-  const accountId = decodeCodexJwtPayload(token)?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
-  if (typeof accountId === "string" && accountId.length > 0) {
+  const accountId = resolveOpenAICodexAccountId(token);
+  if (accountId) {
     return accountId;
   }
   throw new Error("Failed to extract accountId from token");

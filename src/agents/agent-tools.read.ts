@@ -860,12 +860,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   return {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    access: async (absolutePath: string) => {
-      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
-      if (!stat) {
-        throw createFsAccessError("ENOENT", absolutePath);
-      }
-    },
+    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
     detectImageMimeType: async (absolutePath: string) => {
       const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
       const mime = await detectMime({ buffer, filePath: absolutePath });
@@ -895,13 +890,15 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     writeFile: (absolutePath: string, content: string) =>
       params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
-    access: async (absolutePath: string) => {
-      const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
-      if (!stat) {
-        throw createFsAccessError("ENOENT", absolutePath);
-      }
-    },
+    access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
   } as const;
+}
+
+async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {
+  const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+  if (!stat) {
+    throw createFsAccessError("ENOENT", absolutePath);
+  }
 }
 
 function expandTildeToOsHome(filePath: string): string {
@@ -909,8 +906,12 @@ function expandTildeToOsHome(filePath: string): string {
   return home ? expandHomePrefix(filePath, { home }) : filePath;
 }
 
+function resolveHostPath(filePath: string): string {
+  return path.resolve(expandTildeToOsHome(filePath));
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+  const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
 }
@@ -936,6 +937,16 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
+async function writeWorkspaceFile(
+  root: string,
+  rootPromise: ReturnType<typeof fsRoot>,
+  absolutePath: string,
+  content: string,
+) {
+  const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+  await (await rootPromise).write(relative, content, { mkdir: true });
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -943,7 +954,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(expandTildeToOsHome(dir));
+        const resolved = resolveHostPath(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
@@ -962,10 +973,8 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       await assertSandboxPath({ filePath: resolved, cwd: root, root });
       await fs.mkdir(resolved, { recursive: true });
     },
-    writeFile: async (absolutePath: string, content: string) => {
-      const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-      await (await rootPromise).write(relative, content, { mkdir: true });
-    },
+    writeFile: (absolutePath: string, content: string) =>
+      writeWorkspaceFile(root, rootPromise, absolutePath, content),
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return (await (await rootPromise).read(relative)).buffer;
@@ -984,13 +993,11 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
-        return await fs.readFile(resolved);
+        return await fs.readFile(resolveHostPath(absolutePath));
       },
       writeFile: writeHostFile,
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
-        await fs.access(resolved);
+        await fs.access(resolveHostPath(absolutePath));
       },
     } as const;
   }
@@ -1003,10 +1010,8 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       const safeRead = await (await rootPromise).read(relative);
       return safeRead.buffer;
     },
-    writeFile: async (absolutePath: string, content: string) => {
-      const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-      await (await rootPromise).write(relative, content, { mkdir: true });
-    },
+    writeFile: (absolutePath: string, content: string) =>
+      writeWorkspaceFile(root, rootPromise, absolutePath, content),
     access: async (absolutePath: string) => {
       let relative: string;
       try {
