@@ -2174,8 +2174,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         shouldDefaultChatHistoryToTurns({ client, isWebchatConnect }))
         ? "turns"
         : "messages";
-    const rawToolPayloadsRequested =
-      historyMode === "messages" && (mode === "raw-messages" || unsafeRawToolPayloads === true);
+    // Raw tool payloads ride on mode === "raw-messages" only. The
+    // `unsafeRawToolPayloads` flag is documented to only have effect when
+    // mode === "raw-messages" (see docs/web/webchat.md and
+    // docs/gateway/protocol.md). For any other mode the flag is silently
+    // ignored so the safe display projection is preserved even for admin
+    // callers that pass the flag with mode === "messages".
+    const rawToolPayloadsRequested = historyMode === "messages" && mode === "raw-messages";
     if (rawToolPayloadsRequested && !canReadUnsafeRawChatHistory(client)) {
       respond(
         false,
