@@ -4,6 +4,7 @@ import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { buildChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -1856,6 +1857,103 @@ describe("control UI credential redaction (issue #72283)", () => {
 describe("handleToolExecutionUpdate non-exec progress", () => {
   afterEach(() => {
     resetAgentEventsForTest();
+  });
+
+  it("renders audited web_fetch progressText instead of stored meta (ClawSweeper P2 regression: meta does NOT shadow safe progressText)", async () => {
+    // ClawSweeper P2: the shared renderer at channel-streaming.ts resolves
+    // `meta ?? summary ?? progressText`. The stored toolMetaById meta for
+    // `web_fetch` is derived from `inferToolMetaFromArgs` and contains the
+    // FULL URL (detailKeys: ["url", "extractMode", "maxChars"]). If our
+    // progress item carried that meta, the renderer would (a) hide our safe
+    // progress line and (b) leak the URL into the channel draft. Lock in
+    // that the channel-visible line shows our audited progressText.
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "tool-clawsweeper-p2",
+        args: {
+          url: "https://httpbin.org/secret-path?token=ABC123XYZ",
+          extractMode: "text",
+          maxChars: 1000,
+        },
+      } as never,
+    );
+
+    // Sanity: the stored meta should contain the URL + extractMode + maxChars
+    // (derived from args via inferToolMetaFromArgs with detailKeys:
+    // ["url", "extractMode", "maxChars"]). If this ever changes the test
+    // setup needs review.
+    const storedMeta = ctx.state.toolMetaById.get("tool-clawsweeper-p2")?.meta;
+    expect(storedMeta).toBeDefined();
+    expect(storedMeta).toContain("httpbin.org");
+    expect(storedMeta).toContain("secret-path");
+    expect(storedMeta).toContain("text");
+    expect(storedMeta).toMatch(/1000/);
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-clawsweeper-p2",
+        partialResult: {
+          content: [{ type: "text", text: "web_fetch: connecting to httpbin.org…" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    const emittedItem = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "tool" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      ) as { data?: Record<string, unknown> } | undefined;
+
+    expect(emittedItem).toBeDefined();
+    const data = emittedItem?.data ?? {};
+
+    // The non-exec progress item must NOT carry the stored URL meta — that
+    // is the ClawSweeper P2 fix.
+    expect(data).not.toHaveProperty("meta");
+    expect(data.progressText).toBe("web_fetch: connecting to httpbin.org…");
+
+    // Drive the actual shared channel renderer with the emitted item and
+    // assert that the rendered text shows our safe progressText, NOT the
+    // URL-bearing stored meta. This is the binding behavior contract the
+    // PR claim depends on.
+    const rendered = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: data.itemId as string,
+      itemKind: data.kind as string,
+      name: data.name as string,
+      phase: data.phase as string,
+      status: data.status as string,
+      title: data.title as string,
+      meta: data.meta as string | undefined,
+      summary: data.summary as string | undefined,
+      progressText: data.progressText as string | undefined,
+    });
+    expect(rendered).toBeDefined();
+    expect(rendered?.text ?? "").toContain("web_fetch: connecting to httpbin.org…");
+    // The full URL with path/query must NOT appear in the rendered text —
+    // privacy regression on the channel-visible side. Also assert that
+    // extractMode and maxChars (which `inferToolMetaFromArgs` packs into
+    // the stored meta string) do not reach the rendered draft either.
+    expect(rendered?.text ?? "").not.toContain("/secret-path");
+    expect(rendered?.text ?? "").not.toContain("ABC123XYZ");
+    expect(rendered?.text ?? "").not.toContain("token=");
+    expect(rendered?.text ?? "").not.toContain("https://httpbin.org/");
+    expect(rendered?.text ?? "").not.toContain("extractMode");
+    expect(rendered?.text ?? "").not.toContain("maxChars");
+    expect(rendered?.text ?? "").not.toMatch(/mode text/);
+    expect(rendered?.text ?? "").not.toMatch(/1000/);
   });
 
   it("populates progressText on the kind:'tool' item for non-exec partialResult", async () => {

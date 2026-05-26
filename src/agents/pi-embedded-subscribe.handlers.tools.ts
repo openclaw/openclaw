@@ -1188,14 +1188,29 @@ export function handleToolExecutionUpdate(
   // item is just the tool-name label and does not alternate).
   const shouldEmitToolItemUpdate = isExecTool || Boolean(nonExecProgressText);
   if (shouldEmitToolItemUpdate) {
+    // The shared channel renderer at `src/plugin-sdk/channel-streaming.ts`
+    // resolves the item's display text via `input.meta ?? input.summary
+    // ?? input.progressText`. The stored `toolMetaById.meta` for a
+    // non-exec tool like `web_fetch` is derived from `inferToolMetaFromArgs`
+    // and contains the full URL + extractMode + maxChars summary — both
+    // truthy AND privacy-sensitive. Setting it on the same item that
+    // carries our audited safe `progressText` would (a) hide the safe
+    // progress line behind the unsafe meta and (b) leak the URL into the
+    // channel draft. Omit `meta` on the non-exec progress emission so the
+    // renderer falls through to `progressText`. Exec retains its existing
+    // `meta` field because its sibling `kind:"command"` item plus the
+    // `command_output` stream carry stdout through a different render
+    // path; the `kind:"tool"` item label is unchanged for exec.
+    const includeStoredMeta = isExecTool;
+    const storedMeta = ctx.state.toolMetaById.get(toolCallId)?.meta;
     const itemData: AgentItemEventData = {
       itemId: buildToolItemId(toolCallId),
       phase: "update",
       kind: "tool",
-      title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+      title: buildToolItemTitle(toolName, storedMeta),
       status: "running",
       name: toolName,
-      meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+      ...(includeStoredMeta ? { meta: storedMeta } : {}),
       toolCallId,
       ...(nonExecProgressText ? { progressText: nonExecProgressText } : {}),
     };
