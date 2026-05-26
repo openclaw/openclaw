@@ -19,11 +19,8 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  onTrustedInternalDiagnosticEvent,
   type DiagnosticEventPrivateData,
-} from "../../../../src/infra/diagnostic-events.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   clearInternalHooks,
   initializeGlobalHookRunner,
@@ -31,7 +28,10 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  onTrustedInternalDiagnosticEvent,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";

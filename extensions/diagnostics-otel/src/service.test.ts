@@ -153,14 +153,12 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
 
 import {
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  emitTrustedDiagnosticEventWithPrivateData,
-  onTrustedInternalDiagnosticEvent,
   type DiagnosticEventPrivateData,
-} from "../../../src/infra/diagnostic-events.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
