@@ -1,0 +1,80 @@
+import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelAgentPromptAdapter, ChannelAllowlistAdapter, ChannelCapabilities, ChannelCommandAdapter, ChannelConfigAdapter, ChannelConversationBindingSupport, ChannelDirectoryAdapter, ChannelGroupAdapter, ChannelMessageActionAdapter, ChannelMessagingAdapter, ChannelOutboundAdapter, ChannelPairingAdapter, ChannelStreamingAdapter, ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { type DeliverableMessageChannel } from "../../utils/message-channel.js";
+type ChannelTargetResolver = NonNullable<ChannelMessagingAdapter["targetResolver"]>;
+export type ChannelPromptRuntime = {
+    messageToolHints?: ChannelAgentPromptAdapter["messageToolHints"];
+    messageToolCapabilities?: ChannelAgentPromptAdapter["messageToolCapabilities"];
+    reactionGuidance?: ChannelAgentPromptAdapter["reactionGuidance"];
+    hasNativeApprovalPromptUi?: boolean;
+};
+export type OutboundChannelRuntime = {
+    id: string;
+    label: string;
+    chatTypes: NonNullable<ChannelCapabilities["chatTypes"]>;
+    preferSessionLookupForAnnounceTarget?: ChannelPlugin["meta"]["preferSessionLookupForAnnounceTarget"];
+    actions?: ChannelMessageActionAdapter;
+    approvalCapability?: ChannelPlugin["approvalCapability"];
+    conversationBindings?: ChannelConversationBindingSupport;
+    allowlist?: ChannelAllowlistAdapter;
+    pairing?: ChannelPairingAdapter;
+    commands?: ChannelCommandAdapter;
+    defaultAccountId?: ChannelConfigAdapter<unknown>["defaultAccountId"];
+    directory?: ChannelDirectoryAdapter;
+    promptRuntime?: ChannelPromptRuntime;
+    inferTargetChatType?: ChannelMessagingAdapter["inferTargetChatType"];
+    normalizeTarget?: ChannelMessagingAdapter["normalizeTarget"];
+    looksLikeTargetId?: ChannelTargetResolver["looksLikeId"];
+    targetResolverHint?: string;
+    resolveMessagingTargetFallback?: ChannelTargetResolver["resolveTarget"];
+    resolveSessionTarget?: ChannelMessagingAdapter["resolveSessionTarget"];
+    formatTargetDisplay?: ChannelMessagingAdapter["formatTargetDisplay"];
+    resolveOutboundSessionRoute?: ChannelMessagingAdapter["resolveOutboundSessionRoute"];
+    buildCrossContextPresentation?: ChannelMessagingAdapter["buildCrossContextPresentation"];
+    transformReplyPayload?: ChannelMessagingAdapter["transformReplyPayload"];
+    resolveAllowFrom?: ChannelConfigAdapter<unknown>["resolveAllowFrom"];
+    resolveDefaultTo?: ChannelConfigAdapter<unknown>["resolveDefaultTo"];
+    formatAllowFrom?: ChannelPlugin["config"]["formatAllowFrom"];
+    allowFromFallback?: NonNullable<ChannelPlugin["elevated"]>["allowFromFallback"];
+    resolveGroupRequireMention?: ChannelGroupAdapter["resolveRequireMention"];
+    resolveGroupToolPolicy?: ChannelGroupAdapter["resolveToolPolicy"];
+    queueDebounceMs?: NonNullable<NonNullable<ChannelPlugin["defaults"]>["queue"]>["debounceMs"];
+    buildThreadingToolContext?: ChannelThreadingAdapter["buildToolContext"];
+    resolveAutoThreadId?: ChannelThreadingAdapter["resolveAutoThreadId"];
+    resolveReplyToMode?: ChannelThreadingAdapter["resolveReplyToMode"];
+    resolveReplyTransport?: ChannelThreadingAdapter["resolveReplyTransport"];
+    outbound?: ChannelOutboundAdapter;
+    resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+    textChunkLimit?: ChannelOutboundAdapter["textChunkLimit"];
+    shouldTreatDeliveredTextAsVisible?: ChannelOutboundAdapter["shouldTreatDeliveredTextAsVisible"];
+    shouldTreatRoutedTextAsVisible?: ChannelOutboundAdapter["shouldTreatRoutedTextAsVisible"];
+    targetsMatchForReplySuppression?: ChannelOutboundAdapter["targetsMatchForReplySuppression"];
+    hasStructuredReplyPayload?: ChannelMessagingAdapter["hasStructuredReplyPayload"];
+    blockStreamingCoalesceDefaults?: ChannelStreamingAdapter["blockStreamingCoalesceDefaults"];
+};
+export declare function resetOutboundChannelResolutionStateForTest(): void;
+export declare function normalizeDeliverableOutboundChannel(raw?: string | null): DeliverableMessageChannel | undefined;
+export declare function resolveOutboundChannelPlugin(params: {
+    channel: string;
+    cfg?: OpenClawConfig;
+    allowBootstrap?: boolean;
+}): ChannelPlugin | undefined;
+export declare function resolveOutboundChannelMessageAdapter(params: {
+    channel: string;
+    cfg?: OpenClawConfig;
+    allowBootstrap?: boolean;
+}): ChannelMessageAdapterShape | undefined;
+export declare function resolveOutboundChannelPluginForRead(params: {
+    channel: string;
+    cfg?: OpenClawConfig;
+}): ChannelPlugin | undefined;
+export declare function resolveOutboundChannelRuntime(params: {
+    channel: string;
+    cfg?: OpenClawConfig;
+}): OutboundChannelRuntime | undefined;
+export declare function resolveLoadedOutboundChannelPluginForRead(params: {
+    channel: string;
+}): ChannelPlugin | undefined;
+export {};

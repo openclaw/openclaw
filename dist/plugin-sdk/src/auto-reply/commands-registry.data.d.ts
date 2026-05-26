@@ -1,0 +1,2 @@
+import type { ChatCommandDefinition } from "./commands-registry.types.js";
+export declare function getChatCommands(): ChatCommandDefinition[];

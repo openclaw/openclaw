@@ -1,0 +1,20 @@
+import type { ReplyPayload } from "./reply-payload.js";
+export declare const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
+export declare const HEARTBEAT_TOOL_OUTCOMES: readonly ["no_change", "progress", "done", "blocked", "needs_attention"];
+type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
+export declare const HEARTBEAT_TOOL_PRIORITIES: readonly ["low", "normal", "high"];
+type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
+export type HeartbeatToolResponse = {
+    outcome: HeartbeatToolOutcome;
+    notify: boolean;
+    summary: string;
+    notificationText?: string;
+    reason?: string;
+    priority?: HeartbeatToolPriority;
+    nextCheck?: string;
+};
+export declare function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolResponse | undefined;
+export declare function getHeartbeatToolNotificationText(response: HeartbeatToolResponse): string;
+export declare function createHeartbeatToolResponsePayload(response: HeartbeatToolResponse): ReplyPayload;
+export declare function resolveHeartbeatToolResponseFromReplyResult(replyResult: ReplyPayload | ReplyPayload[] | undefined): HeartbeatToolResponse | undefined;
+export {};

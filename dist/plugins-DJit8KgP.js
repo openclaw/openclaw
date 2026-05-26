@@ -1,0 +1,5 @@
+import { a as normalizeChannelId, i as listChannelPlugins, n as getLoadedChannelPlugin, r as getLoadedChannelPluginOrigin, t as getChannelPlugin } from "./registry-BdfZSqhE2.js";
+import { a as resolveChannelEntryMatchWithFallback, i as resolveChannelEntryMatch, n as buildChannelKeyCandidates, o as resolveChannelMatchConfig, r as normalizeChannelSlug, s as resolveNestedAllowlistDecision, t as applyChannelMatchMeta } from "./channel-config-BNiVnyY6.js";
+import { n as formatAllowlistMatchMeta } from "./allowlist-match-D1SSm7UQ.js";
+import { n as resolveChannelApprovalCapability, t as resolveChannelApprovalAdapter } from "./plugins-YTdL-Pji.js";
+export { applyChannelMatchMeta, buildChannelKeyCandidates, formatAllowlistMatchMeta, getChannelPlugin, getLoadedChannelPlugin, getLoadedChannelPluginOrigin, listChannelPlugins, normalizeChannelId, normalizeChannelSlug, resolveChannelApprovalAdapter, resolveChannelApprovalCapability, resolveChannelEntryMatch, resolveChannelEntryMatchWithFallback, resolveChannelMatchConfig, resolveNestedAllowlistDecision };

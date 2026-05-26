@@ -1,0 +1,708 @@
+{
+  "id": "irc",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "irc"
+  ],
+  "channelEnvVars": {
+    "irc": [
+      "IRC_HOST",
+      "IRC_PORT",
+      "IRC_TLS",
+      "IRC_NICK",
+      "IRC_USERNAME",
+      "IRC_REALNAME",
+      "IRC_PASSWORD",
+      "IRC_CHANNELS",
+      "IRC_NICKSERV_PASSWORD",
+      "IRC_NICKSERV_REGISTER_EMAIL"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "irc": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "dangerouslyAllowNameMatching": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "tls": {
+            "type": "boolean"
+          },
+          "nick": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "realname": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "passwordFile": {
+            "type": "string"
+          },
+          "nickserv": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "service": {
+                "type": "string"
+              },
+              "password": {
+                "type": "string"
+              },
+              "passwordFile": {
+                "type": "string"
+              },
+              "register": {
+                "type": "boolean"
+              },
+              "registerEmail": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dmPolicy": {
+            "default": "pairing",
+            "type": "string",
+            "enum": [
+              "pairing",
+              "allowlist",
+              "open",
+              "disabled"
+            ]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "groupPolicy": {
+            "default": "allowlist",
+            "type": "string",
+            "enum": [
+              "open",
+              "disabled",
+              "allowlist"
+            ]
+          },
+          "groupAllowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "groups": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "tools": {
+                  "type": "object",
+                  "properties": {
+                    "allow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "alsoAllow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deny": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "toolsBySender": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "allow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "alsoAllow": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "deny": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "skills": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "systemPrompt": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mentionPatterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "markdown": {
+            "type": "object",
+            "properties": {
+              "tables": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "bullets",
+                  "code",
+                  "block"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dmHistoryLimit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "contextVisibility": {
+            "type": "string",
+            "enum": [
+              "all",
+              "allowlist",
+              "allowlist_quote"
+            ]
+          },
+          "dms": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "historyLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "textChunkLimit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "chunkMode": {
+            "type": "string",
+            "enum": [
+              "length",
+              "newline"
+            ]
+          },
+          "blockStreaming": {
+            "type": "boolean"
+          },
+          "blockStreamingCoalesce": {
+            "type": "object",
+            "properties": {
+              "minChars": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxChars": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "idleMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "responsePrefix": {
+            "type": "string"
+          },
+          "mediaMaxMb": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "accounts": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "dangerouslyAllowNameMatching": {
+                  "type": "boolean"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "tls": {
+                  "type": "boolean"
+                },
+                "nick": {
+                  "type": "string"
+                },
+                "username": {
+                  "type": "string"
+                },
+                "realname": {
+                  "type": "string"
+                },
+                "password": {
+                  "type": "string"
+                },
+                "passwordFile": {
+                  "type": "string"
+                },
+                "nickserv": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "service": {
+                      "type": "string"
+                    },
+                    "password": {
+                      "type": "string"
+                    },
+                    "passwordFile": {
+                      "type": "string"
+                    },
+                    "register": {
+                      "type": "boolean"
+                    },
+                    "registerEmail": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "dmPolicy": {
+                  "default": "pairing",
+                  "type": "string",
+                  "enum": [
+                    "pairing",
+                    "allowlist",
+                    "open",
+                    "disabled"
+                  ]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groupPolicy": {
+                  "default": "allowlist",
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "disabled",
+                    "allowlist"
+                  ]
+                },
+                "groupAllowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groups": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "requireMention": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "alsoAllow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deny": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "toolsBySender": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "allow": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "alsoAllow": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "deny": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "skills": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "allowFrom": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "systemPrompt": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "mentionPatterns": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "markdown": {
+                  "type": "object",
+                  "properties": {
+                    "tables": {
+                      "type": "string",
+                      "enum": [
+                        "off",
+                        "bullets",
+                        "code",
+                        "block"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "historyLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "dmHistoryLimit": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "contextVisibility": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "allowlist",
+                    "allowlist_quote"
+                  ]
+                },
+                "dms": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "historyLimit": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "textChunkLimit": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "chunkMode": {
+                  "type": "string",
+                  "enum": [
+                    "length",
+                    "newline"
+                  ]
+                },
+                "blockStreaming": {
+                  "type": "boolean"
+                },
+                "blockStreamingCoalesce": {
+                  "type": "object",
+                  "properties": {
+                    "minChars": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "maxChars": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "idleMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "responsePrefix": {
+                  "type": "string"
+                },
+                "mediaMaxMb": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": [
+                "dmPolicy",
+                "groupPolicy"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "defaultAccount": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dmPolicy",
+          "groupPolicy"
+        ],
+        "additionalProperties": false
+      },
+      "label": "IRC",
+      "description": "classic IRC networks with DM/channel routing and pairing controls.",
+      "uiHints": {
+        "": {
+          "label": "IRC",
+          "help": "IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw."
+        },
+        "dmPolicy": {
+          "label": "IRC DM Policy",
+          "help": "Direct message access control (\"pairing\" recommended). \"open\" requires channels.irc.allowFrom=[\"*\"]."
+        },
+        "nickserv.enabled": {
+          "label": "IRC NickServ Enabled",
+          "help": "Enable NickServ identify/register after connect (defaults to enabled when password is configured)."
+        },
+        "nickserv.service": {
+          "label": "IRC NickServ Service",
+          "help": "NickServ service nick (default: NickServ)."
+        },
+        "nickserv.password": {
+          "label": "IRC NickServ Password",
+          "help": "NickServ password used for IDENTIFY/REGISTER (sensitive)."
+        },
+        "nickserv.passwordFile": {
+          "label": "IRC NickServ Password File",
+          "help": "Optional file path containing NickServ password."
+        },
+        "nickserv.register": {
+          "label": "IRC NickServ Register",
+          "help": "If true, send NickServ REGISTER on every connect. Use once for initial registration, then disable."
+        },
+        "nickserv.registerEmail": {
+          "label": "IRC NickServ Register Email",
+          "help": "Email used with NickServ REGISTER (required when register=true)."
+        },
+        "configWrites": {
+          "label": "IRC Config Writes",
+          "help": "Allow IRC to write config in response to channel events/commands (default: true)."
+        }
+      }
+    }
+  }
+}

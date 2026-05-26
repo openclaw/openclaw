@@ -1,0 +1,11 @@
+import type { createSubsystemLogger } from "../logging/subsystem.js";
+type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+type ModelTransportDebugEnv = NodeJS.ProcessEnv;
+export type ModelPayloadDebugMode = "off" | "summary" | "tools" | "full-redacted";
+export type ModelSseDebugMode = "off" | "events" | "peek";
+export declare function resolveModelPayloadDebugMode(env?: ModelTransportDebugEnv): ModelPayloadDebugMode;
+export declare function resolveModelSseDebugMode(env?: ModelTransportDebugEnv): ModelSseDebugMode;
+export declare function isModelTransportDebugEnabled(env?: ModelTransportDebugEnv): boolean;
+export declare function isCodeModeDebugEnabled(env?: ModelTransportDebugEnv): boolean;
+export declare function emitModelTransportDebug(log: SubsystemLogger, message: string): void;
+export {};

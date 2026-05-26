@@ -1,0 +1,2 @@
+import { i as normalizeOpenRouterBaseUrl, n as buildOpenrouterProvider, r as isOpenRouterProxyReasoningUnsupportedModel, t as OPENROUTER_BASE_URL } from "../../provider-catalog-DOty1l2_.js";
+export { OPENROUTER_BASE_URL, buildOpenrouterProvider, isOpenRouterProxyReasoningUnsupportedModel, normalizeOpenRouterBaseUrl };

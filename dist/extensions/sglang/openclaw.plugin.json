@@ -1,0 +1,49 @@
+{
+  "id": "sglang",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "sglang"
+  ],
+  "providerRequest": {
+    "providers": {
+      "sglang": {
+        "family": "sglang",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "sglang": {
+        "external": false
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "sglang": [
+      "SGLANG_API_KEY"
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "sglang",
+      "method": "custom",
+      "choiceId": "sglang",
+      "choiceLabel": "SGLang",
+      "choiceHint": "Fast self-hosted OpenAI-compatible server",
+      "groupId": "sglang",
+      "groupLabel": "SGLang",
+      "groupHint": "Fast self-hosted server"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

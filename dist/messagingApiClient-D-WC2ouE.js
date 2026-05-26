@@ -1,0 +1,1934 @@
+import { Readable } from "node:stream";
+import { Buffer } from "node:buffer";
+//#region node_modules/@line/bot-sdk/dist/exceptions.js
+var HTTPFetchError = class extends Error {
+	status;
+	statusText;
+	headers;
+	body;
+	constructor(message, { status, statusText, headers, body }) {
+		super(message);
+		this.name = this.constructor.name;
+		Object.assign(this, {
+			status,
+			statusText,
+			headers,
+			body
+		});
+	}
+};
+const USER_AGENT = `@line/bot-sdk/11.0.0`;
+//#endregion
+//#region node_modules/@line/bot-sdk/dist/utils.js
+function createURLSearchParams(params) {
+	const searchParams = new URLSearchParams();
+	for (const [key, value] of Object.entries(params)) if (value != null) searchParams.append(key, String(value));
+	return searchParams;
+}
+//#endregion
+//#region node_modules/@line/bot-sdk/dist/http-fetch.js
+function convertResponseToReadable(response) {
+	const reader = response.body.getReader();
+	return new Readable({ async read() {
+		const { done, value } = await reader.read();
+		if (done) this.push(null);
+		else this.push(Buffer.from(value));
+	} });
+}
+function normalizeHeaders(headers) {
+	const normalized = {};
+	if (!headers) return normalized;
+	for (const key of Object.keys(headers)) normalized[key.toLowerCase()] = headers[key];
+	return normalized;
+}
+function mergeHeaders(base, override) {
+	const normalizedBase = normalizeHeaders(base);
+	const normalizedOverride = normalizeHeaders(override);
+	return {
+		...normalizedBase,
+		...normalizedOverride
+	};
+}
+var HTTPFetchClient = class {
+	baseURL;
+	defaultHeaders;
+	constructor(config) {
+		this.baseURL = config.baseURL;
+		this.defaultHeaders = mergeHeaders({ "User-Agent": USER_AGENT }, config.defaultHeaders);
+	}
+	async get(url, params) {
+		const requestUrl = new URL(url, this.baseURL);
+		if (params) requestUrl.search = createURLSearchParams(params).toString();
+		const response = await fetch(requestUrl, { headers: this.defaultHeaders });
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async post(url, body, config) {
+		const requestUrl = new URL(url, this.baseURL);
+		const response = await fetch(requestUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...this.defaultHeaders,
+				...config && config.headers
+			},
+			body: JSON.stringify(body)
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async put(url, body, config) {
+		const requestUrl = new URL(url, this.baseURL);
+		const response = await fetch(requestUrl, {
+			method: "PUT",
+			headers: {
+				"Content-Type": "application/json",
+				...this.defaultHeaders,
+				...config && config.headers
+			},
+			body: JSON.stringify(body)
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async postForm(url, body) {
+		const requestUrl = new URL(url, this.baseURL);
+		const params = body ? createURLSearchParams(body) : new URLSearchParams();
+		const response = await fetch(requestUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+				...this.defaultHeaders
+			},
+			body: params.toString()
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async postFormMultipart(url, form) {
+		const requestUrl = new URL(url, this.baseURL);
+		const response = await fetch(requestUrl, {
+			method: "POST",
+			headers: { ...this.defaultHeaders },
+			body: form
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async putFormMultipart(url, form, config) {
+		const requestUrl = new URL(url, this.baseURL);
+		const response = await fetch(requestUrl, {
+			method: "PUT",
+			headers: {
+				...this.defaultHeaders,
+				...config && (config.headers ? config.headers : {})
+			},
+			body: form
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async postBinaryContent(url, body) {
+		const requestUrl = new URL(url, this.baseURL);
+		const response = await fetch(requestUrl, {
+			method: "POST",
+			headers: {
+				"Content-Type": body.type,
+				...this.defaultHeaders
+			},
+			body
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async delete(url, params) {
+		const requestUrl = new URL(url, this.baseURL);
+		if (params) requestUrl.search = createURLSearchParams(params).toString();
+		const response = await fetch(requestUrl, {
+			method: "DELETE",
+			headers: { ...this.defaultHeaders }
+		});
+		await this.checkResponseStatus(response);
+		return response;
+	}
+	async checkResponseStatus(response) {
+		const { ok, status, statusText, headers } = response;
+		const message = `${status} - ${statusText}`;
+		if (!ok) throw new HTTPFetchError(message, {
+			status,
+			statusText,
+			headers,
+			body: await response.text()
+		});
+	}
+};
+//#endregion
+//#region node_modules/@line/bot-sdk/dist/messaging-api/api/messagingApiClient.js
+/**
+* LINE Messaging API
+* This document describes LINE Messaging API.
+*
+* The version of the OpenAPI document: 0.0.1
+*
+*
+* NOTE: This class is auto generated by OpenAPI Generator (https://openapi-generator.tech).
+* https://openapi-generator.tech
+* Do not edit the class manually.
+*/
+/**
+* @see {@link LineBotClient} for a unified interface that wraps this client.
+*/
+var MessagingApiClient = class {
+	httpClient;
+	constructor(config) {
+		const baseURL = config.baseURL || "https://api.line.me";
+		const defaultHeaders = mergeHeaders(config.defaultHeaders, { Authorization: "Bearer " + config.channelAccessToken });
+		this.httpClient = new HTTPFetchClient({
+			defaultHeaders,
+			baseURL
+		});
+	}
+	/**
+	* Sends a message to multiple users at any time.
+	* @param broadcastRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-broadcast-message"> Documentation</a>
+	*/
+	async broadcast(broadcastRequest, xLineRetryKey) {
+		return (await this.broadcastWithHttpInfo(broadcastRequest, xLineRetryKey)).body;
+	}
+	/**
+	* Sends a message to multiple users at any time..
+	* This method includes HttpInfo object to return additional information.
+	* @param broadcastRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-broadcast-message"> Documentation</a>
+	*/
+	async broadcastWithHttpInfo(broadcastRequest, xLineRetryKey) {
+		const params = broadcastRequest;
+		const headerParams = { ...xLineRetryKey != null ? { "X-Line-Retry-Key": xLineRetryKey } : {} };
+		const res = await this.httpClient.post("/v2/bot/message/broadcast", params, { headers: headerParams });
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Cancel default rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#cancel-default-rich-menu"> Documentation</a>
+	*/
+	async cancelDefaultRichMenu() {
+		return (await this.cancelDefaultRichMenuWithHttpInfo()).body;
+	}
+	/**
+	* Cancel default rich menu.
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#cancel-default-rich-menu"> Documentation</a>
+	*/
+	async cancelDefaultRichMenuWithHttpInfo() {
+		const res = await this.httpClient.delete("/v2/bot/user/all/richmenu");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Close coupon
+	* @param couponId
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#discontinue-coupon"> Documentation</a>
+	*/
+	async closeCoupon(couponId) {
+		return (await this.closeCouponWithHttpInfo(couponId)).body;
+	}
+	/**
+	* Close coupon.
+	* This method includes HttpInfo object to return additional information.
+	* @param couponId
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#discontinue-coupon"> Documentation</a>
+	*/
+	async closeCouponWithHttpInfo(couponId) {
+		const res = await this.httpClient.put("/v2/bot/coupon/{couponId}/close".replace("{couponId}", String(couponId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Create a new coupon. Define coupon details such as type, title, and validity period.
+	* @param couponCreateRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#create-coupon"> Documentation</a>
+	*/
+	async createCoupon(couponCreateRequest) {
+		return (await this.createCouponWithHttpInfo(couponCreateRequest)).body;
+	}
+	/**
+	* Create a new coupon. Define coupon details such as type, title, and validity period..
+	* This method includes HttpInfo object to return additional information.
+	* @param couponCreateRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#create-coupon"> Documentation</a>
+	*/
+	async createCouponWithHttpInfo(couponCreateRequest) {
+		const params = couponCreateRequest;
+		const res = await this.httpClient.post("/v2/bot/coupon", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Create rich menu
+	* @param richMenuRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#create-rich-menu"> Documentation</a>
+	*/
+	async createRichMenu(richMenuRequest) {
+		return (await this.createRichMenuWithHttpInfo(richMenuRequest)).body;
+	}
+	/**
+	* Create rich menu.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#create-rich-menu"> Documentation</a>
+	*/
+	async createRichMenuWithHttpInfo(richMenuRequest) {
+		const params = richMenuRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Create rich menu alias
+	* @param createRichMenuAliasRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#create-rich-menu-alias"> Documentation</a>
+	*/
+	async createRichMenuAlias(createRichMenuAliasRequest) {
+		return (await this.createRichMenuAliasWithHttpInfo(createRichMenuAliasRequest)).body;
+	}
+	/**
+	* Create rich menu alias.
+	* This method includes HttpInfo object to return additional information.
+	* @param createRichMenuAliasRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#create-rich-menu-alias"> Documentation</a>
+	*/
+	async createRichMenuAliasWithHttpInfo(createRichMenuAliasRequest) {
+		const params = createRichMenuAliasRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/alias", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Deletes a rich menu.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#delete-rich-menu"> Documentation</a>
+	*/
+	async deleteRichMenu(richMenuId) {
+		return (await this.deleteRichMenuWithHttpInfo(richMenuId)).body;
+	}
+	/**
+	* Deletes a rich menu..
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#delete-rich-menu"> Documentation</a>
+	*/
+	async deleteRichMenuWithHttpInfo(richMenuId) {
+		const res = await this.httpClient.delete("/v2/bot/richmenu/{richMenuId}".replace("{richMenuId}", String(richMenuId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Delete rich menu alias
+	* @param richMenuAliasId Rich menu alias ID that you want to delete.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#delete-rich-menu-alias"> Documentation</a>
+	*/
+	async deleteRichMenuAlias(richMenuAliasId) {
+		return (await this.deleteRichMenuAliasWithHttpInfo(richMenuAliasId)).body;
+	}
+	/**
+	* Delete rich menu alias.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuAliasId Rich menu alias ID that you want to delete.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#delete-rich-menu-alias"> Documentation</a>
+	*/
+	async deleteRichMenuAliasWithHttpInfo(richMenuAliasId) {
+		const res = await this.httpClient.delete("/v2/bot/richmenu/alias/{richMenuAliasId}".replace("{richMenuAliasId}", String(richMenuAliasId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get name list of units used this month
+	* @param limit The maximum number of aggregation units you can get per request.
+	* @param start Value of the continuation token found in the next property of the JSON object returned in the response. If you can\'t get all the aggregation units in one request, include this parameter to get the remaining array.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-name-list-of-units-used-this-month"> Documentation</a>
+	*/
+	async getAggregationUnitNameList(limit, start) {
+		return (await this.getAggregationUnitNameListWithHttpInfo(limit, start)).body;
+	}
+	/**
+	* Get name list of units used this month.
+	* This method includes HttpInfo object to return additional information.
+	* @param limit The maximum number of aggregation units you can get per request.
+	* @param start Value of the continuation token found in the next property of the JSON object returned in the response. If you can\'t get all the aggregation units in one request, include this parameter to get the remaining array.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-name-list-of-units-used-this-month"> Documentation</a>
+	*/
+	async getAggregationUnitNameListWithHttpInfo(limit, start) {
+		const queryParams = {
+			limit,
+			start
+		};
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/aggregation/list", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of units used this month
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-units-used-this-month"> Documentation</a>
+	*/
+	async getAggregationUnitUsage() {
+		return (await this.getAggregationUnitUsageWithHttpInfo()).body;
+	}
+	/**
+	* Get number of units used this month.
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-units-used-this-month"> Documentation</a>
+	*/
+	async getAggregationUnitUsageWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/message/aggregation/info");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get bot info
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-bot-info"> Documentation</a>
+	*/
+	async getBotInfo() {
+		return (await this.getBotInfoWithHttpInfo()).body;
+	}
+	/**
+	* Get bot info.
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-bot-info"> Documentation</a>
+	*/
+	async getBotInfoWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/info");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get coupon detail
+	* @param couponId
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-coupon"> Documentation</a>
+	*/
+	async getCouponDetail(couponId) {
+		return (await this.getCouponDetailWithHttpInfo(couponId)).body;
+	}
+	/**
+	* Get coupon detail.
+	* This method includes HttpInfo object to return additional information.
+	* @param couponId
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-coupon"> Documentation</a>
+	*/
+	async getCouponDetailWithHttpInfo(couponId) {
+		const res = await this.httpClient.get("/v2/bot/coupon/{couponId}".replace("{couponId}", String(couponId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Gets the ID of the default rich menu set with the Messaging API.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-default-rich-menu-id"> Documentation</a>
+	*/
+	async getDefaultRichMenuId() {
+		return (await this.getDefaultRichMenuIdWithHttpInfo()).body;
+	}
+	/**
+	* Gets the ID of the default rich menu set with the Messaging API..
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-default-rich-menu-id"> Documentation</a>
+	*/
+	async getDefaultRichMenuIdWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/user/all/richmenu");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get a list of users who added your LINE Official Account as a friend
+	* @param start Value of the continuation token found in the next property of the JSON object returned in the response. Include this parameter to get the next array of user IDs.
+	* @param limit The maximum number of user IDs to retrieve in a single request.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-follower-ids"> Documentation</a>
+	*/
+	async getFollowers(start, limit) {
+		return (await this.getFollowersWithHttpInfo(start, limit)).body;
+	}
+	/**
+	* Get a list of users who added your LINE Official Account as a friend.
+	* This method includes HttpInfo object to return additional information.
+	* @param start Value of the continuation token found in the next property of the JSON object returned in the response. Include this parameter to get the next array of user IDs.
+	* @param limit The maximum number of user IDs to retrieve in a single request.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-follower-ids"> Documentation</a>
+	*/
+	async getFollowersWithHttpInfo(start, limit) {
+		const queryParams = {
+			start,
+			limit
+		};
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/followers/ids", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of users in a group chat
+	* @param groupId Group ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-members-group-count"> Documentation</a>
+	*/
+	async getGroupMemberCount(groupId) {
+		return (await this.getGroupMemberCountWithHttpInfo(groupId)).body;
+	}
+	/**
+	* Get number of users in a group chat.
+	* This method includes HttpInfo object to return additional information.
+	* @param groupId Group ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-members-group-count"> Documentation</a>
+	*/
+	async getGroupMemberCountWithHttpInfo(groupId) {
+		const res = await this.httpClient.get("/v2/bot/group/{groupId}/members/count".replace("{groupId}", String(groupId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get group chat member profile
+	* @param groupId Group ID
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-group-member-profile"> Documentation</a>
+	*/
+	async getGroupMemberProfile(groupId, userId) {
+		return (await this.getGroupMemberProfileWithHttpInfo(groupId, userId)).body;
+	}
+	/**
+	* Get group chat member profile.
+	* This method includes HttpInfo object to return additional information.
+	* @param groupId Group ID
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-group-member-profile"> Documentation</a>
+	*/
+	async getGroupMemberProfileWithHttpInfo(groupId, userId) {
+		const res = await this.httpClient.get("/v2/bot/group/{groupId}/member/{userId}".replace("{groupId}", String(groupId)).replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get group chat member user IDs
+	* @param groupId Group ID
+	* @param start Value of the continuation token found in the `next` property of the JSON object returned in the response. Include this parameter to get the next array of user IDs for the members of the group.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-group-member-user-ids"> Documentation</a>
+	*/
+	async getGroupMembersIds(groupId, start) {
+		return (await this.getGroupMembersIdsWithHttpInfo(groupId, start)).body;
+	}
+	/**
+	* Get group chat member user IDs.
+	* This method includes HttpInfo object to return additional information.
+	* @param groupId Group ID
+	* @param start Value of the continuation token found in the `next` property of the JSON object returned in the response. Include this parameter to get the next array of user IDs for the members of the group.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-group-member-user-ids"> Documentation</a>
+	*/
+	async getGroupMembersIdsWithHttpInfo(groupId, start) {
+		const queryParams = { start };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/group/{groupId}/members/ids".replace("{groupId}", String(groupId)), queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get group chat summary
+	* @param groupId Group ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-group-summary"> Documentation</a>
+	*/
+	async getGroupSummary(groupId) {
+		return (await this.getGroupSummaryWithHttpInfo(groupId)).body;
+	}
+	/**
+	* Get group chat summary.
+	* This method includes HttpInfo object to return additional information.
+	* @param groupId Group ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-group-summary"> Documentation</a>
+	*/
+	async getGroupSummaryWithHttpInfo(groupId) {
+		const res = await this.httpClient.get("/v2/bot/group/{groupId}/summary".replace("{groupId}", String(groupId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get a list of user IDs who joined the membership.
+	* @param membershipId Membership plan ID.
+	* @param start A continuation token to get next remaining membership user IDs. Returned only when there are remaining user IDs that weren\'t returned in the userIds property in the previous request. The continuation token expires in 24 hours (86,400 seconds).
+	* @param limit The max number of items to return for this API call. The value is set to 300 by default, but the max acceptable value is 1000.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-membership-user-ids"> Documentation</a>
+	*/
+	async getJoinedMembershipUsers(membershipId, start, limit) {
+		return (await this.getJoinedMembershipUsersWithHttpInfo(membershipId, start, limit)).body;
+	}
+	/**
+	* Get a list of user IDs who joined the membership..
+	* This method includes HttpInfo object to return additional information.
+	* @param membershipId Membership plan ID.
+	* @param start A continuation token to get next remaining membership user IDs. Returned only when there are remaining user IDs that weren\'t returned in the userIds property in the previous request. The continuation token expires in 24 hours (86,400 seconds).
+	* @param limit The max number of items to return for this API call. The value is set to 300 by default, but the max acceptable value is 1000.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-membership-user-ids"> Documentation</a>
+	*/
+	async getJoinedMembershipUsersWithHttpInfo(membershipId, start, limit) {
+		const queryParams = {
+			start,
+			limit
+		};
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/membership/{membershipId}/users/ids".replace("{membershipId}", String(membershipId)), queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get a list of memberships.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-membership-plans"> Documentation</a>
+	*/
+	async getMembershipList() {
+		return (await this.getMembershipListWithHttpInfo()).body;
+	}
+	/**
+	* Get a list of memberships..
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-membership-plans"> Documentation</a>
+	*/
+	async getMembershipListWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/membership/list");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get a user\'s membership subscription.
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-a-users-membership-subscription-status"> Documentation</a>
+	*/
+	async getMembershipSubscription(userId) {
+		return (await this.getMembershipSubscriptionWithHttpInfo(userId)).body;
+	}
+	/**
+	* Get a user\'s membership subscription..
+	* This method includes HttpInfo object to return additional information.
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-a-users-membership-subscription-status"> Documentation</a>
+	*/
+	async getMembershipSubscriptionWithHttpInfo(userId) {
+		const res = await this.httpClient.get("/v2/bot/membership/subscription/{userId}".replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Gets the target limit for sending messages in the current month. The total number of the free messages and the additional messages is returned.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-quota"> Documentation</a>
+	*/
+	async getMessageQuota() {
+		return (await this.getMessageQuotaWithHttpInfo()).body;
+	}
+	/**
+	* Gets the target limit for sending messages in the current month. The total number of the free messages and the additional messages is returned..
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-quota"> Documentation</a>
+	*/
+	async getMessageQuotaWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/message/quota");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Gets the number of messages sent in the current month.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-consumption"> Documentation</a>
+	*/
+	async getMessageQuotaConsumption() {
+		return (await this.getMessageQuotaConsumptionWithHttpInfo()).body;
+	}
+	/**
+	* Gets the number of messages sent in the current month..
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-consumption"> Documentation</a>
+	*/
+	async getMessageQuotaConsumptionWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/message/quota/consumption");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Gets the status of a narrowcast message.
+	* @param requestId The narrowcast message\'s request ID. Each Messaging API request has a request ID.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-narrowcast-progress-status"> Documentation</a>
+	*/
+	async getNarrowcastProgress(requestId) {
+		return (await this.getNarrowcastProgressWithHttpInfo(requestId)).body;
+	}
+	/**
+	* Gets the status of a narrowcast message..
+	* This method includes HttpInfo object to return additional information.
+	* @param requestId The narrowcast message\'s request ID. Each Messaging API request has a request ID.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-narrowcast-progress-status"> Documentation</a>
+	*/
+	async getNarrowcastProgressWithHttpInfo(requestId) {
+		const queryParams = { requestId };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/progress/narrowcast", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of sent broadcast messages
+	* @param date Date the messages were sent  Format: yyyyMMdd (e.g. 20191231) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-broadcast-messages"> Documentation</a>
+	*/
+	async getNumberOfSentBroadcastMessages(date) {
+		return (await this.getNumberOfSentBroadcastMessagesWithHttpInfo(date)).body;
+	}
+	/**
+	* Get number of sent broadcast messages.
+	* This method includes HttpInfo object to return additional information.
+	* @param date Date the messages were sent  Format: yyyyMMdd (e.g. 20191231) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-broadcast-messages"> Documentation</a>
+	*/
+	async getNumberOfSentBroadcastMessagesWithHttpInfo(date) {
+		const queryParams = { date };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/delivery/broadcast", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of sent multicast messages
+	* @param date Date the messages were sent  Format: `yyyyMMdd` (e.g. `20191231`) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-multicast-messages"> Documentation</a>
+	*/
+	async getNumberOfSentMulticastMessages(date) {
+		return (await this.getNumberOfSentMulticastMessagesWithHttpInfo(date)).body;
+	}
+	/**
+	* Get number of sent multicast messages.
+	* This method includes HttpInfo object to return additional information.
+	* @param date Date the messages were sent  Format: `yyyyMMdd` (e.g. `20191231`) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-multicast-messages"> Documentation</a>
+	*/
+	async getNumberOfSentMulticastMessagesWithHttpInfo(date) {
+		const queryParams = { date };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/delivery/multicast", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of sent push messages
+	* @param date Date the messages were sent  Format: `yyyyMMdd` (e.g. `20191231`) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-push-messages"> Documentation</a>
+	*/
+	async getNumberOfSentPushMessages(date) {
+		return (await this.getNumberOfSentPushMessagesWithHttpInfo(date)).body;
+	}
+	/**
+	* Get number of sent push messages.
+	* This method includes HttpInfo object to return additional information.
+	* @param date Date the messages were sent  Format: `yyyyMMdd` (e.g. `20191231`) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-push-messages"> Documentation</a>
+	*/
+	async getNumberOfSentPushMessagesWithHttpInfo(date) {
+		const queryParams = { date };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/delivery/push", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of sent reply messages
+	* @param date Date the messages were sent  Format: `yyyyMMdd` (e.g. `20191231`) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-reply-messages"> Documentation</a>
+	*/
+	async getNumberOfSentReplyMessages(date) {
+		return (await this.getNumberOfSentReplyMessagesWithHttpInfo(date)).body;
+	}
+	/**
+	* Get number of sent reply messages.
+	* This method includes HttpInfo object to return additional information.
+	* @param date Date the messages were sent  Format: `yyyyMMdd` (e.g. `20191231`) Timezone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-number-of-reply-messages"> Documentation</a>
+	*/
+	async getNumberOfSentReplyMessagesWithHttpInfo(date) {
+		const queryParams = { date };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/delivery/reply", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of sent LINE notification messages
+	* @param date Date the message was sent  Format: `yyyyMMdd` (Example:`20211231`) Time zone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/partner-docs/#get-number-of-sent-line-notification-messages"> Documentation</a>
+	*/
+	async getPNPMessageStatistics(date) {
+		return (await this.getPNPMessageStatisticsWithHttpInfo(date)).body;
+	}
+	/**
+	* Get number of sent LINE notification messages　.
+	* This method includes HttpInfo object to return additional information.
+	* @param date Date the message was sent  Format: `yyyyMMdd` (Example:`20211231`) Time zone: UTC+9
+	*
+	* @see <a href="https://developers.line.biz/en/reference/partner-docs/#get-number-of-sent-line-notification-messages"> Documentation</a>
+	*/
+	async getPNPMessageStatisticsWithHttpInfo(date) {
+		const queryParams = { date };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/message/delivery/pnp", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get profile
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-profile"> Documentation</a>
+	*/
+	async getProfile(userId) {
+		return (await this.getProfileWithHttpInfo(userId)).body;
+	}
+	/**
+	* Get profile.
+	* This method includes HttpInfo object to return additional information.
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-profile"> Documentation</a>
+	*/
+	async getProfileWithHttpInfo(userId) {
+		const res = await this.httpClient.get("/v2/bot/profile/{userId}".replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Gets a rich menu via a rich menu ID.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu"> Documentation</a>
+	*/
+	async getRichMenu(richMenuId) {
+		return (await this.getRichMenuWithHttpInfo(richMenuId)).body;
+	}
+	/**
+	* Gets a rich menu via a rich menu ID..
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu"> Documentation</a>
+	*/
+	async getRichMenuWithHttpInfo(richMenuId) {
+		const res = await this.httpClient.get("/v2/bot/richmenu/{richMenuId}".replace("{richMenuId}", String(richMenuId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get rich menu alias information
+	* @param richMenuAliasId The rich menu alias ID whose information you want to obtain.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-alias-by-id"> Documentation</a>
+	*/
+	async getRichMenuAlias(richMenuAliasId) {
+		return (await this.getRichMenuAliasWithHttpInfo(richMenuAliasId)).body;
+	}
+	/**
+	* Get rich menu alias information.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuAliasId The rich menu alias ID whose information you want to obtain.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-alias-by-id"> Documentation</a>
+	*/
+	async getRichMenuAliasWithHttpInfo(richMenuAliasId) {
+		const res = await this.httpClient.get("/v2/bot/richmenu/alias/{richMenuAliasId}".replace("{richMenuAliasId}", String(richMenuAliasId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get list of rich menu alias
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-alias-list"> Documentation</a>
+	*/
+	async getRichMenuAliasList() {
+		return (await this.getRichMenuAliasListWithHttpInfo()).body;
+	}
+	/**
+	* Get list of rich menu alias.
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-alias-list"> Documentation</a>
+	*/
+	async getRichMenuAliasListWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/richmenu/alias/list");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get the status of Replace or unlink a linked rich menus in batches.
+	* @param requestId A request ID used to batch control the rich menu linked to the user. Each Messaging API request has a request ID.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-batch-control-rich-menus-progress-status"> Documentation</a>
+	*/
+	async getRichMenuBatchProgress(requestId) {
+		return (await this.getRichMenuBatchProgressWithHttpInfo(requestId)).body;
+	}
+	/**
+	* Get the status of Replace or unlink a linked rich menus in batches..
+	* This method includes HttpInfo object to return additional information.
+	* @param requestId A request ID used to batch control the rich menu linked to the user. Each Messaging API request has a request ID.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-batch-control-rich-menus-progress-status"> Documentation</a>
+	*/
+	async getRichMenuBatchProgressWithHttpInfo(requestId) {
+		const queryParams = { requestId };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/richmenu/progress/batch", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get rich menu ID of user
+	* @param userId User ID. Found in the `source` object of webhook event objects. Do not use the LINE ID used in LINE.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-id-of-user"> Documentation</a>
+	*/
+	async getRichMenuIdOfUser(userId) {
+		return (await this.getRichMenuIdOfUserWithHttpInfo(userId)).body;
+	}
+	/**
+	* Get rich menu ID of user.
+	* This method includes HttpInfo object to return additional information.
+	* @param userId User ID. Found in the `source` object of webhook event objects. Do not use the LINE ID used in LINE.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-id-of-user"> Documentation</a>
+	*/
+	async getRichMenuIdOfUserWithHttpInfo(userId) {
+		const res = await this.httpClient.get("/v2/bot/user/{userId}/richmenu".replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get rich menu list
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-list"> Documentation</a>
+	*/
+	async getRichMenuList() {
+		return (await this.getRichMenuListWithHttpInfo()).body;
+	}
+	/**
+	* Get rich menu list.
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-rich-menu-list"> Documentation</a>
+	*/
+	async getRichMenuListWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/richmenu/list");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get number of users in a multi-person chat
+	* @param roomId Room ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-members-room-count"> Documentation</a>
+	*/
+	async getRoomMemberCount(roomId) {
+		return (await this.getRoomMemberCountWithHttpInfo(roomId)).body;
+	}
+	/**
+	* Get number of users in a multi-person chat.
+	* This method includes HttpInfo object to return additional information.
+	* @param roomId Room ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-members-room-count"> Documentation</a>
+	*/
+	async getRoomMemberCountWithHttpInfo(roomId) {
+		const res = await this.httpClient.get("/v2/bot/room/{roomId}/members/count".replace("{roomId}", String(roomId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get multi-person chat member profile
+	* @param roomId Room ID
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-room-member-profile"> Documentation</a>
+	*/
+	async getRoomMemberProfile(roomId, userId) {
+		return (await this.getRoomMemberProfileWithHttpInfo(roomId, userId)).body;
+	}
+	/**
+	* Get multi-person chat member profile.
+	* This method includes HttpInfo object to return additional information.
+	* @param roomId Room ID
+	* @param userId User ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-room-member-profile"> Documentation</a>
+	*/
+	async getRoomMemberProfileWithHttpInfo(roomId, userId) {
+		const res = await this.httpClient.get("/v2/bot/room/{roomId}/member/{userId}".replace("{roomId}", String(roomId)).replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get multi-person chat member user IDs
+	* @param roomId Room ID
+	* @param start Value of the continuation token found in the `next` property of the JSON object returned in the response. Include this parameter to get the next array of user IDs for the members of the group.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-room-member-user-ids"> Documentation</a>
+	*/
+	async getRoomMembersIds(roomId, start) {
+		return (await this.getRoomMembersIdsWithHttpInfo(roomId, start)).body;
+	}
+	/**
+	* Get multi-person chat member user IDs.
+	* This method includes HttpInfo object to return additional information.
+	* @param roomId Room ID
+	* @param start Value of the continuation token found in the `next` property of the JSON object returned in the response. Include this parameter to get the next array of user IDs for the members of the group.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-room-member-user-ids"> Documentation</a>
+	*/
+	async getRoomMembersIdsWithHttpInfo(roomId, start) {
+		const queryParams = { start };
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/room/{roomId}/members/ids".replace("{roomId}", String(roomId)), queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get webhook endpoint information
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-webhook-endpoint-information"> Documentation</a>
+	*/
+	async getWebhookEndpoint() {
+		return (await this.getWebhookEndpointWithHttpInfo()).body;
+	}
+	/**
+	* Get webhook endpoint information.
+	* This method includes HttpInfo object to return additional information.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-webhook-endpoint-information"> Documentation</a>
+	*/
+	async getWebhookEndpointWithHttpInfo() {
+		const res = await this.httpClient.get("/v2/bot/channel/webhook/endpoint");
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Issue link token
+	* @param userId User ID for the LINE account to be linked. Found in the `source` object of account link event objects. Do not use the LINE ID used in LINE.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#issue-link-token"> Documentation</a>
+	*/
+	async issueLinkToken(userId) {
+		return (await this.issueLinkTokenWithHttpInfo(userId)).body;
+	}
+	/**
+	* Issue link token.
+	* This method includes HttpInfo object to return additional information.
+	* @param userId User ID for the LINE account to be linked. Found in the `source` object of account link event objects. Do not use the LINE ID used in LINE.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#issue-link-token"> Documentation</a>
+	*/
+	async issueLinkTokenWithHttpInfo(userId) {
+		const res = await this.httpClient.post("/v2/bot/user/{userId}/linkToken".replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Leave group chat
+	* @param groupId Group ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#leave-group"> Documentation</a>
+	*/
+	async leaveGroup(groupId) {
+		return (await this.leaveGroupWithHttpInfo(groupId)).body;
+	}
+	/**
+	* Leave group chat.
+	* This method includes HttpInfo object to return additional information.
+	* @param groupId Group ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#leave-group"> Documentation</a>
+	*/
+	async leaveGroupWithHttpInfo(groupId) {
+		const res = await this.httpClient.post("/v2/bot/group/{groupId}/leave".replace("{groupId}", String(groupId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Leave multi-person chat
+	* @param roomId Room ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#leave-room"> Documentation</a>
+	*/
+	async leaveRoom(roomId) {
+		return (await this.leaveRoomWithHttpInfo(roomId)).body;
+	}
+	/**
+	* Leave multi-person chat.
+	* This method includes HttpInfo object to return additional information.
+	* @param roomId Room ID
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#leave-room"> Documentation</a>
+	*/
+	async leaveRoomWithHttpInfo(roomId) {
+		const res = await this.httpClient.post("/v2/bot/room/{roomId}/leave".replace("{roomId}", String(roomId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Link rich menu to user.
+	* @param userId User ID. Found in the `source` object of webhook event objects. Do not use the LINE ID used in LINE.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#link-rich-menu-to-user"> Documentation</a>
+	*/
+	async linkRichMenuIdToUser(userId, richMenuId) {
+		return (await this.linkRichMenuIdToUserWithHttpInfo(userId, richMenuId)).body;
+	}
+	/**
+	* Link rich menu to user..
+	* This method includes HttpInfo object to return additional information.
+	* @param userId User ID. Found in the `source` object of webhook event objects. Do not use the LINE ID used in LINE.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#link-rich-menu-to-user"> Documentation</a>
+	*/
+	async linkRichMenuIdToUserWithHttpInfo(userId, richMenuId) {
+		const res = await this.httpClient.post("/v2/bot/user/{userId}/richmenu/{richMenuId}".replace("{userId}", String(userId)).replace("{richMenuId}", String(richMenuId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Link rich menu to multiple users
+	* @param richMenuBulkLinkRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#link-rich-menu-to-users"> Documentation</a>
+	*/
+	async linkRichMenuIdToUsers(richMenuBulkLinkRequest) {
+		return (await this.linkRichMenuIdToUsersWithHttpInfo(richMenuBulkLinkRequest)).body;
+	}
+	/**
+	* Link rich menu to multiple users.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuBulkLinkRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#link-rich-menu-to-users"> Documentation</a>
+	*/
+	async linkRichMenuIdToUsersWithHttpInfo(richMenuBulkLinkRequest) {
+		const params = richMenuBulkLinkRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/bulk/link", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Get a paginated list of coupons.
+	* @param status Filter coupons by their status.
+	* @param start Pagination token to retrieve the next page of results.
+	* @param limit Maximum number of coupons to return per request.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-coupons-list"> Documentation</a>
+	*/
+	async listCoupon(status, start, limit) {
+		return (await this.listCouponWithHttpInfo(status, start, limit)).body;
+	}
+	/**
+	* Get a paginated list of coupons..
+	* This method includes HttpInfo object to return additional information.
+	* @param status Filter coupons by their status.
+	* @param start Pagination token to retrieve the next page of results.
+	* @param limit Maximum number of coupons to return per request.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#get-coupons-list"> Documentation</a>
+	*/
+	async listCouponWithHttpInfo(status, start, limit) {
+		const queryParams = {
+			status: [...status].join(","),
+			start,
+			limit
+		};
+		Object.keys(queryParams).forEach((key) => {
+			if (queryParams[key] === void 0) delete queryParams[key];
+		});
+		const res = await this.httpClient.get("/v2/bot/coupon", queryParams);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Mark messages from users as read
+	* @param markMessagesAsReadRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/partner-docs/#mark-messages-from-users-as-read"> Documentation</a>
+	*/
+	async markMessagesAsRead(markMessagesAsReadRequest) {
+		return (await this.markMessagesAsReadWithHttpInfo(markMessagesAsReadRequest)).body;
+	}
+	/**
+	* Mark messages from users as read.
+	* This method includes HttpInfo object to return additional information.
+	* @param markMessagesAsReadRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/partner-docs/#mark-messages-from-users-as-read"> Documentation</a>
+	*/
+	async markMessagesAsReadWithHttpInfo(markMessagesAsReadRequest) {
+		const params = markMessagesAsReadRequest;
+		const res = await this.httpClient.post("/v2/bot/message/markAsRead", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Mark messages from users as read by token
+	* @param markMessagesAsReadByTokenRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#mark-as-read"> Documentation</a>
+	*/
+	async markMessagesAsReadByToken(markMessagesAsReadByTokenRequest) {
+		return (await this.markMessagesAsReadByTokenWithHttpInfo(markMessagesAsReadByTokenRequest)).body;
+	}
+	/**
+	* Mark messages from users as read by token.
+	* This method includes HttpInfo object to return additional information.
+	* @param markMessagesAsReadByTokenRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#mark-as-read"> Documentation</a>
+	*/
+	async markMessagesAsReadByTokenWithHttpInfo(markMessagesAsReadByTokenRequest) {
+		const params = markMessagesAsReadByTokenRequest;
+		const res = await this.httpClient.post("/v2/bot/chat/markAsRead", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* An API that efficiently sends the same message to multiple user IDs. You can\'t send messages to group chats or multi-person chats.
+	* @param multicastRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-multicast-message"> Documentation</a>
+	*/
+	async multicast(multicastRequest, xLineRetryKey) {
+		return (await this.multicastWithHttpInfo(multicastRequest, xLineRetryKey)).body;
+	}
+	/**
+	* An API that efficiently sends the same message to multiple user IDs. You can\'t send messages to group chats or multi-person chats..
+	* This method includes HttpInfo object to return additional information.
+	* @param multicastRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-multicast-message"> Documentation</a>
+	*/
+	async multicastWithHttpInfo(multicastRequest, xLineRetryKey) {
+		const params = multicastRequest;
+		const headerParams = { ...xLineRetryKey != null ? { "X-Line-Retry-Key": xLineRetryKey } : {} };
+		const res = await this.httpClient.post("/v2/bot/message/multicast", params, { headers: headerParams });
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Send narrowcast message
+	* @param narrowcastRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-narrowcast-message"> Documentation</a>
+	*/
+	async narrowcast(narrowcastRequest, xLineRetryKey) {
+		return (await this.narrowcastWithHttpInfo(narrowcastRequest, xLineRetryKey)).body;
+	}
+	/**
+	* Send narrowcast message.
+	* This method includes HttpInfo object to return additional information.
+	* @param narrowcastRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-narrowcast-message"> Documentation</a>
+	*/
+	async narrowcastWithHttpInfo(narrowcastRequest, xLineRetryKey) {
+		const params = narrowcastRequest;
+		const headerParams = { ...xLineRetryKey != null ? { "X-Line-Retry-Key": xLineRetryKey } : {} };
+		const res = await this.httpClient.post("/v2/bot/message/narrowcast", params, { headers: headerParams });
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Sends a message to a user, group chat, or multi-person chat at any time.
+	* @param pushMessageRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-push-message"> Documentation</a>
+	*/
+	async pushMessage(pushMessageRequest, xLineRetryKey) {
+		return (await this.pushMessageWithHttpInfo(pushMessageRequest, xLineRetryKey)).body;
+	}
+	/**
+	* Sends a message to a user, group chat, or multi-person chat at any time..
+	* This method includes HttpInfo object to return additional information.
+	* @param pushMessageRequest
+	* @param xLineRetryKey Retry key. Specifies the UUID in hexadecimal format (e.g., `123e4567-e89b-12d3-a456-426614174000`) generated by any method. The retry key isn\'t generated by LINE. Each developer must generate their own retry key.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-push-message"> Documentation</a>
+	*/
+	async pushMessageWithHttpInfo(pushMessageRequest, xLineRetryKey) {
+		const params = pushMessageRequest;
+		const headerParams = { ...xLineRetryKey != null ? { "X-Line-Retry-Key": xLineRetryKey } : {} };
+		const res = await this.httpClient.post("/v2/bot/message/push", params, { headers: headerParams });
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Send LINE notification message
+	* @param pnpMessagesRequest
+	* @param xLineDeliveryTag String returned in the delivery.data property of the delivery completion event via Webhook.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/partner-docs/#send-line-notification-message"> Documentation</a>
+	*/
+	async pushMessagesByPhone(pnpMessagesRequest, xLineDeliveryTag) {
+		return (await this.pushMessagesByPhoneWithHttpInfo(pnpMessagesRequest, xLineDeliveryTag)).body;
+	}
+	/**
+	* Send LINE notification message.
+	* This method includes HttpInfo object to return additional information.
+	* @param pnpMessagesRequest
+	* @param xLineDeliveryTag String returned in the delivery.data property of the delivery completion event via Webhook.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/partner-docs/#send-line-notification-message"> Documentation</a>
+	*/
+	async pushMessagesByPhoneWithHttpInfo(pnpMessagesRequest, xLineDeliveryTag) {
+		const params = pnpMessagesRequest;
+		const headerParams = { ...xLineDeliveryTag != null ? { "X-Line-Delivery-Tag": xLineDeliveryTag } : {} };
+		const res = await this.httpClient.post("/bot/pnp/push", params, { headers: headerParams });
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Send reply message
+	* @param replyMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-reply-message"> Documentation</a>
+	*/
+	async replyMessage(replyMessageRequest) {
+		return (await this.replyMessageWithHttpInfo(replyMessageRequest)).body;
+	}
+	/**
+	* Send reply message.
+	* This method includes HttpInfo object to return additional information.
+	* @param replyMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#send-reply-message"> Documentation</a>
+	*/
+	async replyMessageWithHttpInfo(replyMessageRequest) {
+		const params = replyMessageRequest;
+		const res = await this.httpClient.post("/v2/bot/message/reply", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* You can use this endpoint to batch control the rich menu linked to the users using the endpoint such as Link rich menu to user. The following operations are available:  1. Replace a rich menu with another rich menu for all users linked to a specific rich menu 2. Unlink a rich menu for all users linked to a specific rich menu 3. Unlink a rich menu for all users linked the rich menu
+	* @param richMenuBatchRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#batch-control-rich-menus-of-users"> Documentation</a>
+	*/
+	async richMenuBatch(richMenuBatchRequest) {
+		return (await this.richMenuBatchWithHttpInfo(richMenuBatchRequest)).body;
+	}
+	/**
+	* You can use this endpoint to batch control the rich menu linked to the users using the endpoint such as Link rich menu to user. The following operations are available:  1. Replace a rich menu with another rich menu for all users linked to a specific rich menu 2. Unlink a rich menu for all users linked to a specific rich menu 3. Unlink a rich menu for all users linked the rich menu .
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuBatchRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#batch-control-rich-menus-of-users"> Documentation</a>
+	*/
+	async richMenuBatchWithHttpInfo(richMenuBatchRequest) {
+		const params = richMenuBatchRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/batch", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Set default rich menu
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#set-default-rich-menu"> Documentation</a>
+	*/
+	async setDefaultRichMenu(richMenuId) {
+		return (await this.setDefaultRichMenuWithHttpInfo(richMenuId)).body;
+	}
+	/**
+	* Set default rich menu.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuId ID of a rich menu
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#set-default-rich-menu"> Documentation</a>
+	*/
+	async setDefaultRichMenuWithHttpInfo(richMenuId) {
+		const res = await this.httpClient.post("/v2/bot/user/all/richmenu/{richMenuId}".replace("{richMenuId}", String(richMenuId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Set webhook endpoint URL
+	* @param setWebhookEndpointRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#set-webhook-endpoint-url"> Documentation</a>
+	*/
+	async setWebhookEndpoint(setWebhookEndpointRequest) {
+		return (await this.setWebhookEndpointWithHttpInfo(setWebhookEndpointRequest)).body;
+	}
+	/**
+	* Set webhook endpoint URL.
+	* This method includes HttpInfo object to return additional information.
+	* @param setWebhookEndpointRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#set-webhook-endpoint-url"> Documentation</a>
+	*/
+	async setWebhookEndpointWithHttpInfo(setWebhookEndpointRequest) {
+		const params = setWebhookEndpointRequest;
+		const res = await this.httpClient.put("/v2/bot/channel/webhook/endpoint", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Display a loading animation in one-on-one chats between users and LINE Official Accounts.
+	* @param showLoadingAnimationRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#display-a-loading-indicator"> Documentation</a>
+	*/
+	async showLoadingAnimation(showLoadingAnimationRequest) {
+		return (await this.showLoadingAnimationWithHttpInfo(showLoadingAnimationRequest)).body;
+	}
+	/**
+	* Display a loading animation in one-on-one chats between users and LINE Official Accounts..
+	* This method includes HttpInfo object to return additional information.
+	* @param showLoadingAnimationRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#display-a-loading-indicator"> Documentation</a>
+	*/
+	async showLoadingAnimationWithHttpInfo(showLoadingAnimationRequest) {
+		const params = showLoadingAnimationRequest;
+		const res = await this.httpClient.post("/v2/bot/chat/loading/start", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Test webhook endpoint
+	* @param testWebhookEndpointRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#test-webhook-endpoint"> Documentation</a>
+	*/
+	async testWebhookEndpoint(testWebhookEndpointRequest) {
+		return (await this.testWebhookEndpointWithHttpInfo(testWebhookEndpointRequest)).body;
+	}
+	/**
+	* Test webhook endpoint.
+	* This method includes HttpInfo object to return additional information.
+	* @param testWebhookEndpointRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#test-webhook-endpoint"> Documentation</a>
+	*/
+	async testWebhookEndpointWithHttpInfo(testWebhookEndpointRequest) {
+		const params = testWebhookEndpointRequest;
+		const res = await this.httpClient.post("/v2/bot/channel/webhook/test", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Unlink rich menu from user
+	* @param userId User ID. Found in the `source` object of webhook event objects. Do not use the LINE ID used in LINE.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#unlink-rich-menu-from-user"> Documentation</a>
+	*/
+	async unlinkRichMenuIdFromUser(userId) {
+		return (await this.unlinkRichMenuIdFromUserWithHttpInfo(userId)).body;
+	}
+	/**
+	* Unlink rich menu from user.
+	* This method includes HttpInfo object to return additional information.
+	* @param userId User ID. Found in the `source` object of webhook event objects. Do not use the LINE ID used in LINE.
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#unlink-rich-menu-from-user"> Documentation</a>
+	*/
+	async unlinkRichMenuIdFromUserWithHttpInfo(userId) {
+		const res = await this.httpClient.delete("/v2/bot/user/{userId}/richmenu".replace("{userId}", String(userId)));
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Unlink rich menus from multiple users
+	* @param richMenuBulkUnlinkRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#unlink-rich-menu-from-users"> Documentation</a>
+	*/
+	async unlinkRichMenuIdFromUsers(richMenuBulkUnlinkRequest) {
+		return (await this.unlinkRichMenuIdFromUsersWithHttpInfo(richMenuBulkUnlinkRequest)).body;
+	}
+	/**
+	* Unlink rich menus from multiple users.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuBulkUnlinkRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#unlink-rich-menu-from-users"> Documentation</a>
+	*/
+	async unlinkRichMenuIdFromUsersWithHttpInfo(richMenuBulkUnlinkRequest) {
+		const params = richMenuBulkUnlinkRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/bulk/unlink", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Update rich menu alias
+	* @param richMenuAliasId The rich menu alias ID you want to update.
+	* @param updateRichMenuAliasRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#update-rich-menu-alias"> Documentation</a>
+	*/
+	async updateRichMenuAlias(richMenuAliasId, updateRichMenuAliasRequest) {
+		return (await this.updateRichMenuAliasWithHttpInfo(richMenuAliasId, updateRichMenuAliasRequest)).body;
+	}
+	/**
+	* Update rich menu alias.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuAliasId The rich menu alias ID you want to update.
+	* @param updateRichMenuAliasRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#update-rich-menu-alias"> Documentation</a>
+	*/
+	async updateRichMenuAliasWithHttpInfo(richMenuAliasId, updateRichMenuAliasRequest) {
+		const params = updateRichMenuAliasRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/alias/{richMenuAliasId}".replace("{richMenuAliasId}", String(richMenuAliasId)), params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate message objects of a broadcast message
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-broadcast-message"> Documentation</a>
+	*/
+	async validateBroadcast(validateMessageRequest) {
+		return (await this.validateBroadcastWithHttpInfo(validateMessageRequest)).body;
+	}
+	/**
+	* Validate message objects of a broadcast message.
+	* This method includes HttpInfo object to return additional information.
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-broadcast-message"> Documentation</a>
+	*/
+	async validateBroadcastWithHttpInfo(validateMessageRequest) {
+		const params = validateMessageRequest;
+		const res = await this.httpClient.post("/v2/bot/message/validate/broadcast", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate message objects of a multicast message
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-multicast-message"> Documentation</a>
+	*/
+	async validateMulticast(validateMessageRequest) {
+		return (await this.validateMulticastWithHttpInfo(validateMessageRequest)).body;
+	}
+	/**
+	* Validate message objects of a multicast message.
+	* This method includes HttpInfo object to return additional information.
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-multicast-message"> Documentation</a>
+	*/
+	async validateMulticastWithHttpInfo(validateMessageRequest) {
+		const params = validateMessageRequest;
+		const res = await this.httpClient.post("/v2/bot/message/validate/multicast", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate message objects of a narrowcast message
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-narrowcast-message"> Documentation</a>
+	*/
+	async validateNarrowcast(validateMessageRequest) {
+		return (await this.validateNarrowcastWithHttpInfo(validateMessageRequest)).body;
+	}
+	/**
+	* Validate message objects of a narrowcast message.
+	* This method includes HttpInfo object to return additional information.
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-narrowcast-message"> Documentation</a>
+	*/
+	async validateNarrowcastWithHttpInfo(validateMessageRequest) {
+		const params = validateMessageRequest;
+		const res = await this.httpClient.post("/v2/bot/message/validate/narrowcast", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate message objects of a push message
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-push-message"> Documentation</a>
+	*/
+	async validatePush(validateMessageRequest) {
+		return (await this.validatePushWithHttpInfo(validateMessageRequest)).body;
+	}
+	/**
+	* Validate message objects of a push message.
+	* This method includes HttpInfo object to return additional information.
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-push-message"> Documentation</a>
+	*/
+	async validatePushWithHttpInfo(validateMessageRequest) {
+		const params = validateMessageRequest;
+		const res = await this.httpClient.post("/v2/bot/message/validate/push", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate message objects of a reply message
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-reply-message"> Documentation</a>
+	*/
+	async validateReply(validateMessageRequest) {
+		return (await this.validateReplyWithHttpInfo(validateMessageRequest)).body;
+	}
+	/**
+	* Validate message objects of a reply message.
+	* This method includes HttpInfo object to return additional information.
+	* @param validateMessageRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-message-objects-of-reply-message"> Documentation</a>
+	*/
+	async validateReplyWithHttpInfo(validateMessageRequest) {
+		const params = validateMessageRequest;
+		const res = await this.httpClient.post("/v2/bot/message/validate/reply", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate a request body of the Replace or unlink the linked rich menus in batches endpoint.
+	* @param richMenuBatchRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-batch-control-rich-menus-request"> Documentation</a>
+	*/
+	async validateRichMenuBatchRequest(richMenuBatchRequest) {
+		return (await this.validateRichMenuBatchRequestWithHttpInfo(richMenuBatchRequest)).body;
+	}
+	/**
+	* Validate a request body of the Replace or unlink the linked rich menus in batches endpoint..
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuBatchRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-batch-control-rich-menus-request"> Documentation</a>
+	*/
+	async validateRichMenuBatchRequestWithHttpInfo(richMenuBatchRequest) {
+		const params = richMenuBatchRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/validate/batch", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+	/**
+	* Validate rich menu object
+	* @param richMenuRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-rich-menu-object"> Documentation</a>
+	*/
+	async validateRichMenuObject(richMenuRequest) {
+		return (await this.validateRichMenuObjectWithHttpInfo(richMenuRequest)).body;
+	}
+	/**
+	* Validate rich menu object.
+	* This method includes HttpInfo object to return additional information.
+	* @param richMenuRequest
+	*
+	* @see <a href="https://developers.line.biz/en/reference/messaging-api/#validate-rich-menu-object"> Documentation</a>
+	*/
+	async validateRichMenuObjectWithHttpInfo(richMenuRequest) {
+		const params = richMenuRequest;
+		const res = await this.httpClient.post("/v2/bot/richmenu/validate", params);
+		const text = await res.text();
+		return {
+			httpResponse: res,
+			body: text ? JSON.parse(text) : null
+		};
+	}
+};
+//#endregion
+export { mergeHeaders as i, HTTPFetchClient as n, convertResponseToReadable as r, MessagingApiClient as t };

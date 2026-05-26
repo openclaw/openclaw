@@ -1,0 +1,23 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { ClawHubPackageChannel, ClawHubPackageFamily } from "../infra/clawhub.js";
+export type ClawHubPluginInstallRecordFields = {
+    source: "clawhub";
+    clawhubUrl: string;
+    clawhubPackage: string;
+    clawhubFamily: Exclude<ClawHubPackageFamily, "skill">;
+    clawhubChannel?: ClawHubPackageChannel;
+    version?: string;
+    integrity?: string;
+    resolvedAt?: string;
+    installedAt?: string;
+    artifactKind?: "legacy-zip" | "npm-pack";
+    artifactFormat?: "zip" | "tgz";
+    npmIntegrity?: string;
+    npmShasum?: string;
+    npmTarballName?: string;
+    clawpackSha256?: string;
+    clawpackSpecVersion?: number;
+    clawpackManifestSha256?: string;
+    clawpackSize?: number;
+};
+export declare function buildClawHubPluginInstallRecordFields(fields: ClawHubPluginInstallRecordFields): Pick<PluginInstallRecord, "source" | "clawhubUrl" | "clawhubPackage" | "clawhubFamily" | "clawhubChannel" | "version" | "integrity" | "resolvedAt" | "installedAt" | "artifactKind" | "artifactFormat" | "npmIntegrity" | "npmShasum" | "npmTarballName" | "clawpackSha256" | "clawpackSpecVersion" | "clawpackManifestSha256" | "clawpackSize">;

@@ -1,0 +1,61 @@
+{
+  "id": "lmstudio",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "lmstudio"
+  ],
+  "providerRequest": {
+    "providers": {
+      "lmstudio": {
+        "family": "lmstudio",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "lmstudio": {
+        "external": false
+      }
+    }
+  },
+  "nonSecretAuthMarkers": [
+    "lmstudio-local"
+  ],
+  "providerAuthEnvVars": {
+    "lmstudio": [
+      "LM_API_TOKEN"
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "lmstudio",
+      "method": "custom",
+      "choiceId": "lmstudio",
+      "choiceLabel": "LM Studio",
+      "choiceHint": "Local/self-hosted LM Studio server",
+      "optionKey": "lmstudioApiKey",
+      "cliFlag": "--lmstudio-api-key",
+      "cliOption": "--lmstudio-api-key <key>",
+      "cliDescription": "LM Studio API key",
+      "groupId": "lmstudio",
+      "groupLabel": "LM Studio",
+      "groupHint": "Self-hosted open-weight models"
+    }
+  ],
+  "contracts": {
+    "memoryEmbeddingProviders": [
+      "lmstudio"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

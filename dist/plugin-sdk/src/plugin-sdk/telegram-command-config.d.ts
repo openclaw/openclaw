@@ -1,0 +1,29 @@
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Use plugin-local Telegram command config handling for new plugin code.
+ */
+export type TelegramCustomCommandInput = {
+    command?: string | null;
+    description?: string | null;
+};
+export type TelegramCustomCommandIssue = {
+    index: number;
+    field: "command" | "description";
+    message: string;
+};
+export declare function getTelegramCommandNamePattern(): RegExp;
+export declare const TELEGRAM_COMMAND_NAME_PATTERN: RegExp;
+export declare function normalizeTelegramCommandName(value: string): string;
+export declare function normalizeTelegramCommandDescription(value: string): string;
+export declare function resolveTelegramCustomCommands(params: {
+    commands?: TelegramCustomCommandInput[] | null;
+    reservedCommands?: Set<string>;
+    checkReserved?: boolean;
+    checkDuplicates?: boolean;
+}): {
+    commands: Array<{
+        command: string;
+        description: string;
+    }>;
+    issues: TelegramCustomCommandIssue[];
+};

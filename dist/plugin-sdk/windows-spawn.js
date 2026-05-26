@@ -1,0 +1,2 @@
+import { a as resolveWindowsSpawnProgramCandidate, i as resolveWindowsSpawnProgram, n as materializeWindowsSpawnProgram, r as resolveWindowsExecutablePath, t as applyWindowsSpawnProgramPolicy } from "../windows-spawn-CpvP3TLe.js";
+export { applyWindowsSpawnProgramPolicy, materializeWindowsSpawnProgram, resolveWindowsExecutablePath, resolveWindowsSpawnProgram, resolveWindowsSpawnProgramCandidate };

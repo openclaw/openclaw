@@ -1,0 +1,31 @@
+import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
+export type FollowupQueueState = {
+    items: FollowupRun[];
+    draining: boolean;
+    lastEnqueuedAt: number;
+    mode: QueueMode;
+    debounceMs: number;
+    cap: number;
+    dropPolicy: QueueDropPolicy;
+    droppedCount: number;
+    summaryLines: string[];
+    lastRun?: FollowupRun["run"];
+};
+export declare const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
+export declare const DEFAULT_QUEUE_CAP = 20;
+export declare const DEFAULT_QUEUE_DROP: QueueDropPolicy;
+export declare const FOLLOWUP_QUEUES: Map<string, FollowupQueueState>;
+export declare function getExistingFollowupQueue(key: string): FollowupQueueState | undefined;
+export declare function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState;
+export declare function clearFollowupQueue(key: string): number;
+export declare function refreshQueuedFollowupSession(params: {
+    key: string;
+    previousSessionId?: string;
+    nextSessionId?: string;
+    nextSessionFile?: string;
+    nextProvider?: string;
+    nextModel?: string;
+    nextModelOverrideSource?: "auto" | "user";
+    nextAuthProfileId?: string;
+    nextAuthProfileIdSource?: "auto" | "user";
+}): void;

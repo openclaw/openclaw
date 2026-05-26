@@ -1,0 +1,14 @@
+export declare const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
+export declare const BUNDLED_PLUGIN_PATH_PREFIX = "extensions/";
+export declare const BUNDLED_PLUGIN_TEST_GLOB = "extensions/**/*.test.ts";
+export declare function bundledPluginRoot(pluginId: string): string;
+export declare function bundledPluginFile(pluginId: string, relativePath: string): string;
+export declare function bundledPluginDirPrefix(pluginId: string, relativeDir: string): string;
+export declare function bundledPluginRootAt(baseDir: string, pluginId: string): string;
+export declare function bundledPluginFileAt(baseDir: string, pluginId: string, relativePath: string): string;
+export declare function bundledDistPluginRoot(pluginId: string): string;
+export declare function bundledDistPluginFile(pluginId: string, relativePath: string): string;
+export declare function bundledDistPluginRootAt(baseDir: string, pluginId: string): string;
+export declare function bundledDistPluginFileAt(baseDir: string, pluginId: string, relativePath: string): string;
+export declare function installedPluginRoot(baseDir: string, pluginId: string): string;
+export declare function repoInstallSpec(pluginId: string): string;
