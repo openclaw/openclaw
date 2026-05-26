@@ -352,16 +352,6 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
       writeFileSync(
-        join(packageRoot, "dist", "discord-voice-runtime.js"),
-        [
-          'const { OpusDecoder } = require("opus-decoder");',
-          'const OpusScript = require("opusscript");',
-          "export { OpusDecoder, OpusScript };",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
-      writeFileSync(
         join(packageRoot, "dist", "externalized-plugin-runtime.js"),
         'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
         "utf8",

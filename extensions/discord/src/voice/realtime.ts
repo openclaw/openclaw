@@ -42,6 +42,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asBoolean, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import {
+  createDiscordOpusEncodeStream,
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
@@ -752,14 +753,24 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.outputPacedBuffer = Buffer.alloc(0);
     this.outputActivity.markStreamOpened();
     stream.once("close", () => {
-      if (this.outputStream === stream) {
-        this.logOutputAudioStopped("stream-close");
-        this.outputStream = null;
-        this.resetOutputAudioStats();
-        this.completeExactSpeechResponse("stream-close", { drain: false });
+      // After playback starts this PCM stream can close before Discord consumes
+      // the Opus resource; idle/watchdog owns active playback cleanup.
+      if (this.outputActivity.snapshot().playbackStarted) {
+        return;
       }
+      this.handleOutputStreamClosed(stream, "stream-close");
     });
     return stream;
+  }
+
+  private handleOutputStreamClosed(stream: PassThrough, reason: string): void {
+    if (this.outputStream !== stream) {
+      return;
+    }
+    this.logOutputAudioStopped(reason);
+    this.outputStream = null;
+    this.resetOutputAudioStats();
+    this.completeExactSpeechResponse(reason, { drain: false });
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {
@@ -784,12 +795,21 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     const voiceSdk = loadDiscordVoiceSdk();
+    const opusStream = createDiscordOpusEncodeStream();
+    opusStream.on("error", (err) => {
+      logger.warn(
+        `discord voice: realtime opus encode failed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}: ${formatErrorMessage(err)}`,
+      );
+      this.resetOutputStream("opus-encode-error");
+    });
+    opusStream.once("close", () => this.handleOutputStreamClosed(stream, "stream-close"));
+    stream.pipe(opusStream);
     if (this.outputPacedBuffer.length > 0) {
       stream.write(this.outputPacedBuffer);
       this.outputPacedBuffer = Buffer.alloc(0);
     }
-    const resource = voiceSdk.createAudioResource(stream, {
-      inputType: voiceSdk.StreamType.Raw,
+    const resource = voiceSdk.createAudioResource(opusStream, {
+      inputType: voiceSdk.StreamType.Opus,
     });
     this.params.entry.player.play(resource);
     this.outputActivity.markPlaybackStarted();

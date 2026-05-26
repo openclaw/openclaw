@@ -175,7 +175,7 @@ vi.mock("./sdk-runtime.js", () => ({
     AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
     EndBehaviorType: { AfterSilence: "AfterSilence", Manual: "Manual" },
     NetworkingStatusCode: { Ready: "networking-ready", Resuming: "networking-resuming" },
-    StreamType: { Raw: "raw" },
+    StreamType: { Opus: "opus", Raw: "raw" },
     VoiceConnectionStatus: {
       Ready: "ready",
       Disconnected: "disconnected",
@@ -252,8 +252,11 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
 
 vi.mock("./audio.js", async () => {
   const actual = await vi.importActual<typeof import("./audio.js")>("./audio.js");
+  const { PassThrough } = await import("node:stream");
   return {
     ...actual,
+    createDiscordOpusEncodeStream: vi.fn(() => new PassThrough()),
+    createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
     decodeOpusStream: (...args: Parameters<typeof actual.decodeOpusStream>) =>
       decodeOpusStreamMock.getMockImplementation()
         ? decodeOpusStreamMock(...args)
@@ -2453,7 +2456,7 @@ describe("DiscordVoiceManager", () => {
     expect(createAudioResourceMock).toHaveBeenCalledTimes(1);
     expect(player.play).toHaveBeenCalledTimes(1);
     const firstStream = lastAudioResourceInput() as { writableEnded?: boolean } | undefined;
-    expect(firstStream?.writableEnded).toBe(true);
+    await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
       | (() => void)
