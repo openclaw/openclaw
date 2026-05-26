@@ -354,7 +354,10 @@ async function ensureMockCliScriptPath(): Promise<string> {
   }
   sharedMockCliScriptPath = (async () => {
     const dir = await mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-acpx-runtime-test-"),
+      path.join(
+        resolvePreferredOpenClawTmpDir(),
+        "openclaw-acpx-runtime-test-",
+      ),
     );
     tempDirs.push(dir);
     const scriptPath = path.join(dir, "mock-acpx.cjs");
