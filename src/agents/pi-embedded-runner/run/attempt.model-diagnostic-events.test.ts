@@ -265,6 +265,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
 
   it("does not retain stream progress activity when diagnostics are disabled", async () => {
     setDiagnosticsEnabledForProcess(false);
+    const runProgressEvents: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress") {
+        runProgressEvents.push(event);
+      }
+    });
     async function* stream() {
       yield { type: "text_delta", delta: "first" };
       yield { type: "text_delta", delta: "second" };
@@ -282,8 +288,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       },
     );
 
-    await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
-    await waitForDiagnosticEventsDrained();
+    try {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      stop();
+    }
 
     expect(
       getDiagnosticSessionActivitySnapshot({
@@ -291,6 +301,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         sessionId: "session-id",
       }),
     ).toEqual({});
+    expect(runProgressEvents).toEqual([]);
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {
