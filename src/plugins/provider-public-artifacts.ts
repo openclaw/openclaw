@@ -64,23 +64,10 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-function resolveBundledProviderPolicyPluginId(
-  providerId: string,
-  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+function findOwnerInRegistry(
+  normalizedProviderId: string,
+  registry: Pick<PluginManifestRegistry, "plugins">,
 ): string | null {
-  const normalizedProviderId = normalizeProviderId(providerId);
-  if (!normalizedProviderId) {
-    return null;
-  }
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  if (!bundledPluginsDir) {
-    return null;
-  }
-
-  const registry =
-    options.manifestRegistry ??
-    getCurrentPluginMetadataSnapshot({ allowWorkspaceScopedSnapshot: true })?.manifestRegistry ??
-    loadPluginManifestRegistry();
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {
@@ -94,8 +81,39 @@ function resolveBundledProviderPolicyPluginId(
       return plugin.id;
     }
   }
-
   return null;
+}
+
+function resolveBundledProviderPolicyPluginId(
+  providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+): string | null {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId) {
+    return null;
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  if (!bundledPluginsDir) {
+    return null;
+  }
+
+  // 1. If options.manifestRegistry is provided, use it directly
+  if (options.manifestRegistry) {
+    return findOwnerInRegistry(normalizedProviderId, options.manifestRegistry);
+  }
+
+  // 2. Try the memory-resident active snapshot first (Fast Path)
+  const snapshot = getCurrentPluginMetadataSnapshot({ allowWorkspaceScopedSnapshot: true });
+  if (snapshot) {
+    const ownerId = findOwnerInRegistry(normalizedProviderId, snapshot.manifestRegistry);
+    if (ownerId) {
+      return ownerId;
+    }
+  }
+
+  // 3. Fallback to physical disk-loading (Slow Path)
+  const diskRegistry = loadPluginManifestRegistry();
+  return findOwnerInRegistry(normalizedProviderId, diskRegistry);
 }
 
 export function resolveBundledProviderPolicySurface(

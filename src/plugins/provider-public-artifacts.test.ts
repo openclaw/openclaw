@@ -315,4 +315,80 @@ describe("provider public artifacts", () => {
     });
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
+
+  it("falls back to loadPluginManifestRegistry when current snapshot is present but does not contain the provider alias", async () => {
+    const loadPluginManifestRegistry = vi.fn(() => ({
+      plugins: [
+        {
+          id: "disk-owner",
+          channels: [],
+          cliBackends: [],
+          hooks: [],
+          origin: "bundled",
+          manifestPath: "/tmp/disk-owner/openclaw.plugin.json",
+          providers: ["target-alias"],
+          rootDir: "/tmp/disk-owner",
+          skills: [],
+          source: "/tmp/disk-owner/index.js",
+        },
+      ],
+    }));
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "disk-owner") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+    const getCurrentPluginMetadataSnapshot = vi.fn(() => ({
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "snapshot-owner",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/snapshot-owner/openclaw.plugin.json",
+            providers: ["snapshot-alias"],
+            rootDir: "/tmp/snapshot-owner",
+            skills: [],
+            source: "/tmp/snapshot-owner/index.js",
+          },
+        ],
+      },
+    }));
+
+    vi.doMock("./manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry,
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+    vi.doMock("./current-plugin-metadata-snapshot.js", () => ({
+      getCurrentPluginMetadataSnapshot,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-snapshot-fallback");
+
+    // "target-alias" is in disk registry but NOT in current snapshot
+    const surface = resolvePolicySurface("target-alias");
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "target-alias", modelId: "demo" }),
+    ).toEqual({
+      levels: [{ id: "disk-owner" }],
+    });
+    expect(getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      allowWorkspaceScopedSnapshot: true,
+    });
+    expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+  });
 });
