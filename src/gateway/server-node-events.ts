@@ -1,6 +1,7 @@
 // Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -23,9 +24,11 @@ import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js"
 import {
   agentCommandFromIngress,
   buildOutboundSessionContext,
+  canonicalizeSessionEntryAliases,
   createOutboundSendDeps,
   defaultRuntime,
   deleteMediaBuffer,
+  emitSessionTranscriptUpdate,
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
@@ -41,10 +44,11 @@ import {
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
   resolveSessionAgentId,
+  resolveSessionFilePath,
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
+  saveMediaBuffer,
   sendDurableMessageBatch,
-  canonicalizeSessionEntryAliases,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -340,6 +344,79 @@ function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown
     : null;
 }
 
+type SavedMediaEntry = { id: string; path: string; size: number; contentType: string };
+
+async function persistAgentRequestImages(params: {
+  images: Array<{ type: "image"; data: string; mimeType: string }>;
+  offloadedRefs: Array<{ id: string; path: string; mimeType: string }>;
+  logGateway: NodeEventContext["logGateway"];
+}): Promise<SavedMediaEntry[]> {
+  if (params.images.length === 0 && params.offloadedRefs.length === 0) {
+    return [];
+  }
+  const saved: SavedMediaEntry[] = [];
+  for (const img of params.images) {
+    try {
+      saved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
+    } catch (err) {
+      params.logGateway.warn(
+        `agent.request: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
+      );
+    }
+  }
+  for (const ref of params.offloadedRefs) {
+    saved.push({ id: ref.id, path: ref.path, size: 0, contentType: ref.mimeType });
+  }
+  return saved;
+}
+
+function emitAgentRequestTranscript(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  canonicalKey: string;
+  message: string;
+  savedMedia: SavedMediaEntry[];
+  now: number;
+}) {
+  const { sessionId, storePath, canonicalKey, message, savedMedia, now } = params;
+  let transcriptPath: string | null;
+  try {
+    const sessionsDir = storePath ? path.dirname(storePath) : undefined;
+    transcriptPath = resolveSessionFilePath(
+      sessionId,
+      undefined,
+      sessionsDir ? { sessionsDir } : undefined,
+    );
+  } catch {
+    return;
+  }
+  if (!transcriptPath) {
+    return;
+  }
+
+  const mediaPaths = savedMedia.map((entry) => entry.path);
+  const mediaFields =
+    mediaPaths.length > 0
+      ? {
+          MediaPath: mediaPaths[0],
+          MediaPaths: mediaPaths,
+          MediaType: savedMedia[0]?.contentType ?? "application/octet-stream",
+          MediaTypes: savedMedia.map((entry) => entry.contentType ?? "application/octet-stream"),
+        }
+      : {};
+
+  emitSessionTranscriptUpdate({
+    sessionFile: transcriptPath,
+    sessionKey: canonicalKey,
+    message: {
+      role: "user" as const,
+      content: message,
+      timestamp: now,
+      ...mediaFields,
+    },
+  });
+}
+
 async function sendReceiptAck(params: {
   cfg: OpenClawConfig;
   deps: NodeEventContext["deps"];
@@ -482,6 +559,7 @@ export const handleNodeEvent = async (
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       let imageOrder: PromptImageOrderEntry[] = [];
+      let offloadedRefs: Array<{ id: string; path: string; mimeType: string }> = [];
       if (!message && normalizedAttachments.length === 0) {
         return undefined;
       }
@@ -509,12 +587,13 @@ export const handleNodeEvent = async (
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
+          offloadedRefs = parsed.offloadedRefs ?? [];
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
             );
-            if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
-              for (const ref of parsed.offloadedRefs) {
+            if (offloadedRefs.length > 0) {
+              for (const ref of offloadedRefs) {
                 try {
                   await deleteMediaBuffer(ref.id);
                 } catch (cleanupErr) {
@@ -595,6 +674,12 @@ export const handleNodeEvent = async (
         );
       }
 
+      const savedMedia = await persistAgentRequestImages({
+        images,
+        offloadedRefs,
+        logGateway: ctx.logGateway,
+      });
+
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
         message,
@@ -611,6 +696,16 @@ export const handleNodeEvent = async (
         messageChannel: "node",
         allowModelOverride: false,
       });
+
+      emitAgentRequestTranscript({
+        sessionId,
+        storePath,
+        canonicalKey,
+        message,
+        savedMedia,
+        now,
+      });
+
       return undefined;
     }
     case "notifications.changed": {
