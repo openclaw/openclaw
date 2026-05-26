@@ -286,10 +286,10 @@ describe("overview view rendering", () => {
     );
     expect(container.querySelectorAll(".ov-usage-metrics .stat-detail")).toHaveLength(2);
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
-      "Week quota 28% reset",
+      "Week quota 28% left reset",
     );
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
-      "3h quota 82% reset",
+      "3h quota 82% left reset",
     );
     expect(compactText(container.querySelector(".ov-usage-card"))).not.toContain("Cost $0.00");
     expect(container.querySelector(".ov-usage-windows")).toBeNull();
@@ -355,6 +355,9 @@ describe("overview view rendering", () => {
 
     expect(compactText(container.querySelector('[data-kind="quota"]'))).toBe(
       "Credits $12.34 left OpenRouter · Credits · Z.ai · Tokens (6h) 60% left",
+    );
+    expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
+      "Credits $12.34 left",
     );
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain("Cost $0.00");
     expect(container.querySelector(".ov-usage-windows")).toBeNull();

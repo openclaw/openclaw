@@ -915,7 +915,7 @@ export function renderOverview(props: OverviewProps) {
               <div class="ov-usage-metrics">
                 ${renderUsageStat({
                   label: primaryQuotaLabel,
-                  value: primaryQuota ? `${primaryQuota.remaining}%` : t("common.na"),
+                  value: primaryQuota ? formatQuotaRemaining(primaryQuota) : t("common.na"),
                   detail: primaryQuotaReset
                     ? t("overview.operator.quotaResetShort", { time: primaryQuotaReset })
                     : null,
@@ -927,7 +927,7 @@ export function renderOverview(props: OverviewProps) {
                 ${showSecondaryQuotaStat && secondaryQuotaStat && secondaryQuotaStatLabel
                   ? renderUsageStat({
                       label: secondaryQuotaStatLabel,
-                      value: `${secondaryQuotaStat.remaining}%`,
+                      value: formatQuotaRemaining(secondaryQuotaStat),
                       detail: secondaryQuotaStatReset
                         ? t("overview.operator.quotaResetShort", { time: secondaryQuotaStatReset })
                         : null,
