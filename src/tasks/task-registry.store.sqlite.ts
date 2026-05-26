@@ -448,38 +448,45 @@ function isSqliteCorruptionError(error: unknown): boolean {
 function quarantineCorruptedDatabase(pathname: string): string | null {
   const quarantinePath = `${pathname}.corrupted.${Date.now()}`;
   try {
-    renameSync(pathname, quarantinePath);
+    // Move sidecars first so a partial failure leaves the main file in place
     for (const suffix of ["-shm", "-wal"]) {
       const sidecar = `${pathname}${suffix}`;
       if (existsSync(sidecar)) {
         renameSync(sidecar, `${quarantinePath}${suffix}`);
       }
     }
+    // Then move the main database
+    renameSync(pathname, quarantinePath);
     return quarantinePath;
   } catch {
+    // Roll back any moved sidecars to keep state consistent
+    for (const suffix of ["-shm", "-wal"]) {
+      const movedSidecar = `${quarantinePath}${suffix}`;
+      if (existsSync(movedSidecar)) {
+        try {
+          renameSync(movedSidecar, `${pathname}${suffix}`);
+        } catch {}
+      }
+    }
     return null;
   }
 }
 
-function openTaskRegistryDatabase(): TaskRegistryDatabase {
-  const pathname = resolveTaskRegistrySqlitePath(process.env);
-  if (cachedDatabase && cachedDatabase.path === pathname) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase) {
-    cachedDatabase.walMaintenance.close();
-    cachedDatabase.db.close();
-    cachedDatabase = null;
-  }
-  ensureTaskRegistryPermissions(pathname);
+function openDatabaseOrRecover(pathname: string): DatabaseSync {
   const { DatabaseSync } = requireNodeSqlite();
-  let db: DatabaseSync;
+  let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(pathname);
     db.exec(`PRAGMA synchronous = NORMAL;`);
     db.exec(`PRAGMA busy_timeout = 5000;`);
     ensureSchema(db);
+    return db;
   } catch (error) {
+    if (db) {
+      try {
+        db.close();
+      } catch {}
+    }
     if (!isSqliteCorruptionError(error) || !existsSync(pathname)) {
       throw error;
     }
@@ -497,7 +504,22 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
     db.exec(`PRAGMA synchronous = NORMAL;`);
     db.exec(`PRAGMA busy_timeout = 5000;`);
     ensureSchema(db);
+    return db;
   }
+}
+
+function openTaskRegistryDatabase(): TaskRegistryDatabase {
+  const pathname = resolveTaskRegistrySqlitePath(process.env);
+  if (cachedDatabase && cachedDatabase.path === pathname) {
+    return cachedDatabase;
+  }
+  if (cachedDatabase) {
+    cachedDatabase.walMaintenance.close();
+    cachedDatabase.db.close();
+    cachedDatabase = null;
+  }
+  ensureTaskRegistryPermissions(pathname);
+  const db = openDatabaseOrRecover(pathname);
   const walMaintenance = configureSqliteWalMaintenance(db);
   ensureTaskRegistryPermissions(pathname);
   cachedDatabase = {
