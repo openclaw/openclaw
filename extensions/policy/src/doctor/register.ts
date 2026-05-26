@@ -1623,6 +1623,31 @@ export function policyContainerShapeFindings(
       ),
     ];
   }
+  const unsupportedTopLevel = unsupportedPolicyKey(policy, [
+    "auth",
+    "agents",
+    "channels",
+    "dataHandling",
+    "gateway",
+    "ingress",
+    "mcp",
+    "models",
+    "network",
+    "sandbox",
+    "scopes",
+    "secrets",
+    "tools",
+  ]);
+  if (unsupportedTopLevel !== undefined) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/${ocPathSegment(unsupportedTopLevel)}`,
+        `${policyPath} ${unsupportedTopLevel} is not a supported policy section.`,
+        `Remove ${unsupportedTopLevel} or use a supported policy section.`,
+      ),
+    ];
+  }
   if (policy.tools !== undefined && !isRecord(policy.tools)) {
     return [
       policyShapeFinding(
@@ -1672,6 +1697,19 @@ export function policyContainerShapeFindings(
       ),
     ];
   }
+  if (isRecord(policy.channels)) {
+    const unsupportedChannelKey = unsupportedPolicyKey(policy.channels, ["denyRules"]);
+    if (unsupportedChannelKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/channels/${ocPathSegment(unsupportedChannelKey)}`,
+          `${policyPath} channels.${unsupportedChannelKey} is not supported in channel policy.`,
+          `Remove channels.${unsupportedChannelKey} or use channels.denyRules.`,
+        ),
+      ];
+    }
+  }
   if (policy.mcp !== undefined && !isRecord(policy.mcp)) {
     return [
       policyShapeFinding(
@@ -1681,6 +1719,19 @@ export function policyContainerShapeFindings(
         `Fix ${policyPath} so mcp is an object.`,
       ),
     ];
+  }
+  if (isRecord(policy.mcp)) {
+    const unsupportedMcpKey = unsupportedPolicyKey(policy.mcp, ["servers"]);
+    if (unsupportedMcpKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/mcp/${ocPathSegment(unsupportedMcpKey)}`,
+          `${policyPath} mcp.${unsupportedMcpKey} is not supported in MCP policy.`,
+          `Remove mcp.${unsupportedMcpKey} or use mcp.servers.`,
+        ),
+      ];
+    }
   }
   if (policy.dataHandling !== undefined && !isRecord(policy.dataHandling)) {
     return [
@@ -1715,6 +1766,19 @@ export function policyContainerShapeFindings(
     ];
   }
   if (isRecord(policy.models)) {
+    const unsupportedModelsKey = unsupportedPolicyKey(policy.models, ["providers"]);
+    if (unsupportedModelsKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/models/${ocPathSegment(unsupportedModelsKey)}`,
+          `${policyPath} models.${unsupportedModelsKey} is not supported in model policy.`,
+          `Remove models.${unsupportedModelsKey} or use models.providers.`,
+        ),
+      ];
+    }
+  }
+  if (isRecord(policy.models)) {
     const finding = policyStringArrayShapeFinding(policy.models.providers, {
       property: "models.providers",
       policyDocName,
@@ -1737,6 +1801,17 @@ export function policyContainerShapeFindings(
     ];
   }
   if (isRecord(policy.network)) {
+    const unsupportedNetworkKey = unsupportedPolicyKey(policy.network, ["privateNetwork"]);
+    if (unsupportedNetworkKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/network/${ocPathSegment(unsupportedNetworkKey)}`,
+          `${policyPath} network.${unsupportedNetworkKey} is not supported in network policy.`,
+          `Remove network.${unsupportedNetworkKey} or use network.privateNetwork.`,
+        ),
+      ];
+    }
     if (policy.network.privateNetwork !== undefined && !isRecord(policy.network.privateNetwork)) {
       return [
         policyShapeFinding(
@@ -1746,6 +1821,21 @@ export function policyContainerShapeFindings(
           `Fix ${policyPath} so network.privateNetwork is an object.`,
         ),
       ];
+    }
+    if (isRecord(policy.network.privateNetwork)) {
+      const unsupportedPrivateNetworkKey = unsupportedPolicyKey(policy.network.privateNetwork, [
+        "allow",
+      ]);
+      if (unsupportedPrivateNetworkKey !== undefined) {
+        return [
+          policyShapeFinding(
+            policyPath,
+            `oc://${policyDocName}/network/privateNetwork/${ocPathSegment(unsupportedPrivateNetworkKey)}`,
+            `${policyPath} network.privateNetwork.${unsupportedPrivateNetworkKey} is not supported in network policy.`,
+            `Remove network.privateNetwork.${unsupportedPrivateNetworkKey} or use network.privateNetwork.allow.`,
+          ),
+        ];
+      }
     }
     if (
       isRecord(policy.network.privateNetwork) &&
@@ -1772,6 +1862,23 @@ export function policyContainerShapeFindings(
       ),
     ];
   }
+  if (isRecord(policy.secrets)) {
+    const unsupportedSecretsKey = unsupportedPolicyKey(policy.secrets, [
+      "allowInsecureProviders",
+      "denySources",
+      "requireManagedProviders",
+    ]);
+    if (unsupportedSecretsKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/secrets/${ocPathSegment(unsupportedSecretsKey)}`,
+          `${policyPath} secrets.${unsupportedSecretsKey} is not supported in secrets policy.`,
+          `Remove secrets.${unsupportedSecretsKey} or use a supported secrets policy rule.`,
+        ),
+      ];
+    }
+  }
   if (policy.auth !== undefined && !isRecord(policy.auth)) {
     return [
       policyShapeFinding(
@@ -1781,6 +1888,19 @@ export function policyContainerShapeFindings(
         `Fix ${policyPath} so auth is an object.`,
       ),
     ];
+  }
+  if (isRecord(policy.auth)) {
+    const unsupportedAuthKey = unsupportedPolicyKey(policy.auth, ["profiles"]);
+    if (unsupportedAuthKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/auth/${ocPathSegment(unsupportedAuthKey)}`,
+          `${policyPath} auth.${unsupportedAuthKey} is not supported in auth policy.`,
+          `Remove auth.${unsupportedAuthKey} or use auth.profiles.`,
+        ),
+      ];
+    }
   }
   if (
     isRecord(policy.auth) &&
@@ -1795,6 +1915,22 @@ export function policyContainerShapeFindings(
         `Fix ${policyPath} so auth.profiles is an object.`,
       ),
     ];
+  }
+  if (isRecord(policy.auth) && isRecord(policy.auth.profiles)) {
+    const unsupportedProfilesKey = unsupportedPolicyKey(policy.auth.profiles, [
+      "allowModes",
+      "requireMetadata",
+    ]);
+    if (unsupportedProfilesKey !== undefined) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/auth/profiles/${ocPathSegment(unsupportedProfilesKey)}`,
+          `${policyPath} auth.profiles.${unsupportedProfilesKey} is not supported in auth profile policy.`,
+          `Remove auth.profiles.${unsupportedProfilesKey} or use a supported auth profile policy rule.`,
+        ),
+      ];
+    }
   }
   const sandboxFinding = sandboxPolicyShapeFinding(policy.sandbox, {
     policyDocName,
@@ -1867,6 +2003,15 @@ function ingressPolicyShapeFinding(
       `Move session ingress rules to top-level ingress; scoped ingress currently supports ingress.channels.*.`,
     );
   }
+  const unsupportedIngressKey = unsupportedPolicyKey(value, ["channels", "session"]);
+  if (unsupportedIngressKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedIngressKey)}`,
+      `${params.policyPath} ${propertyPrefix}.${unsupportedIngressKey} is not supported in ingress policy.`,
+      `Remove ${propertyPrefix}.${unsupportedIngressKey} or use ingress.session or ingress.channels.`,
+    );
+  }
   for (const section of ["session", "channels"] as const) {
     if (value[section] !== undefined && !isRecord(value[section])) {
       return policyShapeFinding(
@@ -1878,6 +2023,15 @@ function ingressPolicyShapeFinding(
     }
   }
   const session = isRecord(value.session) ? value.session : {};
+  const unsupportedSessionKey = unsupportedPolicyKey(session, ["requireDmScope"]);
+  if (unsupportedSessionKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/session/${ocPathSegment(unsupportedSessionKey)}`,
+      `${params.policyPath} ${propertyPrefix}.session.${unsupportedSessionKey} is not supported in ingress policy.`,
+      `Remove ${propertyPrefix}.session.${unsupportedSessionKey} or use ${propertyPrefix}.session.requireDmScope.`,
+    );
+  }
   if (
     session.requireDmScope !== undefined &&
     !SUPPORTED_DM_SCOPES.includes(session.requireDmScope as (typeof SUPPORTED_DM_SCOPES)[number])
@@ -1890,6 +2044,19 @@ function ingressPolicyShapeFinding(
     );
   }
   const channels = isRecord(value.channels) ? value.channels : {};
+  const unsupportedChannelsKey = unsupportedPolicyKey(channels, [
+    "allowDmPolicies",
+    "denyOpenGroups",
+    "requireMentionInGroups",
+  ]);
+  if (unsupportedChannelsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/channels/${ocPathSegment(unsupportedChannelsKey)}`,
+      `${params.policyPath} ${propertyPrefix}.channels.${unsupportedChannelsKey} is not supported in ingress policy.`,
+      `Remove ${propertyPrefix}.channels.${unsupportedChannelsKey} or use a supported ingress channel policy rule.`,
+    );
+  }
   const allowDmPoliciesFinding = policyStringArrayPropertyShapeFinding(channels.allowDmPolicies, {
     allowed: SUPPORTED_DM_POLICIES,
     policyDocName: params.policyDocName,
@@ -1930,6 +2097,15 @@ function agentsPolicyShapeFinding(
       `oc://${params.policyDocName}/agents`,
       `${params.policyPath} agents must be an object.`,
       `Fix ${params.policyPath} so agents is an object.`,
+    );
+  }
+  const unsupportedAgentsKey = unsupportedPolicyKey(value, ["workspace"]);
+  if (unsupportedAgentsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/agents/${ocPathSegment(unsupportedAgentsKey)}`,
+      `${params.policyPath} agents.${unsupportedAgentsKey} is not supported in agents policy.`,
+      `Remove agents.${unsupportedAgentsKey} or use agents.workspace.`,
     );
   }
   const workspaceFinding = agentWorkspacePolicyShapeFinding(value.workspace, {
@@ -2309,6 +2485,15 @@ function agentWorkspacePolicyShapeFinding(
       `Fix ${params.policyPath} so ${params.propertyPrefix} is an object.`,
     );
   }
+  const unsupportedWorkspaceKey = unsupportedPolicyKey(value, ["allowedAccess", "denyTools"]);
+  if (unsupportedWorkspaceKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.targetPrefix}/${ocPathSegment(unsupportedWorkspaceKey)}`,
+      `${params.policyPath} ${params.propertyPrefix}.${unsupportedWorkspaceKey} is not supported in agent workspace policy.`,
+      `Remove ${params.propertyPrefix}.${unsupportedWorkspaceKey} or use a supported agent workspace policy rule.`,
+    );
+  }
   const allowedAccess = value.allowedAccess;
   if (allowedAccess !== undefined && !Array.isArray(allowedAccess)) {
     return policyShapeFinding(
@@ -2371,6 +2556,26 @@ function toolPosturePolicyShapeFinding(
 ): HealthFinding | undefined {
   const targetPrefix = params.targetPrefix ?? "tools";
   const propertyPrefix = params.propertyPrefix ?? "tools";
+  const allowedTopLevel = [
+    "alsoAllow",
+    "denyTools",
+    "elevated",
+    "entries",
+    "exec",
+    "fs",
+    "profiles",
+    "requireMetadata",
+    "settings",
+  ];
+  const unsupportedTopLevel = unsupportedPolicyKey(tools, allowedTopLevel);
+  if (unsupportedTopLevel !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedTopLevel)}`,
+      `${params.policyPath} ${propertyPrefix}.${unsupportedTopLevel} is not supported in tools policy.`,
+      `Remove ${propertyPrefix}.${unsupportedTopLevel} or use a supported tools policy rule.`,
+    );
+  }
   for (const section of ["profiles", "fs", "exec", "elevated", "alsoAllow"] as const) {
     if (tools[section] !== undefined && !isRecord(tools[section])) {
       return policyShapeFinding(
@@ -2383,6 +2588,15 @@ function toolPosturePolicyShapeFinding(
   }
 
   const profiles = isRecord(tools.profiles) ? tools.profiles : {};
+  const unsupportedProfileKey = unsupportedPolicyKey(profiles, ["allow"]);
+  if (unsupportedProfileKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/profiles/${ocPathSegment(unsupportedProfileKey)}`,
+      `${params.policyPath} ${propertyPrefix}.profiles.${unsupportedProfileKey} is not supported in tools policy.`,
+      `Remove ${propertyPrefix}.profiles.${unsupportedProfileKey} or use ${propertyPrefix}.profiles.allow.`,
+    );
+  }
   const profileAllowFinding = policyStringArrayPropertyShapeFinding(profiles.allow, {
     allowed: SUPPORTED_TOOL_PROFILES,
     policyDocName: params.policyDocName,
@@ -2396,6 +2610,15 @@ function toolPosturePolicyShapeFinding(
   }
 
   const fs = isRecord(tools.fs) ? tools.fs : {};
+  const unsupportedFsKey = unsupportedPolicyKey(fs, ["requireWorkspaceOnly"]);
+  if (unsupportedFsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/fs/${ocPathSegment(unsupportedFsKey)}`,
+      `${params.policyPath} ${propertyPrefix}.fs.${unsupportedFsKey} is not supported in tools policy.`,
+      `Remove ${propertyPrefix}.fs.${unsupportedFsKey} or use ${propertyPrefix}.fs.requireWorkspaceOnly.`,
+    );
+  }
   if (fs.requireWorkspaceOnly !== undefined && typeof fs.requireWorkspaceOnly !== "boolean") {
     return policyShapeFinding(
       params.policyPath,
@@ -2406,6 +2629,19 @@ function toolPosturePolicyShapeFinding(
   }
 
   const exec = isRecord(tools.exec) ? tools.exec : {};
+  const unsupportedExecKey = unsupportedPolicyKey(exec, [
+    "allowHosts",
+    "allowSecurity",
+    "requireAsk",
+  ]);
+  if (unsupportedExecKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/exec/${ocPathSegment(unsupportedExecKey)}`,
+      `${params.policyPath} ${propertyPrefix}.exec.${unsupportedExecKey} is not supported in tools policy.`,
+      `Remove ${propertyPrefix}.exec.${unsupportedExecKey} or use a supported tools exec policy rule.`,
+    );
+  }
   const execLists = [
     ["allowSecurity", SUPPORTED_TOOL_EXEC_SECURITY, "exec security mode"],
     ["requireAsk", SUPPORTED_TOOL_EXEC_ASK, "exec ask mode"],
@@ -2426,6 +2662,15 @@ function toolPosturePolicyShapeFinding(
   }
 
   const elevated = isRecord(tools.elevated) ? tools.elevated : {};
+  const unsupportedElevatedKey = unsupportedPolicyKey(elevated, ["allow"]);
+  if (unsupportedElevatedKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/elevated/${ocPathSegment(unsupportedElevatedKey)}`,
+      `${params.policyPath} ${propertyPrefix}.elevated.${unsupportedElevatedKey} is not supported in tools policy.`,
+      `Remove ${propertyPrefix}.elevated.${unsupportedElevatedKey} or use ${propertyPrefix}.elevated.allow.`,
+    );
+  }
   if (elevated.allow !== undefined && typeof elevated.allow !== "boolean") {
     return policyShapeFinding(
       params.policyPath,
@@ -2436,6 +2681,15 @@ function toolPosturePolicyShapeFinding(
   }
 
   const alsoAllow = isRecord(tools.alsoAllow) ? tools.alsoAllow : {};
+  const unsupportedAlsoAllowKey = unsupportedPolicyKey(alsoAllow, ["expected"]);
+  if (unsupportedAlsoAllowKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/alsoAllow/${ocPathSegment(unsupportedAlsoAllowKey)}`,
+      `${params.policyPath} ${propertyPrefix}.alsoAllow.${unsupportedAlsoAllowKey} is not supported in tools policy.`,
+      `Remove ${propertyPrefix}.alsoAllow.${unsupportedAlsoAllowKey} or use ${propertyPrefix}.alsoAllow.expected.`,
+    );
+  }
   const alsoAllowExpectedFinding = policyStringArrayPropertyShapeFinding(alsoAllow.expected, {
     policyDocName: params.policyDocName,
     policyPath: params.policyPath,
@@ -2608,12 +2862,44 @@ function gatewayPolicyShapeFinding(
       );
     }
   }
+  const unsupportedGatewayKey = unsupportedPolicyKey(value, [
+    "auth",
+    "controlUi",
+    "exposure",
+    "http",
+    "remote",
+  ]);
+  if (unsupportedGatewayKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/gateway/${ocPathSegment(unsupportedGatewayKey)}`,
+      `${params.policyPath} gateway.${unsupportedGatewayKey} is not supported in Gateway policy.`,
+      `Remove gateway.${unsupportedGatewayKey} or use a supported Gateway policy section.`,
+    );
+  }
 
   const exposure = isRecord(value.exposure) ? value.exposure : {};
   const auth = isRecord(value.auth) ? value.auth : {};
   const controlUi = isRecord(value.controlUi) ? value.controlUi : {};
   const remote = isRecord(value.remote) ? value.remote : {};
   const http = isRecord(value.http) ? value.http : {};
+  for (const [section, sectionValue, allowedKeys] of [
+    ["exposure", exposure, ["allowNonLoopbackBind", "allowTailscaleFunnel"]],
+    ["auth", auth, ["requireAuth", "requireExplicitRateLimit"]],
+    ["controlUi", controlUi, ["allowInsecure"]],
+    ["remote", remote, ["allow"]],
+    ["http", http, ["denyEndpoints", "requireUrlAllowlists"]],
+  ] as const) {
+    const unsupportedKey = unsupportedPolicyKey(sectionValue, allowedKeys);
+    if (unsupportedKey !== undefined) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/gateway/${section}/${ocPathSegment(unsupportedKey)}`,
+        `${params.policyPath} gateway.${section}.${unsupportedKey} is not supported in Gateway policy.`,
+        `Remove gateway.${section}.${unsupportedKey} or use a supported Gateway policy rule.`,
+      );
+    }
+  }
   const booleanRules = [
     [
       "gateway/exposure/allowNonLoopbackBind",
@@ -2698,6 +2984,15 @@ function policyStringArrayShapeFinding(
       `oc://${params.policyDocName}/${params.target}`,
       `${params.policyPath} ${params.property} must be an object.`,
       `Fix ${params.policyPath} so ${params.property} is an object.`,
+    );
+  }
+  const unsupportedKey = unsupportedPolicyKey(value, ["allow", "deny"]);
+  if (unsupportedKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.target}/${ocPathSegment(unsupportedKey)}`,
+      `${params.policyPath} ${params.property}.${unsupportedKey} is not supported in policy.`,
+      `Remove ${params.property}.${unsupportedKey} or use ${params.property}.allow or ${params.property}.deny.`,
     );
   }
   for (const key of ["allow", "deny"] as const) {
@@ -2856,6 +3151,41 @@ function invalidChannelDenyRuleFindings(
         fixHint: `Fix ${policyPath} so channel deny rules are an array.`,
       },
     ];
+  }
+  for (const [index, rule] of policy.channels.denyRules.entries()) {
+    if (!isRecord(rule)) {
+      continue;
+    }
+    const unsupportedRuleKey = unsupportedPolicyKey(rule, ["id", "reason", "when"]);
+    if (unsupportedRuleKey !== undefined) {
+      return [
+        {
+          checkId: CHECK_IDS.policyInvalidFile,
+          severity: "error",
+          message: `${policyPath} channels.denyRules[${index}].${unsupportedRuleKey} is not supported in channel deny rules.`,
+          source: "policy",
+          path: policyPath,
+          target: `oc://${policyDocName}/channels/denyRules/#${index}/${ocPathSegment(unsupportedRuleKey)}`,
+          fixHint: `Remove channels.denyRules[${index}].${unsupportedRuleKey} or use id, when.provider, and reason.`,
+        },
+      ];
+    }
+    if (isRecord(rule.when)) {
+      const unsupportedWhenKey = unsupportedPolicyKey(rule.when, ["provider"]);
+      if (unsupportedWhenKey !== undefined) {
+        return [
+          {
+            checkId: CHECK_IDS.policyInvalidFile,
+            severity: "error",
+            message: `${policyPath} channels.denyRules[${index}].when.${unsupportedWhenKey} is not supported in channel deny rules.`,
+            source: "policy",
+            path: policyPath,
+            target: `oc://${policyDocName}/channels/denyRules/#${index}/when/${ocPathSegment(unsupportedWhenKey)}`,
+            fixHint: `Remove channels.denyRules[${index}].when.${unsupportedWhenKey} or use when.provider.`,
+          },
+        ];
+      }
+    }
   }
   const invalid = policy.channels.denyRules.findIndex((rule) => !isChannelDenyRule(rule));
   if (invalid < 0) {
@@ -4742,6 +5072,14 @@ function dataHandlingPolicyShapeFindings(
     return [];
   }
   return [
+    policySectionUnsupportedKeyFinding(policy.dataHandling, {
+      policyPath,
+      policyDocName,
+      propertyPath: "dataHandling",
+      targetPath: "dataHandling",
+      sectionName: "data-handling",
+      allowedKeys: ["memory", "retention", "sensitiveLogging", "telemetry"],
+    }),
     dataHandlingSectionShapeFinding(policy.dataHandling, {
       policyPath,
       policyDocName,
@@ -4801,6 +5139,29 @@ function dataHandlingPolicyShapeFindings(
   ].filter((finding): finding is HealthFinding => finding !== undefined);
 }
 
+function policySectionUnsupportedKeyFinding(
+  value: Record<string, unknown>,
+  params: {
+    readonly policyPath: string;
+    readonly policyDocName: string;
+    readonly propertyPath: string;
+    readonly targetPath: string;
+    readonly sectionName: string;
+    readonly allowedKeys: readonly string[];
+  },
+): HealthFinding | undefined {
+  const unsupportedKey = unsupportedPolicyKey(value, params.allowedKeys);
+  if (unsupportedKey === undefined) {
+    return undefined;
+  }
+  return policyShapeFinding(
+    params.policyPath,
+    `oc://${params.policyDocName}/${params.targetPath}/${ocPathSegment(unsupportedKey)}`,
+    `${params.policyPath} ${params.propertyPath}.${unsupportedKey} is not supported in ${params.sectionName} policy.`,
+    `Remove ${params.propertyPath}.${unsupportedKey} or use a supported ${params.sectionName} policy rule.`,
+  );
+}
+
 function dataHandlingSectionShapeFinding(
   dataHandling: Record<string, unknown>,
   params: {
@@ -4834,6 +5195,24 @@ function dataHandlingBooleanShapeFinding(
   },
 ): HealthFinding | undefined {
   const value = getPolicyPath(dataHandling, params.path);
+  if (isRecord(dataHandling) && typeof params.path[0] === "string") {
+    const section = dataHandling[params.path[0]];
+    if (isRecord(section) && typeof params.path[1] === "string") {
+      const sectionPath = params.path.slice(0, -1).join(".");
+      const unsupportedKey = unsupportedPolicyKey(section, [params.path[1]]);
+      if (unsupportedKey !== undefined) {
+        return policyShapeFinding(
+          params.policyPath,
+          `oc://${params.policyDocName}/${params.targetPath
+            .split("/")
+            .slice(0, -1)
+            .join("/")}/${ocPathSegment(unsupportedKey)}`,
+          `${params.policyPath} dataHandling.${sectionPath}.${unsupportedKey} is not supported in data-handling policy.`,
+          `Remove dataHandling.${sectionPath}.${unsupportedKey} or use ${params.propertyPath}.`,
+        );
+      }
+    }
+  }
   if (value === undefined || typeof value === "boolean") {
     return undefined;
   }
