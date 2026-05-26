@@ -251,7 +251,34 @@ export function resolvePromptSubmissionSkipReason(params: {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
   }
-  return params.messages.length > 0 ? "blank_user_prompt" : "empty_prompt_history_images";
+  return params.messages.some(hasVisiblePromptHistory)
+    ? "blank_user_prompt"
+    : "empty_prompt_history_images";
+}
+
+function hasVisiblePromptHistory(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as { role?: unknown; content?: unknown };
+  if (record.role !== "user" && record.role !== "assistant") {
+    return false;
+  }
+  return hasNonEmptyContent(record.content);
+}
+
+function hasNonEmptyContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return content.trim().length > 0;
+  }
+  if (Array.isArray(content)) {
+    return content.some(hasNonEmptyContent);
+  }
+  if (!content || typeof content !== "object") {
+    return false;
+  }
+  const record = content as { text?: unknown; content?: unknown };
+  return hasNonEmptyContent(record.text) || hasNonEmptyContent(record.content);
 }
 
 const QUEUED_USER_MESSAGE_MARKER =

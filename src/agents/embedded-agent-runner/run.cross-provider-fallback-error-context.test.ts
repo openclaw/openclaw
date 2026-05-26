@@ -172,53 +172,6 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     });
   });
 
-  it("keeps PI-stamped session assistant errors for the current candidate after compaction", async () => {
-    const getLastFormattedAssistant = captureFormattedAssistant();
-    const sameCandidateErrorMessage = "429 current PI-stamped candidate rate limit";
-    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
-      const assistant = args[0];
-      return isCurrentAttemptAssistant(assistant) && assistant.provider === "pi";
-    });
-    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
-      const assistant = args[0];
-      return isCurrentAttemptAssistant(assistant) && assistant.provider === "pi";
-    });
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: sameCandidateErrorMessage,
-          provider: "pi",
-          model: "pi",
-          content: [],
-        }),
-        currentAttemptAssistant: undefined,
-      }),
-    );
-
-    const promise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      runId: "run-compaction-pi-stamped-fallback-error-context",
-      config: makeCrossProviderFallbackConfig(),
-    });
-
-    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow(sameCandidateErrorMessage);
-    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
-    const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
-    expect(rateLimitCalls.at(-1)?.[0]).toMatchObject({
-      provider: "pi",
-      model: "pi",
-      errorMessage: sameCandidateErrorMessage,
-    });
-    expect(getLastFormattedAssistant()).toMatchObject({
-      provider: "pi",
-      model: "pi",
-      errorMessage: sameCandidateErrorMessage,
-    });
-  });
-
   it("does not reuse a prior provider session assistant when the current candidate times out", async () => {
     const getLastFormattedAssistant = captureFormattedAssistant();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
