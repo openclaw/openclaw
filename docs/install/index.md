@@ -85,7 +85,7 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="pnpm">
     ```bash
-    pnpm add -g github:StefRush2099/Zorg_MemoryDB
+    pnpm add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
     pnpm approve-builds -g
     openclaw onboard --install-daemon
     ```
@@ -97,7 +97,7 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="bun">
     ```bash
-    bun add -g github:StefRush2099/Zorg_MemoryDB
+    bun add -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
     openclaw onboard --install-daemon
     ```
 
