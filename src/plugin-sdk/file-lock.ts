@@ -101,14 +101,16 @@ async function resolveNormalizedFilePath(filePath: string): Promise<string> {
 
 async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
   const payload = await readLockPayload(lockPath);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
-    return true;
-  }
+  // Check createdAt expiry first so that an expired lock is always reclaimed,
+  // even if the OS happened to reuse the recorded PID for an unrelated process.
   if (payload?.createdAt) {
     const createdAt = Date.parse(payload.createdAt);
     if (!Number.isFinite(createdAt) || Date.now() - createdAt > staleMs) {
       return true;
     }
+  }
+  if (payload?.pid && !isPidAlive(payload.pid)) {
+    return true;
   }
   try {
     const stat = await fs.stat(lockPath);
