@@ -833,7 +833,7 @@ function createClient(
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
-      apiKey: null,
+      apiKey,
       authToken: null,
       baseURL: resolveCloudflareBaseUrl(model),
       dangerouslyAllowBrowser: true,
@@ -841,8 +841,6 @@ function createClient(
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
-          "cf-aig-authorization": `Bearer ${apiKey}`,
-          "x-api-key": null,
           Authorization: null,
           ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
         },
