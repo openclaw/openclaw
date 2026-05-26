@@ -17,9 +17,15 @@ describe("imessageDoctor.collectPreviewWarnings", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(warnings).toEqual([
-      '- channels.imessage: accounts "swang430-gmail-com" and "default" watch the same local Messages source (cliPath=imsg). OpenClaw now runs one watcher (owner: "swang430-gmail-com") and skips the others; set "enabled": false on the duplicates to silence this warning.',
-    ]);
+    expect(warnings).toHaveLength(1);
+    const warning = warnings?.[0] ?? "";
+    expect(warning).toContain(
+      'channels.imessage: accounts "swang430-gmail-com" and "default" watch the same local Messages source (cliPath=imsg).',
+    );
+    expect(warning).toContain('OpenClaw now runs one watcher (owner: "swang430-gmail-com")');
+    expect(warning).toContain('accountId="swang430-gmail-com"');
+    expect(warning).toContain('"default"');
+    expect(warning).toContain('set "enabled": false');
   });
 
   it("includes dbPath in the warning when configured", async () => {
