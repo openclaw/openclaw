@@ -843,6 +843,125 @@ describe("agentCommand", () => {
     });
   });
 
+  it("persists ACP user turns before the runtime turn can fail", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:acp-failure";
+      mockConfig(home, store, { models: {} });
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-backed-session",
+          updatedAt: Date.now(),
+        },
+      });
+      const runTurn = vi.fn(async () => {
+        throw new Error("acp runtime failed before reply");
+      });
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      await expect(
+        agentCommand({ message: "please persist me", sessionKey }, runtime),
+      ).rejects.toThrow("acp runtime failed before reply");
+
+      expect(vi.mocked(attemptExecutionRuntime.persistUserTurnTranscript)).toHaveBeenCalledTimes(1);
+      expect(
+        vi.mocked(attemptExecutionRuntime.persistUserTurnTranscript).mock.calls[0]?.[0],
+      ).toMatchObject({
+        body: "please persist me",
+        transcriptBody: "please persist me",
+        sessionKey,
+      });
+    });
+  });
+
+  it("routes ACP internal user persistence to the internal transcript entry", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const visibleSessionFile = path.join(home, "visible-session.jsonl");
+      const sessionKey = "agent:main:acp-internal";
+      mockConfig(home, store, { models: {} });
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "acp-internal-session",
+          sessionFile: visibleSessionFile,
+          updatedAt: Date.now(),
+        },
+      });
+      vi.mocked(attemptExecutionRuntime.createAcpVisibleTextAccumulator).mockReturnValueOnce({
+        consume: vi.fn(() => null),
+        finalizeRaw: vi.fn(() => "assistant internal reply"),
+        finalize: vi.fn(() => "assistant internal reply"),
+      } as never);
+      vi.mocked(attemptExecutionRuntime.buildAcpResult).mockReturnValueOnce(
+        createDefaultAgentResult({
+          payloads: [{ text: "assistant internal reply" }],
+        }) as never,
+      );
+      const runTurn = vi.fn(async () => undefined);
+      acpManagerTesting.setAcpSessionManagerForTests({
+        resolveSession: vi.fn(() => ({
+          kind: "ready",
+          sessionKey,
+          meta: {
+            backend: "acpx",
+            agent: "main",
+            runtimeSessionName: "runtime-1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        })),
+        runTurn,
+      });
+
+      await agentCommand(
+        {
+          message: "internal acp prompt",
+          sessionKey,
+          sessionEffects: "internal",
+        },
+        runtime,
+      );
+
+      const persistUserCall = vi.mocked(attemptExecutionRuntime.persistUserTurnTranscript).mock
+        .calls[0]?.[0];
+      const persistAcpCall = vi.mocked(attemptExecutionRuntime.persistAcpTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistUserCall).toMatchObject({
+        body: "internal acp prompt",
+        transcriptBody: "internal acp prompt",
+        sessionKey,
+        sessionStore: undefined,
+        storePath: undefined,
+      });
+      expect(persistAcpCall).toMatchObject({
+        sessionKey,
+        sessionStore: undefined,
+        storePath: undefined,
+        userAlreadyPersisted: true,
+      });
+      const userSessionFile = persistUserCall?.sessionEntry?.sessionFile;
+      const acpSessionFile = persistAcpCall?.sessionEntry?.sessionFile;
+      expect(userSessionFile).toBe(acpSessionFile);
+      expect(userSessionFile).not.toBe(visibleSessionFile);
+      expect(userSessionFile).toContain(`${path.sep}internal-agent-runs${path.sep}`);
+    });
+  });
+
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
