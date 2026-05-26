@@ -146,6 +146,35 @@ declare global {
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
 
+const TERMINAL_APPROVAL_RESOLVE_REASONS = new Set([
+  "APPROVAL_ALREADY_RESOLVED",
+  "APPROVAL_NOT_FOUND",
+]);
+
+function readApprovalResolveErrorReason(err: unknown): string | null {
+  if (!err || typeof err !== "object" || Array.isArray(err) || !("details" in err)) {
+    return null;
+  }
+  const details = err.details;
+  if (!details || typeof details !== "object" || Array.isArray(details) || !("reason" in details)) {
+    return null;
+  }
+  const reason = details.reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+function isTerminalApprovalResolveError(err: unknown): boolean {
+  const reason = readApprovalResolveErrorReason(err);
+  if (reason && TERMINAL_APPROVAL_RESOLVE_REASONS.has(reason)) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes("unknown or expired approval id") ||
+    message.includes("approval already resolved")
+  );
+}
+
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
     return false;
@@ -1228,6 +1257,11 @@ export class OpenClawApp extends LitElement {
       });
       this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
     } catch (err) {
+      if (isTerminalApprovalResolveError(err)) {
+        this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+        this.execApprovalError = null;
+        return;
+      }
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;
