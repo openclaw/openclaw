@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
@@ -60,10 +61,6 @@ type CronStateFile = {
   version: 1;
   jobs: Record<string, CronStateFileEntry>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
   const rawJobs = Array.isArray(parsed)

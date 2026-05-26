@@ -255,19 +255,31 @@ parse_args() {
         shift
         ;;
       --prefix)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         PREFIX="$2"
         shift 2
         ;;
       --version)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         OPENCLAW_VERSION="$2"
         shift 2
         ;;
       --node-version)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         NODE_VERSION="$2"
         NODE_VERSION_REQUESTED=1
         shift 2
         ;;
       --install-method|--method)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         INSTALL_METHOD="$2"
         shift 2
         ;;
@@ -280,6 +292,9 @@ parse_args() {
         shift
         ;;
       --git-dir|--dir)
+        if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+          fail "Missing value for $1"
+        fi
         GIT_DIR="$2"
         shift 2
         ;;

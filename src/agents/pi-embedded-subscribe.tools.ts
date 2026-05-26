@@ -2,11 +2,13 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./pi-embedded-messaging.js";
@@ -141,12 +143,6 @@ function extractDirectErrorCodeField(value: unknown): string | undefined {
     readErrorCodeField(record.code) ??
     readErrorCodeField(record.gatewayCode)
   );
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 export function buildToolLifecycleErrorResult(error: unknown): {
@@ -476,7 +472,7 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
       pushAttachment(attachment);
     }
   }
-  return Array.from(new Set(urls));
+  return uniqueStrings(urls);
 }
 
 function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {

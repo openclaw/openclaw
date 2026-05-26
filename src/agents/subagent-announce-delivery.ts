@@ -13,6 +13,7 @@ import {
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -593,9 +594,7 @@ function hasGatewayAgentMessagingToolDeliveredExpectedMedia(
   response: unknown,
   expectedMediaUrls: readonly string[],
 ): boolean {
-  const expected = Array.from(
-    new Set(expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
-  );
+  const expected = uniqueStrings(normalizeStringEntries(expectedMediaUrls));
   if (expected.length === 0) {
     return true;
   }
@@ -714,9 +713,7 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
   expectedMediaUrls: readonly string[];
   announceResponse?: unknown;
 }): string[] {
-  const expected = Array.from(
-    new Set(params.expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
-  );
+  const expected = uniqueStrings(normalizeStringEntries(params.expectedMediaUrls));
   const result = getGatewayAgentResult(params.announceResponse);
   if (!result) {
     return expected;

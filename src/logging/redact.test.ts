@@ -45,6 +45,49 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
   });
 
+  it("preserves shell env references in assignments", () => {
+    const input = [
+      'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"',
+      "OPENAI_API_KEY=$OPENAI_API_KEY",
+      "API_KEY=$API_KEY",
+      "TOKEN=${TOKEN}",
+      "PASSWORD=${PASSWORD:-}",
+      "GITHUB_TOKEN=${GITHUB_TOKEN}",
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe(input);
+  });
+
+  it("masks shell env references that do not match the assignment key", () => {
+    const output = redactSensitiveText("DISCORD_BOT_TOKEN=$SUPERSECRET123", {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toBe("DISCORD_BOT_TOKEN=***");
+  });
+
+  it("masks literal shell env expansion defaults in assignments", () => {
+    const fallback = "discordliteral1234567890";
+    const input = `DISCORD_BOT_TOKEN="\${DISCORD_BOT_TOKEN:-${fallback}}"`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).not.toContain(fallback);
+    expect(output).toBe('DISCORD_BOT_TOKEN="${DISC…890}"');
+  });
+
+  it("does not bypass explicit user redaction patterns for shell references", () => {
+    const output = redactSensitiveText("FOO_TOKEN=$FOO_TOKEN", {
+      mode: "tools",
+      patterns: [String.raw`/FOO_TOKEN=(\$FOO_TOKEN)/g`],
+    });
+    expect(output).toBe("FOO_TOKEN=***");
+  });
+
   it("masks JSON-escaped quoted env assignments while keeping the key", () => {
     const xai = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
     const brave = "issue85049-brave-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
@@ -211,6 +254,18 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveFieldValue("openai_api_key", "abcdefghijklmnopqrstuvwx1234567890")).toBe(
       "abcdef…7890",
     );
+    expect(redactSensitiveFieldValue("DISCORD_BOT_TOKEN", "${DISCORD_BOT_TOKEN:-}")).toBe(
+      "${DISCORD_BOT_TOKEN:-}",
+    );
+    expect(redactSensitiveFieldValue("apiKey", "${OPENAI_API_KEY:-}")).toBe("${OPEN…Y:-}");
+    expect(redactSensitiveFieldValue("password", "$SUPERSECRET123")).toBe("***");
+    expect(redactSensitiveFieldValue("apiKey", "${SECRET_TOKEN}")).toBe("***");
+    expect(
+      redactSensitiveFieldValue(
+        "DISCORD_BOT_TOKEN",
+        "${DISCORD_BOT_TOKEN:-discordliteral1234567890}",
+      ),
+    ).toBe("${DISCORD_BOT_TOKEN:-disco…890}");
     expect(redactSensitiveFieldValue("MONKEY", "banana")).toBe("banana");
   });
 

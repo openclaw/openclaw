@@ -28,6 +28,10 @@ const INSTALL_TIMEOUT_MS = readPositiveInt(
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
+const OUTPUT_CAPTURE_CHARS = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS,
+  1024 * 1024,
+);
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 
 let callGatewayModulePromise;
@@ -64,7 +68,8 @@ export function makeEnv() {
     env: {
       ...process.env,
       HOME: home,
-      OPENCLAW_HOME: stateDir,
+      USERPROFILE: home,
+      OPENCLAW_HOME: home,
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_NO_ONBOARD: "1",
@@ -109,38 +114,77 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-function runCommand(command, args, options = {}) {
+export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
+  const text = String(chunk);
+  const combined = `${buffer.text}${text}`;
+  const overflowChars = Math.max(0, combined.length - maxChars);
+  return {
+    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
+    truncatedChars: buffer.truncatedChars + overflowChars,
+  };
+}
+
+function formatCapturedOutput(label, buffer) {
+  return buffer.truncatedChars > 0
+    ? `[${label} truncated ${buffer.truncatedChars} chars]\n${buffer.text}`
+    : buffer.text;
+}
+
+export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const {
+      timeoutKillGraceMs = 2000,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+      ...spawnOptions
+    } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
+      detached: spawnOptions.detached ?? process.platform !== "win32",
     });
-    let stdout = "";
-    let stderr = "";
-    const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+    let stdout = { text: "", truncatedChars: 0 };
+    let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
+    let forceKillTimer;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+      signalProcessGroup(child, "SIGTERM");
+      forceKillTimer = setTimeout(
+        () => signalProcessGroup(child, "SIGKILL"),
+        timeoutKillGraceMs,
+      );
+      forceKillTimer.unref();
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedOutput(stderr, chunk);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
+      clearTimeout(forceKillTimer);
       reject(error);
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
+      clearTimeout(forceKillTimer);
       if (status === 0) {
-        resolve({ stdout, stderr });
+        resolve({
+          stdout: stdout.text,
+          stderr: stderr.text,
+          stdoutTruncatedChars: stdout.truncatedChars,
+          stderrTruncatedChars: stderr.truncatedChars,
+        });
         return;
       }
-      const detail = [stdout, stderr].filter(Boolean).join("\n").trim();
+      const detail = [
+        formatCapturedOutput("stdout", stdout),
+        formatCapturedOutput("stderr", stderr),
+      ]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
       const failure = timedOut
         ? `timed out after ${timeoutMs}ms`
         : `failed with ${signal || status}`;
@@ -151,6 +195,22 @@ function runCommand(command, args, options = {}) {
       );
     });
   });
+}
+
+function signalProcessGroup(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
@@ -621,7 +681,7 @@ export async function sampleProcess(pid, options = {}) {
   if (platform === "win32") {
     return sampleWindowsProcess(pid, run, options.windowsCommandLineNeedles);
   }
-  return samplePosixProcess(pid, run);
+  return samplePosixProcess(pid, run, options.posixCommandLineNeedles);
 }
 
 export function summarizeProcessSamples(samples) {
@@ -643,7 +703,13 @@ export function summarizeProcessSamples(samples) {
   };
 }
 
-async function samplePosixProcess(pid, run) {
+async function samplePosixProcess(pid, run, commandLineNeedles = []) {
+  const needles = commandLineNeedles
+    .map((needle) => String(needle ?? "").trim())
+    .filter((needle) => needle.length > 0);
+  if (needles.length > 0) {
+    return samplePosixProcessTree(pid, run, needles);
+  }
   try {
     const { stdout } = await run("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
       timeoutMs: 5000,
@@ -661,6 +727,106 @@ async function samplePosixProcess(pid, run) {
   } catch {
     return null;
   }
+}
+
+async function samplePosixProcessTree(pid, run, commandLineNeedles) {
+  const safePid = Number(pid);
+  if (!Number.isInteger(safePid) || safePid <= 0) {
+    return null;
+  }
+  try {
+    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+      timeoutMs: 5000,
+    });
+    const rows = parsePosixProcessRows(stdout);
+    const descendants = collectPosixProcessTree(rows, safePid).filter(
+      (row) => row.processId !== safePid,
+    );
+    const commandMatches = descendants.filter((row) =>
+      commandLineNeedles.every((needle) =>
+        row.command.toLowerCase().includes(needle.toLowerCase()),
+      ),
+    );
+    const gatewayTitleMatches = descendants.filter((row) =>
+      row.command.toLowerCase().includes("openclaw-gateway"),
+    );
+    const selected = selectPeakRssProcess(
+      commandMatches.length > 0
+        ? commandMatches
+        : gatewayTitleMatches.length > 0
+          ? gatewayTitleMatches
+          : descendants,
+    );
+    if (!selected) {
+      return null;
+    }
+    return formatPosixProcessSample(selected);
+  } catch {
+    return null;
+  }
+}
+
+function parsePosixProcessRows(stdout) {
+  return stdout
+    .split(/\r?\n/u)
+    .map((line) => {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(.*)$/u);
+      if (!match) {
+        return null;
+      }
+      const [, pidRaw, ppidRaw, rssKbRaw, cpuRaw, command] = match;
+      const processId = Number.parseInt(pidRaw, 10);
+      const parentProcessId = Number.parseInt(ppidRaw, 10);
+      const rssKb = Number.parseInt(rssKbRaw, 10);
+      const cpuPercent = Number.parseFloat(cpuRaw);
+      if (
+        !Number.isInteger(processId) ||
+        !Number.isInteger(parentProcessId) ||
+        !Number.isFinite(rssKb)
+      ) {
+        return null;
+      }
+      return {
+        processId,
+        parentProcessId,
+        rssKb,
+        cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null,
+        command: command ?? "",
+      };
+    })
+    .filter(Boolean);
+}
+
+function collectPosixProcessTree(rows, rootPid) {
+  const byParent = new Map();
+  for (const row of rows) {
+    const children = byParent.get(row.parentProcessId) ?? [];
+    children.push(row);
+    byParent.set(row.parentProcessId, children);
+  }
+  const root = rows.find((row) => row.processId === rootPid);
+  const collected = root ? [root] : [];
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const nextPid = pending.shift();
+    for (const child of byParent.get(nextPid) ?? []) {
+      collected.push(child);
+      pending.push(child.processId);
+    }
+  }
+  return collected;
+}
+
+function selectPeakRssProcess(rows) {
+  return rows.reduce((peak, row) => (peak && peak.rssKb >= row.rssKb ? peak : row), null);
+}
+
+function formatPosixProcessSample(row) {
+  return {
+    rssMiB: Math.round((row.rssKb / 1024) * 10) / 10,
+    cpuPercent: row.cpuPercent,
+    processId: row.processId,
+  };
 }
 
 function parseTasklistCsvLine(line) {
@@ -898,10 +1064,14 @@ export async function main() {
 
     child = await startGateway(runner, port, env, logPath);
     const sampleGateway = async () => {
-      const windowsSampleOptions = runner.pnpm
-        ? { windowsCommandLineNeedles: ["gateway", "--port", String(port)] }
+      const gatewayCommandLineNeedles = ["gateway", "--port", String(port)];
+      const processSampleOptions = runner.pnpm
+        ? {
+            posixCommandLineNeedles: gatewayCommandLineNeedles,
+            windowsCommandLineNeedles: gatewayCommandLineNeedles,
+          }
         : {};
-      let sample = await sampleProcess(child.pid, windowsSampleOptions);
+      let sample = await sampleProcess(child.pid, processSampleOptions);
       if (!sample && process.platform === "win32") {
         sample = await sampleWindowsProcessByPort(port);
       }

@@ -65,13 +65,17 @@ vi.mock("node:net", async () => {
   };
 });
 
-vi.mock("undici", () => ({
-  Agent: AgentCtor,
-  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
-  ProxyAgent: ProxyAgentCtor,
-  fetch: undiciFetch,
-  setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: AgentCtor,
+    EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+    ProxyAgent: ProxyAgentCtor,
+    fetch: undiciFetch,
+    setGlobalDispatcher,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
@@ -1095,6 +1099,23 @@ describe("resolveTelegramFetch", () => {
     );
 
     expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries sticky fallback when the local network is down during connect", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ENETDOWN"))
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getUpdates");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
+    expect(getDispatcherFromUndiciCall(1)).not.toBe(getDispatcherFromUndiciCall(2));
   });
 
   it("keeps per-resolver transport policy isolated across multiple accounts", async () => {

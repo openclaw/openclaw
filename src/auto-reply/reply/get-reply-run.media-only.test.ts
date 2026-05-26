@@ -293,6 +293,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
@@ -335,6 +336,39 @@ describe("runPreparedReply media-only handling", () => {
 
     call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it("hydrates runtime thinking metadata before trusting static provider support", async () => {
+    const resolveThinkingCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "high",
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog,
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.thinkLevel).toBe("off");
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
@@ -1478,6 +1512,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
   it("reports still shutting down when a new owner appears after waiting", async () => {
+    vi.useFakeTimers();
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -1505,9 +1540,11 @@ describe("runPreparedReply media-only handling", () => {
     });
     nextRun.setPhase("running");
 
-    await expect(runPromise).resolves.toEqual({
+    const assertion = expect(runPromise).resolves.toEqual({
       text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
     });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
 
     nextRun.complete();

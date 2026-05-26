@@ -1752,18 +1752,27 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
-                        if (
-                          nativeToolProgressDraft &&
-                          canUseNativeToolProgressDraft({
-                            payload: effectivePayload,
-                            reply,
-                            buttons: telegramButtons,
-                          })
-                        ) {
+                        const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
+                          payload: effectivePayload,
+                          reply,
+                          buttons: telegramButtons,
+                        });
+                        if (nativeToolProgressDraft && canRepresentAsTransientProgress) {
                           if (await pushStreamToolProgress(segment.update.text)) {
                             blockDelivered = true;
                             continue;
                           }
+                        }
+                        if (
+                          canRepresentAsTransientProgress &&
+                          streamMode === "progress" &&
+                          answerLane.stream
+                        ) {
+                          // Progress-mode streams render tool status in the
+                          // live draft. Do not also emit text-only tool output
+                          // as answer text, or simple commands duplicate and
+                          // restart the progress draft.
+                          continue;
                         }
                         await prepareAnswerLaneForToolProgress();
                       }

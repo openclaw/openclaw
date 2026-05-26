@@ -7,6 +7,7 @@ import { startWhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -322,7 +323,7 @@ function buildWhatsAppQaConfig(
     sutAccountId: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "whatsapp"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "whatsapp"]);
   return {
     ...baseCfg,
     plugins: {
@@ -470,10 +471,7 @@ async function listTarEntries(archivePath: string): Promise<string[]> {
   const { stdout } = await execFileAsync("tar", ["-tzf", archivePath], {
     maxBuffer: 1024 * 1024,
   });
-  return stdout
-    .split("\n")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(stdout.split("\n"));
 }
 
 function assertSafeArchiveEntries(entries: string[]) {

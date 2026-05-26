@@ -332,6 +332,19 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
   });
 
+  it("passes AWS capacity regions to Crabbox warmup", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const regions = "eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2";
+
+    expect(workflow.env?.CRABBOX_CAPACITY_REGIONS).toBe(regions);
+
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+    expect(agent.env?.CRABBOX_CAPACITY_REGIONS).toBe("${{ env.CRABBOX_CAPACITY_REGIONS }}");
+
+    const prepare = workflowStep("Prepare Codex user");
+    expect(prepare.run).toContain("CRABBOX_PROVIDER CRABBOX_CAPACITY_REGIONS");
+  });
+
   it("runs the Mantis Codex agent in fast medium-effort mode", () => {
     const agent = workflowStep("Run Codex Mantis Telegram agent");
 
@@ -413,6 +426,34 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).toContain("crop: TELEGRAM_PROOF_CROP");
     expect(skill).toContain("crop can isolate the chat pane");
     expect(skill).not.toContain("650px` is the largest tested clean width");
+  });
+
+  it("bounds Telegram user Crabbox remote bootstrap network and build steps", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+
+    expect(proofScript).toContain("run_setup_step()");
+    expect(proofScript).toContain("download_file()");
+    expect(proofScript).toContain('timeout --kill-after="$setup_step_timeout_kill_after"');
+    expect(proofScript).not.toContain("timeout --foreground");
+    expect(proofScript).toContain(
+      'apt_timeout="\\${OPENCLAW_TELEGRAM_USER_APT_TIMEOUT_SECONDS:-900}s"',
+    );
+    expect(proofScript).toContain(
+      'download_connect_timeout="\\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}"',
+    );
+    expect(proofScript).toContain(
+      'download_timeout="\\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_TIMEOUT_SECONDS:-600}"',
+    );
+    expect(proofScript).toContain('run_setup_step "apt-get update" "$apt_timeout"');
+    expect(proofScript).toContain("download_file https://telegram.org/dl/desktop/linux");
+    expect(proofScript).toContain('download_file "$tdlib_url" "$root/tdlib-linux.tgz"');
+    expect(proofScript).toContain(
+      'tdlib_clone_timeout="\\${OPENCLAW_TELEGRAM_USER_TDLIB_CLONE_TIMEOUT_SECONDS:-600}s"',
+    );
+    expect(proofScript).toContain('run_setup_step "tdlib clone" "$tdlib_clone_timeout"');
+    expect(proofScript).toContain('run_setup_step "tdlib build" "$tdlib_build_timeout"');
+    expect(proofScript).not.toContain("curl -fL https://telegram.org/dl/desktop/linux -o");
+    expect(proofScript).not.toContain("curl -fL \"$tdlib_url\" -o");
   });
 
   it("does not pass the full workflow environment into the local Telegram SUT", () => {

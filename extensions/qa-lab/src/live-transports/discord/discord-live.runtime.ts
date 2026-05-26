@@ -11,6 +11,7 @@ import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -461,7 +462,7 @@ function buildDiscordQaConfig(
     };
   } = {},
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "discord"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "discord"]);
   const pluginEntries = {
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },

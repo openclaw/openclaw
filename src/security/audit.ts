@@ -26,6 +26,7 @@ import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -283,7 +284,7 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.map((v) => String(v).trim()).filter(Boolean);
+  return normalizeStringEntries(list);
 }
 
 export async function collectFilesystemFindings(params: {

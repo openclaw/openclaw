@@ -390,19 +390,26 @@ async function resolveCliCommandSurfaceOwner(params: {
   }
 }
 
-async function resolveUnownedCliPrimary(params: {
-  argv: string[];
-  config: OpenClawConfig;
-}): Promise<string | null> {
-  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(params.argv));
+function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(argv));
   const { primary } = invocation;
   if (
-    invocation.hasHelpOrVersion ||
     !primary ||
     primary === "help" ||
     isReservedNonPluginCommandRoot(primary) ||
     isKnownBuiltInCommandRoot(primary)
   ) {
+    return null;
+  }
+  return primary;
+}
+
+async function resolveUnownedCliPrimary(params: {
+  argv: string[];
+  config: OpenClawConfig;
+}): Promise<string | null> {
+  const primary = resolveUnownedCliPrimaryCandidate(params.argv);
+  if (!primary) {
     return null;
   }
   const pluginRoot = await isPluginCliRoot({ primary, config: params.config });
@@ -612,6 +619,24 @@ export async function runCli(argv: string[] = process.argv) {
         const { outputPrecomputedNodesHelpText } = await import("./root-help-metadata.js");
         if (outputPrecomputedNodesHelpText()) {
           return;
+        }
+      }
+    }
+
+    // Reject unowned command roots before help/version routing, so that
+    // `openclaw <typo> --help` surfaces the same Unknown command error as
+    // `openclaw <typo>` instead of silently showing generic top-level help.
+    // Runs after legitimate precomputed help fast paths so known help commands
+    // still dispatch normally. See #81077.
+    {
+      const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
+      if (unownedPrimaryCandidate) {
+        const config = await readBestEffortCliConfig();
+        const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+        if (unownedPrimary) {
+          throw new Error(
+            await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }),
+          );
         }
       }
     }

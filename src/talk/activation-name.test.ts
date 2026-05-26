@@ -48,6 +48,34 @@ describe("realtime voice activation names", () => {
       match: "fuzzy",
       text: "what changed?",
     });
+    expect(matchRealtimeVoiceActivationName("what changed, Malty?", ["molty"])).toMatchObject({
+      allowed: true,
+      activationName: "molty",
+      edge: "trailing",
+      heardName: "malty",
+      match: "fuzzy",
+      text: "what changed",
+    });
+    expect(matchRealtimeVoiceActivationName("what changed, Marty?", ["molty"])).toMatchObject({
+      allowed: true,
+      activationName: "molty",
+      edge: "trailing",
+      heardName: "marty",
+      match: "fuzzy",
+      text: "what changed",
+    });
+  });
+
+  it("does not accept fuzzy trailing matches in ambient speech", () => {
+    expect(
+      matchRealtimeVoiceActivationName("I miss the nonsensical German ranting from Multy.", [
+        "molty",
+      ]),
+    ).toBeUndefined();
+    expect(matchRealtimeVoiceActivationName("I agree, mostly.", ["molty"])).toBeUndefined();
+    expect(matchRealtimeVoiceActivationName("the room is damp, moldy.", ["molty"])).toBeUndefined();
+    expect(matchRealtimeVoiceActivationName("the room is damp, moldy?", ["molty"])).toBeUndefined();
+    expect(matchRealtimeVoiceActivationName("what changed, Malty.", ["molty"])).toBeUndefined();
   });
 
   it("does not fuzzy match inside a larger phrase without an edge boundary", () => {

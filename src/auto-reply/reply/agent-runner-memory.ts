@@ -10,6 +10,10 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import {
+  classifyCompactionReason,
+  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+} from "../../agents/pi-embedded-runner/compact-reasons.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -49,6 +53,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -173,6 +178,22 @@ function resolveEffectivePromptTokens(
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
   return base + output + estimate;
+}
+
+function isPreflightCompactionSkipReason(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  // Preflight compaction is a guardrail, not a hard dependency. These classes
+  // mean the context engine found nothing useful to compact, so the reply should
+  // continue instead of surfacing a generic user-facing failure.
+  return (
+    classification === "below_threshold" ||
+    classification === "no_compactable_entries" ||
+    classification === "already_compacted_recently"
+  );
+}
+
+function isDeferredPreflightCompactionReason(reason?: string): boolean {
+  return normalizeOptionalString(reason) === DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON;
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -623,6 +644,11 @@ export async function runPreflightCompactionIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
+  const deps = {
+    compactEmbeddedPiSession: memoryDeps.compactEmbeddedPiSession,
+    incrementCompactionCount: memoryDeps.incrementCompactionCount,
+    refreshQueuedFollowupSession: memoryDeps.refreshQueuedFollowupSession,
+  };
   if (!params.sessionKey) {
     return params.sessionEntry;
   }
@@ -735,11 +761,20 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+  });
+  const threshold = Math.max(
+    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
+    serverCompactionThreshold ?? 0,
+  );
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `serverCompactionThreshold=${serverCompactionThreshold ?? "undefined"} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -755,6 +790,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
+    minimumThresholdTokens: serverCompactionThreshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -777,7 +813,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.sessionKey ?? params.followupRun.run.sessionKey,
     { storePath: params.storePath },
   );
-  const result = await memoryDeps.compactEmbeddedPiSession({
+  const result = await deps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey: params.runtimePolicySessionKey,
@@ -802,13 +838,19 @@ export async function runPreflightCompactionIfNeeded(params: {
     thinkLevel: params.followupRun.run.thinkLevel,
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
+    deferOwningContextEngineCompaction: false,
+    contextTokenBudget: contextWindowTokens,
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });
 
-  if (!result?.ok || !result.compacted) {
+  if (!result?.ok) {
     const reason = result?.reason ?? "not_compacted";
+    if (isPreflightCompactionSkipReason(reason)) {
+      logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+      return entry ?? params.sessionEntry;
+    }
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
     if (isRecoverableNativeHarnessBindingFailure(result)) {
       logVerbose(
@@ -819,7 +861,19 @@ export async function runPreflightCompactionIfNeeded(params: {
     throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
-  await incrementCompactionCount({
+  if (!result.compacted) {
+    const reason = normalizeOptionalString(result.reason);
+    if (isDeferredPreflightCompactionReason(reason)) {
+      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
+    }
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason ?? "not_compacted"}`,
+    );
+    return entry ?? params.sessionEntry;
+  }
+
+  await deps.incrementCompactionCount({
     cfg: params.cfg,
     sessionEntry: entry,
     sessionStore: params.sessionStore,
@@ -843,7 +897,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     }
     const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
     if (queueKey) {
-      memoryDeps.refreshQueuedFollowupSession({
+      deps.refreshQueuedFollowupSession({
         key: queueKey,
         previousSessionId,
         nextSessionId: entry.sessionId,

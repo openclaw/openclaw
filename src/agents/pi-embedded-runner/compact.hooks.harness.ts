@@ -78,6 +78,8 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
   sessionAgentId: "main",
 }));
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "pi" }));
+export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
 function createDefaultSessionMessages(): unknown[] {
   return [
     { role: "user", content: "hello", timestamp: 1 },
@@ -95,6 +97,13 @@ function createDefaultSessionMessages(): unknown[] {
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const guardSessionManagerMock = vi.fn(() => ({
+  flushPendingToolResults: vi.fn(),
+}));
+export const applyPiCompactionSettingsFromConfigMock = vi.fn();
+export const createPreparedEmbeddedPiSettingsManagerMock = vi.fn(() => ({
+  getGlobalSettings: vi.fn(() => ({})),
+}));
 export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
   params?.surface === "subagent"
     ? ["Subagent compact command guidance."]
@@ -118,6 +127,7 @@ export const rotateTranscriptAfterCompactionMock: Mock<
 > = vi.fn(async () => ({
   rotated: false,
 }));
+export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -270,6 +280,8 @@ export function resetCompactSessionStateMocks(): void {
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
+  enqueueCommandInLaneMock.mockReset();
+  enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
     params?.surface === "subagent"
@@ -313,6 +325,10 @@ export function resetCompactHooksHarnessMocks(): void {
     authStorage: { setRuntimeApiKey: vi.fn() },
     modelRegistry: {},
   });
+  resolveAgentHarnessPolicyMock.mockReset();
+  resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "pi" });
+  resolveContextWindowInfoMock.mockReset();
+  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
 
   sessionCompactImpl.mockReset();
   sessionCompactImpl.mockResolvedValue({
@@ -326,6 +342,15 @@ export function resetCompactHooksHarnessMocks(): void {
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  guardSessionManagerMock.mockReset();
+  guardSessionManagerMock.mockReturnValue({
+    flushPendingToolResults: vi.fn(),
+  });
+  applyPiCompactionSettingsFromConfigMock.mockReset();
+  createPreparedEmbeddedPiSettingsManagerMock.mockReset();
+  createPreparedEmbeddedPiSettingsManagerMock.mockReturnValue({
+    getGlobalSettings: vi.fn(() => ({})),
+  });
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -381,7 +406,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../harness/selection.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
-    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
+    resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
@@ -464,14 +489,12 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
-    guardSessionManager: vi.fn(() => ({
-      flushPendingToolResults: vi.fn(),
-    })),
+    guardSessionManager: guardSessionManagerMock,
   }));
 
   vi.doMock("../pi-settings.js", () => ({
     applyPiAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
-    applyPiCompactionSettingsFromConfig: vi.fn(),
+    applyPiCompactionSettingsFromConfig: applyPiCompactionSettingsFromConfigMock,
     ensurePiCompactionReserveTokens: vi.fn(),
     isSilentOverflowProneModel: vi.fn(() => false),
     resolveCompactionReserveTokensFloor: vi.fn(() => 0),
@@ -526,7 +549,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../process/command-queue.js", () => ({
-    enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+    enqueueCommandInLane: enqueueCommandInLaneMock,
     clearCommandLane: vi.fn(() => 0),
   }));
 
@@ -537,7 +560,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../context-window-guard.js", () => ({
-    resolveContextWindowInfo: vi.fn(() => ({ tokens: 128_000 })),
+    resolveContextWindowInfo: resolveContextWindowInfoMock,
   }));
 
   vi.doMock("../bootstrap-files.js", () => ({
@@ -787,9 +810,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-project-settings.js", () => ({
-    createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
-      getGlobalSettings: vi.fn(() => ({})),
-    })),
+    createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerMock,
   }));
 
   vi.doMock("./sandbox-info.js", () => ({
@@ -816,11 +837,15 @@ export async function loadCompactHooksHarness(): Promise<{
     createSystemPromptOverride: vi.fn(() => () => ""),
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => String(err)),
-    mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
-    resolveExecToolDefaults: vi.fn(() => undefined),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => String(err)),
+      mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
+      resolveExecToolDefaults: vi.fn(() => undefined),
+    };
+  });
 
   const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
     import("./compact.js"),

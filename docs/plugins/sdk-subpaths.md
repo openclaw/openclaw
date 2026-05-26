@@ -198,7 +198,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
+    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers and local native exec prompt suppression |
+    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
     | `plugin-sdk/reply-dedupe` | Narrow inbound reply dedupe reset helpers |
@@ -245,6 +246,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime-config-snapshot` | Current process config snapshot helpers such as `getRuntimeConfig`, `getRuntimeConfigSnapshot`, and test snapshot setters |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text barrel |
+    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
@@ -322,23 +324,21 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/meeting-notes` | Meeting notes source provider types, registry lookup, and provider id normalization helpers |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
-    | `plugin-sdk/meeting-notes` | Meeting notes source provider types, registry helpers, and provider id normalization |
     | `plugin-sdk/text-chunking` | Text and markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-bootstrap-context` | Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
-    | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
+    | `plugin-sdk/realtime-voice` | Realtime voice provider types, registry helpers, and shared realtime voice behavior helpers, including output activity tracking |
     | `plugin-sdk/image-generation` | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/music-generation` | Music generation provider/request/result types |
     | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/meeting-notes` | Shared meeting-notes source provider types, registry helpers, session descriptors, and utterance metadata |
+    | `plugin-sdk/transcripts` | Shared transcripts source provider types, registry helpers, session descriptors, and utterance metadata |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
     | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |

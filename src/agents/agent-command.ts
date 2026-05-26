@@ -930,6 +930,8 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
       ...modelManifestContext,
     });
 
@@ -941,6 +943,8 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;

@@ -221,8 +221,9 @@ run_logged() {
 }
 
 echo "Running package Telegram live Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
@@ -237,7 +238,20 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 echo "Installing ${package_label} from ${install_source}..."
-npm install -g "$install_source" --no-fund --no-audit
+
+npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
+  npm install -g "$install_source" --no-fund --no-audit
+elif command -v timeout >/dev/null 2>&1; then
+  if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+    timeout --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  else
+    timeout "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  fi
+else
+  echo "timeout command not found; running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT" >&2
+  npm install -g "$install_source" --no-fund --no-audit
+fi
 
 command -v openclaw
 openclaw --version

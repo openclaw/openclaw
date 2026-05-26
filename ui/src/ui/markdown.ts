@@ -84,6 +84,8 @@ const MARKDOWN_PARSE_LIMIT = 40_000;
 const MARKDOWN_CACHE_LIMIT = 200;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
+const HOST_LOCAL_FILE_HREF_RE =
+  /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 
@@ -135,6 +137,10 @@ function shouldRenderCodeBlockCopy(env: unknown): boolean {
   return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
 }
 
+function isHostLocalFileHref(href: string): boolean {
+  return HOST_LOCAL_FILE_HREF_RE.test(href.trim());
+}
+
 function installHooks() {
   if (hooksInstalled) {
     return;
@@ -147,6 +153,11 @@ function installHooks() {
     }
     const href = node.getAttribute("href");
     if (!href) {
+      return;
+    }
+
+    if (isHostLocalFileHref(href)) {
+      node.removeAttribute("href");
       return;
     }
 

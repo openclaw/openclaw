@@ -10,11 +10,11 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
-  "anthropic/claude-opus-4-7",
-  "anthropic/claude-opus-4-6",
   "anthropic/claude-sonnet-4-6",
+  "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3-flash-preview",
+  "anthropic/claude-opus-4-6",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m2.7",
