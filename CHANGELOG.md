@@ -135,6 +135,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway: require Talk secret authority before setup-code handoff can include Talk secrets. (#85690) Thanks @ngutman.
 - Agents: keep fallback error reporting scoped to the active model candidate so stale prior-provider quota/auth text is not reported for later fallback attempts. (#86134) thanks @zhangguiping-xydt.
+- iMessage: dedupe enabled accounts that target the same local Messages source so a config with both `default` and a named account no longer starts two `imsg rpc` watchers or duplicates inbound replies; the named account is preferred and `openclaw doctor` flags the redundant account. Fixes #65141. Thanks @swang430.
 
 ## 2026.5.25
 

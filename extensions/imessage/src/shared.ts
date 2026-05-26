@@ -7,9 +7,11 @@ import {
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
+  isIMessageAccountEnabledForRuntime,
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
+  resolveIMessageAccountDisabledReason,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
@@ -93,6 +95,8 @@ export function createIMessagePluginBase(params: {
     configSchema: IMessageChannelConfigSchema,
     config: {
       ...imessageConfigAdapter,
+      isEnabled: (account, cfg) => isIMessageAccountEnabledForRuntime(account, cfg),
+      disabledReason: (account, cfg) => resolveIMessageAccountDisabledReason(account, cfg),
       isConfigured: (account) => account.configured,
       describeAccount: (account) =>
         describeAccountSnapshot({
