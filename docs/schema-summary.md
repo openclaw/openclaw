@@ -1,0 +1,166 @@
+# Schema Summary
+
+The schema is exported structure-only from a working OpenClaw DB-memory installation.
+
+Main recall objects:
+
+- `zorg_memory` - durable memory and remembered context
+- `zorg_memory_file_archive` - archive of retired legacy `memory/` files before filesystem removal
+- `md_agents`, `md_soul`, `md_user`, `md_tools`, `md_identity`, `md_heartbeat` - line-imported core markdown context
+- `memory_projects`, `memory_hosts`, `memory_services`, `memory_runbooks`, `memory_relationships` - structured operational context
+- `zorg_operational_facts` - promoted operational facts
+- `zorg_memory_search_mv` - unified search surface
+- `zorg_master_context_mv` - prioritized master context
+- `zorg_recall_context(query, limit)` - broad recall entry point
+- `zorg_get_project_context`, `zorg_get_host_context`, `zorg_get_runbook_context` - targeted recall entry points
+
+Fresh installs contain no private data. The structure is intended to be repopulated locally. Legacy workspaces should archive any retired `memory/` directory into `zorg_memory_file_archive` and line-index it into `zorg_memory`, then remove the directory; new durable memory should be written to DB tables only.
+
+## End-to-end generated data ingestion
+
+Memory health is defined by active ingestion plus recall, not database connectivity alone. A compliant install must route newly generated durable data into PostgreSQL memory: chat turns, assistant replies, generated instructions, code and documentation change summaries, GitHub publication records, installer/upgrade outcomes, and meaningful operational process logs. If a data-producing surface cannot write to PostgreSQL memory, it must be reported as blocked or degraded rather than treated as healthy.
+
+Retired markdown memory surfaces remain retired. The `memory/` directory, daily notes, project notes, JSON state files, and similar flat-file memory logs must not be used as durable memory output. Health checks should verify recent rows, ingestion bridge activity, natural-language recall of new records, and absence of recreated flat-file memory output.
+
+## Weighted semantic recall objects
+
+The schema includes additive tables for vector/neural-style recall evolution:
+
+- `memory_semantic_nodes` - LLM-derived concepts/entities/intents/rules/projects/etc.
+- `memory_semantic_edges` - weighted graph edges between source rows, semantic nodes, and other recall objects.
+- `memory_embedding_slots` - provider-agnostic embedding/vector metadata and optional vector payload storage.
+- `memory_recall_hints` - LLM-readable explanations that make familiarity/relevance explicit for future models.
+- `memory_query_observations` - query/result feedback used to strengthen useful associations over time.
+
+These objects are derived/additive. They may be rebuilt, but source memory rows must not be removed for performance.
+
+## Fast recall surface
+
+`zorg_memory_search_fast_mv` is an additive derived materialized view over `zorg_memory_search_mv`. It precomputes lowercase content, English/simple tsvectors, source rank, and content length so recall queries avoid repeated per-row text normalization/vectorization. It is refreshable/rebuildable derived data and must not replace or prune source memory.
+
+`zorg_search_memory(query, limit)` ranks exact full-text and exact phrase matches first. If those do not fill the requested limit, it now falls back to token-level OR matching against the same precomputed indexed tsvector columns. This improves natural-language recall when a query contains several useful terms that may be split across different memory rows, while preserving the faster exact-match path for focused queries.
+
+## Contacts CRM / Google Contacts Memory
+
+Zorg MemoryDB includes an additive private contacts/CRM layer for installs that have authorized Google People/Contacts access. The structure is designed to preserve contact data if a mail provider account is lost and to make contact facts available to the same DB recall path as other memory.
+
+Tables/views/functions:
+
+- `zorg_contacts_crm` — one row per external contact record. Stores normalized fields such as display name, company, job title, primary email/phone, notes, JSONB arrays for People API fields, and the full raw person JSON for durable recovery.
+- `zorg_contact_points_crm` — normalized email/phone/url points linked to contacts for lookup and dedupe.
+- `zorg_contact_sync_runs` — append-only sync run history and counts.
+- `zorg_contacts_crm_recall_v` — crawler/recall-safe contact text projection.
+- `zorg_refresh_memory_search()` — refreshes memory search materialized views after contact sync/import.
+- `zorg_memory_search_mv` / `zorg_memory_search_fast_mv` include contact rows as source type `contact`, so contact data participates in the normal DB-backed recall path.
+
+Privacy boundary: live contact rows, phone numbers, email addresses, raw People API JSON, credentials, and sync outputs are private operator data and must not be published in public docs, examples, issues, or release notes. Public repos may include only schema, scripts, and sanitized operational guidance.
+
+## Contacts CRM Deduplication / Distillation
+
+The contacts layer is intentionally non-destructive. Provider rows remain in `zorg_contacts_crm`, while distilled recall should use canonical contacts.
+
+Additional structures:
+
+- `zorg_contact_canonical_crm` — canonical/distilled contacts used by recall. Strong dedupe uses email, phone, or provider-resource evidence; the table stores source contact IDs and source counts.
+- `zorg_contact_canonical_members` — membership links from canonical contacts back to preserved raw provider contacts.
+- `zorg_contact_dedupe_flags` — review flags for name-only collisions and ambiguous matches. Name-only matches are flagged, not automatically destroyed.
+- `zorg_contact_duplicates_review_v` — safe review surface that exposes counts/evidence metadata without requiring raw contact deletion.
+- `zorg_distill_contacts_crm()` — rebuilds canonical groups and review flags, then refreshes the memory search materialized views.
+
+Recall uses `zorg_contacts_crm_recall_v`, which points at canonical/distilled contacts. This keeps the number of recallable contacts deduplicated while preserving every raw source row for recovery and later review.
+
+## Recursive Logic Rules / Proactive Quality Control
+
+Zorg MemoryDB includes an additive logic-rule layer for turning operator instructions, examples, public-safe executive-assistant principles, and observed mistakes into reusable decision structures.
+
+Tables/views/functions:
+
+- `zorg_logic_rules` — durable operating logic, priority, privacy scope, applicable categories, standard checks, and tuning notes.
+- `zorg_logic_rule_sources` — source summaries for why a rule exists. Public docs should include only sanitized source summaries.
+- `zorg_logic_rule_applications` — optional audit trail when a rule/check is applied to a task.
+- `zorg_logic_rules_recall_v` — recall projection for logic rules.
+- `zorg_get_logic_context(query, limit)` — logic-specific recall path.
+
+The CRM dedupe miss is the model lesson: when a new database/list/import/CRM/memory feature is built, duplicate detection, canonicalization, count reconciliation, source preservation, recall integration, privacy checks, representative searches, and performance checks are standard final checks before declaring completion.
+
+## Private DB backup/recovery requirement
+
+Schema/index/recall changes require a verified full database backup first. Keep full dumps only in local/private recovery locations, never in this public structural repo. Fresh installs should configure a private GitHub recovery target equivalent to `Zorg_Hive/backups/postgres/openclaw/`.
+
+Fresh-install note: if no private GitHub/offsite DB backup target exists, local backup is the minimum, but the agent should explicitly recommend setting up a private GitHub repository because private repos are free and off-host recovery is critical for durable memory.
+
+<!-- SCORCHED_MEMORY_RECALL_RULE -->
+## Absolute Priority 0: Exhaustive Memory Before Response
+
+The operator does not ask for work in context unless the needed information, access path, rule, contact, precedent, or working solution likely already exists somewhere in durable memory, project history, live configuration, runbooks, prompts, cron jobs, or related system state. A fast or shallow miss is never evidence of absence.
+
+Before replying, asking a question, claiming uncertainty, or reporting a blocker, the assistant must scour the backend memory system deeply and creatively: use broader queries, alternate names, relationship terms, adjacent projects, prior similar tasks, contact records, operational history, runbooks, cron payloads, and live configuration clues until the relevant context is found or genuinely exhausted. Immediate answers are disallowed when memory could contain the answer.
+
+If deep scouring finds information that the first query missed, treat that as a recall-structure failure and immediately add additive retrieval support: aliases, recall hints, semantic/relationship edges, query observations, indexes, materialized/search support, or rule surfaces so the same phrasing is fast and reliable next time. Preserve all source data; improve recall additively only.
+
+Failure reports must not excuse the miss as “not enough information” when the information existed in memory. The correct diagnosis is inadequate recall behavior or structure, and the corrective action is deeper recall plus indexing/hinting/relationship repair.
+<!-- /SCORCHED_MEMORY_RECALL_RULE -->
+
+
+## Recall hints in search surface
+
+`memory_recall_hints` and `memory_query_observations` are part of the canonical recall surface. They should be materialized into the main search view so alternate wording, relationship labels, operator corrections, and prior query failures become first-class retrieval cues. This keeps recall behavior neural/vector-like: source rows remain preserved, while additive hints and weighted associations improve future retrieval without pruning history.
+
+<!-- LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
+## LLM-Governed Performance Tuning Rule
+
+Database and memory performance tuning must be governed by live LLM judgment, not hidden script policy. Tuning work starts with a natural-language hypothesis formed from current system evidence and internet/authoritative research. If research gives a credible reason to believe a database design, recall-path, materialized-view, vector/neural association, or query-structure change will improve performance, the LLM must run side-by-side before/after measurements on representative queries before claiming success.
+
+If research does not support a design change, move to raw additive performance work: indexes, query-path improvements, materialized/search-support views, relationships, recall hints, semantic edges, weighted connections, token/FTS/trigram support, and other non-destructive logic that brings query times down while preserving all source memory. No original memory data may be pruned, deleted, truncated, compacted away, or aged out for speed.
+
+Every meaningful tuning change must record the research basis, before/after benchmark results, changed structures, rollback path, and follow-up indexing/hinting implications in durable memory and public-safe docs when structural behavior changes.
+<!-- /LLM_GOVERNED_PERFORMANCE_TUNING_RULE -->
+
+<!-- GO_ONLY_APPROVAL_RULE -->
+## GO-Only Approval Rule
+
+When Stefan gives a command that requires confirmation before execution, ask only for `GO`. Do not invent longer approval phrases, magic words, task-specific confirmations, or exact response strings such as `GO REIP ...`, `GO SCORCHED ...`, or any other expanded form. Stefan decides how to respond; the assistant may request only the simple approval token `GO`.
+
+If the requested action is unsafe, ambiguous, destructive, externally risky, or missing a necessary decision, explain the blocker or the exact intended change briefly, then end with only `GO` as the approval request when approval is the only thing needed. Never require Stefan to repeat the task, include extra words, or match an assistant-authored phrase.
+<!-- /GO_ONLY_APPROVAL_RULE -->
+
+<!-- SAME_DAY_NEWS_FRESHNESS_RULE -->
+## Same-Day News Freshness Rule
+
+When writing multiple news articles or public reports on the same day, do not repeat the same information from article to article. Adjacent or continuing stories may reference earlier context only briefly when necessary, but each article must add fresh facts, new framing, new implications, new examples, or a clearly advanced continuation that was not already covered in earlier same-day articles.
+
+Before drafting or publishing a new article, review the same-day feed/archive and compare titles, summaries, body claims, examples, and links. If information has already been used that day, either omit it, compress it to a short bridge, or explicitly advance it with new developments. Maintain editorial continuity without recycling paragraphs, talking points, examples, or conclusions.
+
+The assistant owns the full article set and must keep the day’s coverage fresh, non-repetitive, and additive.
+<!-- /SAME_DAY_NEWS_FRESHNESS_RULE -->
+
+
+## Semantic neural recall v1 objects
+
+2026-05-13 additive upgrade: queue-driven weighted semantic recall was added.
+
+Primary objects:
+
+- `memory_semantic_work_queue` - statused work queue for semantic association jobs; indexed by status/due/priority and source key.
+- `memory_semantic_tuner_versions` - active tuner/worker metadata and safety notes.
+- `memory_recall_weight_runs` - weighted recall audit rows.
+- `memory_enqueue_semantic_job(...)` - idempotent enqueue helper using `pg_notify`.
+- Trigger functions on `zorg_memory`, `zorg_contacts_crm`, and `zorg_success_query_index`.
+- `zorg_weighted_recall_context(...)` - weighted recall entry point.
+- `scripts/memory_semantic_worker.py` - bounded external worker for semantic nodes, weighted edges, query observations, and recall hints.
+
+This layer follows PostgreSQL queue best practice by using `FOR UPDATE SKIP LOCKED` in the worker and keeping triggers lightweight. It does not execute generated code inside PostgreSQL triggers and does not remove original memory data.
+
+## 2026-05-14 non-destructive index tuning
+
+`db/non_destructive_index_tuning_2026_05_14.sql` adds trigram and sort-support indexes for existing recall/context tables without pruning or reshaping source memory. The indexes target the existing lookup predicates used by `zorg_get_logic_context`, `zorg_get_runbook_context`, `zorg_get_project_context`, `zorg_get_host_context`, and related context surfaces:
+
+- active logic-rule text and priority/update ordering
+- active runbook title/key/trigger/procedure text and update ordering
+- active project key/name/path/purpose text
+- project alias text
+- active host name/key/IP/purpose text
+- active directive text/category/priority text
+- project fact text/type/key text
+
+The production tuning run also refreshed planner statistics with `VACUUM (ANALYZE)` and rebuilt existing hot recall indexes before adding the new indexes. This is additive performance support only; original memory rows remain the source of truth.
