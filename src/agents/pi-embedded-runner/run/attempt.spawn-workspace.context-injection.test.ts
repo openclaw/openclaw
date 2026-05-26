@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
+import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import { limitHistoryTurns } from "../history.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
@@ -113,7 +113,7 @@ describe("embedded attempt context injection", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards senderIsOwner into embedded message-action discovery", () => {
+  it("builds embedded message-action discovery routing context", () => {
     const input = buildEmbeddedMessageActionDiscoveryInput({
       cfg: {},
       channel: "matrix",
@@ -125,7 +125,6 @@ describe("embedded attempt context injection", () => {
       sessionId: "session",
       agentId: "main",
       senderId: "@alice:example.org",
-      senderIsOwner: false,
     });
 
     expect(input.channel).toBe("matrix");
@@ -137,7 +136,6 @@ describe("embedded attempt context injection", () => {
     expect(input.sessionId).toBe("session");
     expect(input.agentId).toBe("main");
     expect(input.requesterSenderId).toBe("@alice:example.org");
-    expect(input.senderIsOwner).toBe(false);
   });
 
   it("never skips heartbeat bootstrap filtering", async () => {
@@ -208,7 +206,11 @@ describe("embedded attempt context injection", () => {
       { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as unknown as AgentMessage,
     ];
 
-    const heartbeatFiltered = filterHeartbeatPairs(sessionMessages, undefined, HEARTBEAT_PROMPT);
+    const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
+      sessionMessages,
+      undefined,
+      HEARTBEAT_PROMPT,
+    );
     const limited = limitHistoryTurns(heartbeatFiltered, 1);
     await assembleAttemptContextEngine({
       contextEngine: {

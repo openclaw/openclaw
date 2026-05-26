@@ -101,6 +101,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/gateway/admin-http-rpc",
+      "destination": "/plugins/admin-http-rpc"
+    },
+    {
       "source": "/cli/capability",
       "destination": "/cli/infer"
     },
@@ -222,10 +226,14 @@
     },
     {
       "source": "/glm",
-      "destination": "/providers/glm"
+      "destination": "/providers/zai"
     },
     {
       "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/providers/glm",
       "destination": "/providers/zai"
     },
     {
@@ -1036,7 +1044,8 @@
                   "install/oracle",
                   "install/railway",
                   "install/raspberry-pi",
-                  "install/render"
+                  "install/render",
+                  "install/upstash"
                 ]
               },
               {
@@ -1101,6 +1110,7 @@
                   "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
+                  "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
@@ -1129,6 +1139,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
+                  "concepts/personal-agent-benchmark-pack",
                   "concepts/qa-matrix"
                 ]
               },
@@ -1198,9 +1209,11 @@
                 "group": "Bundled plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
+                  "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
@@ -1213,10 +1226,12 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
                   "plugins/sdk-provider-plugins",
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
               },
@@ -1334,7 +1349,6 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/security",
                   "clawhub/acceptable-usage"
                 ]
               }
@@ -1373,7 +1387,6 @@
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
-                  "providers/glm",
                   "providers/google",
                   "providers/gradium",
                   "providers/groq",
@@ -1425,7 +1438,8 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
-                  "platforms/ios"
+                  "platforms/ios",
+                  "platforms/easyrunner"
                 ]
               },
               {
@@ -1521,6 +1535,7 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
                       "gateway/security/audit-checks",
                       "gateway/operator-scopes",
@@ -1661,7 +1676,7 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
+                    "pages": ["cli/plugins", "cli/path", "cli/policy", "cli/skills"]
                   },
                   {
                     "group": "Interfaces",
@@ -1688,6 +1703,7 @@
                   "reference/rpc",
                   "concepts/openclaw-sdk",
                   "reference/openclaw-sdk-api-design",
+                  "reference/code-mode",
                   "reference/device-models"
                 ]
               },
@@ -1695,8 +1711,7 @@
                 "group": "Codex harness",
                 "pages": [
                   "plugins/codex-harness-reference",
-                  "plugins/codex-harness-runtime",
-                  "plugins/codex-native-plugins"
+                  "plugins/codex-harness-runtime"
                 ]
               },
               {

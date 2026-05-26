@@ -23,6 +23,8 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -35,14 +37,15 @@ export function resolveGatewayScopedTools(params: {
   sessionKey: string;
   messageProvider?: string;
   accountId?: string;
+  inboundEventKind?: InboundEventKind;
   agentTo?: string;
   agentThreadId?: string;
+  senderIsOwner?: boolean;
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
   surface?: GatewayScopedToolSurface;
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
-  senderIsOwner?: boolean;
   gatewayRequestedTools?: string[];
 }) {
   const {
@@ -59,13 +62,18 @@ export function resolveGatewayScopedTools(params: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
+  const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
+    params.inboundEventKind === "room_event" ? "message_tool_only" : undefined;
+  const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
     ...gatewayRequestedTools,
+    ...runtimeAlsoAllow,
   ]);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
     ...(providerProfileAlsoAllow ?? []),
     ...gatewayRequestedTools,
+    ...runtimeAlsoAllow,
   ]);
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
@@ -133,13 +141,15 @@ export function resolveGatewayScopedTools(params: {
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    inboundEventKind: params.inboundEventKind,
+    sourceReplyDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
-    senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([

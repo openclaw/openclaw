@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -109,11 +110,11 @@ function chatListCacheSet(
  * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
  * miss the match. Mirror of the same helper in monitor-reply-cache.ts.
  */
-export function _normalizeDirectChatIdentifierForTest(raw: string): string {
+export function normalizeDirectChatIdentifierForTest(raw: string): string {
   return normalizeDirectChatIdentifier(raw);
 }
 
-export function _findChatGuidForTest(
+export function findChatGuidForTest(
   chats: readonly Record<string, unknown>[],
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string | null {
@@ -222,10 +223,7 @@ async function runIMessageCliJson(
       if (killEscalation) {
         clearTimeout(killEscalation);
       }
-      const lines = stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
+      const lines = normalizeStringEntries(stdout.split(/\r?\n/));
       const last = lines.at(-1);
       let parsed: Record<string, unknown> | null = null;
       if (last) {

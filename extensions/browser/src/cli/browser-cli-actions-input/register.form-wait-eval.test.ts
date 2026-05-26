@@ -1,0 +1,104 @@
+import { Command } from "commander";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as browserCliSharedModule from "../browser-cli-shared.js";
+import {
+  createBrowserProgram,
+  getBrowserCliRuntime,
+  getBrowserCliRuntimeCapture,
+} from "../browser-cli.test-support.js";
+import * as cliCoreApiModule from "../core-api.js";
+
+const mocks = vi.hoisted(() => ({
+  callBrowserRequest: vi.fn<
+    (
+      opts?: unknown,
+      req?: unknown,
+      extra?: { timeoutMs?: number },
+    ) => Promise<Record<string, unknown>>
+  >(async () => ({ result: true })),
+}));
+
+vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
+const browserCliRuntime = getBrowserCliRuntime();
+vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
+  browserCliRuntime.writeJson,
+);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+
+const { registerBrowserActionInputCommands } = await import("./register.js");
+
+function createActionInputProgram(): Command {
+  const { program, browser, parentOpts } = createBrowserProgram();
+  registerBrowserActionInputCommands(browser, parentOpts);
+  return program;
+}
+
+describe("browser action input wait command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("keeps the outer request open longer than a time-based wait", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(["browser", "wait", "--time", "25000"], { from: "user" });
+
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(options?.timeoutMs).toBeGreaterThan(25000);
+  });
+
+  it("keeps the outer request open for time delay plus condition timeout", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(["browser", "wait", "--time", "1000", "--text", "Ready"], {
+      from: "user",
+    });
+
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(options?.timeoutMs).toBeGreaterThan(21000);
+  });
+
+  it("rejects unsupported load states before sending the wait request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "wait", "--load", "complete"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors.join("\n")).toContain("Invalid --load value: complete");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser action input evaluate command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("passes timeout-ms through to the evaluate action and outer request", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "30000"],
+      { from: "user" },
+    );
+
+    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+      | { body?: { timeoutMs?: number } }
+      | undefined;
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(request?.body?.timeoutMs).toBe(30000);
+    expect(options?.timeoutMs).toBeGreaterThan(30000);
+  });
+});

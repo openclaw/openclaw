@@ -1,9 +1,11 @@
-import type { ErrorObject } from "ajv";
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
+import * as protocol from "./index.js";
 import {
   formatValidationErrors,
   validateChatEvent,
+  validateCommandsListParams,
+  validateConnectParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -13,7 +15,9 @@ import {
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
+  validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
+  validateTalkAgentControlResult,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCancelTurnParams,
@@ -21,18 +25,70 @@ import {
   validateTalkSessionJoinParams,
   validateTalkSessionJoinResult,
   validateTalkSessionSubmitToolResultParams,
+  validateTalkSessionSteerParams,
   validateTalkSessionTurnParams,
   validateTalkSessionTurnResult,
   validateWakeParams,
+  type ValidationError,
 } from "./index.js";
 
-const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
+const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   keyword: "type",
   instancePath: "",
   schemaPath: "#/",
   params: {},
   message: "validation error",
   ...overrides,
+});
+
+type ProtocolValidator = (value: unknown) => boolean;
+
+describe("lazy protocol validators", () => {
+  it("validates through exported lazy validators", () => {
+    expect(validateCommandsListParams({})).toBe(true);
+    expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
+    expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
+    expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+  });
+
+  it("keeps validation errors readable on the exported validator", () => {
+    expect(validateConnectParams({})).toBe(false);
+    expect(formatValidationErrors(validateConnectParams.errors)).toContain("must have required");
+
+    expect(
+      validateConnectParams({
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          id: "test",
+          version: "1.0.0",
+          platform: "test",
+          mode: "test",
+        },
+      }),
+    ).toBe(true);
+    expect(validateConnectParams.errors).toBeNull();
+  });
+
+  it("can still compile every exported protocol validator", () => {
+    const failures: string[] = [];
+    const validators: Array<[string, ProtocolValidator]> = [];
+    for (const [name, value] of Object.entries(protocol)) {
+      if (name.startsWith("validate") && typeof value === "function") {
+        validators.push([name, value as ProtocolValidator]);
+      }
+    }
+
+    expect(validators.length).toBeGreaterThan(150);
+    for (const [name, validate] of validators) {
+      try {
+        validate(undefined);
+      } catch (err) {
+        failures.push(`${name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
 });
 
 describe("formatValidationErrors", () => {
@@ -381,6 +437,44 @@ describe("validateTalkClientToolCallParams", () => {
         callId: "call-1",
         name: "openclaw_agent_consult",
         args: { question: "what now" },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkAgentControlParams", () => {
+  it("accepts client and session steering params plus structured outcomes", () => {
+    expect(
+      validateTalkClientSteerParams({
+        sessionKey: "agent:main:main",
+        text: "use the safer path",
+        mode: "steer",
+      }),
+    ).toBe(true);
+    expect(
+      validateTalkSessionSteerParams({
+        sessionId: "talk-1",
+        sessionKey: "agent:main:main",
+        text: "status",
+        mode: "status",
+      }),
+    ).toBe(true);
+    expect(
+      validateTalkAgentControlResult({
+        ok: true,
+        mode: "cancel",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        active: true,
+        aborted: true,
+        message: "Cancelled the active OpenClaw run.",
+        speak: true,
+        show: true,
+        suppress: false,
+        providerResult: {
+          status: "cancelled",
+          message: "Cancelled the active OpenClaw run.",
+        },
       }),
     ).toBe(true);
   });

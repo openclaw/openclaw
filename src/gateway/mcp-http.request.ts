@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -29,12 +30,18 @@ type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
   accountId: string | undefined;
-  senderIsOwner: boolean;
+  inboundEventKind: InboundEventKind | undefined;
+  senderIsOwner: boolean | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
   const trimmed = normalizeOptionalString(rawSessionKey);
   return !trimmed || trimmed === "main" ? resolveMainSessionKey(cfg) : trimmed;
+}
+
+function normalizeMcpInboundEventKind(value: string | undefined): InboundEventKind | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "room_event" || trimmed === "user_request" ? trimmed : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -173,6 +180,7 @@ export function resolveMcpRequestContext(
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
+    inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     senderIsOwner: auth.senderIsOwner,
   };
 }

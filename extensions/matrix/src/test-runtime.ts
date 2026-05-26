@@ -21,26 +21,26 @@ type MatrixRuntimeStub = {
 };
 
 function createMatrixRuntimeMediaMock(
-  overrides: Partial<PluginRuntime["channel"]["media"]> = {},
-): PluginRuntime["channel"]["media"] {
-  const readRemoteMediaBuffer =
-    vi.fn() as unknown as PluginRuntime["channel"]["media"]["readRemoteMediaBuffer"];
+  overrides: Partial<NonNullable<PluginRuntime["channel"]>["media"]> = {},
+): NonNullable<PluginRuntime["channel"]>["media"] {
+  const readRemoteMediaBuffer = vi.fn() as NonNullable<
+    PluginRuntime["channel"]
+  >["media"]["readRemoteMediaBuffer"];
   return {
     readRemoteMediaBuffer,
-    fetchRemoteMedia:
-      readRemoteMediaBuffer as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
+    fetchRemoteMedia: readRemoteMediaBuffer,
     saveRemoteMedia: vi.fn().mockResolvedValue({
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
-    }) as unknown as PluginRuntime["channel"]["media"]["saveRemoteMedia"],
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveRemoteMedia"],
     saveResponseMedia: vi.fn().mockResolvedValue({
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
-    }) as unknown as PluginRuntime["channel"]["media"]["saveResponseMedia"],
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveResponseMedia"],
     saveMediaBuffer: vi.fn().mockResolvedValue({
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
-    }) as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+    }) as NonNullable<PluginRuntime["channel"]>["media"]["saveMediaBuffer"],
     ...overrides,
   };
 }

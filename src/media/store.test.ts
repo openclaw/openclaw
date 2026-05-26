@@ -3,8 +3,8 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -644,11 +644,7 @@ describe("media store", () => {
     {
       name: "saves jpeg buffers with the detected extension",
       bufferFactory: async () => {
-        return await sharp({
-          create: { width: 2, height: 2, channels: 3, background: "#123456" },
-        })
-          .jpeg({ quality: 80 })
-          .toBuffer();
+        return createTinyJpegBuffer();
       },
       contentType: "image/jpeg",
       expectedContentType: "image/jpeg",
@@ -669,6 +665,21 @@ describe("media store", () => {
       originalFilename: "report.custom",
       expectedContentType: "application/octet-stream",
       expectedExtension: ".custom",
+    },
+    {
+      name: "does not preserve image header extensions for generic container buffers",
+      bufferFactory: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return await zip.generateAsync({ type: "nodebuffer" });
+      },
+      contentType: "image/png",
+      originalFilename: "fake.png",
+      expectedContentType: "application/zip",
+      expectedExtension: ".zip",
+      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+        expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
+      },
     },
   ] as const)("$name", async (testCase) => {
     const buffer =
@@ -830,11 +841,7 @@ describe("media store", () => {
       name: "renames media based on detected mime even when extension is wrong",
       relativeSourcePath: "image-wrong.bin",
       contentsFactory: async () => {
-        return await sharp({
-          create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
-        })
-          .png()
-          .toBuffer();
+        return createSolidPngBuffer(2, 2, { r: 0, g: 255, b: 0 });
       },
       expectedContentType: "image/png",
       expectedExtension: ".png",
@@ -941,6 +948,18 @@ describe("media store", () => {
         filename: "报告_2024---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
         expected: "报告_2024.pdf",
         basePath: "/media",
+      },
+      {
+        name: "extracts from Windows paths on non-Windows hosts",
+        filename: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        expected: "report.pdf",
+        basePath: String.raw`C:\media\inbound`,
+      },
+      {
+        name: "extracts from mixed-separator paths",
+        filename: "photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+        expected: "photo.png",
+        basePath: String.raw`C:\media/inbound`,
       },
     ] as const)("$name", async ({ filename, expected, basePath }) => {
       await expectOriginalFilenameCase({ filename, expected, basePath });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import { formatHealthChannelLines, healthCommand } from "./health.js";
+import { formatHealthChannelLines, formatModelPricingHealthLine, healthCommand } from "./health.js";
 
 const runtime = {
   log: vi.fn(),
@@ -52,8 +52,11 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const formatGatewayTransportErrorJsonMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  formatGatewayTransportErrorJson: (...args: unknown[]) =>
+    formatGatewayTransportErrorJsonMock(...args),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -83,6 +86,7 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
   });
 
   it("outputs JSON from gateway", async () => {
@@ -146,7 +150,34 @@ describe("healthCommand", () => {
     expect(gatewayRequest.password).toBe("setup-password");
   });
 
-  it("prints degraded model-pricing health without failing the command", async () => {
+  it("outputs JSON for gateway transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
+  });
+
+  it("formats degraded model-pricing health as a warning", () => {
     const snapshot = createHealthSummary({
       channels: {},
       channelOrder: [],
@@ -165,12 +196,8 @@ describe("healthCommand", () => {
       detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
       lastFailureAt: Date.now(),
     };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
+    expect(formatModelPricingHealthLine(snapshot)).toBe(
       "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
     );
   });

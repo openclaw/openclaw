@@ -6,6 +6,7 @@ import {
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
   expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
@@ -68,6 +69,61 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("filters bundled plugin build entries for bounded script lanes", () => {
+    const entries = listBundledPluginBuildEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "active-memory,acpx",
+      },
+    });
+    const entryKeys = Object.keys(entries);
+
+    expect(entryKeys).toEqual(expect.arrayContaining(["extensions/acpx/index"]));
+    expect(entryKeys.every((entry) => /^extensions\/(?:acpx|active-memory)\//u.test(entry))).toBe(
+      true,
+    );
+  });
+
+  it("rejects unknown bounded bundled plugin build ids", () => {
+    expect(() =>
+      listBundledPluginBuildEntries({
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "missing-plugin",
+        },
+      }),
+    ).toThrow(
+      "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS references unknown bundled plugin id(s): missing-plugin",
+    );
+  });
+
+  it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
+  });
+
+  it("discovers repo plugin build entries without directory scans", () => {
+    const payload = expectNoNodeFsScans<{
+      artifacts: number;
+      entries: number;
+    }>(
+      `
+        const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
+        const entries = build.listBundledPluginBuildEntries();
+        const artifacts = build.listBundledPluginPackArtifacts();
+        return {
+          artifacts: artifacts.length,
+          entries: Object.keys(entries).length,
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+
+    expect(payload.entries).toBeGreaterThan(0);
+    expect(payload.artifacts).toBeGreaterThan(0);
+  });
+
   it("packs runtime core support packages without requiring plugin manifests", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
@@ -105,6 +161,26 @@ describe("bundled plugin build entries", () => {
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
     for (const pluginId of ["qqbot", "whatsapp"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps external-only providers out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["openshell", "slack"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }

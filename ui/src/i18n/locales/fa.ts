@@ -349,6 +349,12 @@ export const fa: TranslationMap = {
     eventLogSubtitle: "آخرین رویدادهای gateway.",
     noEvents: "هنوز رویدادی وجود ندارد.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "تا {time} دیگر منقضی می‌شود",
     expired: "منقضی شده",
@@ -388,6 +394,7 @@ export const fa: TranslationMap = {
   },
   tabs: {
     agents: "عامل‌ها",
+    activity: "Activity",
     overview: "نمای کلی",
     channels: "کانال‌ها",
     instances: "نمونه‌ها",
@@ -409,6 +416,7 @@ export const fa: TranslationMap = {
   },
   subtitles: {
     agents: "فضاهای کاری، ابزارها، هویت‌ها.",
+    activity: "Browser-local tool activity summaries.",
     overview: "وضعیت، نقاط ورود، سلامت.",
     channels: "کانال‌ها و تنظیمات.",
     instances: "کلاینت‌ها و گره‌های متصل.",
@@ -427,6 +435,42 @@ export const fa: TranslationMap = {
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
     dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "جستجو",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "ابزار",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "پاک کردن",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "اجرا کنید",
+    session: "نشست",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "در حال اجرا",
+      done: "انجام شد",
+      error: "خطا",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
@@ -693,10 +737,6 @@ export const fa: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "ببینید توکن‌ها کجا مصرف می‌شوند، نشست‌ها چه زمانی جهش می‌کنند و چه چیزی هزینه را افزایش می‌دهد.",
-    },
     common: {
       emptyValue: "—",
       unknown: "نامشخص",
@@ -1044,6 +1084,10 @@ export const fa: TranslationMap = {
     settings: "تنظیمات چت",
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
+    autoScrollMode: "حالت پیمایش خودکار",
+    autoScrollAlways: "همیشه",
+    autoScrollNearBottom: "نزدیک پایین",
+    autoScrollOff: "خاموش",
     focusToggle: "تغییر وضعیت حالت تمرکز (پنهان کردن نوار کناری + سرصفحه صفحه)",
     hideCronSessions: "پنهان کردن نشست‌های cron",
     showCronSessions: "نمایش نشست‌های cron",
@@ -1087,11 +1131,16 @@ export const fa: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "هنوز در حال گوش دادن",
+      talkTranscript: "رونوشت گفتار",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "فیلتر کردن نشست‌ها بر اساس عامل",
       session: "Chat session",
+      sessionSearch: "جستجوی نشست‌ها",
+      clearSessionSearch: "پاک کردن جستجوی نشست",
+      loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1203,6 +1252,9 @@ export const fa: TranslationMap = {
       ascending: "صعودی",
       descending: "نزولی",
       reset: "بازنشانی",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "کار منطبقی وجود ندارد.",
       loading: "در حال بارگیری...",
       loadMore: "بارگیری کارهای بیشتر",
@@ -1238,6 +1290,7 @@ export const fa: TranslationMap = {
     form: {
       editJob: "ویرایش کار",
       newJob: "کار جدید",
+      advancedJob: "Advanced job",
       updateSubtitle: "کار زمان‌بندی‌شده انتخاب‌شده را به‌روزرسانی کنید.",
       createSubtitle: "یک بیدارباش زمان‌بندی‌شده یا اجرای عامل ایجاد کنید.",
       required: "ضروری",

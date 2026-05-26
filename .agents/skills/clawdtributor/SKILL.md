@@ -98,6 +98,8 @@ Do not close from title alone. If closing as done on main or nonsensical, prove 
 
 When asked for `5 new`, exclude refs already surfaced in the session and refill from the archive until there are 5 live-open candidates. If fewer than 5 remain open, list all open ones and say how many short.
 
+When asked to `update`, `refresh`, `recheck`, `check again`, or similar, return an updated live-open candidate list. Do not fill the main list with items that merely merged/closed since the last pass; put those numbers in a short bottom line.
+
 Prefer:
 
 - Fresh, open, external contributor work.
@@ -154,3 +156,4 @@ Rules:
 - Always include blast radius in one phrase.
 - Always include `verifiable: yes|partial|no` plus the shortest proof hint when helpful.
 - If status is not open, still show it only when the user asked for all surfaced refs; use ✅ or ⚪ and state merged/closed.
+- For refresh-style asks, bottom line: `Merged/closed since last pass: #81016 merged, #81026 closed.` Omit if none.

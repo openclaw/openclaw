@@ -359,6 +359,20 @@ describe("fetchWithSlackAuth", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("returns redirect response when location header is malformed", async () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { location: "http://[::1" },
+    });
+
+    mockFetch.mockResolvedValueOnce(redirectResponse);
+
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+
+    expect(result).toBe(redirectResponse);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 4xx/5xx responses directly without following", async () => {
     const errorResponse = new Response("Not Found", {
       status: 404,

@@ -17,6 +17,9 @@ export const pluginSdkDocMetadata = {
   core: {
     category: "core",
   },
+  health: {
+    category: "core",
+  },
   "approval-runtime": {
     category: "runtime",
   },
@@ -99,6 +102,9 @@ export const pluginSdkDocMetadata = {
     category: "runtime",
   },
   "speech-core": {
+    category: "provider",
+  },
+  "realtime-voice": {
     category: "provider",
   },
   "tts-runtime": {

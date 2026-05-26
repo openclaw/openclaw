@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { clearLoadPluginMetadataSnapshotMemo } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
@@ -157,6 +158,7 @@ async function expectStaleMetadataSnapshotRebuild(params: {
 
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     listPotentialConfiguredChannelIds
       .mockReset()
       .mockImplementation((config: OpenClawConfig) => Object.keys(config.channels ?? {}));
@@ -196,7 +198,7 @@ describe("loadPluginLookUpTable", () => {
             },
           },
         },
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         setup: {
           providers: [{ id: "openai" }],
         },
@@ -248,7 +250,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
-    expect(table.owners.cliBackends.get("codex-cli")).toEqual(["openai"]);
+    expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();
     expect(table.owners.setupProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);

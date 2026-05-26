@@ -3,13 +3,22 @@ import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type {
+  SessionContextBudgetStatus,
+  SessionSystemPromptReport,
+} from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
+import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
-import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../../pi-embedded-messaging.types.js";
 import type { ToolOutcomeObserver } from "../../pi-tools.before-tool-call.js";
+import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -23,12 +32,20 @@ type EmbeddedRunAttemptBase = Omit<
   "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
 >;
 
+export type EmbeddedRunContextWindowInfo = {
+  tokens: number;
+  referenceTokens?: number;
+  source: "model" | "modelsConfig" | "agentContextTokens" | "default";
+};
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Source metadata for the resolved model context budget. */
+  contextWindowInfo?: EmbeddedRunContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
@@ -41,12 +58,19 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Host-issued scope for harnesses that mirror native child runs into task state. */
+  agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   model: Model<Api>;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;
+  /**
+   * Full auth profile store for OpenClaw tool availability.
+   * Plugin-owned harnesses may scope `authProfileStore` to model transport credentials.
+   */
+  toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -92,13 +116,33 @@ export type EmbeddedRunAttemptResult = {
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  promptTimeoutOutcome?: {
+    message?: string;
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
+  };
+  codexAppServerFailure?: {
+    kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    transport: "stdio" | "websocket";
+    threadId?: string;
+    turnId?: string;
+    replaySafe: boolean;
+    replayBlockedReason?:
+      | "assistant_output"
+      | "tool_activity"
+      | "potential_side_effect"
+      | "active_item";
+  };
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
@@ -107,13 +151,16 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionTokensAfter?: number;
   /**
@@ -137,5 +184,7 @@ export type EmbeddedRunAttemptResult = {
     livenessState?: EmbeddedRunLivenessState;
     stopReason?: string;
     yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
   }) => void;
 };

@@ -1,6 +1,10 @@
 import path from "node:path";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
 export const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
@@ -20,32 +24,23 @@ function normalizeSelectionRef(value: string): string {
 }
 
 function readMigrationSkillName(item: MigrationItem): string | undefined {
-  const value = item.details?.skillName;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.skillName);
 }
 
 function readMigrationSkillSourceLabel(item: MigrationItem): string | undefined {
-  const value = item.details?.sourceLabel;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.sourceLabel);
 }
 
 function readMigrationPluginName(item: MigrationItem): string | undefined {
-  const value = item.details?.pluginName;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.pluginName);
 }
 
 function readMigrationPluginConfigKey(item: MigrationItem): string | undefined {
-  const value = item.details?.configKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.configKey);
 }
 
 function readMigrationPluginMarketplaceName(item: MigrationItem): string | undefined {
-  const value = item.details?.marketplaceName;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return normalizeOptionalString(item.details?.marketplaceName);
 }
 
 function migrationSkillRefs(item: MigrationItem): string[] {
@@ -253,33 +248,29 @@ export function formatMigrationSkillSelectionLabel(item: MigrationItem): string 
   return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
 }
 
-export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
-  const parts = [readMigrationSkillSourceLabel(item)];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+function humanizeMigrationConflictReason(reason: string | undefined): string {
+  if (!reason) {
+    return "conflict";
   }
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  return MIGRATION_CONFLICT_REASON_PHRASES[reason] ?? reason;
+}
+
+export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
+  if (item.status !== "conflict") {
+    return undefined;
+  }
+  const sourceLabel = readMigrationSkillSourceLabel(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return sourceLabel ? `${sourceLabel} ${reason}` : reason;
 }
 
 export function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined {
-  const pluginName = readMigrationPluginName(item);
-  const configKey = readMigrationPluginConfigKey(item);
-  const parts = [
-    readMigrationPluginMarketplaceName(item),
-    configKey && configKey !== pluginName ? `config: ${configKey}` : undefined,
-  ];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+  if (item.status !== "conflict") {
+    return undefined;
   }
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  const marketplace = readMigrationPluginMarketplaceName(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
 
 export function applyMigrationSelectedSkillItemIds(
@@ -502,7 +493,7 @@ export function reconcileInteractiveMigrationEnterValues(
     if (opts.preserveDeselectedActivatedValue && !selectedValues.includes(activatedValue)) {
       return selectedSelectableValues;
     }
-    return Array.from(new Set([...selectedSelectableValues, activatedValue]));
+    return uniqueStrings([...selectedSelectableValues, activatedValue]);
   }
   return [...selectedValues];
 }

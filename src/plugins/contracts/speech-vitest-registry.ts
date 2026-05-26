@@ -2,6 +2,7 @@ import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runt
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MusicGenerationProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -18,6 +19,11 @@ export type SpeechProviderContractEntry = {
 export type MediaUnderstandingProviderContractEntry = {
   pluginId: string;
   provider: MediaUnderstandingProviderPlugin;
+};
+
+export type TranscriptsSourceProviderContractEntry = {
+  pluginId: string;
+  provider: TranscriptSourceProvider;
 };
 
 export type RealtimeVoiceProviderContractEntry = {
@@ -49,6 +55,7 @@ type ManifestContractKey =
   | "imageGenerationProviders"
   | "speechProviders"
   | "mediaUnderstandingProviders"
+  | "transcriptSourceProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "videoGenerationProviders"
@@ -63,6 +70,9 @@ const VITEST_CONTRACT_PLUGIN_IDS = {
   ).map((entry) => entry.pluginId),
   mediaUnderstandingProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
     (entry) => entry.mediaUnderstandingProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  transcriptSourceProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.transcriptSourceProviderIds.length > 0,
   ).map((entry) => entry.pluginId),
   realtimeVoiceProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
     (entry) => entry.realtimeVoiceProviderIds.length > 0,
@@ -199,6 +209,18 @@ export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnd
     contract: "mediaUnderstandingProviders",
     pickEntries: (registry) =>
       registry.mediaUnderstandingProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
+export function loadVitestTranscriptsSourceProviderContractRegistry(): TranscriptsSourceProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "transcriptSourceProviders",
+    pluginSdkResolution: "src",
+    pickEntries: (registry) =>
+      registry.transcriptSourceProviders.map((entry) => ({
         pluginId: entry.pluginId,
         provider: entry.provider,
       })),

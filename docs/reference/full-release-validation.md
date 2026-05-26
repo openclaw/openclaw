@@ -38,13 +38,19 @@ beta publish, pass `release_package_spec=openclaw@YYYY.M.D-beta.N` to reuse the
 shipped npm package across release checks, Package Acceptance, cross-OS,
 release-path Docker, and package Telegram. Use `package_acceptance_package_spec`
 only when Package Acceptance should intentionally prove a different package.
+The Codex plugin live package lane follows the same state: published
+`release_package_spec` values derive `codex_plugin_spec=npm:@openclaw/codex@<version>`;
+SHA/artifact runs pack `extensions/codex` from the selected ref; and operators
+can set `codex_plugin_spec` directly for `npm:`, `npm-pack:`, or `git:` plugin
+sources. The lane grants the explicit Codex CLI install approval required by
+that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
 
 ## Top-level stages
 
 | Stage                | Details                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Target resolution    | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                               |
-| Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, channel contracts, Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                  |
+| Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.             |
 | Plugin prerelease    | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                          |
 | Release checks       | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram. With `run_release_soak=true` or `release_profile=full`, also runs exhaustive live/E2E suites and Docker release-path chunks.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle. |
 | Package artifact     | **Job:** `Prepare release package artifact`<br />**Child workflow:** none<br />**Proves:** creates the parent `release-package-under-test` tarball early enough for package-facing checks that do not need to wait for `OpenClaw Release Checks`.<br />**Rerun:** rerun the umbrella or provide `release_package_spec` for published-package reruns.                                                                                           |
@@ -81,15 +87,15 @@ or Docker-facing stages need it.
 The Docker release-path stage runs these chunks when `live_suite_filter` is
 empty:
 
-| Chunk                                                           | Coverage                                                                                          |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `core`                                                          | Core Docker release-path smoke lanes.                                                             |
-| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, and Chat Completions tool calls. |
-| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                    |
-| `package-update-core`                                           | Provider-neutral package and update behavior.                                                     |
-| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                               |
-| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes; includes OpenWebUI when requested.                  |
-| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                             |
+| Chunk                                                           | Coverage                                                                                                                   |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `core`                                                          | Core Docker release-path smoke lanes.                                                                                      |
+| `package-update-openai`                                         | OpenAI package install/update behavior, Codex on-demand install, Codex plugin live turns, and Chat Completions tool calls. |
+| `package-update-anthropic`                                      | Anthropic package install and update behavior.                                                                             |
+| `package-update-core`                                           | Provider-neutral package and update behavior.                                                                              |
+| `plugins-runtime-plugins`                                       | Plugin runtime lanes that exercise plugin behavior.                                                                        |
+| `plugins-runtime-services`                                      | Service-backed and live plugin runtime lanes; includes OpenWebUI when requested.                                           |
+| `plugins-runtime-install-a` through `plugins-runtime-install-h` | Plugin install/runtime batches split for parallel release validation.                                                      |
 
 Use targeted `docker_lanes=<lane[,lane]>` on the reusable live/E2E workflow when
 only one Docker lane failed. The release artifacts include per-lane rerun
@@ -166,9 +172,10 @@ summaries include per-phase timings for packaged upgrade lanes, and long-running
 commands print heartbeat lines so a stuck Windows update is visible before the
 job timeout.
 
-QA release-check lanes are advisory. A QA-only failure is reported as a warning
-and does not block the release-check verifier; rerun `rerun_group=qa`,
-`qa-parity`, or `qa-live` when you need fresh QA evidence.
+QA release-check lanes are advisory except the standard runtime tool coverage
+gate. Required OpenClaw dynamic tool drift in the standard tier blocks the
+release-check verifier; other QA-only failures are reported as warnings. Rerun
+`rerun_group=qa`, `qa-parity`, or `qa-live` when you need fresh QA evidence.
 
 ## Evidence to keep
 

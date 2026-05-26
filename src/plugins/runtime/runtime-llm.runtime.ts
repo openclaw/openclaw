@@ -1,10 +1,12 @@
 import type { Api, Message } from "@earendil-works/pi-ai";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
@@ -214,7 +216,7 @@ function buildUsage(params: {
 }
 
 function finiteOption(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function normalizeAllowedModelRef(raw: string): string | null {
@@ -235,7 +237,7 @@ function normalizeAllowedModelRef(raw: string): string | null {
     return null;
   }
   const normalized = normalizeModelRef(provider, model);
-  return `${normalized.provider}/${normalized.model}`;
+  return modelKey(normalized.provider, normalized.model);
 }
 
 function buildPolicyFromEntry(entry: {
@@ -402,7 +404,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
           ? normalizeModelRef(selection.provider, selection.modelId)
           : null;
         const resolvedModelRef = normalizedSelection
-          ? `${normalizedSelection.provider}/${normalizedSelection.model}`
+          ? modelKey(normalizedSelection.provider, normalizedSelection.model)
           : null;
         assertAllowedModelOverride({
           resolvedModelRef,

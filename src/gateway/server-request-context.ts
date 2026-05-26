@@ -39,6 +39,8 @@ type GatewayRequestContextParams = {
   chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
   chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
   chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
+  agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
+  bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -66,6 +68,11 @@ type GatewayRequestContextParams = {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {
+  const hasApprovalScope = (gatewayClient: GatewayClient): boolean => {
+    const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
+    return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+  };
+
   return {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -99,14 +106,30 @@ export function createGatewayRequestContext(
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
           continue;
         }
-        const scopes = Array.isArray(gatewayClient.connect.scopes)
-          ? gatewayClient.connect.scopes
-          : [];
-        if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
+        if (hasApprovalScope(gatewayClient)) {
           return true;
         }
       }
       return false;
+    },
+    getApprovalClientConnIds: (opts = {}) => {
+      const connIds = new Set<string>();
+      for (const gatewayClient of params.clients) {
+        if (!gatewayClient.connId) {
+          continue;
+        }
+        if (opts.excludeConnId && gatewayClient.connId === opts.excludeConnId) {
+          continue;
+        }
+        if (!hasApprovalScope(gatewayClient)) {
+          continue;
+        }
+        if (opts.filter && !opts.filter(gatewayClient, opts.record)) {
+          continue;
+        }
+        connIds.add(gatewayClient.connId);
+      }
+      return connIds;
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
       for (const gatewayClient of params.clients) {
@@ -136,6 +159,8 @@ export function createGatewayRequestContext(
     chatDeltaSentAt: params.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
+    agentDeltaSentAt: params.agentDeltaSentAt,
+    bufferedAgentEvents: params.bufferedAgentEvents,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,

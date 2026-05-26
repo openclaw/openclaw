@@ -2,20 +2,23 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function cloneInstallRecords(
   records: Record<string, PluginInstallRecord> | undefined,
 ): Record<string, PluginInstallRecord> {
-  return structuredClone(records ?? {});
+  return readRecordMap(records) ?? {};
+}
+
+const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isSafeRecordKey(key: string): boolean {
+  return !BLOCKED_RECORD_KEYS.has(key);
 }
 
 function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | null {
@@ -26,6 +29,9 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
   for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    if (!isSafeRecordKey(pluginId)) {
+      continue;
+    }
     if (isRecord(record) && typeof record.source === "string") {
       records[pluginId] = structuredClone(record) as PluginInstallRecord;
     }
@@ -46,6 +52,9 @@ function readStringRecord(value: unknown): Record<string, string> {
   for (const [key, raw] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    if (!isSafeRecordKey(key)) {
+      continue;
+    }
     if (typeof raw === "string" && raw.trim()) {
       record[key] = raw.trim();
     }
@@ -68,6 +77,12 @@ function readManifestPluginId(packageDir: string): string | undefined {
   return id || undefined;
 }
 
+function resolveRecoveredManagedNpmRoot(options: InstalledPluginIndexStoreOptions = {}): string {
+  return path.resolve(
+    options.stateDir ? path.join(options.stateDir, "npm") : resolveDefaultPluginNpmDir(options.env),
+  );
+}
+
 function resolveRecoveredManagedNpmPluginId(params: {
   packageName: string;
   packageDir: string;
@@ -87,9 +102,7 @@ function resolveRecoveredManagedNpmPluginId(params: {
 function buildRecoveredManagedNpmInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
-  const npmRoot = options.stateDir
-    ? path.join(options.stateDir, "npm")
-    : resolveDefaultPluginNpmDir(options.env);
+  const npmRoot = resolveRecoveredManagedNpmRoot(options);
   const rootManifest = readJsonObjectFileSync(path.join(npmRoot, "package.json"));
   const dependencies = readStringRecord(rootManifest?.dependencies);
   const records: Record<string, PluginInstallRecord> = {};
@@ -124,14 +137,58 @@ function buildRecoveredManagedNpmInstallRecords(
   return records;
 }
 
+function recordsShareInstallPath(
+  left: PluginInstallRecord | undefined,
+  right: PluginInstallRecord,
+): boolean {
+  if (!left?.installPath || !right.installPath) {
+    return false;
+  }
+  return path.resolve(left.installPath) === path.resolve(right.installPath);
+}
+
+function readInstallRecordVersion(record: PluginInstallRecord | undefined): string | undefined {
+  return record?.resolvedVersion ?? record?.version;
+}
+
+function mergeRecoveredManagedNpmRecord(params: {
+  persisted: PluginInstallRecord | undefined;
+  recovered: PluginInstallRecord;
+}): PluginInstallRecord {
+  const persistedVersion = readInstallRecordVersion(params.persisted);
+  const recoveredVersion = readInstallRecordVersion(params.recovered);
+  if (
+    params.persisted?.source === "npm" &&
+    recordsShareInstallPath(params.persisted, params.recovered) &&
+    recoveredVersion &&
+    persistedVersion !== recoveredVersion
+  ) {
+    const next: PluginInstallRecord = {
+      ...params.persisted,
+      ...params.recovered,
+    };
+    delete next.integrity;
+    delete next.shasum;
+    delete next.resolvedAt;
+    delete next.installedAt;
+    return next;
+  }
+  return params.persisted ?? params.recovered;
+}
+
 function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
-  return {
-    ...buildRecoveredManagedNpmInstallRecords(options),
-    ...persisted,
-  };
+  const recovered = buildRecoveredManagedNpmInstallRecords(options);
+  const merged: Record<string, PluginInstallRecord> = { ...persisted };
+  for (const [pluginId, record] of Object.entries(recovered)) {
+    merged[pluginId] = mergeRecoveredManagedNpmRecord({
+      persisted: merged[pluginId],
+      recovered: record,
+    });
+  }
+  return merged;
 }
 
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
@@ -149,6 +206,9 @@ function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   const records: Record<string, PluginInstallRecord> = {};
   for (const entry of index.plugins) {
     if (!isRecord(entry) || typeof entry.pluginId !== "string" || !isRecord(entry.installRecord)) {
+      continue;
+    }
+    if (!isSafeRecordKey(entry.pluginId)) {
       continue;
     }
     records[entry.pluginId] = structuredClone(entry.installRecord) as PluginInstallRecord;
@@ -170,24 +230,90 @@ export function readPersistedInstalledPluginIndexInstallRecordsSync(
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 
+type InstallRecordsCacheEntry = {
+  records: Record<string, PluginInstallRecord>;
+  signature: string;
+};
+
+const installRecordsCache = new Map<string, InstallRecordsCacheEntry>();
+
+function readFileSignature(filePath: string): string {
+  try {
+    const stat = fs.statSync(filePath);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+function resolveInstallRecordsCacheKey(options: InstalledPluginIndexStoreOptions): string {
+  return [
+    path.resolve(resolveInstalledPluginIndexStorePath(options)),
+    resolveRecoveredManagedNpmRoot(options),
+  ].join("\0");
+}
+
+function resolveManagedNpmInstallSignature(options: InstalledPluginIndexStoreOptions): string {
+  const npmRoot = resolveRecoveredManagedNpmRoot(options);
+  const rootManifestPath = path.join(npmRoot, "package.json");
+  const rootManifest = readJsonObjectFileSync(rootManifestPath);
+  const dependencies = readStringRecord(rootManifest?.dependencies);
+  const packageSignatures = Object.keys(dependencies).map((packageName) => {
+    const packageDir = path.join(npmRoot, "node_modules", packageName);
+    return [
+      packageName,
+      readFileSignature(path.join(packageDir, "package.json")),
+      readFileSignature(path.join(packageDir, "openclaw.plugin.json")),
+    ].join(":");
+  });
+  return [readFileSignature(rootManifestPath), ...packageSignatures].join("\0");
+}
+
+function resolveInstallRecordsCacheSignature(options: InstalledPluginIndexStoreOptions): string {
+  return [
+    readFileSignature(path.resolve(resolveInstalledPluginIndexStorePath(options))),
+    resolveManagedNpmInstallSignature(options),
+  ].join("\0");
+}
+
+export function clearLoadInstalledPluginIndexInstallRecordsCache(): void {
+  installRecordsCache.clear();
+}
+
 export async function loadInstalledPluginIndexInstallRecords(
   params: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord>> {
-  return cloneInstallRecords(
+  const cacheKey = resolveInstallRecordsCacheKey(params);
+  const signature = resolveInstallRecordsCacheSignature(params);
+  const cached = installRecordsCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    return cloneInstallRecords(cached.records);
+  }
+  const records = cloneInstallRecords(
     mergeRecoveredManagedNpmInstallRecords(
       await readPersistedInstalledPluginIndexInstallRecords(params),
       params,
     ),
   );
+  installRecordsCache.set(cacheKey, { records, signature });
+  return cloneInstallRecords(records);
 }
 
 export function loadInstalledPluginIndexInstallRecordsSync(
   params: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
-  return cloneInstallRecords(
+  const cacheKey = resolveInstallRecordsCacheKey(params);
+  const signature = resolveInstallRecordsCacheSignature(params);
+  const cached = installRecordsCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    return cloneInstallRecords(cached.records);
+  }
+  const records = cloneInstallRecords(
     mergeRecoveredManagedNpmInstallRecords(
       readPersistedInstalledPluginIndexInstallRecordsSync(params),
       params,
     ),
   );
+  installRecordsCache.set(cacheKey, { records, signature });
+  return cloneInstallRecords(records);
 }

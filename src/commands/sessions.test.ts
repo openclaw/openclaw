@@ -14,7 +14,7 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand, __testing } from "./sessions.js";
+import { sessionsCommand, testing } from "./sessions.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -49,7 +49,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toBe(
-      "direct +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
+      "direct      +15555550123               45m ago   pi:opus        OpenAI Codex       2.0k/32k (6%)        id:abc123",
     );
   });
 
@@ -86,7 +86,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
     );
   });
 
@@ -121,7 +121,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
     );
   });
 
@@ -141,7 +141,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
-      "group  quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
+      "group       quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
     );
   });
 
@@ -228,8 +228,36 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
+  it("exports runtime policy aliases for collapsed external direct sessions", async () => {
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "telegram-main",
+          updatedAt: Date.now() - 60_000,
+          origin: {
+            provider: "telegram",
+            chatType: "direct",
+            to: "telegram:42",
+            accountId: "default",
+          },
+        },
+      },
+      "sessions-runtime-policy-alias",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        runtimePolicySessionKey?: string;
+      }>;
+    }>(sessionsCommand, store, { active: "10" });
+
+    const main = payload.sessions?.find((row) => row.key === "agent:main:main");
+    expect(main?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:42");
+  });
+
   it("uses a default JSON output limit of 100 sessions", () => {
-    expect(__testing.parseSessionsLimit(undefined)).toBe(100);
+    expect(testing.parseSessionsLimit(undefined)).toBe(100);
   });
 
   it("honors explicit JSON output limits", async () => {

@@ -12,7 +12,9 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import { buildCodexAuthItems } from "./auth.js";
 import { exists, sanitizeName } from "./helpers.js";
 import {
   codexPluginMigrationSubscriptionWarning,
@@ -260,11 +262,7 @@ function readExistingAllowDestructiveActions(
     ...CODEX_PLUGIN_NATIVE_CONFIG_PATH,
     "allow_destructive_actions",
   ]);
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return asBoolean(value);
 }
 
 export function buildCodexPluginsConfigValue(
@@ -396,6 +394,7 @@ export async function buildCodexMigrationPlan(
     );
   }
   const items: MigrationItem[] = [];
+  items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
   items.push(
     ...(await buildSkillItems({
       skills: source.skills,
@@ -424,25 +423,15 @@ export async function buildCodexMigrationPlan(
     );
   }
   const warnings = [
+    ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
+      ? [
+          "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
+        ]
+      : []),
     ...(items.some((item) => item.status === "conflict")
       ? [
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
         ]
-      : []),
-    ...(source.plugins.some((plugin) => plugin.migratable)
-      ? [
-          "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
-        ]
-      : []),
-    ...(source.plugins.some(
-      (plugin) => plugin.migratable && plugin.apps && plugin.apps.length > 0,
-    ) && !shouldVerifyPluginApps(ctx)
-      ? [
-          "Codex app-backed plugins were planned without source app accessibility verification. Re-run with --verify-plugin-apps to force a fresh source app/list check before planning native plugin activation.",
-        ]
-      : []),
-    ...(source.plugins.some((plugin) => plugin.sourceKind === "cache")
-      ? ["Codex cached plugin bundles remain manual-review only."]
       : []),
     ...(source.pluginDiscoveryError
       ? [
@@ -453,11 +442,6 @@ export async function buildCodexMigrationPlan(
       (plugin) => plugin.migrationBlock?.code === "codex_subscription_required",
     )
       ? [codexPluginMigrationSubscriptionWarning()]
-      : []),
-    ...(source.archivePaths.length > 0
-      ? [
-          "Codex config and hook files are archive-only. They are preserved in the migration report, not loaded into OpenClaw automatically.",
-        ]
       : []),
   ];
   return {

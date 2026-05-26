@@ -11,7 +11,11 @@ import {
 } from "./context-notice.ts";
 import { renderChatRunControls, type ChatRunControlsProps } from "./run-controls.ts";
 import { renderSideResult } from "./side-result-render.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "./status-indicators.ts";
+import {
+  renderChatRunStatusIndicator,
+  renderCompactionIndicator,
+  renderFallbackIndicator,
+} from "./status-indicators.ts";
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -97,11 +101,13 @@ describe("chat run controls", () => {
 
     const newSessionButton = getButton(container, 'button[title="New session"]');
     expect(newSessionButton.title).toBe("New session");
+    expect(newSessionButton.textContent).toContain("New session");
     newSessionButton.click();
     expect(onNewSession).toHaveBeenCalledTimes(1);
 
     const sendButton = getButton(container, 'button[title="Send"]');
     expect(sendButton.title).toBe("Send");
+    expect(sendButton.textContent).toContain("Send");
     sendButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" run this ");
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -156,14 +162,70 @@ describe("chat run controls", () => {
     const container = document.createElement("div");
     render(renderChatRunControls(createProps({ hasMessages: true })), container);
 
-    getButton(container, `button[title="${t("chat.runControls.newSession")}"]`);
-    getButton(container, `button[title="${t("chat.runControls.export")}"]`);
-    getButton(container, `button[title="${t("chat.runControls.send")}"]`);
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.newSession")}"]`).textContent,
+    ).toContain(t("chat.runControls.newSession"));
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.export")}"]`).textContent,
+    ).toContain(t("chat.runControls.export"));
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.send")}"]`).textContent,
+    ).toContain(t("chat.runControls.send"));
     expect(container.querySelector('button[title="New session"]')).toBeNull();
   });
 });
 
 describe("chat status indicators", () => {
+  it("renders compact composer run statuses", () => {
+    const container = document.createElement("div");
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      nowSpy.mockReturnValue(1_000);
+      render(renderChatRunStatusIndicator({ phase: "in-progress" }), container);
+      let indicator = container.querySelector(".agent-chat__run-status--in-progress");
+      expect(indicator?.textContent).toContain("In progress");
+      expect(indicator?.getAttribute("aria-label")).toBe("Run status: In progress");
+
+      render(
+        renderChatRunStatusIndicator({
+          phase: "done",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 900,
+        }),
+        container,
+      );
+      indicator = container.querySelector(".agent-chat__run-status--done");
+      expect(indicator?.textContent).toContain("Done");
+
+      render(
+        renderChatRunStatusIndicator({
+          phase: "interrupted",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 900,
+        }),
+        container,
+      );
+      indicator = container.querySelector(".agent-chat__run-status--interrupted");
+      expect(indicator?.textContent).toContain("Interrupted");
+
+      nowSpy.mockReturnValue(7_000);
+      render(
+        renderChatRunStatusIndicator({
+          phase: "done",
+          runId: "run-1",
+          sessionKey: "main",
+          occurredAt: 1_000,
+        }),
+        container,
+      );
+      expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("renders compaction and fallback indicators while they are fresh", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");

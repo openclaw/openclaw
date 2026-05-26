@@ -3,12 +3,26 @@
 # Shared helpers for Docker E2E scripts that keep a named container running
 # while polling readiness from the host.
 
-docker_e2e_docker_cmd() {
+docker_e2e_timeout_cmd() {
+  local timeout_value="$1"
+  shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout "${DOCKER_COMMAND_TIMEOUT:-600s}" docker "$@"
+    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+      timeout --kill-after=30s "$timeout_value" "$@"
+    else
+      timeout "$timeout_value" "$@"
+    fi
     return
   fi
-  docker "$@"
+  "$@"
+}
+
+docker_e2e_docker_cmd() {
+  docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-600s}" docker "$@"
+}
+
+docker_e2e_docker_run_cmd() {
+  docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
 }
 
 docker_e2e_container_running() {

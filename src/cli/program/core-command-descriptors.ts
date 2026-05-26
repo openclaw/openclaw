@@ -69,6 +69,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "mcp",
     description: "Manage OpenClaw MCP config and channel bridge",
     hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
+    name: "transcripts",
+    description: "Inspect stored transcripts",
+    hasSubcommands: true,
   },
   {
     name: "agent",
@@ -119,4 +125,8 @@ export function getCoreCliCommandNames(): string[] {
 
 export function getCoreCliCommandsWithSubcommands(): string[] {
   return coreCliCommandCatalog.getCommandsWithSubcommands();
+}
+
+export function getCoreCliParentDefaultHelpCommands(): string[] {
+  return coreCliCommandCatalog.getParentDefaultHelpCommands();
 }

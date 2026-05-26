@@ -30,6 +30,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -775,6 +776,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         deviceFamily: approvedNode.deviceFamily,
         caps: approvedNode.caps,
         commands: approvedNode.commands,
+        approvedCommands: approvedNode.commands,
       });
       const currentAllowedCommands = normalizeDeclaredNodeCommands({
         declaredCommands: approvedNode.commands ?? [],
@@ -1029,11 +1031,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
-    const ackIds = Array.from(
-      new Set(
-        (params.ids ?? []).map((value) => normalizeOptionalString(value) ?? "").filter(Boolean),
-      ),
-    );
+    const ackIds = normalizeUniqueTrimmedStringList(params.ids);
     const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
     respond(
       true,
@@ -1179,7 +1177,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
-      const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
+      const allowlist = resolveNodeCommandAllowlist(cfg, {
+        ...nodeSession,
+        approvedCommands: nodeSession.commands,
+      });
       const allowed = isNodeCommandAllowed({
         command,
         declaredCommands: nodeSession.commands,

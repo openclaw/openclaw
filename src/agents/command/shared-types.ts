@@ -5,6 +5,10 @@ export type AgentStreamParams = {
   maxTokens?: number;
   /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;
+  responseFormat?: Record<string, unknown>;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
 };
 
 // Simplified tool definition for client-provided tools (OpenResponses hosted tools)

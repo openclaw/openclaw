@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -307,6 +308,10 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
     );
   });
 
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   for (const testCase of CASES) {
     it(`routes ${testCase.name} text-only announce delivery through the outbound adapter`, async () => {
       await expectCoreChannelAnnounceDelivery({
@@ -326,6 +331,51 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
     });
 
     if (testCase.channel === "discord") {
+      it("keeps isolated Discord delivery on the active runtime snapshot after agent-default derivation", async () => {
+        await withTempCronHome(async (home) => {
+          const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+          const sourceCfg = makeCfg(home, storePath, {
+            channels: {
+              discord: {
+                accounts: {
+                  default: {
+                    token: { provider: "default", source: "env", id: "DISCORD_BOT_TOKEN" },
+                  },
+                },
+              },
+            },
+          });
+          const runtimeCfg = makeCfg(home, storePath, {
+            channels: {
+              discord: {
+                accounts: { default: { token: "resolved-discord-token" } },
+              },
+            },
+          });
+          setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
+          const deps = createCliDeps();
+          mockAgentPayloads([{ text: "hello from cron" }]);
+
+          const res = await runExplicitAnnounceTurn({
+            cfg: sourceCfg,
+            deps,
+            channel: "discord",
+            to: testCase.to,
+          });
+
+          expect(res.status).toBe("ok");
+          expect(res.delivered).toBe(true);
+          expect(deps.sendMessageDiscord).toHaveBeenCalledTimes(1);
+          expect(deps.sendMessageDiscord).toHaveBeenCalledWith(
+            testCase.expectedTo,
+            "hello from cron",
+            expect.objectContaining({
+              cfg: expect.objectContaining({ channels: runtimeCfg.channels }),
+            }),
+          );
+        });
+      });
+
       it("collapses Discord text-only announce delivery to the final assistant text", async () => {
         await expectCoreChannelAnnounceDelivery({
           testCase,
@@ -387,7 +437,6 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
 
 describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     setupIsolatedAgentTurnMocks();
   });
 
@@ -418,12 +467,10 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
         );
         expect(entry).toMatchObject({
           lastChannel: "telegram",
-          lastTo: "-1003774691294",
           lastThreadId: 47,
           chatType: "group",
           deliveryContext: {
             channel: "telegram",
-            to: "-1003774691294",
             threadId: 47,
           },
         });

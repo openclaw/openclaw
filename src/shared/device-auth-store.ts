@@ -4,12 +4,46 @@ import {
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "./device-auth.js";
+import { isRecord } from "./record-coerce.js";
 export type { DeviceAuthEntry, DeviceAuthStore } from "./device-auth.js";
 
 export type DeviceAuthStoreAdapter = {
   readStore: () => DeviceAuthStore | null;
   writeStore: (store: DeviceAuthStore) => void;
 };
+
+function coerceDeviceAuthEntry(role: string, value: unknown): DeviceAuthEntry | null {
+  if (!isRecord(value) || typeof value.token !== "string") {
+    return null;
+  }
+  const updatedAtMs =
+    typeof value.updatedAtMs === "number" && Number.isFinite(value.updatedAtMs)
+      ? value.updatedAtMs
+      : 0;
+  return {
+    token: value.token,
+    role,
+    scopes: normalizeDeviceAuthScopes(Array.isArray(value.scopes) ? value.scopes : undefined),
+    updatedAtMs,
+  };
+}
+
+function copyCanonicalDeviceAuthTokens(
+  tokens: Record<string, unknown>,
+): Record<string, DeviceAuthEntry> {
+  const out: Record<string, DeviceAuthEntry> = {};
+  for (const [rawRole, value] of Object.entries(tokens)) {
+    const role = normalizeDeviceAuthRole(rawRole);
+    if (!role) {
+      continue;
+    }
+    const entry = coerceDeviceAuthEntry(role, value);
+    if (entry) {
+      out[role] = entry;
+    }
+  }
+  return out;
+}
 
 export function loadDeviceAuthTokenFromStore(params: {
   adapter: DeviceAuthStoreAdapter;
@@ -21,11 +55,7 @@ export function loadDeviceAuthTokenFromStore(params: {
     return null;
   }
   const role = normalizeDeviceAuthRole(params.role);
-  const entry = store.tokens[role];
-  if (!entry || typeof entry.token !== "string") {
-    return null;
-  }
-  return entry;
+  return coerceDeviceAuthEntry(role, store.tokens[role]);
 }
 
 export function storeDeviceAuthTokenInStore(params: {
@@ -42,7 +72,7 @@ export function storeDeviceAuthTokenInStore(params: {
     deviceId: params.deviceId,
     tokens:
       existing && existing.deviceId === params.deviceId && existing.tokens
-        ? { ...existing.tokens }
+        ? copyCanonicalDeviceAuthTokens(existing.tokens)
         : {},
   };
   const entry: DeviceAuthEntry = {
@@ -72,7 +102,7 @@ export function clearDeviceAuthTokenFromStore(params: {
   const next: DeviceAuthStore = {
     version: 1,
     deviceId: store.deviceId,
-    tokens: { ...store.tokens },
+    tokens: copyCanonicalDeviceAuthTokens(store.tokens),
   };
   delete next.tokens[role];
   params.adapter.writeStore(next);

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import { resolvePluginInstallDir } from "./install.js";
 import {
   cleanupTrackedTempDirsAsync,
@@ -375,7 +376,7 @@ describe("removePluginFromConfig", () => {
       const pluginDir = path.join(tempDir, "plugins", "demo");
       await fs.mkdir(pluginDir, { recursive: true });
       const realPluginDir = await fs.realpath(pluginDir);
-      const sourcePath = `./${path.relative(process.cwd(), realPluginDir).split(path.sep).join("/")}`;
+      const sourcePath = `./${toRepoRelativePath(process.cwd(), realPluginDir)}`;
       const config = createPluginConfig({
         installs: {
           "my-plugin": createPathInstallRecord(undefined, sourcePath),
@@ -1125,7 +1126,7 @@ describe("uninstallPlugin", () => {
       path.join(runtimePeerDir, "package.json"),
       `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
     );
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[], options?: unknown) => {
       if (argv[1] === "uninstall") {
         expect(argv).toContain("--legacy-peer-deps");
         await fs.rm(removedPluginDir, { recursive: true, force: true });
@@ -1136,6 +1137,22 @@ describe("uninstallPlugin", () => {
         await fs.writeFile(
           path.join(npmRoot, "package.json"),
           `${JSON.stringify(rootManifest, null, 2)}\n`,
+        );
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[1] === "install" && argv.includes("--package-lock-only")) {
+        const cwd = (options as { cwd?: string } | undefined)?.cwd;
+        expect(cwd).toBeTruthy();
+        await fs.writeFile(
+          path.join(cwd as string, "package-lock.json"),
+          `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
         );
         return {
           code: 0,
@@ -1183,7 +1200,7 @@ describe("uninstallPlugin", () => {
     expect(rootManifest.dependencies?.["removed-plugin"]).toBeUndefined();
     expect(rootManifest.dependencies?.["runtime-peer"]).toBeUndefined();
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain("runtime-peer");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
   });
 
   it("runs npm cleanup when the managed package directory is already absent", async () => {
@@ -1192,7 +1209,7 @@ describe("uninstallPlugin", () => {
     const pluginDir = path.join(npmRoot, "node_modules", "missing-plugin");
     const peerPluginDir = path.join(npmRoot, "node_modules", "peer-plugin");
     const peerLink = path.join(peerPluginDir, "node_modules", "openclaw");
-    await fs.mkdir(peerLink, { recursive: true });
+    await fs.mkdir(path.dirname(peerLink), { recursive: true });
     await fs.writeFile(
       path.join(npmRoot, "package.json"),
       `${JSON.stringify(

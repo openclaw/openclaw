@@ -7,6 +7,7 @@ const {
   loadChatHistoryMock,
   createSessionAndRefreshMock,
   loadSessionsMock,
+  syncSelectedSessionMessageSubscriptionMock,
 } = vi.hoisted(() => ({
   refreshChatMock: vi.fn(),
   refreshChatAvatarMock: vi.fn(),
@@ -14,11 +15,19 @@ const {
   loadChatHistoryMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
   loadSessionsMock: vi.fn(),
+  syncSelectedSessionMessageSubscriptionMock: vi.fn(),
 }));
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 120,
-  CHAT_SESSIONS_REFRESH_LIMIT: 100,
+  CHAT_SESSIONS_REFRESH_LIMIT: 50,
+  createChatSessionsLoadOverrides: () => ({
+    activeMinutes: 120,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: true,
+    showArchived: false,
+  }),
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -34,6 +43,7 @@ vi.mock("./controllers/chat.ts", () => ({
 vi.mock("./controllers/sessions.ts", () => ({
   createSessionAndRefresh: createSessionAndRefreshMock,
   loadSessions: loadSessionsMock,
+  syncSelectedSessionMessageSubscription: syncSelectedSessionMessageSubscriptionMock,
 }));
 
 import {
@@ -60,6 +70,7 @@ beforeEach(() => {
   loadChatHistoryMock.mockReset();
   createSessionAndRefreshMock.mockReset();
   loadSessionsMock.mockReset();
+  syncSelectedSessionMessageSubscriptionMock.mockReset();
 });
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
@@ -534,10 +545,12 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).toEqual(["Subagent: cron-config-check"]);
   });
 
-  it("does not synthesize active grouped sessions without a listed row", () => {
+  it("keeps the active subagent session visible when no row exists yet", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
+    expect(labelsForSessionOptions({ sessionKey })).toEqual([
+      "subagent:4f2146de-887b-4176-9abe-91140082959b",
+    ]);
     expect(
       labelsForSessionOptions({
         sessionKey,
@@ -550,7 +563,7 @@ describe("resolveSessionOptionGroups", () => {
     expect(labelsForSessionOptions({ sessionKey: "agent:main:main" })).toEqual(["main"]);
   });
 
-  it("disambiguates duplicate grouped labels with scoped suffixes", () => {
+  it("hides inactive subagent sessions from the picker", () => {
     const labels = labelsForSessionOptions({
       sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
       sessions: [
@@ -565,10 +578,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toEqual([
-      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
-      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-    ]);
+    expect(labels).toEqual(["Subagent: cron-config-check"]);
   });
 
   it("filters the chat session options to the active agent", () => {
@@ -640,7 +650,7 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).toEqual(["Beta main"]);
   });
 
-  it("nests subagent sessions under their parent with visual prefix", () => {
+  it("hides spawned subagent sessions under their parent", () => {
     const parentKey = "agent:main:main";
     const subagentKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
     const labels = labelsForSessionOptions({
@@ -651,24 +661,24 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toEqual(["Spock", "└─ PLC Coder"]);
+    expect(labels).toEqual(["Spock"]);
   });
 
-  it("uses raw key fallback for subagent without label when nested", () => {
+  it("keeps the active subagent session visible without nesting it", () => {
     const parentKey = "agent:main:main";
     const subagentKey = "agent:main:subagent:f4ac7ef1-1234-5678-9abc-def012345678";
     const labels = labelsForSessionOptions({
-      sessionKey: parentKey,
+      sessionKey: subagentKey,
       sessions: [
         row({ key: parentKey, label: "Spock" }),
-        row({ key: subagentKey, spawnedBy: parentKey }),
+        row({ key: subagentKey, label: "PLC Coder", spawnedBy: parentKey }),
       ],
     });
 
-    expect(labels).toEqual(["Spock", "└─ f4ac7ef1-1234-5678-9abc-def012345678"]);
+    expect(labels).toEqual(["Spock", "Subagent: PLC Coder"]);
   });
 
-  it("preserves sibling row order when nesting subagent sessions", () => {
+  it("hides spawned subagent siblings regardless of row order", () => {
     const parentKey = "agent:main:main";
     const newerSubagentKey = "agent:main:subagent:newer";
     const olderSubagentKey = "agent:main:subagent:older";
@@ -681,7 +691,7 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels).toEqual(["Spock", "└─ Newer", "└─ Older"]);
+    expect(labels).toEqual(["Spock"]);
   });
 });
 
@@ -772,11 +782,10 @@ describe("createChatSession", () => {
       },
       {
         activeMinutes: 120,
-        limit: 100,
+        limit: 50,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
-        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -972,13 +981,13 @@ describe("switchChatSession", () => {
       agentId: "main",
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(syncSelectedSessionMessageSubscriptionMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 120,
-      limit: 100,
+      limit: 50,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
-      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })

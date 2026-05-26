@@ -150,4 +150,62 @@ describe("buildDiscordInteractiveComponents", () => {
       ],
     });
   });
+
+  it("preserves disabled presentation buttons for Discord components", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Already handled", value: "done", disabled: true },
+              { label: "Open docs", url: "https://example.com/docs", disabled: true },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Already handled",
+              style: "secondary",
+              callbackData: "done",
+              disabled: true,
+            },
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves reusable presentation buttons for Discord action entries", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Refresh", value: "refresh", reusable: true }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "Refresh", style: "secondary", callbackData: "refresh", reusable: true },
+          ],
+        },
+      ],
+    });
+  });
 });

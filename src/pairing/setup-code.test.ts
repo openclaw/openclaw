@@ -91,8 +91,8 @@ describe("pairing setup code", () => {
     expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
       profile: {
-        roles: ["node"],
-        scopes: [],
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     });
     if (params.url) {
@@ -547,6 +547,28 @@ describe("pairing setup code", () => {
         authLabel: "password",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=lan",
+      },
+    });
+  });
+
+  it("allows tailnet bind setup urls when gateway TLS is enabled", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "tailnet",
+          tls: {
+            enabled: true,
+          },
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("100.64.0.9"),
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "wss://100.64.0.9:18789",
+        urlSource: "gateway.bind=tailnet",
       },
     });
   });

@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { writeConfigFile } from "../config/config.js";
 import {
   deriveDeviceIdFromPublicKey,
   type DeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -175,6 +175,14 @@ describe("node.invoke approval bypass", () => {
   let port: number;
 
   beforeAll(async () => {
+    await writeConfigFile({
+      gateway: {
+        nodes: {
+          pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
+          allowCommands: ["system.run", "system.run.prepare", "system.which"],
+        },
+      },
+    });
     const started = await startServerWithClient("secret", {
       controlUiEnabled: true,
     });
@@ -189,12 +197,35 @@ describe("node.invoke approval bypass", () => {
 
   const approveAllPendingPairings = async () => {
     const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
-    const list = await listDevicePairing();
-    for (const pending of list.pending) {
+    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const deviceList = await listDevicePairing();
+    for (const pending of deviceList.pending) {
       await approveDevicePairing(pending.requestId, {
         callerScopes: pending.scopes ?? ["operator.admin"],
       });
     }
+    const nodeList = await listNodePairing();
+    for (const pending of nodeList.pending) {
+      await approveNodePairing(pending.requestId, {
+        callerScopes: ["operator.admin"],
+      });
+    }
+  };
+
+  const approvePendingNodePairings = async (nodeId: string) => {
+    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const list = await listNodePairing();
+    let approved = false;
+    for (const pending of list.pending) {
+      if (pending.nodeId !== nodeId) {
+        continue;
+      }
+      const result = await approveNodePairing(pending.requestId, {
+        callerScopes: ["operator.pairing", "operator.write", "operator.admin"],
+      });
+      approved ||= Boolean(result && "node" in result);
+    }
+    return approved;
   };
 
   const connectOperatorWithRetry = async (
@@ -297,86 +328,87 @@ describe("node.invoke approval bypass", () => {
     });
   };
 
-  const connectTestNode = async (
+  const connectLinuxNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
   ) => {
-    let readyResolve: (() => void) | null = null;
-    const ready = new Promise<void>((resolve) => {
-      readyResolve = resolve;
-    });
-
     const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
-    const pairing = await requestNodePairing({
-      nodeId: resolvedDeviceIdentity.deviceId,
-      displayName: "test node",
-      platform: "Windows_NT",
-      commands,
-    });
-    await approveNodePairing(pairing.request.requestId, {
-      callerScopes: ["operator.pairing", "operator.admin", "operator.write"],
-    });
-    const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
-      // trigger reconnect backoff loops under load.
-      connectChallengeTimeoutMs: 2_000,
-      token: "secret",
-      role: "node",
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      clientVersion: "1.0.0",
-      platform: "Windows_NT",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      scopes: [],
-      commands,
-      deviceIdentity: resolvedDeviceIdentity,
-      onHelloOk: () => readyResolve?.(),
-      onEvent: (evt) => {
-        if (evt.event !== "node.invoke.request") {
-          return;
+
+    const startNodeClient = async () => {
+      let readyResolve: (() => void) | null = null;
+      const ready = new Promise<void>((resolve) => {
+        readyResolve = resolve;
+      });
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
+        // trigger reconnect backoff loops under load.
+        connectChallengeTimeoutMs: 2_000,
+        token: "secret",
+        role: "node",
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientVersion: "1.0.0",
+        platform: "linux",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        scopes: [],
+        caps: ["system"],
+        commands,
+        deviceIdentity: resolvedDeviceIdentity,
+        onHelloOk: () => readyResolve?.(),
+        onEvent: (evt) => {
+          if (evt.event !== "node.invoke.request") {
+            return;
+          }
+          onInvoke(evt.payload);
+          const payload = evt.payload as {
+            id?: string;
+            nodeId?: string;
+          };
+          const id = typeof payload?.id === "string" ? payload.id : "";
+          const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
+          if (!id || !nodeId) {
+            return;
+          }
+          void client.request("node.invoke.result", {
+            id,
+            nodeId,
+            ok: true,
+            payloadJSON: JSON.stringify({ ok: true }),
+          });
+        },
+      });
+      client.start();
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          ready,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("timeout waiting for node to connect")),
+              NODE_CONNECT_TIMEOUT_MS,
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
         }
-        onInvoke(evt.payload);
-        const payload = evt.payload as {
-          id?: string;
-          nodeId?: string;
-        };
-        const id = typeof payload?.id === "string" ? payload.id : "";
-        const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
-        if (!id || !nodeId) {
-          return;
-        }
-        void client.request("node.invoke.result", {
-          id,
-          nodeId,
-          ok: true,
-          payloadJSON: JSON.stringify({ ok: true }),
-        });
-      },
-    });
-    client.start();
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        ready,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("timeout waiting for node to connect")),
-            NODE_CONNECT_TIMEOUT_MS,
-          );
-        }),
-      ]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
       }
+      return client;
+    };
+
+    let client = await startNodeClient();
+    if (await approvePendingNodePairings(resolvedDeviceIdentity.deviceId)) {
+      client.stop();
+      client = await startNodeClient();
     }
     return client;
   };
 
   test("rejects malformed/forbidden node.invoke payloads before forwarding", async () => {
     let sawInvoke = false;
-    const node = await connectTestNode(() => {
+    const node = await connectLinuxNode(() => {
       sawInvoke = true;
     });
     const ws = await connectOperator(["operator.write"]);
@@ -437,7 +469,7 @@ describe("node.invoke approval bypass", () => {
 
   test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
     let sawInvoke = false;
-    const node = await connectTestNode(
+    const node = await connectLinuxNode(
       () => {
         sawInvoke = true;
       },
@@ -471,7 +503,7 @@ describe("node.invoke approval bypass", () => {
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
-    const node = await connectTestNode((payload) => {
+    const node = await connectLinuxNode((payload) => {
       invokeCount += 1;
       const obj = payload as { paramsJSON?: unknown };
       const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
@@ -549,7 +581,7 @@ describe("node.invoke approval bypass", () => {
   test("bridges no-device chat approvals across backend reconnects only for the same turn source", async () => {
     let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
-    const node = await connectTestNode((payload) => {
+    const node = await connectLinuxNode((payload) => {
       invokeCount += 1;
       const obj = payload as { paramsJSON?: unknown };
       const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
@@ -656,8 +688,8 @@ describe("node.invoke approval bypass", () => {
       }
       invokeCounts.set(nodeId, (invokeCounts.get(nodeId) ?? 0) + 1);
     };
-    const nodeA = await connectTestNode(onInvoke, createDeviceIdentity());
-    const nodeB = await connectTestNode(onInvoke, createDeviceIdentity());
+    const nodeA = await connectLinuxNode(onInvoke, createDeviceIdentity());
+    const nodeB = await connectLinuxNode(onInvoke, createDeviceIdentity());
 
     const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
     const wsCaller = await connectOperator(["operator.write"]);
