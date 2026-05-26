@@ -144,6 +144,8 @@ import type {
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   OpenClawPluginHookOptions,
+  OpenClawPluginMcpServerFactory,
+  OpenClawPluginMcpServerOptions,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
 } from "./tool-types.js";
@@ -163,6 +165,9 @@ export type {
 export type {
   OpenClawPluginActiveModelContext,
   OpenClawPluginHookOptions,
+  OpenClawPluginMcpServerFactory,
+  OpenClawPluginMcpServerOptions,
+  OpenClawPluginMcpToolOverride,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
@@ -2609,6 +2614,18 @@ export type OpenClawPluginApi = {
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
+  ) => void;
+  /**
+   * Register a remote/local MCP server that should be discovered dynamically
+   * with MCP `tools/list` for each agent run.
+   *
+   * Use this when the upstream MCP server should remain the tool-schema source
+   * of truth instead of vendoring generated plugin tool contracts.
+   */
+  registerMcpServer: (
+    serverName: string,
+    server: Record<string, unknown> | OpenClawPluginMcpServerFactory,
+    opts?: OpenClawPluginMcpServerOptions,
   ) => void;
   registerHook: (
     events: string | string[],

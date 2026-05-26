@@ -53,6 +53,8 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
+  OpenClawPluginMcpServerFactory,
+  OpenClawPluginMcpServerOptions,
   OpenClawPluginToolFactory,
   PluginConversationBindingResolvedEvent,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -77,6 +79,16 @@ export type PluginToolRegistration = {
   names: string[];
   declaredNames?: string[];
   optional: boolean;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginMcpServerRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  serverName: string;
+  factory: OpenClawPluginMcpServerFactory;
+  options?: OpenClawPluginMcpServerOptions;
   source: string;
   rootDir?: string;
 };
@@ -429,6 +441,7 @@ export type PluginRecord = {
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
+  mcpServers: PluginMcpServerRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];

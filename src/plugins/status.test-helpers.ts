@@ -153,6 +153,7 @@ export function createPluginLoadResult(
     textTransforms: [],
     agentHarnesses: [],
     tools: [],
+    mcpServers: [],
     hooks: [],
     typedHooks: [],
     httpRoutes: [],

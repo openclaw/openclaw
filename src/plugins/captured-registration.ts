@@ -33,6 +33,8 @@ import type {
   MusicGenerationProviderPlugin,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginMcpServerFactory,
+  OpenClawPluginMcpServerOptions,
   PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
@@ -49,6 +51,12 @@ type CapturedPluginCliRegistration = {
   parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
+};
+
+type CapturedPluginMcpServerRegistration = {
+  serverName: string;
+  server: Record<string, unknown> | OpenClawPluginMcpServerFactory;
+  options?: OpenClawPluginMcpServerOptions;
 };
 
 export type CapturedPluginRegistration = {
@@ -82,6 +90,7 @@ export type CapturedPluginRegistration = {
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
   sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
+  mcpServers: CapturedPluginMcpServerRegistration[];
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
@@ -122,6 +131,7 @@ export function createCapturedPluginRegistration(params?: {
   const sessionActions: PluginSessionActionRegistration[] = [];
   let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
+  const mcpServers: CapturedPluginMcpServerRegistration[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
@@ -163,6 +173,7 @@ export function createCapturedPluginRegistration(params?: {
     sessionSchedulerJobs,
     sessionActions,
     tools,
+    mcpServers,
     modelCatalogProviders,
     api: buildPluginApi({
       id: pluginId,
@@ -314,6 +325,9 @@ export function createCapturedPluginRegistration(params?: {
           if (typeof tool !== "function") {
             tools.push(tool);
           }
+        },
+        registerMcpServer(serverName, server, options) {
+          mcpServers.push({ serverName, server, options });
         },
       },
     }),

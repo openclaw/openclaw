@@ -96,12 +96,20 @@ export async function materializeBundleMcpToolsForRun(params: {
     if (!originalName) {
       continue;
     }
-    const safeToolName = buildSafeToolName({
-      serverName: tool.safeServerName,
-      toolName: originalName,
-      reservedNames,
-    });
-    if (safeToolName !== `${tool.safeServerName}${TOOL_NAME_SEPARATOR}${originalName}`) {
+    const preferredToolName = tool.exposedToolName?.trim();
+    const safeToolName =
+      preferredToolName && !reservedNames.has(normalizeLowercaseStringOrEmpty(preferredToolName))
+        ? preferredToolName
+        : buildSafeToolName({
+            serverName: tool.safeServerName,
+            toolName: originalName,
+            reservedNames,
+          });
+    const defaultToolName = `${tool.safeServerName}${TOOL_NAME_SEPARATOR}${originalName}`;
+    if (
+      (preferredToolName && safeToolName !== preferredToolName) ||
+      (!preferredToolName && safeToolName !== defaultToolName)
+    ) {
       logWarn(
         `bundle-mcp: tool "${tool.toolName}" from server "${tool.serverName}" registered as "${safeToolName}" to keep the tool name provider-safe.`,
       );

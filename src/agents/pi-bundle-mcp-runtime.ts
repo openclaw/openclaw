@@ -22,7 +22,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
-import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
+import { sanitizeServerName, sanitizeToolName } from "./pi-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
@@ -41,6 +41,17 @@ type BundleMcpSession = {
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedPiMcpConfig>;
 type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
+type OpenClawMcpToolOverride = {
+  title?: unknown;
+  description?: unknown;
+  inputSchema?: unknown;
+};
+type OpenClawMcpServerMetadata = {
+  toolNamePrefix?: string;
+  allowTools?: Set<string>;
+  denyTools: Set<string>;
+  toolOverrides: Record<string, OpenClawMcpToolOverride>;
+};
 type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
@@ -219,6 +230,86 @@ function createCatalogFingerprint(servers: Record<string, unknown>): string {
   return crypto.createHash("sha1").update(JSON.stringify(servers)).digest("hex");
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizeToolNameSet(value: unknown): Set<string> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const names = new Set(
+    value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0),
+  );
+  return names.size > 0 ? names : undefined;
+}
+
+function normalizeToolOverrides(value: unknown): Record<string, OpenClawMcpToolOverride> {
+  const raw = asRecord(value);
+  if (!raw) {
+    return {};
+  }
+  const entries: Array<[string, OpenClawMcpToolOverride]> = [];
+  for (const [toolName, override] of Object.entries(raw)) {
+    const normalizedName = toolName.trim();
+    const rawOverride = asRecord(override);
+    if (!normalizedName || !rawOverride) {
+      continue;
+    }
+    entries.push([
+      normalizedName,
+      {
+        ...(typeof rawOverride.title === "string" ? { title: rawOverride.title } : {}),
+        ...(typeof rawOverride.description === "string"
+          ? { description: rawOverride.description }
+          : {}),
+        ...(rawOverride.inputSchema !== undefined ? { inputSchema: rawOverride.inputSchema } : {}),
+      },
+    ]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function readOpenClawMcpServerMetadata(rawServer: unknown): OpenClawMcpServerMetadata {
+  const openclaw = asRecord(asRecord(rawServer)?.openclaw);
+  if (!openclaw) {
+    return {
+      denyTools: new Set(),
+      toolOverrides: {},
+    };
+  }
+  const rawPrefix =
+    typeof openclaw.toolNamePrefix === "string" ? openclaw.toolNamePrefix.trim() : "";
+  const allowTools = normalizeToolNameSet(openclaw.allowTools);
+  return {
+    ...(rawPrefix ? { toolNamePrefix: rawPrefix } : {}),
+    ...(allowTools ? { allowTools } : {}),
+    denyTools: normalizeToolNameSet(openclaw.denyTools) ?? new Set(),
+    toolOverrides: normalizeToolOverrides(openclaw.toolOverrides),
+  };
+}
+
+function shouldExposeMcpTool(metadata: OpenClawMcpServerMetadata, toolName: string): boolean {
+  if (metadata.denyTools.has(toolName)) {
+    return false;
+  }
+  return !metadata.allowTools || metadata.allowTools.has(toolName);
+}
+
+function resolveExposedMcpToolName(
+  metadata: OpenClawMcpServerMetadata,
+  toolName: string,
+): string | undefined {
+  if (!metadata.toolNamePrefix) {
+    return undefined;
+  }
+  return sanitizeToolName(`${metadata.toolNamePrefix}${toolName}`);
+}
+
 function loadSessionMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -307,6 +398,7 @@ export function createSessionMcpRuntime(params: {
           if (!resolved) {
             continue;
           }
+          const metadata = readOpenClawMcpServerMetadata(rawServer);
           const safeServerName = sanitizeServerName(serverName, usedServerNames);
           if (safeServerName !== serverName) {
             logWarn(
@@ -338,26 +430,39 @@ export function createSessionMcpRuntime(params: {
             failIfDisposed();
             const listedTools = await listAllTools(client, BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS);
             failIfDisposed();
-            servers[serverName] = {
-              serverName,
-              launchSummary: resolved.description,
-              toolCount: listedTools.length,
-            };
+            const serverTools: McpCatalogTool[] = [];
             for (const tool of listedTools) {
               const toolName = tool.name.trim();
-              if (!toolName) {
+              if (!toolName || !shouldExposeMcpTool(metadata, toolName)) {
                 continue;
               }
-              tools.push({
+              const override = metadata.toolOverrides[toolName];
+              const exposedToolName = resolveExposedMcpToolName(metadata, toolName);
+              serverTools.push({
                 serverName,
                 safeServerName,
                 toolName,
-                title: tool.title,
-                description: normalizeOptionalString(tool.description),
-                inputSchema: tool.inputSchema,
+                ...(exposedToolName ? { exposedToolName } : {}),
+                title:
+                  typeof override?.title === "string" && override.title.trim()
+                    ? override.title
+                    : tool.title,
+                description: normalizeOptionalString(
+                  typeof override?.description === "string"
+                    ? override.description
+                    : tool.description,
+                ),
+                inputSchema: (override?.inputSchema ??
+                  tool.inputSchema) as McpCatalogTool["inputSchema"],
                 fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
               });
             }
+            servers[serverName] = {
+              serverName,
+              launchSummary: resolved.description,
+              toolCount: serverTools.length,
+            };
+            tools.push(...serverTools);
           } catch (error) {
             if (!disposed) {
               logWarn(

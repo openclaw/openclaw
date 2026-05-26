@@ -18,6 +18,7 @@ export type McpCatalogTool = {
   serverName: string;
   safeServerName: string;
   toolName: string;
+  exposedToolName?: string;
   title?: string;
   description?: string;
   inputSchema: TSchema;

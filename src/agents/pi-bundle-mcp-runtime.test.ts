@@ -606,6 +606,73 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("applies OpenClaw MCP exposure metadata from server config", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-metadata-"));
+    const serverPath = path.join(tempDir, "metadata-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-mcp-openclaw-metadata",
+      sessionKey: "agent:test:session-mcp-openclaw-metadata",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            ando: {
+              command: process.execPath,
+              args: [serverPath],
+              openclaw: {
+                toolNamePrefix: "ando_",
+                allowTools: ["slow_tool"],
+                toolOverrides: {
+                  slow_tool: {
+                    description: "Overridden MCP tool description",
+                    inputSchema: {
+                      type: "object",
+                      required: ["body"],
+                      properties: {
+                        body: { type: "string" },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools).toEqual([
+        expect.objectContaining({
+          serverName: "ando",
+          safeServerName: "ando",
+          toolName: "slow_tool",
+          exposedToolName: "ando_slow_tool",
+          description: "Overridden MCP tool description",
+          inputSchema: {
+            type: "object",
+            required: ["body"],
+            properties: {
+              body: { type: "string" },
+            },
+          },
+        }),
+      ]);
+      expect(catalog.servers.ando?.toolCount).toBe(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("times out default-config hung bundle MCP tools/list using the internal catalog timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");

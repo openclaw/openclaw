@@ -58,6 +58,32 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
 };
 
+export type OpenClawPluginMcpToolOverride = {
+  title?: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+export type OpenClawPluginMcpServerOptions = {
+  /**
+   * Optional exact tool-name prefix for MCP tools exposed by this server.
+   *
+   * When omitted, OpenClaw uses the normal bundle MCP naming convention:
+   * `<server>__<tool>`.
+   */
+  toolNamePrefix?: string;
+  /** MCP tool names to expose. Empty or omitted means expose all non-denied tools. */
+  allowTools?: string[];
+  /** MCP tool names to hide even if `allowTools` is omitted. */
+  denyTools?: string[];
+  /** Optional presentation/schema overrides keyed by remote MCP tool name. */
+  toolOverrides?: Record<string, OpenClawPluginMcpToolOverride>;
+};
+
+export type OpenClawPluginMcpServerFactory = (
+  ctx: OpenClawPluginToolContext,
+) => Record<string, unknown> | null | undefined;
+
 export type OpenClawPluginHookOptions = {
   entry?: HookEntry;
   name?: string;

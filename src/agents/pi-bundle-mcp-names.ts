@@ -31,7 +31,7 @@ export function sanitizeServerName(raw: string, usedNames: Set<string>): string 
   return candidate;
 }
 
-function sanitizeToolName(raw: string): string {
+export function sanitizeToolName(raw: string): string {
   return sanitizeToolFragment(raw, "tool");
 }
 

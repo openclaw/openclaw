@@ -136,6 +136,9 @@ export type {
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {
   OpenClawPluginActiveModelContext,
+  OpenClawPluginMcpServerFactory,
+  OpenClawPluginMcpServerOptions,
+  OpenClawPluginMcpToolOverride,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "../plugins/types.js";

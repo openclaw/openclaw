@@ -84,6 +84,45 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
   });
 
+  it("honors plugin-exposed MCP tool names and presentation overrides", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          {
+            serverName: "ando",
+            safeServerName: "ando",
+            toolName: "send_message",
+            exposedToolName: "ando_send_message",
+            title: "Ando message",
+            description: "Send an Ando message",
+            inputSchema: {
+              type: "object",
+              required: ["body"],
+              properties: {
+                body: { type: "string" },
+              },
+            },
+            fallbackDescription: "Fallback Ando message",
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools).toHaveLength(1);
+    expect(runtime.tools[0]).toMatchObject({
+      name: "ando_send_message",
+      label: "Ando message",
+      description: "Send an Ando message",
+      parameters: {
+        type: "object",
+        required: ["body"],
+        properties: {
+          body: { type: "string" },
+        },
+      },
+    });
+  });
+
   it("materializes configured MCP tools through the session runtime boundary", async () => {
     const created: Parameters<
       NonNullable<Parameters<typeof createBundleMcpToolRuntime>[0]["createRuntime"]>

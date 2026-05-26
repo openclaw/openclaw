@@ -170,6 +170,8 @@ import type {
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
+  OpenClawPluginMcpServerFactory,
+  OpenClawPluginMcpServerOptions,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginReloadRegistration,
@@ -617,6 +619,35 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names: normalized,
       declaredNames,
       optional,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerMcpServer = (
+    record: PluginRecord,
+    serverName: string,
+    server: Record<string, unknown> | OpenClawPluginMcpServerFactory,
+    options?: OpenClawPluginMcpServerOptions,
+  ) => {
+    const normalizedName = serverName.trim();
+    if (!normalizedName) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "MCP server registration missing name",
+      });
+      return;
+    }
+    const factory: OpenClawPluginMcpServerFactory =
+      typeof server === "function" ? server : () => server;
+    registry.mcpServers.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      serverName: normalizedName,
+      factory,
+      options,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -2608,6 +2639,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(registrationCapabilities.capabilityHandlers
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
+              registerMcpServer: (serverName, server, opts) =>
+                registerMcpServer(record, serverName, server, opts),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),

@@ -46,6 +46,7 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
 export function loadMergedBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  extraMcpServers?: Record<string, BundleMcpServerConfig>;
   mapConfiguredServer?: BundleMcpServerMapper;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
@@ -57,9 +58,10 @@ export function loadMergedBundleMcpConfig(params: {
 
   return {
     config: {
-      // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
+      // OpenClaw config is the owner-managed layer, so it overrides bundle/plugin defaults.
       mcpServers: {
         ...bundleMcp.config.mcpServers,
+        ...params.extraMcpServers,
         ...Object.fromEntries(
           Object.entries(configuredMcp).map(([name, server]) => [
             name,

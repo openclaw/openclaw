@@ -46,6 +46,43 @@ describe("loadMergedBundleMcpConfig", () => {
     });
   });
 
+  it("merges bundle, plugin, and user-configured MCP servers in ownership order", () => {
+    const merged = loadMergedBundleMcpConfig({
+      workspaceDir: "/workspace",
+      extraMcpServers: {
+        bundleProbe: {
+          transport: "streamable-http",
+          url: "https://plugin.example.com/mcp",
+        },
+        pluginOnly: {
+          transport: "streamable-http",
+          url: "https://plugin-only.example.com/mcp",
+        },
+      },
+      cfg: {
+        mcp: {
+          servers: {
+            bundleProbe: {
+              transport: "streamable-http",
+              url: "https://configured.example.com/mcp",
+            },
+          },
+        },
+      },
+    });
+
+    expect(merged.config.mcpServers).toEqual({
+      bundleProbe: {
+        transport: "streamable-http",
+        url: "https://configured.example.com/mcp",
+      },
+      pluginOnly: {
+        transport: "streamable-http",
+        url: "https://plugin-only.example.com/mcp",
+      },
+    });
+  });
+
   it("maps OpenClaw transports to downstream CLI types when requested", () => {
     expect(
       toCliBundleMcpServerConfig({
