@@ -1,4 +1,4 @@
-import { InvalidArgumentError, type Command } from "commander";
+import type { Command } from "commander";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -68,7 +68,7 @@ async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
 function parseMemoryCliNumberOption(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
-    throw new InvalidArgumentError(`${flag} must be a finite number.`);
+    throw new Error(`${flag} must be a finite number.`);
   }
   return parsed;
 }
