@@ -166,6 +166,11 @@ describe("channel-broker plugin", () => {
         to: "telegram:-1001234567890",
       } as never),
     ).toBe("group");
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "telegram:-1001234567890?threadId=42",
+      } as never),
+    ).toBe("channel");
   });
 
   it("delivers broker-prefixed DM aliases as direct conversations", async () => {
@@ -1123,7 +1128,7 @@ describe("channel-broker plugin", () => {
     });
   });
 
-  it("canonicalizes Telegram topic routes without changing native default ownership", () => {
+  it("canonicalizes Telegram topic routes while preserving broker ownership", () => {
     const route = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {
         channels: {
@@ -1146,7 +1151,7 @@ describe("channel-broker plugin", () => {
     expect(route).toMatchObject({
       chatType: "channel",
       peer: { kind: "channel", id: "telegram:-1001234567890" },
-      to: "telegram:-1001234567890?threadId=42",
+      to: "broker:telegram:-1001234567890?conversationType=channel&threadId=42",
       threadId: "42",
     });
   });
@@ -1174,7 +1179,7 @@ describe("channel-broker plugin", () => {
     expect(route).toMatchObject({
       chatType: "direct",
       peer: { kind: "direct", id: "telegram:123456789" },
-      to: "telegram:123456789",
+      to: "telegram:123456789?conversationType=direct",
     });
   });
 

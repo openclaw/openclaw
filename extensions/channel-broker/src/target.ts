@@ -48,7 +48,7 @@ export function normalizeBrokerTarget(raw: string): string | undefined {
     return buildBrokerConversationTarget({
       platform: normalizeBrokerPlatformId(parsed.platform),
       conversationId,
-      ...(explicitType ?? parsed.conversationType
+      ...((explicitType ?? parsed.conversationType)
         ? { conversationType: explicitType ?? parsed.conversationType }
         : {}),
       ...(parsed.threadId ? { threadId: parsed.threadId } : {}),
@@ -120,13 +120,31 @@ export function inferChannelBrokerTargetChatType(
       return parsedType;
     }
     const brokerPrefixed = parsed.platform === "broker" || parsed.platform === "channel-broker";
-    if (!rawTargetUsesConversationTypeShorthand(rawTarget, brokerPrefixed)) {
-      return "channel";
-    }
     const rawConversationId =
       brokerPrefixed && parsed.conversationId.includes(":")
         ? parsed.conversationId.slice(parsed.conversationId.indexOf(":") + 1)
         : parsed.conversationId;
+    const rawPlatform =
+      brokerPrefixed && parsed.conversationId.includes(":")
+        ? parsed.conversationId.slice(0, parsed.conversationId.indexOf(":"))
+        : parsed.platform;
+    const usesConversationTypeShorthand = rawTargetUsesConversationTypeShorthand(
+      rawTarget,
+      brokerPrefixed,
+    );
+    if (!usesConversationTypeShorthand && normalizeBrokerPlatformId(rawPlatform) === "telegram") {
+      const telegramConversation = parseTelegramTopicConversation(rawConversationId);
+      const telegramType = inferTelegramChatTypeFromConversation({
+        conversationId: telegramConversation.conversationId,
+        threadId: parsed.threadId ?? telegramConversation.threadId,
+      });
+      if (telegramType) {
+        return telegramType;
+      }
+    }
+    if (!usesConversationTypeShorthand) {
+      return "channel";
+    }
     const [rawType] = rawConversationId.split(":", 1);
     const type = rawType?.trim().toLowerCase();
     if (DIRECT_CONVERSATION_TYPE_ALIASES.has(type ?? "")) {
@@ -138,13 +156,12 @@ export function inferChannelBrokerTargetChatType(
     if (type === "channel" || type === "thread") {
       return "channel";
     }
-    const rawPlatform =
-      brokerPrefixed && parsed.conversationId.includes(":")
-        ? parsed.conversationId.slice(0, parsed.conversationId.indexOf(":"))
-        : parsed.platform;
     if (normalizeBrokerPlatformId(rawPlatform) === "telegram") {
       const telegramConversation = parseTelegramTopicConversation(rawConversationId);
-      const telegramType = inferTelegramChatTypeFromConversation(telegramConversation);
+      const telegramType = inferTelegramChatTypeFromConversation({
+        conversationId: telegramConversation.conversationId,
+        threadId: parsed.threadId ?? telegramConversation.threadId,
+      });
       if (telegramType) {
         return telegramType;
       }
