@@ -14,7 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Install: repair too-old Node.js automatically during direct npm preinstall on supported package-manager hosts, including Ubuntu/Debian npm and libnode development-package conflicts, so fresh Zorg/OpenClaw installs can recover before package setup continues.
+- Install: repair too-old Node.js automatically during direct npm preinstall on supported package-manager hosts, avoid git-install preparation from inheriting global npm state, and handle Ubuntu/Debian npm and libnode development-package conflicts so fresh Zorg/OpenClaw installs can recover before package setup continues.
 - Discord/OpenAI voice: rotate Realtime sessions at provider max duration without logging the expected session-expiry event as an error.
 - Memory/local embeddings: run local GGUF embeddings in an isolated worker sidecar and degrade to configured fallback or keyword search on worker failure so native embedding crashes do not take down the Gateway. (#85348) Thanks @osolmaz.
 - Gateway: clear the runtime config snapshot before `SIGUSR1` in-process restarts so config changes survive the next gateway loop. (#86388) Thanks @XuZehan-iCenter.

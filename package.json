@@ -1566,7 +1566,6 @@
     "postinstall": "node scripts/check-node-version.cjs && node scripts/postinstall-bundled-plugins.mjs",
     "preinstall": "node scripts/check-node-version.cjs && node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
-    "prepare": "node scripts/check-node-version.cjs && node scripts/prepare-git-hooks.mjs",
     "prepush:ci": "bash scripts/prepush-ci.sh",
     "probe:anthropic:prompt": "node --import tsx scripts/anthropic-prompt-probe.ts",
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
