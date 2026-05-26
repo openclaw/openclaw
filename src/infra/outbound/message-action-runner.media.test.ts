@@ -805,6 +805,48 @@ describe("runMessageAction media behavior", () => {
       expect(handlerParams.contentType).toBe("image/png");
     });
 
+    it("allows host-local image paths from attachments[] when fs root expansion is enabled", async () => {
+      const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
+        "../../media/web-media.js",
+      );
+      vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
+
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-reply-attachment-image-"));
+      try {
+        const outsidePath = path.join(tempDir, "photo.png");
+        await fs.writeFile(outsidePath, onePixelPng);
+
+        const result = await runMessageAction({
+          cfg: {
+            ...cfg,
+            tools: { fs: { workspaceOnly: false } },
+          },
+          action: "reply",
+          params: {
+            channel: "replychat",
+            target: "+15551234567",
+            messageId: "parent-id",
+            text: "look at this",
+            attachments: [
+              {
+                path: outsidePath,
+                mimeType: "image/png",
+                name: "photo.png",
+              },
+            ],
+          },
+        });
+
+        expect(result.kind).toBe("action");
+        expect(handleActionMock).toHaveBeenCalledTimes(1);
+        const handlerParams = firstMockArg(handleActionMock, "handleAction");
+        expect(handlerParams.filename).toBe("photo.png");
+        expect(handlerParams.contentType).toBe("image/png");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it("prefers an explicit top-level hint over attachments[] entries", async () => {
       await runMessageAction({
         cfg,
@@ -815,7 +857,13 @@ describe("runMessageAction media behavior", () => {
           messageId: "parent-id",
           text: "look at this",
           media: "https://example.com/explicit.png",
-          attachments: [{ path: "https://example.com/ignored.png" }],
+          attachments: [
+            {
+              path: "https://example.com/ignored.png",
+              mimeType: "image/jpeg",
+              name: "ignored.jpg",
+            },
+          ],
         },
       });
 
@@ -824,6 +872,8 @@ describe("runMessageAction media behavior", () => {
       // hint resolution preserved the explicit `media` and didn't overwrite
       // it with the attachments[] entry.
       expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
+      expect(handlerParams.filename).toBe("pic.png");
+      expect(handlerParams.contentType).toBe("image/png");
     });
   });
 

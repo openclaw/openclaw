@@ -123,8 +123,15 @@ function readAttachmentFileHint(args: Record<string, unknown>): string | undefin
 // silently dropped: hydration found no hint, no buffer was loaded, and the
 // channel handler shipped text-only. Backward-compatible: only fills slots when
 // they are empty.
-function liftFirstAttachmentToTopLevel(args: Record<string, unknown>): void {
+export function liftFirstAttachmentToTopLevel(args: Record<string, unknown>): void {
   if (!Array.isArray(args.attachments) || args.attachments.length === 0) {
+    return;
+  }
+  if (
+    readAttachmentMediaHint(args) ||
+    readAttachmentFileHint(args) ||
+    readStringParam(args, "buffer", { trim: false })
+  ) {
     return;
   }
   for (const attachment of args.attachments) {
@@ -142,13 +149,7 @@ function liftFirstAttachmentToTopLevel(args: Record<string, unknown>): void {
     if (!source) {
       continue;
     }
-    if (
-      !readAttachmentMediaHint(args) &&
-      !readAttachmentFileHint(args) &&
-      !readStringParam(args, "buffer", { trim: false })
-    ) {
-      args.path = source;
-    }
+    args.path = source;
     const mimeType =
       normalizeOptionalString(record.mimeType) ?? normalizeOptionalString(record.contentType);
     if (mimeType && !readStringParam(args, "mimeType") && !readStringParam(args, "contentType")) {

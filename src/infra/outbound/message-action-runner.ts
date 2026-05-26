@@ -59,6 +59,7 @@ import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
+  liftFirstAttachmentToTopLevel,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   parseInteractiveParam,
@@ -1355,6 +1356,7 @@ export async function runMessageAction(
     requesterSenderId: input.requesterSenderId,
     senderIsOwner: input.senderIsOwner,
   });
+  liftFirstAttachmentToTopLevel(params);
 
   await normalizeSandboxMediaParams({
     args: params,
