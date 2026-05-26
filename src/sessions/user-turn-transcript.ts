@@ -33,7 +33,7 @@ export type UserTurnInput = {
   mediaOnlyText?: string;
 };
 
-type UserTurnTranscriptUpdateMode = "inline" | "file-only" | "none";
+type UserTurnTranscriptUpdateMode = "inline" | "none";
 
 type AppendUserTurnTranscriptMessageParams = {
   transcriptPath: string;
@@ -407,14 +407,6 @@ export async function appendUserTurnTranscriptMessage(
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           message: appended.message,
           messageId: appended.messageId,
-        });
-      }
-      break;
-    case "file-only":
-      if (appended.appended) {
-        emitSessionTranscriptUpdate({
-          sessionFile: params.transcriptPath,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         });
       }
       break;
