@@ -202,6 +202,26 @@ export async function startDebugProxyServer(params: {
           });
           res.end();
         });
+        upstreamRes.on("error", (error) => {
+          store.recordEvent({
+            sessionId: params.settings.sessionId,
+            ts: Date.now(),
+            sourceScope: "openclaw",
+            sourceProcess: params.settings.sourceProcess,
+            protocol: target.protocol === "https:" ? "https" : "http",
+            direction: "inbound",
+            kind: "error",
+            flowId,
+            method: req.method,
+            host: target.host,
+            path: `${target.pathname}${target.search}`,
+            errorText: error.message,
+          });
+          if (!res.headersSent) {
+            res.statusCode = 502;
+          }
+          res.end(error.message);
+        });
         res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       },
     );
