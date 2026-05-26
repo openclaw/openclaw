@@ -1718,6 +1718,52 @@ finish_linux_node_install() {
     print_active_node_paths || true
 }
 
+
+install_user_local_node_linux() {
+    local arch platform version_dir tarball url tmp extract_dir bin_dir
+    arch="$(uname -m 2>/dev/null || true)"
+    case "$arch" in
+        x86_64|amd64) platform="linux-x64" ;;
+        aarch64|arm64) platform="linux-arm64" ;;
+        armv7l) platform="linux-armv7l" ;;
+        *) platform="" ;;
+    esac
+    if [[ -z "$platform" ]]; then
+        ui_error "Unsupported architecture for user-local Node.js install: ${arch:-unknown}"
+        return 1
+    fi
+
+    version_dir="node-v${NODE_DEFAULT_MAJOR}.latest-${platform}"
+    tarball="$(mktempfile)"
+    tmp="$(mktemp -d)"
+    TMPFILES+=("$tmp")
+    url="https://nodejs.org/dist/latest-v${NODE_DEFAULT_MAJOR}.x/${version_dir}.tar.xz"
+
+    ui_info "Installing Node.js ${NODE_DEFAULT_MAJOR} locally under \$HOME/.local/openclaw-node"
+    if ! download_file "$url" "$tarball"; then
+        ui_error "Could not download user-local Node.js from ${url}"
+        return 1
+    fi
+
+    mkdir -p "$HOME/.local/openclaw-node"
+    tar -xJf "$tarball" -C "$tmp"
+    extract_dir="$(find "$tmp" -maxdepth 1 -type d -name "node-v*" | head -n1)"
+    if [[ -z "$extract_dir" ]]; then
+        ui_error "Node.js archive did not contain the expected directory"
+        return 1
+    fi
+
+    rm -rf "$HOME/.local/openclaw-node/current"
+    cp -R "$extract_dir" "$HOME/.local/openclaw-node/current"
+    bin_dir="$HOME/.local/openclaw-node/current/bin"
+    prepend_path_dir "$bin_dir" || return 1
+    persist_shell_path_prepend "$bin_dir" "\$HOME/.local/openclaw-node/current/bin" || true
+    npm config set prefix "$HOME/.local" >/dev/null 2>&1 || true
+    ensure_user_local_bin_on_path || true
+    ui_success "Node.js v$(node -v | cut -d'v' -f2) installed locally"
+    print_active_node_paths || true
+}
+
 # Install Node.js
 install_node() {
     if [[ "$OS" == "macos" ]]; then
@@ -1733,6 +1779,13 @@ install_node() {
         ui_success "Node.js installed"
         print_active_node_paths || true
     elif [[ "$OS" == "linux" ]]; then
+        if ! is_root && { ! command -v sudo >/dev/null 2>&1 || ! sudo -n true >/dev/null 2>&1; }; then
+            ui_warn "sudo is unavailable without a password; installing Node.js locally for this user"
+            install_user_local_node_linux
+            finish_linux_node_install
+            return 0
+        fi
+
         require_sudo
 
         ui_info "Installing Linux build tools (make/g++/cmake/python3)"
