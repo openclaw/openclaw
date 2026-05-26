@@ -168,7 +168,7 @@ function isHistoricalRoutedSessionKey(value: string | undefined): boolean {
     return false;
   }
   const [, , first, second, third, fourth] = parts;
-  if (first === "subagent" || first === "cron" || first === "custom") {
+  if (first === "subagent" || first === "cron" || first === "custom" || first === "explicit") {
     return false;
   }
   if (parts.length === 4) {

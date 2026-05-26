@@ -886,6 +886,9 @@ describe("loadSettings default gateway URL derivation", () => {
     "agent:main:subagent:worker:direct:user-1",
     "agent:main:cron:daily:group:summary",
     "agent:main:custom:project:direct:notes:extra",
+    "agent:main:explicit:portal-123:direct:shadow",
+    "agent:main:explicit:portal-123:dm:shadow",
+    "agent:main:explicit:portal-123:group:shadow",
   ])("preserves non-peer agent session %s", async (sessionKey) => {
     setTestLocation({
       protocol: "https:",
