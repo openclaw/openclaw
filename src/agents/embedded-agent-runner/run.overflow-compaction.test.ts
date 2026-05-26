@@ -1882,7 +1882,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       }),
     );
 
-    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(overflowBaseRunParams);
 
     expectMockCallFields(mockedCompactDirect, {
       currentTokenCount: 200001,
@@ -1907,7 +1907,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       }),
     );
 
-    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(overflowBaseRunParams);
 
     expect(mockedIsLikelyContextOverflowError).toHaveBeenCalledWith(promptError.message);
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);

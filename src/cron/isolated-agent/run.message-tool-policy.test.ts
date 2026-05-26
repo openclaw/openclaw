@@ -1174,7 +1174,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -1202,7 +1202,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
@@ -1225,7 +1225,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
@@ -1248,7 +1248,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");

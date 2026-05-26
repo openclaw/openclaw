@@ -278,6 +278,10 @@ export function resetCompactSessionStateMocks(): void {
   resolveSandboxContextMock.mockResolvedValue(null);
   maybeCompactAgentHarnessSessionMock.mockReset();
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
+  resolveAgentHarnessPolicyMock.mockReset();
+  resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
+  resolveContextWindowInfoMock.mockReset();
+  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
@@ -409,6 +413,10 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 
+  vi.doMock("../harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+  }));
+
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: vi.fn(async () => ({ resolvedApiKey: undefined })),
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
@@ -433,18 +441,7 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@earendil../oauth.js", async () => {
-    const actual = await vi.importActual<typeof import("@earendil../oauth.js")>(
-      "@earendil../oauth.js",
-    );
-    return {
-      ...actual,
-      getOAuthApiKey: vi.fn(),
-      getOAuthProviders: vi.fn(() => []),
-    };
-  });
-
-  vi.doMock("@earendil../sessions/index.js", () => ({
+  vi.doMock("../sessions/index.js", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {
@@ -479,7 +476,9 @@ export async function loadCompactHooksHarness(): Promise<{
       };
     },
     SessionManager: {
-      open: vi.fn(() => ({})),
+      open: vi.fn(() => ({
+        buildSessionContext: vi.fn(() => ({ messages: sessionMessages })),
+      })),
     },
     SettingsManager: {
       create: vi.fn(() => ({})),

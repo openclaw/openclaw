@@ -21,9 +21,7 @@ type CurrentAttemptAssistantWithError = NonNullable<
   EmbeddedRunAttemptResult["currentAttemptAssistant"]
 > & { errorMessage: string };
 
-function isCurrentAttemptAssistant(
-  value: unknown,
-): value is CurrentAttemptAssistantWithError {
+function isCurrentAttemptAssistant(value: unknown): value is CurrentAttemptAssistantWithError {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -199,7 +197,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    const promise = runEmbeddedPiAgent({
+    const promise = runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "run-compaction-pi-stamped-fallback-error-context",
       config: makeCrossProviderFallbackConfig(),
@@ -238,7 +236,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    const promise = runEmbeddedPiAgent({
+    const promise = runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-timeout",
       config: makeCrossProviderFallbackConfig(),
@@ -270,7 +268,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-non-timeout",
       config: makeCrossProviderFallbackConfig(),

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
@@ -9,8 +10,12 @@ type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 const toolReportEntryCache = new WeakMap<AgentTool, ToolReportEntry>();
 const toolSchemaStatsCache = new WeakMap<
   object,
-  Pick<ToolReportEntry, "propertiesCount" | "schemaChars">
+  Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
 >();
+
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
 
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
@@ -39,22 +44,23 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 
 function buildToolSchemaStats(
   parameters: AgentTool["parameters"],
-): Pick<ToolReportEntry, "propertiesCount" | "schemaChars"> {
+): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
-    return { schemaChars: 0, propertiesCount: null };
+    return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
   }
   const cached = toolSchemaStatsCache.get(parameters);
   if (cached) {
     return cached;
   }
+  let schemaJson = "";
+  try {
+    schemaJson = JSON.stringify(parameters);
+  } catch {
+    schemaJson = "";
+  }
   const stats = {
-    schemaChars: (() => {
-      try {
-        return JSON.stringify(parameters).length;
-      } catch {
-        return 0;
-      }
-    })(),
+    schemaChars: schemaJson.length,
+    schemaHash: sha256(schemaJson),
     propertiesCount: (() => {
       const schema = parameters as Record<string, unknown>;
       const props = typeof schema.properties === "object" ? schema.properties : null;
@@ -78,7 +84,7 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const entry = { name, summaryChars, ...schemaStats };
+    const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;
   });
@@ -127,6 +133,7 @@ export function buildSystemPromptReport(params: {
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPromptChars,
+      hash: sha256(params.systemPrompt),
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
@@ -137,6 +144,7 @@ export function buildSystemPromptReport(params: {
     }),
     skills: {
       promptChars: params.skillsPrompt.length,
+      hash: sha256(params.skillsPrompt),
       entries: skillsEntries,
     },
     tools: {
