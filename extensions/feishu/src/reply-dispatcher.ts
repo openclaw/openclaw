@@ -32,6 +32,19 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+/** Maximum number of table components per Feishu card (official Feishu limit). */
+const MAX_FEISHU_CARD_TABLES = 5;
+
+/**
+ * Count markdown tables in text, excluding tables inside fenced code blocks.
+ * Each markdown table has exactly one separator row (e.g. |---|---|).
+ */
+function countMarkdownTables(text: string): number {
+  const stripped = text.replace(/```[\s\S]*?```/g, "");
+  const separators = stripped.match(/^[ \t]*\|[-:| \t]+\|[ \t]*$/gm);
+  return separators ? separators.length : 0;
+}
+
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
@@ -540,7 +553,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText &&
           (renderMode === "card" ||
             (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-            (renderMode === "auto" && shouldUseCard(text)));
+            (renderMode === "auto" &&
+              shouldUseCard(text) &&
+              countMarkdownTables(text) <= MAX_FEISHU_CARD_TABLES));
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const skipTextForClosedStreamingFinal =
