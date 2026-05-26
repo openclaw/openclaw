@@ -257,6 +257,31 @@ describe("goal plugin", () => {
     });
   });
 
+  it("clears stale scheduler notes after a successful slash-command resume", async () => {
+    const { api, store, requestSessionContinuationLease } = createApi();
+    await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });
+    requestSessionContinuationLease.mockResolvedValueOnce({
+      scheduled: false,
+      reason: "scheduler_unavailable",
+    });
+
+    const tool = createGoalStatusTool(
+      api,
+      { sessionKey: "agent:main:main" } as Parameters<typeof createGoalStatusTool>[1],
+      { store },
+    );
+    await tool?.execute("call-unscheduled", { status: "continue" });
+
+    const resume = await handleGoalCommand(api, commandCtx("resume"), { store });
+
+    expect(resume.text).toContain("Status: continue");
+    expect(resume.text).not.toContain("scheduler_unavailable");
+    expect(store.states.get("agent:main:main")).toMatchObject({
+      status: "continue",
+    });
+    expect(store.states.get("agent:main:main")?.lastNote).toBeUndefined();
+  });
+
   it("keeps blocked and waiting_approval out of the user command surface", async () => {
     const { api, store } = createApi();
     await handleGoalCommand(api, commandCtx("start inspect the stuck session"), { store });

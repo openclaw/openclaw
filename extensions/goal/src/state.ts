@@ -67,6 +67,7 @@ export function updateGoalState(
   },
 ): GoalState {
   const nowMs = params.nowMs ?? Date.now();
+  const { lastNote: _lastNote, ...stateWithoutLastNote } = state;
   const events: GoalEvent[] = [
     ...state.events,
     {
@@ -77,12 +78,12 @@ export function updateGoalState(
     },
   ];
   return {
-    ...state,
+    ...stateWithoutLastNote,
     status: params.status,
     updatedAtMs: nowMs,
     continuationCount:
       params.continuationScheduled === true ? state.continuationCount + 1 : state.continuationCount,
-    ...(params.note ? { lastNote: params.note } : {}),
+    ...(params.note !== undefined ? { lastNote: params.note } : {}),
     events,
   };
 }
