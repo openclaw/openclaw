@@ -2915,7 +2915,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           const broadcastText =
             extractAssistantDisplayTextFromContent(persistedContentForAppend) ?? transcriptReply;
           webchatAgentMediaFinalMessage = {
-            ...(appendedMessage ?? {}),
+            ...appendedMessage,
             role: "assistant",
             content: persistedContentForAppend,
             ...(broadcastText ? { text: broadcastText } : {}),
