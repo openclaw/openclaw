@@ -429,33 +429,43 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(input[0]).toHaveProperty("details");
   });
 
-  it("keeps historical runtime-context transcript entries out of the LLM boundary", () => {
+  it("keeps only pre-user current-turn runtime context at the LLM boundary", () => {
     const input = [
       {
-        role: "custom",
-        customType: "openclaw.runtime-context",
-        content: "old secret runtime context",
-        display: false,
+        role: "user",
+        content: [{ type: "text", text: "old ask" }],
         timestamp: 0,
       },
       {
-        role: "user",
-        content: [{ type: "text", text: "visible ask" }],
+        role: "assistant",
+        content: [{ type: "text", text: "old answer" }],
         timestamp: 1,
       },
       {
         role: "custom",
         customType: "openclaw.runtime-context",
-        content: "secret runtime context",
+        content: "current secret runtime context",
         display: false,
         timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "visible ask" }],
+        timestamp: 3,
+      },
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "post-user stale runtime context",
+        display: false,
+        timestamp: 4,
       },
       {
         role: "custom",
         customType: "other-extension-context",
         content: "normal custom context",
         display: false,
-        timestamp: 3,
+        timestamp: 5,
       },
     ];
 
@@ -463,9 +473,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
     ) as unknown as Array<Record<string, unknown>>;
 
-    expect(output).toHaveLength(3);
-    expect(output.some((item) => item.content === "old secret runtime context")).toBe(false);
-    expect(output.some((item) => item.content === "secret runtime context")).toBe(true);
+    expect(output).toHaveLength(5);
+    expect(output.some((item) => item.content === "current secret runtime context")).toBe(true);
+    expect(output.some((item) => item.content === "post-user stale runtime context")).toBe(false);
     expect(output.some((item) => item.customType === "other-extension-context")).toBe(true);
   });
 

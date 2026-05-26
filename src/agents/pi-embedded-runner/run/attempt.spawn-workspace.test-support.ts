@@ -1077,7 +1077,9 @@ export function createDefaultEmbeddedSession(params?: {
           { role: "custom", timestamp: 1, ...message },
           { role: "assistant", content: "done", timestamp: 2 },
         ];
+        return;
       }
+      session.messages = [...session.messages, { role: "custom", timestamp: 1, ...message }];
     },
     abort: async () => {},
     dispose: () => {},

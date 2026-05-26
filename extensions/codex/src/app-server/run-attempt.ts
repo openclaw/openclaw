@@ -3248,7 +3248,7 @@ export async function runCodexAppServerAttempt(
     kind: "embedded" as const,
     queueMessage: async (text: string, options?: CodexSteeringQueueOptions) =>
       activeSteeringQueue.queue(text, options),
-    isStreaming: () => !completed,
+    isStreaming: () => !completed && !terminalTurnNotificationQueued,
     isCompacting: () => projector?.isCompacting() ?? false,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => runAbortController.abort("cancelled"),

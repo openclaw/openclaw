@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  type AgentSession,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -413,8 +417,8 @@ import {
 } from "./preemptive-compaction.js";
 import {
   buildCurrentInboundPrompt,
-  buildRuntimeContextSystemContext,
-  queueRuntimeContextForNextTurn,
+  buildRuntimeContextCustomMessage,
+  type RuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -997,6 +1001,55 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   const withoutHistoricalInboundMetadata =
     stripHistoricalInboundMetadataFromUserMessages(normalized);
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+}
+
+function normalizeMessagesForCurrentPromptBoundary(params: {
+  messages: AgentMessage[];
+  prompt: string;
+}): AgentMessage[] {
+  const promptMessage = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: params.prompt }],
+    timestamp: Date.now(),
+  };
+  return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
+}
+
+function installRuntimeContextMessageForPrompt(params: {
+  session: AgentSession;
+  message?: RuntimeContextCustomMessage;
+}): () => void {
+  if (!params.message) {
+    return () => undefined;
+  }
+  const install = () => {
+    if (!params.session.messages.includes(params.message)) {
+      params.session.agent.state.messages = [...params.session.messages, params.message];
+    }
+  };
+  install();
+  const agentWithContinue = params.session.agent as typeof params.session.agent & {
+    continue?: (...args: unknown[]) => unknown;
+  };
+  const originalContinue = agentWithContinue.continue;
+  if (originalContinue) {
+    agentWithContinue.continue = function continueWithRuntimeContext(
+      this: typeof params.session.agent,
+      ...args: unknown[]
+    ): unknown {
+      // Pi overflow recovery can rebuild state from the persisted branch before retrying.
+      install();
+      return originalContinue.apply(this, args);
+    };
+  }
+  return () => {
+    if (originalContinue) {
+      agentWithContinue.continue = originalContinue;
+    }
+    params.session.agent.state.messages = params.session.messages.filter(
+      (message) => message !== params.message,
+    );
+  };
 }
 
 function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -4008,12 +4061,15 @@ export async function runEmbeddedAttempt(
           const runtimeContextForHook = promptSubmission.runtimeOnly
             ? undefined
             : promptSubmission.runtimeContext?.trim();
-          const runtimeSystemPromptForHook = runtimeContextForHook
-            ? composeSystemPromptWithHookContext({
-                baseSystemPrompt: systemPromptText,
-                appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
-              })
-            : undefined;
+          const runtimeContextMessageForCurrentTurn =
+            buildRuntimeContextCustomMessage(runtimeContextForHook);
+          const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
+            ? [...activeSession.messages, runtimeContextMessageForCurrentTurn]
+            : activeSession.messages;
+          const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
+            messages: messagesForCurrentPrompt,
+            prompt: promptForModel,
+          });
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
               ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
@@ -4023,7 +4079,7 @@ export async function runEmbeddedAttempt(
                 : (runtimeContextForHook?.length ?? 0),
             };
           }
-          const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
+          const systemPromptForHook = systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
             message: string;
@@ -4065,9 +4121,7 @@ export async function runEmbeddedAttempt(
           };
 
           if (hookRunner?.hasHooks("before_agent_run")) {
-            const beforeRunMessages = cloneHookMessages(
-              normalizeMessagesForLlmBoundary(activeSession.messages),
-            );
+            const beforeRunMessages = cloneHookMessages(hookMessagesForCurrentPrompt);
             let beforeRunResult:
               | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
               | undefined;
@@ -4298,9 +4352,7 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   systemPrompt: systemPromptForHook,
                   prompt: promptForModel,
-                  historyMessages: cloneHookMessages(
-                    normalizeMessagesForLlmBoundary(activeSession.messages),
-                  ),
+                  historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
                   imagesCount: imageResult.images.length,
                   tools: tools,
                 },
@@ -4323,7 +4375,7 @@ export async function runEmbeddedAttempt(
           const preemptiveCompaction = skipPromptSubmission
             ? null
             : shouldPreemptivelyCompactBeforePrompt({
-                messages: activeSession.messages,
+                messages: messagesForCurrentPrompt,
                 ...(contextEnginePromptAuthority === "preassembly_may_overflow"
                   ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
                   : {}),
@@ -4459,17 +4511,20 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await promptActiveSession(promptForModel);
             } else {
-              await queueRuntimeContextForNextTurn({
+              const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
                 session: activeSession,
-                runtimeContext: runtimeContextForHook,
+                message: runtimeContextMessageForCurrentTurn,
               });
-
-              // Only pass images option if there are actually images to pass
-              // This avoids potential issues with models that don't expect the images parameter
-              if (imageResult.images.length > 0) {
-                await promptActiveSession(promptForModel, { images: imageResult.images });
-              } else {
-                await promptActiveSession(promptForModel);
+              try {
+                // Only pass images option if there are actually images to pass
+                // This avoids potential issues with models that don't expect the images parameter
+                if (imageResult.images.length > 0) {
+                  await promptActiveSession(promptForModel, { images: imageResult.images });
+                } else {
+                  await promptActiveSession(promptForModel);
+                }
+              } finally {
+                cleanupRuntimeContextMessage();
               }
             }
           }

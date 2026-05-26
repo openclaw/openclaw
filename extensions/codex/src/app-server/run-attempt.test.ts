@@ -8483,6 +8483,23 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("rejects default queued steering after terminal notification is queued", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    const completed = completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    expect(queueActiveRunMessageForTest("session-1", "too late", { debounceMs: 0 })).toBe(false);
+
+    await completed;
+    await run;
+
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+  });
+
   it("batches explicit all-mode steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 
