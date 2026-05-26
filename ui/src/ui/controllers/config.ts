@@ -501,16 +501,47 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
   if (!state.client || !state.connected) {
     return;
   }
-  try {
-    await state.client.request("config.openFile", {});
-  } catch {
-    const path = state.configSnapshot?.path;
-    if (path) {
-      try {
-        await navigator.clipboard.writeText(path);
-      } catch {
-        // ignore
-      }
+
+  state.lastError = null;
+
+  const copyPathToClipboard = async (path: string | null | undefined) => {
+    if (!path) {
+      return;
     }
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    const result = await state.client.request<{
+      ok?: boolean;
+      path?: string;
+      error?: string;
+      message?: string;
+    }>("config.openFile", {});
+
+    if (result?.ok === false) {
+      const path = result.path ?? state.configSnapshot?.path ?? null;
+      await copyPathToClipboard(path);
+
+      const reason =
+        result.message ??
+        result.error ??
+        "Could not open the config file externally. This environment may be headless or missing a file opener.";
+
+      state.lastError = path
+        ? `${reason} Path copied to clipboard: ${path}`
+        : reason;
+    }
+  } catch (err) {
+    const path = state.configSnapshot?.path ?? null;
+    await copyPathToClipboard(path);
+
+    state.lastError = path
+      ? `Could not open the config file. Path copied to clipboard: ${path}`
+      : String(err);
   }
 }
