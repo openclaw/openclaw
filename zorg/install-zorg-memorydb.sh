@@ -79,6 +79,7 @@ ensure_prerequisites() {
   local missing=()
   command -v git >/dev/null 2>&1 || missing+=(git)
   command -v python3 >/dev/null 2>&1 || missing+=(python3)
+  python3 -c "import ensurepip" >/dev/null 2>&1 || missing+=(python3-venv)
   command -v psql >/dev/null 2>&1 || missing+=(postgresql-client)
   command -v pg_isready >/dev/null 2>&1 || missing+=(postgresql)
   command -v npm >/dev/null 2>&1 || missing+=(npm)
@@ -116,17 +117,83 @@ ensure_db_password() {
   fi
 }
 
+is_safe_pg_identifier() {
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
+sql_quote_literal() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
+run_postgres_superuser_sql() {
+  local sql="$1"
+  if is_root; then
+    su - postgres -c "psql -v ON_ERROR_STOP=1 -Atqc \"$sql\""
+  elif has_passwordless_sudo; then
+    sudo -n -u postgres psql -v ON_ERROR_STOP=1 -Atqc "$sql"
+  else
+    return 127
+  fi
+}
+
+start_local_postgres() {
+  if command -v pg_isready >/dev/null 2>&1 && pg_isready -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo_if_needed systemctl enable --now postgresql >/dev/null 2>&1 || true
+  fi
+  if command -v pg_ctlcluster >/dev/null 2>&1; then
+    local cluster
+    while read -r cluster; do
+      [[ -n "$cluster" ]] || continue
+      sudo_if_needed pg_ctlcluster $cluster start >/dev/null 2>&1 || true
+    done < <(pg_lsclusters --no-header 2>/dev/null | awk '{print $1 " " $2}')
+  fi
+}
+
+ensure_local_postgres_role_database() {
+  case "$ZORG_DB_HOST" in
+    127.0.0.1|localhost|::1) ;;
+    *) return 0 ;;
+  esac
+  [[ "$ZORG_DB_PORT" == "5432" ]] || return 0
+  is_safe_pg_identifier "$ZORG_DB_USER" || { warn "Skipping automatic PostgreSQL role creation because ZORG_DB_USER is not a simple identifier."; return 0; }
+  is_safe_pg_identifier "$ZORG_DB_NAME" || { warn "Skipping automatic PostgreSQL database creation because ZORG_DB_NAME is not a simple identifier."; return 0; }
+
+  local quoted_password
+  quoted_password="$(sql_quote_literal "$ZORG_DB_PASSWORD")"
+
+  if ! run_postgres_superuser_sql "SELECT 1" >/dev/null 2>&1; then
+    warn "PostgreSQL superuser access is unavailable; create role/database manually or set ZORG_DB_* variables."
+    return 0
+  fi
+
+  if [[ "$(run_postgres_superuser_sql "SELECT 1 FROM pg_roles WHERE rolname = '$ZORG_DB_USER'" 2>/dev/null || true)" != "1" ]]; then
+    run_postgres_superuser_sql "CREATE ROLE \"$ZORG_DB_USER\" WITH LOGIN PASSWORD '$quoted_password'" >/dev/null || {
+      warn "Could not create PostgreSQL role $ZORG_DB_USER."
+      return 0
+    }
+  else
+    run_postgres_superuser_sql "ALTER ROLE \"$ZORG_DB_USER\" WITH LOGIN PASSWORD '$quoted_password'" >/dev/null || true
+  fi
+
+  if [[ "$(run_postgres_superuser_sql "SELECT 1 FROM pg_database WHERE datname = '$ZORG_DB_NAME'" 2>/dev/null || true)" != "1" ]]; then
+    run_postgres_superuser_sql "CREATE DATABASE \"$ZORG_DB_NAME\" OWNER \"$ZORG_DB_USER\"" >/dev/null || {
+      warn "Could not create PostgreSQL database $ZORG_DB_NAME."
+      return 0
+    }
+  fi
+}
+
 ensure_postgres_database() {
   ensure_db_password
   if ! command -v psql >/dev/null 2>&1; then
     warn "psql is unavailable; database schema was copied but not applied."
     return 0
   fi
-  if command -v pg_isready >/dev/null 2>&1 && ! pg_isready -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" >/dev/null 2>&1; then
-    if command -v systemctl >/dev/null 2>&1; then
-      sudo_if_needed systemctl enable --now postgresql >/dev/null 2>&1 || true
-    fi
-  fi
+  start_local_postgres
+  ensure_local_postgres_role_database
   PGPASSWORD="$ZORG_DB_PASSWORD" psql -h "$ZORG_DB_HOST" -p "$ZORG_DB_PORT" -U "$ZORG_DB_USER" -d "$ZORG_DB_NAME" -v ON_ERROR_STOP=1 -f "$ZORG_WORKSPACE_DIR/db/schema.sql" || {
     warn "Schema apply failed. Create database/role or set ZORG_DB_* variables, then rerun this script."
     return 0
@@ -272,7 +339,10 @@ PY
 
 import_markdown_rules() {
   if [[ ! -x "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" ]]; then
-    python3 -m venv "$OPENCLAW_WORKSPACE/.venv-sqlmem" || true
+    python3 -m venv "$OPENCLAW_WORKSPACE/.venv-sqlmem" || {
+      warn "Could not create SQL memory virtualenv. Install python3-venv, then rerun this script."
+      return 0
+    }
   fi
   if [[ -x "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" ]]; then
     "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" -m pip install --upgrade pip >/dev/null 2>&1 || true

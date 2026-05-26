@@ -226,14 +226,6 @@ The `StefRush2099/Zorg_MemoryDB` install package includes a Zorg bootstrap at `z
 
 For details, see [Zorg MemoryDB And LAN Command Chat Install](./zorg-memorydb.md).
 
-### Zorg MemoryDB release install command
-
-Use HTTPS for npm installs so clean systems and root installs do not require a GitHub SSH key:
-
-```bash
-sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
-```
-
 ## Zorg MemoryDB first-run installer
 
 Use the installer first on a fresh system. It follows the OpenClaw install pattern and upgrades/install prerequisites such as Node before installing Zorg MemoryDB and LAN command chat.
@@ -242,8 +234,13 @@ Use the installer first on a fresh system. It follows the OpenClaw install patte
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
 ```
 
+Install order is intentional: OpenClaw is installed first from the normal OpenClaw package, then the Zorg MemoryDB add-on and LAN command chat are applied from this repository. This is the supported first-run path for hosts with missing or old software.
+
 Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
 
 ```bash
+node --version
 sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
+
+If `node --version` prints Node 12, Node 18, or any version below 22.19.0, do not use direct npm yet. Run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.

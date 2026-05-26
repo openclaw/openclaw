@@ -507,14 +507,6 @@ If the target Linux user lacks root or passwordless sudo, the bootstrap keeps th
 
 See [docs/install/zorg-memorydb.md](docs/install/zorg-memorydb.md).
 
-### GitHub release install command
-
-Use HTTPS for npm installs so target systems do not need a GitHub SSH key:
-
-```bash
-sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
-```
-
 ## Zorg MemoryDB first-run installer
 
 Use the installer first on a fresh system. It follows the OpenClaw install pattern and upgrades/install prerequisites such as Node before installing Zorg MemoryDB and LAN command chat.
@@ -523,8 +515,13 @@ Use the installer first on a fresh system. It follows the OpenClaw install patte
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
 ```
 
+Install order is intentional: the script prepares missing software first, installs the normal OpenClaw package, then fetches and applies the Zorg MemoryDB add-on plus LAN command chat. Do not use direct npm on fresh hosts as a replacement for this installer.
+
 Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
 
 ```bash
+node --version
 sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
+
+If `node --version` prints Node 12, Node 18, or any version below 22.19.0, do not use direct npm yet. Run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.

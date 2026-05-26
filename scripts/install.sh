@@ -2692,16 +2692,12 @@ resolve_package_install_spec() {
 }
 
 install_openclaw() {
-    local install_spec="${ZORG_MEMORYDB_NPM_SPEC:-git+https://github.com/StefRush2099/Zorg_MemoryDB.git}"
+    local install_spec="${OPENCLAW_NPM_SPEC:-openclaw@latest}"
     if [[ -n "${OPENCLAW_VERSION:-}" && "${OPENCLAW_VERSION}" != "latest" ]]; then
-        case "${OPENCLAW_VERSION}" in
-            zorg-memorydb-v*|v20*|20*)
-                install_spec="git+https://github.com/StefRush2099/Zorg_MemoryDB.git#${OPENCLAW_VERSION}"
-                ;;
-        esac
+        install_spec="openclaw@${OPENCLAW_VERSION}"
     fi
 
-    ui_info "Installing Zorg MemoryDB OpenClaw package (${install_spec})"
+    ui_info "Installing OpenClaw package (${install_spec})"
 
     if ! install_openclaw_npm "${install_spec}"; then
         ui_warn "npm install failed; retrying"
@@ -2711,7 +2707,7 @@ install_openclaw() {
 
     ensure_openclaw_bin_link || true
 
-    ui_success "Zorg MemoryDB OpenClaw package installed"
+    ui_success "OpenClaw package installed"
 }
 
 # Run doctor for migrations (safe, non-interactive)
@@ -2991,9 +2987,34 @@ run_zorg_memorydb_bootstrap() {
             return $?
         fi
     done
-    ui_warn "Zorg MemoryDB bootstrap script was not found in the installed package"
-    ui_info "Expected: <openclaw package>/zorg/install-zorg-memorydb.sh"
-    return 0
+
+    ui_stage "Installing Zorg MemoryDB and LAN command chat"
+    ui_info "Zorg MemoryDB add-on files were not bundled with this installer; fetching them from GitHub"
+
+    local addon_ref="${ZORG_MEMORYDB_REF:-main}"
+    local addon_spec="${ZORG_MEMORYDB_REPO:-https://github.com/StefRush2099/Zorg_MemoryDB.git}"
+    local addon_dir=""
+    addon_dir="$(mktemp -d)"
+    TMPFILES+=("$addon_dir")
+
+    if ! git clone --depth 1 --branch "$addon_ref" "$addon_spec" "$addon_dir" >/dev/null 2>&1; then
+        ui_warn "Branch ${addon_ref} was not available; retrying default branch"
+        rm -rf "$addon_dir"
+        addon_dir="$(mktemp -d)"
+        TMPFILES+=("$addon_dir")
+        git clone --depth 1 "$addon_spec" "$addon_dir" >/dev/null 2>&1 || {
+            ui_error "Could not fetch Zorg MemoryDB add-on source from ${addon_spec}"
+            return 1
+        }
+    fi
+
+    candidate="${addon_dir}/zorg/install-zorg-memorydb.sh"
+    if [[ ! -f "$candidate" ]]; then
+        ui_error "Fetched Zorg MemoryDB source did not contain zorg/install-zorg-memorydb.sh"
+        return 1
+    fi
+
+    OPENCLAW_INSTALL_IN_PROGRESS=1 bash "$candidate" --from-openclaw-install
 }
 
 
