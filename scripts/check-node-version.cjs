@@ -76,6 +76,7 @@ function installNodeWithSystemPackageManager() {
         asRoot("apt-get update"),
         asRoot("apt-get install -y ca-certificates curl gnupg"),
         "curl -fsSL https://deb.nodesource.com/setup_22.x | " + asRoot("bash -"),
+        asRoot("apt-get remove -y npm libnode-dev nodejs-doc || true"),
         asRoot("apt-get install -y nodejs"),
       ].join("\n"),
     ).status === 0;
