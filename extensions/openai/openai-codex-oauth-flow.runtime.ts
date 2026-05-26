@@ -105,6 +105,20 @@ function parseAuthorizationInput(input: string): { code?: string; state?: string
   return { code: value };
 }
 
+async function promptForAuthorizationCode(
+  onPrompt: (prompt: OAuthPrompt) => Promise<string>,
+  state: string,
+): Promise<string | undefined> {
+  const input = await onPrompt({
+    message: "Paste the authorization code (or full redirect URL):",
+  });
+  const parsed = parseAuthorizationInput(input);
+  if (parsed.state && parsed.state !== state) {
+    throw new Error("State mismatch");
+  }
+  return parsed.code;
+}
+
 function formatMissingTokenResponseFields(json: TokenResponseJson): string {
   const missing: string[] = [];
   if (!json.access_token) {
@@ -390,24 +404,27 @@ export async function loginOpenAICodex(options: {
         }
       }
     } else {
-      const result = await Promise.race([server.waitForCode(), waitForManualPromptFallback()]);
+      const callbackPromise = server.waitForCode();
+      const result = await Promise.race([callbackPromise, waitForManualPromptFallback()]);
       if (result?.code) {
         code = result.code;
       } else {
-        server.cancelWait();
+        const promptCodePromise = promptForAuthorizationCode(options.onPrompt, state).then(
+          (promptCode) => {
+            server.cancelWait();
+            return promptCode;
+          },
+        );
+        code = await Promise.race([
+          callbackPromise.then((callback) => callback?.code),
+          promptCodePromise,
+        ]);
       }
     }
 
     // Fallback to onPrompt if still no code
     if (!code) {
-      const input = await options.onPrompt({
-        message: "Paste the authorization code (or full redirect URL):",
-      });
-      const parsed = parseAuthorizationInput(input);
-      if (parsed.state && parsed.state !== state) {
-        throw new Error("State mismatch");
-      }
-      code = parsed.code;
+      code = await promptForAuthorizationCode(options.onPrompt, state);
     }
 
     if (!code) {
