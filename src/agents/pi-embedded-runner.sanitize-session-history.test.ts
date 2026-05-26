@@ -1058,7 +1058,23 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("preserves signed thinking turns while repairing legacy tool-result pairing for anthropic", async () => {
+    setNonGoogleModelApi();
     const sessionManager = makeMockSessionManager();
+    const nativeAnthropicPolicy: TranscriptPolicy = {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      repairToolUseResultPairing: true,
+      preserveSignatures: true,
+      sanitizeThinkingSignatures: false,
+      dropThinkingBlocks: false,
+      dropReasoningFromHistory: false,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    };
     const messages: AgentMessage[] = [
       makeUserMessage("Use the gateway"),
       makeAssistantMessage(
@@ -1085,6 +1101,7 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-sonnet-4-6",
       sessionManager,
       sessionId: TEST_SESSION_ID,
+      policy: nativeAnthropicPolicy,
     });
     const validated = await validateReplayTurns({
       messages: sanitized,
@@ -1092,6 +1109,7 @@ describe("sanitizeSessionHistory", () => {
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       sessionId: TEST_SESSION_ID,
+      policy: nativeAnthropicPolicy,
     });
 
     expect(sanitized.map((msg) => msg.role)).toEqual(["user", "assistant", "toolResult", "user"]);
