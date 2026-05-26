@@ -1,0 +1,132 @@
+{
+  "id": "adaptive-tone",
+  "name": "Adaptive Tone",
+  "description": "Adjusts the assistant's tone by context — time of day, channel, repeated questions, and user-stated wellbeing. Steers delivery only, not facts or safety.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "time": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "timezone": { "type": "string" }
+        }
+      },
+      "place": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "professionalChannels": { "type": "array", "items": { "type": "string" } },
+          "casualChannels": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "repetition": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "windowTurns": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "similarityThreshold": { "type": "number", "minimum": 0.1, "maximum": 1 }
+        }
+      },
+      "wellbeing": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "phrases": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "weather": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "latitude": { "type": "number" },
+          "longitude": { "type": "number" }
+        }
+      },
+      "guidanceOverrides": {
+        "type": "object",
+        "additionalProperties": { "type": "string" },
+        "properties": {
+          "gentle-care": { "type": "string" },
+          "patient-repeat": { "type": "string" },
+          "patient-light": { "type": "string" },
+          "quiet-latenight": { "type": "string" },
+          "professional": { "type": "string" },
+          "casual": { "type": "string" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Adaptive Tone",
+      "help": "Master switch. When off, the plugin injects nothing and the assistant behaves normally."
+    },
+    "time.enabled": {
+      "label": "Time-of-day tone",
+      "help": "Soften and shorten replies late at night."
+    },
+    "time.timezone": {
+      "label": "Timezone (IANA)",
+      "help": "e.g. Europe/Berlin. Used to decide the hour of day. Defaults to the Gateway host's local time."
+    },
+    "place.enabled": {
+      "label": "Channel-aware tone",
+      "help": "Use a more professional or more casual register depending on the channel."
+    },
+    "place.professionalChannels": {
+      "label": "Professional channels",
+      "help": "Channel ids/prefixes that should get a crisp, formal tone (e.g. slack, teams)."
+    },
+    "place.casualChannels": {
+      "label": "Casual channels",
+      "help": "Channel ids/prefixes that should get a relaxed, friendly tone (e.g. whatsapp, telegram)."
+    },
+    "repetition.enabled": {
+      "label": "Patience on repeats",
+      "help": "Be more patient and re-explain differently when the user asks the same thing again."
+    },
+    "repetition.windowTurns": {
+      "label": "Repeat scan window",
+      "help": "How many recent user turns to scan for repeated asks. Default 6."
+    },
+    "repetition.similarityThreshold": {
+      "label": "Repeat similarity threshold",
+      "help": "Token-overlap (0–1) above which two asks count as the same question. Default 0.8."
+    },
+    "wellbeing.enabled": {
+      "label": "Gentler when unwell",
+      "help": "Soften tone when the user explicitly says they are unwell or having a hard time. Tone only — never medical advice."
+    },
+    "wellbeing.phrases": {
+      "label": "Wellbeing phrases",
+      "help": "Lower-cased phrases that trigger the gentler tone. Only explicit, user-volunteered statements are matched."
+    },
+    "weather.enabled": {
+      "label": "Weather-aware tone",
+      "help": "Adapt tone according to local weather conditions (rainy, sunny, hot, cold)."
+    },
+    "weather.latitude": {
+      "label": "Latitude",
+      "help": "Latitude for weather reports. Defaults to Berlin (52.52)."
+    },
+    "weather.longitude": {
+      "label": "Longitude",
+      "help": "Longitude for weather reports. Defaults to Berlin (13.41)."
+    },
+    "guidanceOverrides": {
+      "label": "Custom tone text",
+      "help": "Advanced: replace the default guidance for any tone state. Keep it static (no per-turn data) to preserve prompt caching."
+    }
+  }
+}

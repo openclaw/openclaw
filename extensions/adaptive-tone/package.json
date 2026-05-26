@@ -1,0 +1,42 @@
+{
+  "name": "openclaw-adaptive-tone",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin that adapts the assistant's tone to context (time, channel, repetition, wellbeing).",
+  "type": "module",
+  "license": "MIT",
+  "author": "Vishal Nair Vijayan Pillai",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "tone",
+    "persona"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.0",
+      "minGatewayVersion": "2026.5.0"
+    },
+    "build": {
+      "openclawVersion": "2026.5.25",
+      "pluginSdkVersion": "2026.5.25"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "openclaw": "^2026.5.22",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
