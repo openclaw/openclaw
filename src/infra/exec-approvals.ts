@@ -758,6 +758,15 @@ export function ensureExecApprovals(): ExecApprovalsFile {
   return updated;
 }
 
+function isExecApprovalsFileMissing(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
 function isExecSecurity(value: unknown): value is ExecSecurity {
   return value === "allowlist" || value === "full" || value === "deny";
 }
@@ -890,12 +899,28 @@ export type ExecApprovalsDefaultOverrides = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
+  requireSocket?: boolean;
 };
 
 export function resolveExecApprovals(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
+  const filePath = resolveExecApprovalsPath();
+  if (!overrides?.requireSocket && isExecApprovalsFileMissing(filePath)) {
+    const file = normalizeExecApprovals({ version: 1, agents: {} });
+    const resolved = resolveExecApprovalsFromFile({
+      file,
+      agentId,
+      overrides,
+      path: filePath,
+      socketPath: resolveExecApprovalsSocketPath(),
+      token: "",
+    });
+    if (resolved.agent.security === "full" && resolved.agent.ask === "off") {
+      return resolved;
+    }
+  }
   const file = ensureExecApprovals();
   return resolveExecApprovalsFromFile({
     file,
