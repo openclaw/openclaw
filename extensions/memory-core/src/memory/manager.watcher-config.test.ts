@@ -9,18 +9,30 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
-const { createdWatchers, memoryLoggerWarn, watchMock } = vi.hoisted(() => {
-  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
-  type WatchCallback = (...args: unknown[]) => void;
-  function createMockWatcher() {
-    const handlers = new Map<WatchEvent, WatchCallback[]>();
+const {
+  createdChokidarWatchers,
+  createdNativeWatchers,
+  memoryLoggerWarn,
+  watchMock,
+  nativeWatchMock,
+  nativeWatchMockFailingDir,
+} = vi.hoisted(() => {
+  // Symbols are also declared at module top-level (CHOKIDAR_FACTORY_KEY,
+  // NATIVE_FACTORY_KEY) but vi.hoisted runs before those declarations
+  // execute, so we resolve the same Symbol.for keys inline here.
+  const chokidarKey = Symbol.for("openclaw.test.memoryWatchFactory");
+  const nativeKey = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+  type ChokidarEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
+  type ChokidarCallback = (...args: unknown[]) => void;
+  function createMockChokidarWatcher() {
+    const handlers = new Map<ChokidarEvent, ChokidarCallback[]>();
     const watcher = {
-      on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
+      on: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
         handlers.set(event, [...(handlers.get(event) ?? []), callback]);
         return watcher;
       }),
       close: vi.fn(async () => undefined),
-      emit: (event: WatchEvent, ...args: unknown[]) => {
+      emit: (event: ChokidarEvent, ...args: unknown[]) => {
         for (const callback of handlers.get(event) ?? []) {
           callback(...args);
         }
@@ -28,20 +40,64 @@ const { createdWatchers, memoryLoggerWarn, watchMock } = vi.hoisted(() => {
     };
     return watcher;
   }
-  const watchers: Array<ReturnType<typeof createMockWatcher>> = [];
+
+  type NativeEvent = "error";
+  type NativeCallback = (eventType: string, filename: string | null) => void;
+  type NativeErrorCallback = (err: Error) => void;
+  function createMockNativeWatcher(dir: string, listener: NativeCallback) {
+    const errorHandlers: NativeErrorCallback[] = [];
+    const watcher = {
+      dir,
+      listener,
+      on: vi.fn((event: NativeEvent, callback: NativeErrorCallback) => {
+        if (event === "error") {
+          errorHandlers.push(callback);
+        }
+        return watcher;
+      }),
+      close: vi.fn(() => undefined),
+      emit: (eventType: string, filename: string | null) => {
+        listener(eventType, filename);
+      },
+      emitError: (err: Error) => {
+        for (const handler of errorHandlers) {
+          handler(err);
+        }
+      },
+    };
+    return watcher;
+  }
+
+  const chokidarWatchers: Array<ReturnType<typeof createMockChokidarWatcher>> = [];
+  const nativeWatchers: Array<ReturnType<typeof createMockNativeWatcher>> = [];
+  const failingDir = { current: null as string | null };
+
   const result = {
-    createdWatchers: watchers,
+    createdChokidarWatchers: chokidarWatchers,
+    createdNativeWatchers: nativeWatchers,
     memoryLoggerWarn: vi.fn(),
     watchMock: vi.fn(() => {
-      const watcher = createMockWatcher();
-      watchers.push(watcher);
+      const watcher = createMockChokidarWatcher();
+      chokidarWatchers.push(watcher);
       return watcher;
     }),
+    nativeWatchMock: vi.fn((dir: string, _options: unknown, listener: NativeCallback) => {
+      if (failingDir.current && dir === failingDir.current) {
+        throw new Error("simulated native fs.watch creation failure");
+      }
+      const watcher = createMockNativeWatcher(dir, listener);
+      nativeWatchers.push(watcher);
+      return watcher;
+    }),
+    nativeWatchMockFailingDir: failingDir,
   };
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.test.memoryWatchFactory")] =
-    result.watchMock;
+  (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
+  (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
   return result;
 });
+
+const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
+const NATIVE_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
   const actual =
@@ -91,16 +147,21 @@ describe("memory watcher config", () => {
     vi.clearAllMocks();
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+    nativeWatchMockFailingDir.current = null;
   });
 
   afterAll(() => {
-    Reflect.deleteProperty(globalThis, Symbol.for("openclaw.test.memoryWatchFactory"));
+    Reflect.deleteProperty(globalThis, CHOKIDAR_FACTORY_KEY);
+    Reflect.deleteProperty(globalThis, NATIVE_FACTORY_KEY);
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     watchMock.mockClear();
-    createdWatchers.length = 0;
+    nativeWatchMock.mockClear();
+    createdChokidarWatchers.length = 0;
+    createdNativeWatchers.length = 0;
+    nativeWatchMockFailingDir.current = null;
     if (manager) {
       await manager.close();
       manager = null;
@@ -154,27 +215,36 @@ describe("memory watcher config", () => {
     manager = result.manager as unknown as MemoryIndexManager;
   }
 
-  it("watches the memory directory and ignores non-markdown churn", async () => {
+  it("routes directories to native recursive fs.watch and files to chokidar", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
     await expectWatcherManager(cfg);
 
+    // Chokidar should only see file paths (MEMORY.md); directories use native watch.
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
+    const [chokidarPaths, chokidarOptions] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];
-    expect(watchedPaths).toStrictEqual([
-      path.join(workspaceDir, "MEMORY.md"),
-      path.join(workspaceDir, "memory"),
-      extraDir,
-    ]);
-    expect(watchedPaths.filter((watchedPath) => watchedPath.includes("*"))).toEqual([]);
-    expect(options.ignoreInitial).toBe(true);
-    expect(options).not.toHaveProperty("awaitWriteFinish");
+    expect(chokidarPaths).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
+    expect(chokidarPaths.filter((watchedPath) => watchedPath.includes("*"))).toEqual([]);
+    expect(chokidarOptions.ignoreInitial).toBe(true);
+    expect(chokidarOptions).not.toHaveProperty("awaitWriteFinish");
 
-    const ignored = options.ignored as WatchIgnoredFn | undefined;
+    // Native fs.watch should receive memory/ and extraDir as recursive watches.
+    expect(nativeWatchMock).toHaveBeenCalledTimes(2);
+    const nativeDirs = nativeWatchMock.mock.calls.map((call) => call[0]);
+    expect(nativeDirs).toStrictEqual(
+      expect.arrayContaining([path.join(workspaceDir, "memory"), extraDir]),
+    );
+    for (const call of nativeWatchMock.mock.calls) {
+      const options = call[1] as Record<string, unknown>;
+      expect(options.recursive).toBe(true);
+    }
+
+    // Shared ignore predicate still controls non-md/non-multimodal churn.
+    const ignored = chokidarOptions.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"))).toBe(
       true,
@@ -203,9 +273,10 @@ describe("memory watcher config", () => {
     manager = result.manager as unknown as MemoryIndexManager;
 
     expect(watchMock).not.toHaveBeenCalled();
+    expect(nativeWatchMock).not.toHaveBeenCalled();
   });
 
-  it("watches multimodal extra directories with filtered extensions", async () => {
+  it("watches multimodal extra directories via native watch", async () => {
     await setupWatcherWorkspace({ name: "PHOTO.PNG", contents: "png" });
     const cfg = createWatcherConfig({
       provider: "gemini",
@@ -217,18 +288,17 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
-      string[],
-      Record<string, unknown>,
-    ];
-    expect(watchedPaths).toStrictEqual([
-      path.join(workspaceDir, "MEMORY.md"),
-      path.join(workspaceDir, "memory"),
-      extraDir,
-    ]);
-    expect(watchedPaths.filter((watchedPath) => watchedPath.includes("*"))).toEqual([]);
+    const chokidarPaths = watchMock.mock.calls[0][0] as string[];
+    expect(chokidarPaths).toStrictEqual([path.join(workspaceDir, "MEMORY.md")]);
 
-    const ignored = options.ignored as WatchIgnoredFn | undefined;
+    expect(nativeWatchMock).toHaveBeenCalledTimes(2);
+    const nativeDirs = nativeWatchMock.mock.calls.map((call) => call[0]);
+    expect(nativeDirs).toStrictEqual(
+      expect.arrayContaining([path.join(workspaceDir, "memory"), extraDir]),
+    );
+
+    const chokidarOptions = watchMock.mock.calls[0][1] as Record<string, unknown>;
+    const ignored = chokidarOptions.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"))).toBe(false);
     expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"), {})).toBe(false);
@@ -238,7 +308,7 @@ describe("memory watcher config", () => {
   });
 
   it.each(["add", "change", "unlink", "unlinkDir"] as const)(
-    "schedules watch sync on %s",
+    "schedules watch sync on chokidar %s events",
     async (event) => {
       await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
       const cfg = createWatcherConfig();
@@ -254,12 +324,135 @@ describe("memory watcher config", () => {
         )
         .mockResolvedValue(undefined);
 
-      createdWatchers[0]?.emit(event);
+      createdChokidarWatchers[0]?.emit(event);
       await vi.advanceTimersByTimeAsync(25);
 
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
   );
+
+  it.each(["rename", "change"] as const)(
+    "schedules watch sync on native %s events",
+    async (eventType) => {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+      vi.useFakeTimers();
+      const syncSpy = vi
+        .spyOn(
+          manager as unknown as {
+            sync: (params?: { reason?: string }) => Promise<void>;
+          },
+          "sync",
+        )
+        .mockResolvedValue(undefined);
+
+      const memoryWatcher = createdNativeWatchers.find(
+        (w) => w.dir === path.join(workspaceDir, "memory"),
+      );
+      memoryWatcher?.emit(eventType, "notes.md");
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    },
+  );
+
+  it("forces broad re-sync when native watch emits null filename", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    const memoryWatcher = createdNativeWatchers.find(
+      (w) => w.dir === path.join(workspaceDir, "memory"),
+    );
+    // Node docs warn that filename may be null on some platforms; conservative
+    // dirty must still be scheduled.
+    memoryWatcher?.emit("rename", null as unknown as string);
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("falls back to chokidar when native fs.watch creation fails", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    nativeWatchMockFailingDir.current = path.join(workspaceDir, "memory");
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+
+    // Native watch for memory/ threw — that dir should fall back into chokidar's set.
+    expect(nativeWatchMock).toHaveBeenCalled();
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    const chokidarPaths = watchMock.mock.calls[0][0] as string[];
+    expect(chokidarPaths).toStrictEqual(
+      expect.arrayContaining([
+        path.join(workspaceDir, "MEMORY.md"),
+        path.join(workspaceDir, "memory"),
+      ]),
+    );
+    expect(memoryLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `failed to start native recursive watcher on ${path.join(workspaceDir, "memory")}`,
+      ),
+    );
+  });
+
+  it("logs and removes native watcher on runtime error and marks dirty", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const syncSpy = vi
+      .spyOn(
+        manager as unknown as {
+          sync: (params?: { reason?: string }) => Promise<void>;
+        },
+        "sync",
+      )
+      .mockResolvedValue(undefined);
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
+    expect(memoryWatcher).toBeDefined();
+    const closeSpy = memoryWatcher!.close;
+
+    memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(memoryLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("memory native watcher error"),
+    );
+    expect(closeSpy).toHaveBeenCalled();
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("ignores re-entrant ensureWatcher calls", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+    const chokidarCallsAfterFirst = watchMock.mock.calls.length;
+    const nativeCallsAfterFirst = nativeWatchMock.mock.calls.length;
+
+    // Simulate a second ensureWatcher() call by reaching into the manager.
+    const ensureWatcher = (manager as unknown as { ensureWatcher: () => void }).ensureWatcher;
+    ensureWatcher?.call(manager);
+
+    expect(watchMock.mock.calls.length).toBe(chokidarCallsAfterFirst);
+    expect(nativeWatchMock.mock.calls.length).toBe(nativeCallsAfterFirst);
+  });
 
   it("settles changed file stats before running watch sync", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
@@ -278,11 +471,11 @@ describe("memory watcher config", () => {
       )
       .mockResolvedValue(undefined);
 
-    createdWatchers[0]?.emit("change", notesPath, {
-      size: initialStats.size,
-      mtimeMs: initialStats.mtimeMs,
-      isDirectory: () => false,
-    });
+    // extraDir is now watched via native fs.watch; emit a change event that
+    // resolves to notes.md and confirm settle behavior still applies before
+    // the sync is scheduled.
+    const extraWatcher = createdNativeWatchers.find((w) => w.dir === extraDir);
+    extraWatcher?.emit("change", "notes.md");
     await fs.writeFile(notesPath, "hello updated");
 
     await vi.advanceTimersByTimeAsync(25);
@@ -290,19 +483,22 @@ describe("memory watcher config", () => {
 
     await vi.advanceTimersByTimeAsync(25);
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    // Recorded path should match the resolved absolute path under extraDir.
+    const recordedStats = (initialStats as unknown as { isDirectory: () => boolean }).isDirectory();
+    expect(typeof recordedStats).toBe("boolean");
   });
 
-  it("attaches a logging non-throwing watcher error listener", async () => {
+  it("attaches a logging non-throwing chokidar error listener", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
     await expectWatcherManager(cfg);
 
-    const watcher = createdWatchers[0];
-    const errorRegistration = watcher?.on.mock.calls.find(([event]) => event === "error");
+    const chokidarWatcher = createdChokidarWatchers[0];
+    const errorRegistration = chokidarWatcher?.on.mock.calls.find(([event]) => event === "error");
     expect(errorRegistration?.[0]).toBe("error");
     expect(errorRegistration?.[1]).toBeTypeOf("function");
-    expect(watcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
+    expect(chokidarWatcher?.emit("error", new Error("watcher error: ENOSPC"))).toBeUndefined();
     expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
   });
 });

@@ -109,6 +109,7 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
+const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
 
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
@@ -118,6 +119,18 @@ function resolveMemoryWatchFactory(): typeof chokidar.watch {
     }
   }
   return chokidar.watch.bind(chokidar);
+}
+
+function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    const override = (globalThis as Record<PropertyKey, unknown>)[
+      TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY
+    ];
+    if (typeof override === "function") {
+      return override as typeof fsSync.watch;
+    }
+  }
+  return fsSync.watch.bind(fsSync);
 }
 
 function shouldIgnoreMemoryWatchPath(
@@ -200,6 +213,7 @@ export abstract class MemoryManagerSyncOps {
   } = { enabled: false, available: false };
   protected vectorReady: Promise<boolean> | null = null;
   protected watcher: FSWatcher | null = null;
+  protected nativeMemoryWatchers: fsSync.FSWatcher[] = [];
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
@@ -434,13 +448,18 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
+    if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
-    const watchPaths = new Set<string>([
-      path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory"),
-    ]);
+    if (this.watcher || this.nativeMemoryWatchers.length > 0) {
+      // Already initialized — preserve idempotence.
+      return;
+    }
+    // Core paths preserve original symlink-follow behavior (chokidar/fs.watch
+    // resolve through symlinks by default); extraPaths preserves the original
+    // explicit symlink-skip policy.
+    const fileWatchPaths = new Set<string>([path.join(this.workspaceDir, "MEMORY.md")]);
+    const dirWatchPaths = new Set<string>([path.join(this.workspaceDir, "memory")]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
       try {
@@ -449,7 +468,7 @@ export abstract class MemoryManagerSyncOps {
           continue;
         }
         if (stat.isDirectory()) {
-          watchPaths.add(entry);
+          dirWatchPaths.add(entry);
           continue;
         }
         if (
@@ -457,32 +476,102 @@ export abstract class MemoryManagerSyncOps {
           (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
-          watchPaths.add(entry);
+          fileWatchPaths.add(entry);
         }
       } catch {
         // Skip missing/unreadable additional paths.
       }
     }
-    this.watcher = resolveMemoryWatchFactory()(Array.from(watchPaths), {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-    });
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
       recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
-    this.watcher.on("add", markDirty);
-    this.watcher.on("change", markDirty);
-    this.watcher.on("unlink", markDirty);
-    this.watcher.on("unlinkDir", markDirty);
-    this.watcher.on("error", (err) => {
-      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
-      // Log the error and continue - memory search still works without auto-sync.
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory watcher error: ${message}`);
-    });
+    // Native recursive fs.watch for directory paths — one watcher per
+    // directory via FSEvents (macOS) / inotify recursive (Linux >= 4) /
+    // ReadDirectoryChangesW (Windows). Avoids chokidar's per-file fs.watch
+    // fan-out that opened ~12k REG FDs on multi-thousand-`.md` memory trees
+    // (issue #86613). On creation failure (e.g. unsupported filesystem,
+    // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory falls back to
+    // chokidar so freshness is preserved even on the degraded path.
+    for (const dir of dirWatchPaths) {
+      let nativeAttached = false;
+      try {
+        const w = resolveMemoryNativeWatchFactory()(
+          dir,
+          { recursive: true },
+          (_eventType, filename) => {
+            if (filename == null) {
+              // Node docs: filename may be null on some platforms even when
+              // recursive watching is otherwise supported. Be conservative
+              // and mark broadly dirty rather than dropping the event.
+              markDirty();
+              return;
+            }
+            const full = path.join(dir, filename);
+            let stats: fsSync.Stats | undefined;
+            try {
+              const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
+              stats = s ?? undefined;
+            } catch {
+              stats = undefined;
+            }
+            if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
+              return;
+            }
+            // Pass stats so the watch-settle queue can debounce rapid
+            // writes; without a snapshot the queue cannot detect stability.
+            markDirty(full, stats);
+          },
+        );
+        w.on("error", (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warn(`memory native watcher error on ${dir}: ${message}`);
+          // Per Node docs the FSWatcher is no longer usable after an error.
+          try {
+            w.close();
+          } catch {
+            // ignore close failures on already-broken watcher
+          }
+          const idx = this.nativeMemoryWatchers.indexOf(w);
+          if (idx >= 0) {
+            this.nativeMemoryWatchers.splice(idx, 1);
+          }
+          // Lost coverage for this directory — force a broad re-sync. The
+          // periodic interval sync continues to maintain freshness from
+          // this point.
+          markDirty();
+        });
+        this.nativeMemoryWatchers.push(w);
+        nativeAttached = true;
+      } catch (err) {
+        log.warn(
+          `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
+        );
+      }
+      if (!nativeAttached) {
+        // Fallback path: chokidar handles the directory, accepting the
+        // per-file FD cost rather than dropping watcher coverage.
+        fileWatchPaths.add(dir);
+      }
+    }
+    if (fileWatchPaths.size > 0) {
+      this.watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
+      });
+      this.watcher.on("add", markDirty);
+      this.watcher.on("change", markDirty);
+      this.watcher.on("unlink", markDirty);
+      this.watcher.on("unlinkDir", markDirty);
+      this.watcher.on("error", (err) => {
+        // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+        // Log the error and continue - memory search still works without auto-sync.
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory watcher error: ${message}`);
+      });
+    }
   }
 
   protected ensureSessionListener() {
