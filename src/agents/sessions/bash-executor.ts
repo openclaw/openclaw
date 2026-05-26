@@ -6,13 +6,11 @@
  * - Direct calls from modes that need bash execution
  */
 
-import { randomBytes } from "node:crypto";
-import { createWriteStream, type WriteStream } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import type { WriteStream } from "node:fs";
 import { stripAnsi } from "../utils/ansi.js";
 import { sanitizeBinaryOutput } from "../utils/shell.js";
 import type { BashOperations } from "./tools/bash-operations.js";
+import { createPrivateTempWriteStream } from "./tools/private-temp-file.js";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.js";
 
 // ============================================================================
@@ -65,12 +63,33 @@ export async function executeBashWithOperations(
     if (tempFilePath) {
       return;
     }
-    const id = randomBytes(8).toString("hex");
-    tempFilePath = join(tmpdir(), `openclaw-bash-${id}.log`);
-    tempFileStream = createWriteStream(tempFilePath);
+    const tempFile = createPrivateTempWriteStream("openclaw-bash");
+    tempFilePath = tempFile.path;
+    tempFileStream = tempFile.stream;
     for (const chunk of outputChunks) {
       tempFileStream.write(chunk);
     }
+  };
+
+  const closeTempFile = async () => {
+    if (!tempFileStream) {
+      return;
+    }
+    const stream = tempFileStream;
+    tempFileStream = undefined;
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => {
+        stream.off("finish", onFinish);
+        reject(error);
+      };
+      const onFinish = () => {
+        stream.off("error", onError);
+        resolve();
+      };
+      stream.once("error", onError);
+      stream.once("finish", onFinish);
+      stream.end();
+    });
   };
 
   const decoder = new TextDecoder();
@@ -118,9 +137,7 @@ export async function executeBashWithOperations(
     if (truncationResult.truncated) {
       ensureTempFile();
     }
-    if (tempFileStream) {
-      tempFileStream.end();
-    }
+    await closeTempFile();
     const cancelled = options?.signal?.aborted ?? false;
 
     return {
@@ -138,9 +155,7 @@ export async function executeBashWithOperations(
       if (truncationResult.truncated) {
         ensureTempFile();
       }
-      if (tempFileStream) {
-        tempFileStream.end();
-      }
+      await closeTempFile();
       return {
         output: truncationResult.truncated ? truncationResult.content : fullOutput,
         exitCode: undefined,
@@ -150,9 +165,7 @@ export async function executeBashWithOperations(
       };
     }
 
-    if (tempFileStream) {
-      tempFileStream.end();
-    }
+    await closeTempFile();
 
     throw err;
   }
