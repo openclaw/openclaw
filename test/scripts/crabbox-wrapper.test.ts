@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -28,7 +28,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
     "}",
-    "console.log(JSON.stringify({ args, cwd: process.cwd() }));",
+    "const scriptIndex = args.findIndex((arg) => arg === '--script' || arg === '-script');",
+    "const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : '';",
+    "const scriptContent = scriptPath ? require('node:fs').readFileSync(scriptPath, 'utf8') : '';",
+    "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
   ].join("\n");
   writeFileSync(crabboxPath, `${script}\n`, "utf8");
   writeFileSync(
@@ -74,6 +77,7 @@ function runWrapper(
   options: {
     extraPathEntries?: string[];
     gitResponses?: Record<string, { status?: number; stdout?: string; stderr?: string }>;
+    input?: string;
   } = {},
 ) {
   const binDir = makeFakeCrabbox(helpText);
@@ -81,23 +85,31 @@ function runWrapper(
   return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
+    input: options.input,
     env: {
       ...process.env,
       PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
         .filter(Boolean)
         .join(path.delimiter),
+      OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
       ...(options.gitResponses
         ? { OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(options.gitResponses) }
         : {}),
     },
+    timeout: 10_000,
   });
 }
 
 function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): {
   args: string[];
   cwd: string;
+  scriptContent?: string;
 } {
-  return JSON.parse(result.stdout.trim()) as { args: string[]; cwd: string };
+  return JSON.parse(result.stdout.trim()) as {
+    args: string[];
+    cwd: string;
+    scriptContent?: string;
+  };
 }
 
 function normalizeShellLineEndings(value: string): string {
@@ -118,6 +130,35 @@ afterEach(() => {
 });
 
 describe("scripts/crabbox-wrapper", () => {
+  const advertisedProviderAliasHelp = [
+    "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
+    "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
+    "",
+  ].join("\n");
+  const advertisedProviderAliases = [
+    "blacksmith",
+    "cf",
+    "container",
+    "docker",
+    "exe",
+    "exedev",
+    "google",
+    "google-cloud",
+    "local-docker",
+    "namespace",
+    "namespace-devboxes",
+    "rail",
+    "railwayapp",
+    "run-pod",
+    "runpodio",
+    "sem",
+    "static",
+    "static-ssh",
+  ];
+  beforeAll(() => {
+    runWrapper("provider: aws\n", ["--version"]);
+  });
+
   it("accepts advertised canonical providers from Crabbox help", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -233,6 +274,9 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("shasum -a 256 -c -");
     expect(remoteCommand).not.toContain("set -euo pipefail");
     expect(remoteCommand).toContain('return "$status"');
+    expect(remoteCommand).toContain('if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;');
+    expect(remoteCommand).toContain('mkdir -p "$TMPDIR"');
+    expect(remoteCommand).toContain('usable TMPDIR not found: $TMPDIR');
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain("pnpm --version >&2");
     expectGroupedShellCommand(remoteCommand, "pnpm --version");
@@ -269,6 +313,72 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
     expectGroupedShellCommand(remoteCommand, shellScript);
+  });
+
+  it("bootstraps AWS macOS script-stdin runs before the uploaded script body", () => {
+    const script = ["set -euo pipefail", "node -v", "pnpm --version"].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).not.toContain("--script-stdin");
+    expect(output.args).toContain("--script");
+    expect(result.stderr).toContain(
+      "bootstrapping a pinned user-local Node toolchain before the command",
+    );
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(output.scriptContent).toContain('if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR"');
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain(`\n${script}`);
+  });
+
+  it("preserves AWS macOS script-stdin shebang payloads behind the bootstrap wrapper", () => {
+    const script = ["#!/usr/bin/env node", "console.log(process.version);"].join("\n");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--script-stdin", "--", "arg1"],
+      { input: script },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).not.toContain("--script-stdin");
+    expect(output.args).toContain("--script");
+    expect(output.scriptContent).toContain("openclaw_crabbox_bootstrap_macos_js || exit $?");
+    expect(output.scriptContent).toContain("cat >\"$tmp_script\" <<'OPENCLAW_CRABBOX_SCRIPT_0'");
+    expect(output.scriptContent).toContain(`\n${script}\nOPENCLAW_CRABBOX_SCRIPT_0\n`);
+    expect(output.scriptContent).toContain('chmod 700 "$tmp_script" || exit $?');
+    expect(output.scriptContent).toContain('"$tmp_script" "$@"');
+    expect(output.args.at(-1)).toBe("arg1");
+  });
+
+  it("does not treat run option values as AWS macOS script-stdin flags", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--label",
+        "--script-stdin",
+        "--",
+        "echo ok",
+      ],
+      { input: "node -v\n" },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--label");
+    expect(output.args).toContain("--script-stdin");
+    expect(output.args).not.toContain("--script");
+    expect(output.scriptContent).toBe("");
   });
 
   it("bootstraps raw AWS macOS shell scripts with setup inside command substitutions", () => {
@@ -734,6 +844,7 @@ describe("scripts/crabbox-wrapper", () => {
           encoding: "utf8",
           env: {
             ...process.env,
+            OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
             OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(gitResponses),
             PATH: [gitBinDir, path.dirname(process.execPath)].join(path.delimiter),
           },
@@ -803,40 +914,21 @@ describe("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).args).toContain("aws");
   });
 
-  it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
-    const helpText = [
-      "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
-      "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
-      "",
-    ].join("\n");
-    const aliases = [
-      "blacksmith",
-      "cf",
-      "container",
-      "docker",
-      "exe",
-      "exedev",
-      "google",
-      "google-cloud",
-      "local-docker",
-      "namespace",
-      "namespace-devboxes",
-      "rail",
-      "railwayapp",
-      "run-pod",
-      "runpodio",
-      "sem",
-      "static",
-      "static-ssh",
-    ];
-
-    for (const alias of aliases) {
-      const result = runWrapper(helpText, ["run", "--provider", alias, "--", "echo ok"]);
+  it.each(advertisedProviderAliases)(
+    "accepts Crabbox provider alias %s when its canonical provider is advertised",
+    (alias) => {
+      const result = runWrapper(advertisedProviderAliasHelp, [
+        "run",
+        "--provider",
+        alias,
+        "--",
+        "echo ok",
+      ]);
 
       expect(result.status, alias).toBe(0);
       expect(result.stdout).toContain(`"${alias}"`);
-    }
-  });
+    },
+  );
 
   it("accepts Crabbox provider aliases when upstream help omits Tensorlake", () => {
     const helpText = [

@@ -219,6 +219,32 @@ describe("install-sh smoke runner", () => {
     expect(runner).toContain("==> Direct npm global install candidate");
     expect(runner).toContain("==> Direct npm global update candidate");
   });
+
+  it("forwards smoke-runner control knobs into Docker containers", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("SMOKE_RUNNER_ENV_ARGS=()");
+    for (const envName of [
+      "OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING",
+      "OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION",
+      "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT",
+      "OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL",
+      "OPENCLAW_INSTALL_SMOKE_PREVIOUS",
+      "OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS",
+    ]) {
+      expect(script).toContain(envName);
+    }
+    expect(script).toMatch(
+      /Run installer smoke test[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+    );
+    expect(script).toMatch(/Run update smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u);
+    expect(script).toMatch(
+      /Run direct npm global smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+    );
+    expect(script).toMatch(
+      /Run installer npm freshness smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+    );
+  });
 });
 
 describe("bun global install smoke", () => {

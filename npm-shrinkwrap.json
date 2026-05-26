@@ -26,7 +26,6 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
-        "@silvia-odwyer/photon-node": "0.3.4",
         "ajv": "8.20.0",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
@@ -49,6 +48,7 @@
         "playwright-core": "1.60.0",
         "qrcode": "1.5.4",
         "quickjs-wasi": "2.2.0",
+        "rastermill": "0.2.0",
         "tar": "7.5.15",
         "tokenjuice": "0.7.1",
         "tree-sitter-bash": "0.25.1",
@@ -3840,6 +3840,18 @@
       "license": "MIT",
       "engines": {
         "node": ">= 0.6"
+      }
+    },
+    "node_modules/rastermill": {
+      "version": "0.2.0",
+      "resolved": "https://registry.npmjs.org/rastermill/-/rastermill-0.2.0.tgz",
+      "integrity": "sha512-Uc3oKCF4v+sh8OznkG5P6wzQQUstZI/dEGubjNXfWqmCn6iMEAVz8V8S3SVJf+lfQsGpL9iIjBOECmt2ernOAA==",
+      "license": "MIT",
+      "dependencies": {
+        "@silvia-odwyer/photon-node": "0.3.4"
+      },
+      "engines": {
+        "node": ">=20"
       }
     },
     "node_modules/raw-body": {

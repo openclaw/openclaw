@@ -1,13 +1,23 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const repoLocal = resolveCrabboxBinary(process.env, process.platform);
+const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
+const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const binary =
   repoLocal ??
@@ -1096,6 +1106,9 @@ function remoteAwsMacosJsBootstrap() {
     `node_version=${shellQuote(nodeVersion)};`,
     'arch="$(uname -m)";',
     'case "$arch" in arm64) node_arch=arm64 ;; x86_64) node_arch=x64 ;; *) echo "unsupported macOS arch: $arch" >&2; return 2 ;; esac;',
+    'if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR" 2>/dev/null || export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then echo "usable TMPDIR not found: $TMPDIR" >&2; return 1; fi;',
     'node_dir="$tool_root/node-v${node_version}-darwin-${node_arch}";',
     'export PATH="$node_dir/bin:$pnpm_home:$PATH";',
     'if [ ! -x "$node_dir/bin/node" ]; then',
@@ -1154,6 +1167,91 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
     shellCommand,
   );
   return normalizedArgs;
+}
+
+function hasRunOption(commandArgs, name) {
+  if (commandArgs[0] !== "run") {
+    return false;
+  }
+  const { optionEnd } = runCommandBounds(commandArgs);
+  const normalizedName = name.replace(/^-+/u, "");
+  for (let index = 1; index < optionEnd; index += 1) {
+    const arg = commandArgs[index];
+    if (arg.startsWith("-") && runOptionName(arg) === normalizedName) {
+      return true;
+    }
+    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
+      index += 1;
+    }
+  }
+  return false;
+}
+
+function replaceRunFlagWithScript(commandArgs, flagName, scriptPath) {
+  const { optionEnd } = runCommandBounds(commandArgs);
+  const normalizedName = flagName.replace(/^-+/u, "");
+  const normalizedArgs = [...commandArgs];
+  for (let index = 1; index < optionEnd; index += 1) {
+    const arg = normalizedArgs[index];
+    if (arg.startsWith("-") && runOptionName(arg) === normalizedName) {
+      normalizedArgs.splice(index, 1, "--script", scriptPath);
+      return normalizedArgs;
+    }
+    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
+      index += 1;
+    }
+  }
+  return normalizedArgs;
+}
+
+function prepareAwsMacosScriptStdinBootstrap(commandArgs, providerName) {
+  if (
+    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
+    !hasRunOption(commandArgs, "--script-stdin")
+  ) {
+    return { args: commandArgs, cleanup: () => {}, prepared: false };
+  }
+
+  const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-macos-script-"));
+  const scriptPath = resolve(scriptRoot, "script.sh");
+  const script = readFileSync(0, "utf8");
+  writeFileSync(scriptPath, createAwsMacosScriptStdinWrapper(script), "utf8");
+  chmodSync(scriptPath, 0o700);
+  return {
+    args: replaceRunFlagWithScript(commandArgs, "--script-stdin", scriptPath),
+    cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
+    prepared: true,
+  };
+}
+
+function createAwsMacosScriptStdinWrapper(script) {
+  if (!script.startsWith("#!")) {
+    return `${remoteAwsMacosJsBootstrap()} || exit $?\n${script}`;
+  }
+  const delimiter = uniqueHereDocDelimiter(script);
+  return [
+    `${remoteAwsMacosJsBootstrap()} || exit $?`,
+    'tmp_script="$(mktemp "${TMPDIR:-/tmp}/openclaw-crabbox-script.XXXXXX")" || exit $?',
+    'cleanup_openclaw_crabbox_script() { rm -f "$tmp_script"; }',
+    "trap cleanup_openclaw_crabbox_script EXIT",
+    `cat >"$tmp_script" <<'${delimiter}'`,
+    script.endsWith("\n") ? script.slice(0, -1) : script,
+    delimiter,
+    'chmod 700 "$tmp_script" || exit $?',
+    '"$tmp_script" "$@"',
+    "",
+  ].join("\n");
+}
+
+function uniqueHereDocDelimiter(script) {
+  let index = 0;
+  for (;;) {
+    const delimiter = `OPENCLAW_CRABBOX_SCRIPT_${index}`;
+    if (!new RegExp(`^${delimiter}$`, "mu").test(script)) {
+      return delimiter;
+    }
+    index += 1;
+  }
 }
 
 function isSparseCheckout() {
@@ -1320,7 +1418,7 @@ const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args);
 const commandProviderValue = commandProvider(args);
-const normalizedArgs = ensureAwsMacOnDemandMarket(args, provider);
+let normalizedArgs = ensureAwsMacOnDemandMarket(args, provider);
 
 console.error(
   `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
@@ -1365,21 +1463,30 @@ let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
 let remoteChangedGateBase = "";
-if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
-  const runWords = runCommandArgs(normalizedArgs);
-  const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
-  const checkout = prepareFullCheckoutForSync({ changedGateBase });
-  childCwd = checkout.dir;
-  cleanupChildCwd = () => checkout.cleanup();
-  remoteChangedGateBase = checkout.changedGateBase;
-  console.error(
-    `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
-  );
-  if (checkout.changedGateBase) {
+let scriptStdinPrepared = false;
+const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
+normalizedArgs = scriptBootstrap.args;
+scriptStdinPrepared = scriptBootstrap.prepared;
+try {
+  if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
+    const runWords = runCommandArgs(normalizedArgs);
+    const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
+    const checkout = prepareFullCheckoutForSync({ changedGateBase });
+    childCwd = checkout.dir;
+    cleanupChildCwd = () => checkout.cleanup();
+    remoteChangedGateBase = checkout.changedGateBase;
     console.error(
-      `[crabbox] remote changed gate detected; overlaying local HEAD as worktree changes from ${checkout.changedGateBase}`,
+      `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
     );
+    if (checkout.changedGateBase) {
+      console.error(
+        `[crabbox] remote changed gate detected; overlaying local HEAD as worktree changes from ${checkout.changedGateBase}`,
+      );
+    }
   }
+} catch (error) {
+  scriptBootstrap.cleanup();
+  throw error;
 }
 
 function cleanupOnce() {
@@ -1387,14 +1494,19 @@ function cleanupOnce() {
     return;
   }
   cleanupDone = true;
+  scriptBootstrap.cleanup();
   cleanupChildCwd();
 }
 
 const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(normalizedArgs));
-if (normalizedArgs[0] === "run" && provider === "aws" && runtimeEntrypoint) {
+if (
+  normalizedArgs[0] === "run" &&
+  provider === "aws" &&
+  (runtimeEntrypoint || scriptStdinPrepared)
+) {
   if (isAwsMacosRemoteTarget(normalizedArgs, provider)) {
     console.error(
-      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; bootstrapping a pinned user-local Node toolchain before the command`,
+      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint || "--script-stdin"}; bootstrapping a pinned user-local Node toolchain before the command`,
     );
   } else {
     const id = optionValue(normalizedArgs, "--id");

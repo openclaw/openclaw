@@ -1478,11 +1478,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile?.type).toBe("oauth");
-      expect(sanitized.profiles.codexProfile?.provider).toBe("openai-codex");
-      expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
-      expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
-      expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
+      expect(sanitized.profiles.codexProfile).toBeUndefined();
+      expect(sanitized.order).toBeUndefined();
+      expect(sanitized.lastGood).toBeUndefined();
+      expect(sanitized.usageStats).toBeUndefined();
     } finally {
       if (previousOpenAiKey === undefined) {
         delete process.env.OPENAI_API_KEY;

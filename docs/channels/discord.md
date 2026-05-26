@@ -1247,7 +1247,7 @@ Notes:
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
-- OpenClaw defaults to the `opus-decoder` WASM decoder for Discord voice receive. The older `opusscript` decoder is available only with `OPENCLAW_DISCORD_OPUS_DECODER=opusscript` because malformed Discord receive frames can abort the Node process inside its libopus binding. Dedicated voice-performance hosts can opt in to native `@discordjs/opus` with `OPENCLAW_DISCORD_OPUS_DECODER=native` after installing the native addon.
+- OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons.
 - `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
 - `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
 - In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw ignores new voice capture while TTS is playing; speak after playback finishes for the next turn. Realtime modes forward speaker starts as barge-in signals to the realtime provider.
@@ -1301,22 +1301,11 @@ Choose between the join modes:
 - Use `autoJoin` for fixed-room bots that should be present even when no tracked user is in voice.
 - Use `/vc join` for one-off joins or rooms where automatic voice presence would be surprising.
 
-Native opus setup for source checkouts:
+Discord voice codec:
 
-```bash
-pnpm install
-mise exec node@22 -- pnpm discord:opus:install
-```
-
-Use Node 22 for the gateway when you want the upstream macOS arm64 prebuilt native addon. If you use another Node runtime, the opt-in installer may need a local `node-gyp` source-build toolchain.
-
-After installing the native addon, start the Gateway with:
-
-```bash
-OPENCLAW_DISCORD_OPUS_DECODER=native pnpm gateway:watch
-```
-
-Verbose voice logs should show `discord voice: opus decoder: @discordjs/opus`. Without the env opt-in, OpenClaw logs `discord voice: opus decoder: opus-decoder` and keeps receiving voice through the bundled WASM decoder. If `OPENCLAW_DISCORD_OPUS_DECODER=native` is set but the native addon is missing or cannot load on the host, OpenClaw logs that no usable opus decoder is available instead of falling back to `opusscript`.
+- Voice receive logs show `discord voice: opus decoder: libopus-wasm`.
+- Realtime playback encodes raw 48 kHz stereo PCM to Opus with the same bundled `libopus-wasm` package before handing packets to `@discordjs/voice`.
+- File and provider-stream playback transcodes to raw 48 kHz stereo PCM with ffmpeg, then uses `libopus-wasm` for the Opus packet stream sent to Discord.
 
 STT plus TTS pipeline:
 

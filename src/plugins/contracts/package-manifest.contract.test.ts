@@ -5,7 +5,12 @@ type PackageManifestContractParams = Parameters<typeof describePackageManifestCo
 const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "discord",
-    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
+    pluginLocalRuntimeDeps: [
+      "@discordjs/voice",
+      "discord-api-types",
+      "libopus-wasm",
+      "prism-media",
+    ],
     minHostVersionBaseline: "2026.3.22",
   },
   {

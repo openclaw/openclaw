@@ -212,6 +212,74 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample).toEqual({ cpuPercent: 12.5, rssMiB: 256 });
   });
 
+  it("samples the POSIX gateway child instead of the pnpm launcher", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async (command: string, args: string[]) => {
+        expect(command).toBe("ps");
+        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        return {
+          stdout: [
+            " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+            " 4322  4321  262144  12.5 node dist/index.js gateway --port 19080 --bind loopback",
+            " 4323  4322   32768   1.5 node helper.js",
+          ].join("\n"),
+          stderr: "",
+        };
+      },
+    });
+
+    expect(sample).toEqual({ cpuPercent: 12.5, processId: 4322, rssMiB: 256 });
+  });
+
+  it("falls back to the POSIX gateway process title when the port arg is rewritten", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout: [
+          " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+          " 4322  4321  262144  12.5 openclaw-gateway",
+          " 4323  4322   32768   1.5 node helper.js",
+        ].join("\n"),
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({ cpuPercent: 12.5, processId: 4322, rssMiB: 256 });
+  });
+
+  it("falls back to the largest POSIX child when the gateway command line is unavailable", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout: [
+          " 4321     1 1048576   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
+          " 4322  4321  262144  12.5 node",
+          " 4323  4322   32768   1.5 node helper.js",
+        ].join("\n"),
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({ cpuPercent: 12.5, processId: 4322, rssMiB: 256 });
+  });
+
+  it("does not accept a POSIX launcher sample when the gateway child is missing", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "darwin",
+      posixCommandLineNeedles: ["gateway", "--port", "19080"],
+      runCommand: async () => ({
+        stdout: " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw status\n",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toBeNull();
+  });
+
   it("retries transient loopback fetch resets from Windows HTTP probes", async () => {
     const reset = new TypeError("fetch failed", {
       cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),

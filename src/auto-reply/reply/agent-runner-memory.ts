@@ -814,11 +814,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+    contextTokenBudget: contextWindowTokens,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });
 
-  if (!result?.ok || !result.compacted) {
+  if (!result?.ok) {
     const reason = result?.reason ?? "not_compacted";
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
     if (isRecoverableNativeHarnessBindingFailure(result)) {
@@ -828,6 +829,12 @@ export async function runPreflightCompactionIfNeeded(params: {
       return entry ?? params.sessionEntry;
     }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
+  }
+
+  if (!result.compacted) {
+    const reason = result.reason ?? "not_compacted";
+    logVerbose(`preflightCompaction no-op: sessionKey=${params.sessionKey} reason=${reason}`);
+    return entry ?? params.sessionEntry;
   }
 
   await incrementCompactionCount({

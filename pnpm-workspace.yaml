@@ -16,6 +16,7 @@ minimumReleaseAgeExclude:
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
   - "hono"
+  - "libopus-wasm@0.0.1"
   - "libsignal@6.0.0"
   - "openclaw"
   - "protobufjs"
@@ -55,6 +56,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "rastermill"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true
@@ -104,6 +106,7 @@ allowBuilds:
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
+  rastermill: true
 
 packageExtensions:
   baileys:
@@ -113,10 +116,6 @@ packageExtensions:
   "@earendil-works/pi-coding-agent":
     dependencies:
       strip-ansi: 7.2.0
-
-peerDependencyRules:
-  allowedVersions:
-    "prism-media>opusscript": "^0.0.8 || ^0.1.1"
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.37.0': patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch
