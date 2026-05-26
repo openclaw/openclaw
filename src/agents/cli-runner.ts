@@ -152,6 +152,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
   });
   const persisted = await recorder.persistApproved();
   if (persisted) {
+    params.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message);
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);
       if (notification) {

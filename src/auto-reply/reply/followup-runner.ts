@@ -697,7 +697,6 @@ export function createFollowupRunner(params: {
               message: Parameters<NonNullable<GetReplyOptions["onUserMessagePersisted"]>>[0],
             ) => {
               queuedUserMessagePersistedAcrossFallback = true;
-              opts?.userTurnTranscriptRecorder?.markRuntimePersisted(message);
               try {
                 const notification = opts?.onUserMessagePersisted?.(message);
                 if (notification) {
@@ -714,7 +713,6 @@ export function createFollowupRunner(params: {
               }
             };
             const notifyUserMessagePersistencePending = (pending: Promise<void>) => {
-              opts?.userTurnTranscriptRecorder?.markRuntimePersistencePending(pending);
               opts?.onUserMessagePersistencePending?.(pending);
             };
             try {
@@ -751,6 +749,7 @@ export function createFollowupRunner(params: {
                       ? { message: effectiveQueued.userMessageForPersistence }
                       : { text: effectiveQueued.transcriptPrompt ?? effectiveQueued.prompt },
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                    userTurnTranscriptRecorder: opts?.userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundContext: queued.currentInboundContext,
