@@ -21,6 +21,7 @@ import {
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
+import { redactCallRecordForRead, redactCallRecordsForRead } from "./src/readback.js";
 import type { CallRecord } from "./src/types.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
@@ -658,7 +659,10 @@ export default definePluginEntry({
             normalizeOptionalString(params?.callId) ?? normalizeOptionalString(params?.sid) ?? "";
           const rt = await ensureRuntime();
           if (!raw) {
-            respond(true, { found: true, calls: rt.manager.getActiveCalls() });
+            respond(true, {
+              found: true,
+              calls: redactCallRecordsForRead(rt.manager.getActiveCalls()),
+            });
             return;
           }
           const call = await resolveCallStatus(rt, raw);
@@ -666,7 +670,7 @@ export default definePluginEntry({
             respond(true, { found: false });
             return;
           }
-          respond(true, { found: true, call });
+          respond(true, { found: true, call: redactCallRecordForRead(call) });
         } catch (err) {
           sendError(respond, err);
         }
@@ -802,7 +806,9 @@ export default definePluginEntry({
                   throw new Error("callId required");
                 }
                 const call = await resolveCallStatus(rt, callId);
-                return json(call ? { found: true, call } : { found: false });
+                return json(
+                  call ? { found: true, call: redactCallRecordForRead(call) } : { found: false },
+                );
               }
             }
           }
@@ -814,7 +820,9 @@ export default definePluginEntry({
               throw new Error("sid required for status");
             }
             const call = await resolveCallStatus(rt, sid);
-            return json(call ? { found: true, call } : { found: false });
+            return json(
+              call ? { found: true, call: redactCallRecordForRead(call) } : { found: false },
+            );
           }
 
           const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;

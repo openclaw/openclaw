@@ -167,8 +167,9 @@ Actions:
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
 - `objective` is private call context for realtime task calls. It is not
-  spoken as the opener, but it is stored in OpenClaw call metadata and can be
-  returned by status/history/debug reads.
+  spoken as the opener. OpenClaw stores it in internal call metadata for the
+  active call, but status/tool/CLI readback redacts it from returned call
+  records.
 - `dtmfSequence` is only valid for conversation-mode calls; use
   `voicecall.dtmf` after connect for notify-mode calls.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.

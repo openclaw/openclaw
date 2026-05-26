@@ -11,6 +11,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
+import {
+  redactCallRecordForRead,
+  redactCallRecordsForRead,
+  redactVoiceCallJsonLineForRead,
+} from "./readback.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import type { CallRecord } from "./types.js";
 import { resolveUserPath } from "./utils.js";
@@ -742,12 +747,12 @@ export function registerVoiceCallCli(params: {
           rt.manager.getCall(options.callId) ??
           rt.manager.getCallByProviderCallId(options.callId) ??
           findCallInHistory(await rt.manager.getCallHistory(100), options.callId);
-        writeStdoutJson(call ?? { found: false });
+        writeStdoutJson(call ? redactCallRecordForRead(call) : { found: false });
         return;
       }
       writeStdoutJson({
         found: true,
-        calls: rt.manager.getActiveCalls(),
+        calls: redactCallRecordsForRead(rt.manager.getActiveCalls()),
       });
     });
 
@@ -770,7 +775,7 @@ export function registerVoiceCallCli(params: {
       const initial = fs.readFileSync(file, "utf8");
       const lines = initial.split("\n").filter(Boolean);
       for (const line of lines.slice(Math.max(0, lines.length - since))) {
-        writeStdoutLine(line);
+        writeStdoutLine(redactVoiceCallJsonLineForRead(line));
       }
 
       let offset = Buffer.byteLength(initial, "utf8");
@@ -789,7 +794,7 @@ export function registerVoiceCallCli(params: {
               offset = stat.size;
               const text = buf.toString("utf8");
               for (const line of text.split("\n").filter(Boolean)) {
-                writeStdoutLine(line);
+                writeStdoutLine(redactVoiceCallJsonLineForRead(line));
               }
             } finally {
               fs.closeSync(fd);

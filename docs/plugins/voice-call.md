@@ -779,8 +779,8 @@ should use `voicecall.dtmf` after the call exists if they need post-connect
 digits.
 
 `objective` is private call context for realtime task calls. It is not spoken
-as the opener, but it is stored in OpenClaw call metadata and can be returned
-by status/history/debug reads.
+as the opener. OpenClaw stores it in internal call metadata for the active call,
+but status/tool/CLI readback redacts it from returned call records.
 
 ## Troubleshooting
 

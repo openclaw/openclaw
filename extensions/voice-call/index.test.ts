@@ -489,6 +489,40 @@ describe("voice-call plugin", () => {
     expect(payload?.found).toBe(true);
   });
 
+  it("redacts private objectives from status readback", async () => {
+    const privateCall = createCallRecord({
+      callId: "private-call",
+      metadata: {
+        initialMessage: "Hola, buenas tardes.",
+        objective: "Book a restaurant table.",
+      },
+    });
+    vi.mocked(runtimeStub.manager.getCall).mockReturnValue(privateCall);
+    vi.mocked(runtimeStub.manager.getActiveCalls).mockReturnValue([privateCall]);
+
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+
+    const singleRespond = vi.fn();
+    await handler?.({ params: { callId: "private-call" }, respond: singleRespond });
+    const singlePayload = firstRespondCall(singleRespond)[1] as {
+      call?: { metadata?: Record<string, unknown> };
+    };
+    expect(singlePayload.call?.metadata).toEqual({ initialMessage: "Hola, buenas tardes." });
+
+    const listRespond = vi.fn();
+    await handler?.({ params: {}, respond: listRespond });
+    const listPayload = firstRespondCall(listRespond)[1] as {
+      calls?: Array<{ metadata?: Record<string, unknown> }>;
+    };
+    expect(listPayload.calls?.[0]?.metadata).toEqual({ initialMessage: "Hola, buenas tardes." });
+  });
+
   it("returns completed call status from history", async () => {
     runtimeStub = createRuntimeStub("active-call");
     const completed = createCallRecord({
@@ -513,7 +547,10 @@ describe("voice-call plugin", () => {
     const respond = vi.fn();
     await handler?.({ params: { callId: "completed-call" }, respond });
 
-    expect(firstRespondCall(respond)).toEqual([true, { found: true, call: completed }]);
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { found: true, call: { ...completed, metadata: undefined } },
+    ]);
   });
 
   it("prefers a completed provider history record with call content", async () => {
@@ -552,7 +589,10 @@ describe("voice-call plugin", () => {
     const respond = vi.fn();
     await handler?.({ params: { callId: "provider-completed-call" }, respond });
 
-    expect(firstRespondCall(respond)).toEqual([true, { found: true, call: completed }]);
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { found: true, call: { ...completed, metadata: undefined } },
+    ]);
   });
 
   it("sends DTMF via voicecall.dtmf", async () => {

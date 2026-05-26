@@ -46,7 +46,8 @@ Notes:
 - Plivo config: `provider: "plivo"` + `plivo.authId/authToken` + `fromNumber`.
 - Dev fallback: `provider: "mock"` (no network).
 - `objective` is private call context for realtime task calls. It is not
-  spoken as the opener, but it is stored in OpenClaw call metadata and can be
-  returned by status/history/debug reads.
+  spoken as the opener. OpenClaw stores it in internal call metadata for the
+  active call, but status/tool/CLI readback redacts it from returned call
+  records.
 - `dtmfSequence` is only valid for conversation-mode calls; use `send_dtmf`
   after connect for notify-mode calls.
