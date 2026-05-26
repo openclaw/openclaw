@@ -282,6 +282,13 @@ what about these images?`,
     );
     expectNoImageReferences("System reminder: file_path /tmp/.openclaw-cli-images/e5f6g7h8.jpg");
     expectNoImageReferences("See ./.openclaw-cli-images/image.webp for details");
+    // Windows-style backslash separators must also be skipped.
+    expectNoImageReferences(
+      "C:\\Users\\trevor\\.openclaw\\workspace\\.openclaw-cli-images\\a1b2c3d4.png",
+    );
+    expectNoImageReferences(
+      "See C:\\tmp\\.openclaw-cli-images\\image.webp for details",
+    );
   });
 
   it("ignores remote URLs entirely (local-only)", () => {
