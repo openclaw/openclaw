@@ -513,6 +513,9 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  // Local providers are not blanket-exempt from recovery. Streaming model
+  // chunks refresh run activity while emitted progress events are throttled, so
+  // active streams stay fresh and silent/non-streaming calls can be recovered.
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&

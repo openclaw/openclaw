@@ -2,6 +2,8 @@ import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
@@ -542,7 +544,12 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: {
+    workspaceOnly?: boolean;
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  },
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
@@ -550,7 +557,25 @@ export function resolveMediaToolLocalRoots(
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? uniqueStrings([...roots, workspaceDir]) : [...roots];
+  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+}
+
+export function resolveMediaToolInboundRoots(options?: {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): string[] {
+  if (options?.workspaceOnly || !options?.cfg || !options.channelId) {
+    return [];
+  }
+  return normalizeInboundPathRoots(
+    resolveChannelInboundAttachmentRootsForChannel({
+      cfg: options.cfg,
+      channelId: options.channelId,
+      accountId: options.accountId,
+    }),
+  );
 }
 
 export function resolvePromptAndModelOverride(

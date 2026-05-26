@@ -43,6 +43,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
+    expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
+    expect(installRun).not.toContain("run_logged docker run --rm");
     expect(script).toContain("run_logged docker_e2e_run_with_harness");
     expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');

@@ -20,6 +20,7 @@ import {
   resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
+import { EmbeddedAttemptSessionTakeoverError } from "./attempt.session-lock.js";
 import {
   cleanupTempPaths,
   createDefaultEmbeddedSession,
@@ -1311,6 +1312,65 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBeUndefined();
     expect(result.promptErrorSource).toBe("hook:before_agent_run");
     expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
+  });
+
+  it("preserves provider prompt errors when cleanup reacquire detects session takeover", async () => {
+    const providerError = new Error("provider rejected request: HTTP 400");
+    let acquireCount = 0;
+    let cleanupReacquireSessionFile: string | undefined;
+    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => {
+      acquireCount += 1;
+      if (acquireCount === 3) {
+        cleanupReacquireSessionFile = params.sessionFile;
+        await fs.appendFile(params.sessionFile, '{"type":"message","id":"takeover"}\n', "utf8");
+      }
+      return { release: async () => {} };
+    });
+
+    const error = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async () => {
+        throw providerError;
+      },
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).name).toBe("EmbeddedAttemptSessionTakeoverError");
+    expect((error as Error).message).toBe(providerError.message);
+    expect((error as Error).cause).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
+    if (!cleanupReacquireSessionFile) {
+      throw new Error("expected cleanup lock reacquire");
+    }
+    expect(((error as Error).cause as Error).message).toContain(cleanupReacquireSessionFile);
+    expect((error as { promptError?: unknown }).promptError).toBe(providerError);
+    expect(hoisted.flushPendingToolResultsAfterIdleMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps cleanup session takeover fatal when no provider prompt error exists", async () => {
+    let releasingCleanupLock = false;
+    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
+      releasingCleanupLock = true;
+    });
+    hoisted.acquireSessionWriteLockMock.mockImplementation(async (params) => ({
+      release: async () => {
+        if (releasingCleanupLock) {
+          throw new EmbeddedAttemptSessionTakeoverError(params.sessionFile);
+        }
+      },
+    }));
+
+    await expect(
+      createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        sessionPrompt: async (session) => {
+          session.messages = [...session.messages, doneMessage];
+        },
+      }),
+    ).rejects.toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
   });
 
   it("uses assembled context as the default precheck authority", async () => {

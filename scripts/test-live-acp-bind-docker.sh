@@ -335,7 +335,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-  DOCKER_RUN_ARGS=(docker run --rm -t \
+  DOCKER_RUN_ARGS=()
+  openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s}"
+  DOCKER_RUN_ARGS+=(--rm -t \
     -u "$DOCKER_USER" \
     --entrypoint bash \
     -e ANTHROPIC_API_KEY \

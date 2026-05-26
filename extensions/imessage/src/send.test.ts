@@ -140,6 +140,76 @@ describe("sendMessageIMessage receipts", () => {
     ]);
   });
 
+  it("falls back to the existing rpc send path when send-attachment is unavailable", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockRejectedValueOnce(new Error("unknown command send-attachment"));
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("12345");
+    expect(runCliJson.mock.calls).toEqual([
+      [["send-attachment", "--chat", "chat-1", "--file", "/tmp/image.png", "--transport", "auto"]],
+    ]);
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_guid: "chat-1",
+        file: "/tmp/image.png",
+        text: "",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("falls back to the existing rpc send path when chat_id lookup is unavailable", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi.fn().mockRejectedValueOnce(new Error("private API bridge unavailable"));
+
+    const result = await sendMessageIMessage("chat_id:42", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("12345");
+    expect(runCliJson.mock.calls).toEqual([[["group", "--chat-id", "42"]]]);
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_id: 42,
+        file: "/tmp/image.png",
+        text: "",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects failed send-attachment json instead of reporting success", async () => {
+    const client = createClient({ message_id: 12345 });
+    const runCliJson = vi
+      .fn()
+      .mockResolvedValueOnce({ success: false, error: "attachment delivery failed" });
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        runCliJson,
+      }),
+    ).rejects.toThrow("attachment delivery failed");
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
   it("keeps DM handle media sends on the existing rpc send path", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn();

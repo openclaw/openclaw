@@ -553,6 +553,9 @@ function buildModelCatalogMetadata(
   const aliasByKey = new Map<string, string>();
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
+    if (rawKey.trim().endsWith("/*")) {
+      continue;
+    }
     const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) {
       continue;

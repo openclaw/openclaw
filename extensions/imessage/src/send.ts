@@ -217,6 +217,15 @@ function buildIMessageCliJsonArgs(args: readonly string[], dbPath?: string): str
   return [...args, ...(trimmedDbPath ? ["--db", trimmedDbPath] : []), "--json"];
 }
 
+function resolveIMessageCliFailure(result: Record<string, unknown>): string | null {
+  if (result.success !== false) {
+    return null;
+  }
+  return typeof result.error === "string" && result.error.trim()
+    ? result.error.trim()
+    : "iMessage action failed";
+}
+
 async function runIMessageCliJson(
   cliPath: string,
   dbPath: string | undefined,
@@ -285,6 +294,11 @@ async function runIMessageCliJson(
         }
       }
       if (code === 0 && parsed) {
+        const failure = resolveIMessageCliFailure(parsed);
+        if (failure) {
+          reject(new Error(failure));
+          return;
+        }
         resolve(parsed);
         return;
       }
@@ -302,6 +316,13 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function isAttachmentCommandFallbackError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
+    message,
+  );
+}
+
 async function resolveAttachmentChatGuid(params: {
   target: ReturnType<typeof parseIMessageTarget>;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
@@ -314,6 +335,92 @@ async function resolveAttachmentChatGuid(params: {
   }
   const result = await params.runCliJson(["group", "--chat-id", String(params.target.chatId)]);
   return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
+}
+
+async function trySendAttachmentForExplicitChat(params: {
+  accountId: string;
+  target: ReturnType<typeof parseIMessageTarget>;
+  filePath: string;
+  echoText?: string;
+  runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
+}): Promise<IMessageSendResult | null> {
+  let attachmentChatGuid: string | null = null;
+  try {
+    attachmentChatGuid = await resolveAttachmentChatGuid({
+      target: params.target,
+      runCliJson: params.runCliJson,
+    });
+  } catch (error) {
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  if (!attachmentChatGuid) {
+    return null;
+  }
+
+  let result: Record<string, unknown>;
+  try {
+    result = await params.runCliJson([
+      "send-attachment",
+      "--chat",
+      attachmentChatGuid,
+      "--file",
+      params.filePath,
+      "--transport",
+      "auto",
+    ]);
+  } catch (error) {
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  const failure = resolveIMessageCliFailure(result);
+  if (failure) {
+    const error = new Error(failure);
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+
+  const resolvedId = resolveMessageId(result);
+  const approvalBindingMessageId = resolveOutboundMessageGuid(result);
+  const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
+  const echoScope = resolveOutboundEchoScope({
+    accountId: params.accountId,
+    target: params.target,
+  });
+  if (echoScope) {
+    rememberPersistedIMessageEcho({
+      scope: echoScope,
+      text: params.echoText,
+      messageId: resolvedId ?? undefined,
+    });
+  }
+  if (resolvedId) {
+    rememberIMessageReplyCache({
+      accountId: params.accountId,
+      messageId: resolvedId,
+      chatGuid: params.target.kind === "chat_guid" ? params.target.chatGuid : attachmentChatGuid,
+      chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+  }
+  return {
+    messageId,
+    ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
+    sentText: "",
+    ...(params.echoText ? { echoText: params.echoText } : {}),
+    receipt: createIMessageSendReceipt({
+      messageId,
+      target: params.target,
+      kind: "media",
+    }),
+  };
 }
 
 export async function sendMessageIMessage(
@@ -389,49 +496,15 @@ export async function sendMessageIMessage(
     ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, opts.timeoutMs));
 
   if (filePath && !message.trim() && !resolvedReplyToId) {
-    const attachmentChatGuid = await resolveAttachmentChatGuid({ target, runCliJson });
-    if (attachmentChatGuid) {
-      const result = await runCliJson([
-        "send-attachment",
-        "--chat",
-        attachmentChatGuid,
-        "--file",
-        filePath,
-        "--transport",
-        "auto",
-      ]);
-      const resolvedId = resolveMessageId(result);
-      const approvalBindingMessageId = resolveOutboundMessageGuid(result);
-      const messageId = resolvedId ?? (result?.ok || result?.success ? "ok" : "unknown");
-      const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
-      if (echoScope) {
-        rememberPersistedIMessageEcho({
-          scope: echoScope,
-          text: echoText,
-          messageId: resolvedId ?? undefined,
-        });
-      }
-      if (resolvedId) {
-        rememberIMessageReplyCache({
-          accountId: account.accountId,
-          messageId: resolvedId,
-          chatGuid: target.kind === "chat_guid" ? target.chatGuid : attachmentChatGuid,
-          chatId: target.kind === "chat_id" ? target.chatId : undefined,
-          timestamp: Date.now(),
-          isFromMe: true,
-        });
-      }
-      return {
-        messageId,
-        ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
-        sentText: message,
-        ...(echoText ? { echoText } : {}),
-        receipt: createIMessageSendReceipt({
-          messageId,
-          target,
-          kind: "media",
-        }),
-      };
+    const attachmentResult = await trySendAttachmentForExplicitChat({
+      accountId: account.accountId,
+      target,
+      filePath,
+      echoText,
+      runCliJson,
+    });
+    if (attachmentResult) {
+      return attachmentResult;
     }
   }
   const params: Record<string, unknown> = {

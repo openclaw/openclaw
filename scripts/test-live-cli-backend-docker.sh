@@ -414,7 +414,9 @@ else
   )
 fi
 
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_CLI_BACKEND_DOCKER_RUN_TIMEOUT:-2700s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \

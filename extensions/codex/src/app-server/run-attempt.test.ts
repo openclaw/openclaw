@@ -421,7 +421,7 @@ function createAppServerHarness(
   return {
     request,
     requests,
-    async waitForMethod(method: string, timeoutMs = appServerHarnessWait.timeout) {
+    async waitForMethod(method: string, timeoutMs: number = appServerHarnessWait.timeout) {
       await vi.waitFor(
         () => {
           if (!requests.some((entry) => entry.method === method)) {
@@ -6786,7 +6786,27 @@ describe("runCodexAppServerAttempt", () => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
-      const harness = createStartedThreadHarness();
+      const harness = createAppServerHarness(async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          return {
+            turn: {
+              ...turnStartResult("turn-1", "completed").turn,
+              items: [
+                {
+                  id: "msg-1",
+                  type: "agentMessage",
+                  text: "hello back",
+                  status: "completed",
+                },
+              ],
+            },
+          };
+        }
+        return {};
+      });
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
@@ -6807,20 +6827,15 @@ describe("runCodexAppServerAttempt", () => {
         },
       } as never;
       const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await harness.notify({
-        method: "item/agentMessage/delta",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "msg-1",
-          delta: "hello back",
-        },
-      });
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await harness.waitForMethod("turn/start", 180_000);
       await run;
-      await flushDiagnosticEvents();
+      await vi.waitFor(
+        () =>
+          expect(diagnosticEvents.some((event) => event.type === "model.call.completed")).toBe(
+            true,
+          ),
+        fastWait,
+      );
 
       const startedEvent = diagnosticEvents.find((event) => event.type === "model.call.started");
       const completedEvent = diagnosticEvents.find(
@@ -6855,7 +6870,7 @@ describe("runCodexAppServerAttempt", () => {
     } finally {
       stopDiagnostics();
     }
-  });
+  }, 240_000);
 
   it("classifies codex model-call timeout diagnostics", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];

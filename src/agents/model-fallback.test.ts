@@ -940,6 +940,38 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const cleanupTakeover = new Error(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    );
+    cleanupTakeover.name = "EmbeddedAttemptSessionTakeoverError";
+    const providerFacingError = new Error("provider rejected request: rate limit", {
+      cause: cleanupTakeover,
+    });
+    providerFacingError.name = "EmbeddedAttemptSessionTakeoverError";
+    const run = vi.fn().mockRejectedValue(providerFacingError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(providerFacingError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the fallback chain on session write-lock timeout instead of trying every model (#83510)", async () => {
     const cfg = makeCfg({
       agents: {

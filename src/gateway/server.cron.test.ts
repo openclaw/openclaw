@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
-import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
@@ -408,6 +408,14 @@ function getWebhookCall(index: number) {
 }
 
 describe("gateway server cron", () => {
+  beforeAll(async () => {
+    await Promise.all([
+      import("../config/config.js"),
+      import("./server-cron.js"),
+      import("./server-methods/cron.js"),
+    ]);
+  });
+
   afterAll(async () => {
     if (!cronSuiteTempRootPromise) {
       return;
@@ -480,11 +488,45 @@ describe("gateway server cron", () => {
       expect(missingGetRes.error?.code).toBe("INVALID_REQUEST");
       expect(missingGetRes.error?.message).toContain("cron job not found: missing-job-id");
 
-      const routeAtMs = Date.now() - 1;
+      const wrappedAtMs = Date.now() + 1000;
+      const wrappedRes = await directCronReq(cronState, "cron.add", {
+        data: {
+          name: "wrapped",
+          schedule: { at: new Date(wrappedAtMs).toISOString() },
+          payload: { kind: "systemEvent", text: "hello" },
+        },
+      });
+      expect(wrappedRes.ok).toBe(true);
+      const wrappedPayload = wrappedRes.payload as
+        | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
+        | undefined;
+      expect(wrappedPayload?.sessionTarget).toBe("main");
+      expect(wrappedPayload?.wakeMode).toBe("now");
+      expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
+    } finally {
+      await cleanupCronTestRun({
+        cronState,
+        prevSkipCron,
+        clearSessionConfig: true,
+      });
+    }
+  });
+
+  test("routes forced cron runs to the configured session", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-route-",
+      sessionConfig: { mainKey: "primary" },
+      cronEnabled: false,
+    });
+
+    const cronEvents = createCronEventCollector();
+    const cronState = await createDirectCronState({ broadcast: cronEvents.broadcast });
+
+    try {
       const routeRes = await directCronReq(cronState, "cron.add", {
         name: "route test",
         enabled: true,
-        schedule: { kind: "at", at: new Date(routeAtMs).toISOString() },
+        schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "cron route check" },
@@ -502,22 +544,6 @@ describe("gateway server cron", () => {
       expect(typeof routeFinished.sessionKey).toBe("string");
       const events = peekSystemEvents(routeFinished.sessionKey as string);
       expect(events.some((event) => event.includes("cron route check"))).toBe(true);
-
-      const wrappedAtMs = Date.now() + 1000;
-      const wrappedRes = await directCronReq(cronState, "cron.add", {
-        data: {
-          name: "wrapped",
-          schedule: { at: new Date(wrappedAtMs).toISOString() },
-          payload: { kind: "systemEvent", text: "hello" },
-        },
-      });
-      expect(wrappedRes.ok).toBe(true);
-      const wrappedPayload = wrappedRes.payload as
-        | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
-        | undefined;
-      expect(wrappedPayload?.sessionTarget).toBe("main");
-      expect(wrappedPayload?.wakeMode).toBe("now");
-      expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
     } finally {
       await cleanupCronTestRun({
         cronState,

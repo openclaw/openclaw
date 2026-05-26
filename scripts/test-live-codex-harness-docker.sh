@@ -298,7 +298,9 @@ echo "==> CI-safe Codex config: ${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_
 echo "==> Test files: ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}"
 echo "==> Harness fallback: none"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \

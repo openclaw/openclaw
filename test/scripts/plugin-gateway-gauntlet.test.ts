@@ -288,6 +288,22 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
   });
 
+  it("marks gauntlet prebuilds as runtime-only when requested", () => {
+    expect(
+      buildGauntletPrebuildEnv(
+        { EXISTING: "1" },
+        {
+          buildIds: ["acpx"],
+          skipDeclarationBuild: true,
+        },
+      ),
+    ).toEqual({
+      EXISTING: "1",
+      OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
+  });
+
   it("prebuilds only selected plugin dist entries for bounded gauntlet runs", () => {
     expect(
       buildGauntletPrebuildEnv(

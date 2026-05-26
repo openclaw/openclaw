@@ -222,6 +222,9 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
         deferAutoModelResolution: true,
       })

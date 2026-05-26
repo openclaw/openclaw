@@ -1817,7 +1817,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.3.0",
     "@openclaw/proxyline": "0.3.3",
-    "ajv": "8.20.0",
+    "@silvia-odwyer/photon-node": "0.3.4",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "commander": "14.0.3",

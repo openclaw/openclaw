@@ -1232,10 +1232,18 @@ parse_args() {
                 shift
                 ;;
             --install-method|--method)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 INSTALL_METHOD="$2"
                 shift 2
                 ;;
             --version)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 OPENCLAW_VERSION="$2"
                 shift 2
                 ;;
@@ -1252,6 +1260,10 @@ parse_args() {
                 shift
                 ;;
             --git-dir|--dir)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 GIT_DIR="$2"
                 shift 2
                 ;;
@@ -1260,7 +1272,8 @@ parse_args() {
                 shift
                 ;;
             *)
-                shift
+                ui_error "Unknown option: $1"
+                return 2
                 ;;
         esac
     done

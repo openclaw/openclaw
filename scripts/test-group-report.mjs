@@ -34,6 +34,7 @@ function usage() {
     "  --output <path>       JSON report path (default: .artifacts/test-perf/group-report.json)",
     "  --limit <count>       Number of groups/configs to print (default: 25)",
     "  --top-files <count>   Number of files to print (default: 25)",
+    "  --max-test-ms <ms>    Fail when any individual test exceeds this duration",
     "  --allow-failures      Write a report even when a Vitest run exits non-zero",
     "  --no-rss              Skip max RSS measurement",
     "  --help                Show this help",
@@ -58,6 +59,7 @@ export function parseTestGroupReportArgs(argv) {
     fullSuite: false,
     groupBy: "area",
     limit: 25,
+    maxTestMs: null,
     output: null,
     reports: [],
     rss: process.platform !== "win32",
@@ -117,6 +119,11 @@ export function parseTestGroupReportArgs(argv) {
     }
     if (arg === "--limit") {
       args.limit = parsePositiveInt(argv[index + 1], args.limit);
+      index += 1;
+      continue;
+    }
+    if (arg === "--max-test-ms") {
+      args.maxTestMs = parsePositiveInt(argv[index + 1], args.maxTestMs);
       index += 1;
       continue;
     }
@@ -397,6 +404,7 @@ async function main() {
     .map(readReportInput);
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
+    maxTestMs: args.maxTestMs,
     reports: reportInputs,
   });
   const envelope = {
@@ -417,6 +425,13 @@ async function main() {
   fs.writeFileSync(output, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
   console.log(renderGroupedTestReport(report, { limit: args.limit, topFiles: args.topFiles }));
   console.log(`[test-group-report] wrote ${path.relative(process.cwd(), output)}`);
+
+  if (args.maxTestMs !== null && report.slowTests.length > 0) {
+    console.error(
+      `[test-group-report] ${report.slowTests.length} tests exceeded ${formatMs(args.maxTestMs)}`,
+    );
+    process.exit(1);
+  }
 
   if (failed && !args.allowFailures) {
     process.exit(1);
