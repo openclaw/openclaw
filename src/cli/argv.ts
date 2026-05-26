@@ -432,6 +432,10 @@ export function buildParseArgv(params: {
         ? params.fallbackArgv
         : process.argv;
   const programName = params.programName ?? "";
+  const scopedArgv = scopeRawArgvToProgram(baseArgv, programName);
+  if (scopedArgv) {
+    return scopedArgv;
+  }
   const normalizedArgv =
     programName && baseArgv[0] === programName
       ? baseArgv.slice(1)
@@ -445,6 +449,42 @@ export function buildParseArgv(params: {
     return normalizedArgv;
   }
   return ["node", programName || "openclaw", ...normalizedArgv];
+}
+
+function scopeRawArgvToProgram(baseArgv: readonly string[], programName: string): string[] | null {
+  if (!programName || baseArgv.length === 0 || baseArgv[0] === programName) {
+    return null;
+  }
+  const launcher = baseArgv[0] ?? "node";
+  const launchedByRuntime = isNodeRuntime(launcher) || isBunRuntime(launcher);
+  if (!launchedByRuntime) {
+    return null;
+  }
+  const start = 2;
+  if (start >= baseArgv.length) {
+    return null;
+  }
+  const args = baseArgv.slice(start);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (arg !== programName) {
+      return null;
+    }
+    const scopedArgs = args.slice(index + 1);
+    return [launcher, programName, ...scopedArgs];
+  }
+  return null;
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {

@@ -565,12 +565,25 @@ describe("argv helpers", () => {
       rawArgs: ["bun", "src/entry.ts", "status"],
       expected: ["bun", "src/entry.ts", "status"],
     },
-  ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
+    {
+      name: "scopes root node argv to nested lazy program",
+      rawArgs: ["node", "openclaw", "browser", "--json", "tabs"],
+      programName: "browser",
+      expected: ["node", "browser", "--json", "tabs"],
+    },
+    {
+      name: "scopes root argv with root options to nested lazy program",
+      rawArgs: ["node", "openclaw", "--profile", "work", "browser", "--json", "tabs"],
+      programName: "browser",
+      expected: ["node", "browser", "--json", "tabs"],
+    },
+  ] as const)("builds parse argv from raw args: $name", (entry) => {
+    const programName = "programName" in entry ? entry.programName : "openclaw";
     const parsed = buildParseArgv({
-      programName: "openclaw",
-      rawArgs: [...rawArgs],
+      programName,
+      rawArgs: [...entry.rawArgs],
     });
-    expect(parsed).toEqual([...expected]);
+    expect(parsed).toEqual([...entry.expected]);
   });
 
   it("builds parse argv from fallback args", () => {
