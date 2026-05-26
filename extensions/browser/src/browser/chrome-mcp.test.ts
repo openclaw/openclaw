@@ -1204,7 +1204,7 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
-  it("ignores raw Chrome MCP feature flags that are controlled by capability policy", () => {
+  it("preserves legacy raw Chrome MCP feature flags when capability policy has not replaced them", () => {
     const args = buildChromeMcpArgs({
       mcpArgs: [
         "--experimentalMemory",
@@ -1224,8 +1224,45 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--experimentalVision",
+      "--experimentalMemory",
+      "--experimentalScreencast",
+      "--experimentalInteropTools",
+      "--categoryExtensions",
+      "--categoryExperimentalThirdParty",
+      "--categoryExperimentalWebmcp",
       "--no-usage-statistics",
     ]);
+  });
+
+  it("does not duplicate legacy Chrome MCP feature flags already enabled by capabilities", () => {
+    const args = buildChromeMcpArgs({
+      chromeMcp: {
+        capabilities: {
+          diagnostics: true,
+          extensions: true,
+          extensionMutation: false,
+          thirdPartyTools: true,
+          thirdPartyToolExecution: false,
+          webMcpTools: true,
+          webMcpToolExecution: false,
+        },
+      },
+      mcpArgs: [
+        "--experimentalMemory",
+        "--experimentalScreencast",
+        "--experimentalInteropTools",
+        "--categoryExtensions",
+        "--categoryExperimentalThirdParty",
+        "--categoryExperimentalWebmcp",
+      ],
+    });
+
+    expect(args.filter((arg) => arg === "--experimentalMemory")).toHaveLength(1);
+    expect(args.filter((arg) => arg === "--experimentalScreencast")).toHaveLength(1);
+    expect(args.filter((arg) => arg === "--experimentalInteropTools")).toHaveLength(1);
+    expect(args.filter((arg) => arg === "--categoryExtensions")).toHaveLength(1);
+    expect(args.filter((arg) => arg === "--categoryExperimentalThirdParty")).toHaveLength(1);
+    expect(args.filter((arg) => arg === "--categoryExperimentalWebmcp")).toHaveLength(1);
   });
 
   it("uses browserUrl for existing-session cdpUrl without also passing userDataDir", () => {

@@ -833,7 +833,14 @@ pinned versions, vendored binaries):
 | Field        | What it does                                                                                                                                                                                   |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                                                                                              |
-| `mcpArgs`    | Extra argument array for `mcpCommand`. Endpoint arguments can override auto-connect, but Chrome MCP experimental feature flags are owned by `browser.chromeMcp.capabilities` and ignored here. |
+| `mcpArgs`    | Extra argument array for `mcpCommand`. Endpoint arguments can override auto-connect. Use `browser.chromeMcp.capabilities` for Chrome MCP feature policy; legacy diagnostic/category flags here are accepted as compatibility defaults unless explicit capability policy overrides them. |
+
+For upgrades from older configs, legacy `mcpArgs` diagnostic/category flags keep
+their previous behavior without being silently dropped: diagnostic flags enable
+the matching diagnostics capability, category flags enable the matching list/read
+capability, and explicit `chromeMcp.capabilities.*: false` still wins. Mutation
+and page-provided tool execution capabilities are never inferred from legacy
+category args; opt into those with explicit `chromeMcp.capabilities` settings.
 
 When `cdpUrl` is set on an existing-session profile, OpenClaw skips
 `--autoConnect` and forwards the endpoint to Chrome MCP automatically:

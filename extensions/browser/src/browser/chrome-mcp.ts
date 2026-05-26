@@ -1097,19 +1097,36 @@ function buildChromeMcpFeatureArgs(options: NormalizedChromeMcpProfileOptions): 
   return args;
 }
 
-function isChromeMcpPolicyControlledFeatureArg(arg: string): boolean {
+function readChromeMcpFlagName(arg: string): string {
   const [name] = arg.split("=", 1);
-  return CHROME_MCP_POLICY_CONTROLLED_FEATURE_FLAGS.has(name ?? arg);
+  return name ?? arg;
+}
+
+function isChromeMcpPolicyControlledFeatureArg(arg: string): boolean {
+  return CHROME_MCP_POLICY_CONTROLLED_FEATURE_FLAGS.has(readChromeMcpFlagName(arg));
+}
+
+function buildChromeMcpCompatibilityExtraArgs(
+  extraArgs: string[],
+  featureArgs: string[],
+): string[] {
+  const featureArgNames = new Set(featureArgs.map((arg) => readChromeMcpFlagName(arg)));
+  return extraArgs.filter(
+    (arg) =>
+      !isChromeMcpPolicyControlledFeatureArg(arg) ||
+      !featureArgNames.has(readChromeMcpFlagName(arg)),
+  );
 }
 
 function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOptions): string[] {
   const commandPrefix =
     options.command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : [];
-  const extraArgs = options.extraArgs.filter((arg) => !isChromeMcpPolicyControlledFeatureArg(arg));
+  const featureArgs = buildChromeMcpFeatureArgs(options);
+  const extraArgs = buildChromeMcpCompatibilityExtraArgs(options.extraArgs, featureArgs);
   return [
     ...commandPrefix,
     ...buildChromeMcpConnectionArgs(options),
-    ...buildChromeMcpFeatureArgs(options),
+    ...featureArgs,
     ...buildChromeMcpLaunchArgs(options),
     ...buildChromeMcpUserDataDirArgs(options),
     ...extraArgs,

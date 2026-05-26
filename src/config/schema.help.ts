@@ -353,7 +353,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.mcpCommand":
     "Per-profile Chrome DevTools MCP command for existing-session attachment. Defaults to npx.",
   "browser.profiles.*.mcpArgs":
-    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection. Capability-controlled experimental feature flags are owned by browser.chromeMcp policy and are ignored here.",
+    "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection. Legacy diagnostic/category feature flags here are accepted as compatibility defaults when no explicit browser.chromeMcp capability policy overrides them; configure browser.chromeMcp.capabilities directly for new configs.",
   "browser.profiles.*.driver":
     'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
   "browser.profiles.*.executablePath":

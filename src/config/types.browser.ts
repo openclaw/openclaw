@@ -33,7 +33,7 @@ export type BrowserProfileConfig = {
   userDataDir?: string;
   /** Override the Chrome MCP command for existing-session profiles. */
   mcpCommand?: string;
-  /** Extra Chrome MCP arguments for existing-session profiles. */
+  /** Extra Chrome MCP arguments for existing-session profiles. Legacy diagnostic/category feature flags are compatibility defaults; prefer chromeMcp.capabilities. */
   mcpArgs?: string[];
   /** Profile driver (default: openclaw). */
   driver?: "openclaw" | "clawd" | "existing-session";

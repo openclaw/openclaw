@@ -468,6 +468,11 @@ See [Inferred commitments](/concepts/commitments).
   `existing-session` profiles. `"auto"` enables diagnostics and extension
   inventory only for OpenClaw-managed existing-session profile data dirs;
   personal signed-in profiles require explicit per-profile opt-in.
+- Legacy Chrome MCP diagnostic/category flags in `mcpArgs` are accepted as
+  upgrade compatibility defaults when no explicit capability policy overrides
+  them. They are not a substitute for new configs: set
+  `chromeMcp.capabilities` directly, especially for mutation or page-provided
+  tool execution, which are never inferred from legacy category flags.
 - Deleting an OpenClaw-managed local browser profile removes that profile entry
   and moves its managed data to Trash. Deleting an `existing-session` profile
   removes only the OpenClaw profile entry; an explicit external `userDataDir` is

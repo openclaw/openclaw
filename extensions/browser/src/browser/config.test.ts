@@ -1055,6 +1055,69 @@ describe("browser config", () => {
     });
   });
 
+  it("uses legacy Chrome MCP mcpArgs as compatibility defaults for capability policy", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          color: "#00AA00",
+          mcpArgs: [
+            "--experimentalMemory",
+            "--experimentalScreencast",
+            "--experimentalInteropTools",
+            "--categoryExtensions",
+            "--categoryExperimentalThirdParty",
+            "--categoryExperimentalWebmcp",
+          ],
+        },
+      },
+    });
+
+    expect(resolveProfile(resolved, "chrome-live")?.chromeMcp?.capabilities).toEqual({
+      diagnostics: true,
+      extensions: true,
+      extensionMutation: false,
+      thirdPartyTools: true,
+      thirdPartyToolExecution: false,
+      webMcpTools: true,
+      webMcpToolExecution: false,
+    });
+  });
+
+  it("lets explicit Chrome MCP capability policy override legacy mcpArgs defaults", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "chrome-live": {
+          driver: "existing-session",
+          attachOnly: true,
+          color: "#00AA00",
+          mcpArgs: [
+            "--experimentalMemory",
+            "--categoryExtensions",
+            "--categoryExperimentalThirdParty",
+            "--categoryExperimentalWebmcp",
+          ],
+          chromeMcp: {
+            capabilities: {
+              diagnostics: false,
+              extensions: false,
+              thirdPartyTools: false,
+              webMcpTools: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProfile(resolved, "chrome-live")?.chromeMcp?.capabilities).toMatchObject({
+      diagnostics: false,
+      extensions: false,
+      thirdPartyTools: false,
+      webMcpTools: false,
+    });
+  });
+
   it("resolves Chrome MCP command, args, and endpoint URL for existing-session profiles", () => {
     const resolved = resolveBrowserConfig({
       profiles: {

@@ -59,6 +59,9 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
    */
   allowPrivateNetwork?: boolean;
 };
+type ChromeMcpLegacyCapabilityDefaults = Partial<
+  Record<keyof ResolvedBrowserChromeMcpCapabilities, boolean>
+>;
 
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
 export type ResolvedBrowserConfig = {
@@ -279,21 +282,27 @@ function resolveChromeMcpCapability(
     global?: BrowserConfig["chromeMcp"];
     profile?: BrowserProfileConfig["chromeMcp"];
     autoDefault: boolean;
+    legacyDefaults?: ChromeMcpLegacyCapabilityDefaults;
   },
   key: keyof ResolvedBrowserChromeMcpCapabilities,
 ): boolean {
-  const raw = params.profile?.capabilities?.[key] ?? params.global?.capabilities?.[key] ?? "auto";
-  return raw === "auto" ? params.autoDefault : raw;
+  const raw = params.profile?.capabilities?.[key] ?? params.global?.capabilities?.[key];
+  if (raw !== undefined) {
+    return raw === "auto" ? params.autoDefault : raw;
+  }
+  return params.legacyDefaults?.[key] ?? params.autoDefault;
 }
 
 function resolveBrowserChromeMcpConfig(params: {
   global?: BrowserConfig["chromeMcp"];
   profile?: BrowserProfileConfig["chromeMcp"];
   openClawManagedUserDataDir: boolean;
+  legacyDefaults?: ChromeMcpLegacyCapabilityDefaults;
 }): ResolvedBrowserChromeMcpConfig {
   const policy = {
     global: params.global,
     profile: params.profile,
+    legacyDefaults: params.legacyDefaults,
   };
   return {
     capabilities: {
@@ -348,6 +357,46 @@ function resolveCdpPortRangeStart(
 }
 
 const normalizeStringList = normalizeOptionalTrimmedStringList;
+
+const CHROME_MCP_LEGACY_DIAGNOSTIC_FLAGS = new Set([
+  "--experimentalMemory",
+  "--experimentalScreencast",
+]);
+const CHROME_MCP_LEGACY_EXTENSION_FLAGS = new Set([
+  "--experimentalInteropTools",
+  "--categoryExtensions",
+]);
+const CHROME_MCP_LEGACY_THIRD_PARTY_FLAGS = new Set(["--categoryExperimentalThirdParty"]);
+const CHROME_MCP_LEGACY_WEB_MCP_FLAGS = new Set(["--categoryExperimentalWebmcp"]);
+
+function readChromeMcpFlagName(arg: string): string {
+  const [name] = arg.split("=", 1);
+  return name ?? arg;
+}
+
+function inferLegacyChromeMcpCapabilityDefaults(
+  mcpArgs: string[] | undefined,
+): ChromeMcpLegacyCapabilityDefaults {
+  const defaults: ChromeMcpLegacyCapabilityDefaults = {};
+
+  for (const arg of mcpArgs ?? []) {
+    const flag = readChromeMcpFlagName(arg);
+    if (CHROME_MCP_LEGACY_DIAGNOSTIC_FLAGS.has(flag)) {
+      defaults.diagnostics = true;
+    }
+    if (CHROME_MCP_LEGACY_EXTENSION_FLAGS.has(flag)) {
+      defaults.extensions = true;
+    }
+    if (CHROME_MCP_LEGACY_THIRD_PARTY_FLAGS.has(flag)) {
+      defaults.thirdPartyTools = true;
+    }
+    if (CHROME_MCP_LEGACY_WEB_MCP_FLAGS.has(flag)) {
+      defaults.webMcpTools = true;
+    }
+  }
+
+  return defaults;
+}
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
@@ -575,6 +624,7 @@ export function resolveProfile(
     const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);
     const userDataDir = resolveUserPath(profile.userDataDir?.trim() || "") || undefined;
     const openClawManagedUserDataDir = isOpenClawManagedUserDataDir(profileName, userDataDir);
+    const mcpArgs = normalizeStringList(profile.mcpArgs) ?? undefined;
     return {
       name: profileName,
       cdpPort: 0,
@@ -583,7 +633,7 @@ export function resolveProfile(
       cdpIsLoopback: existingSessionCdp?.cdpIsLoopback ?? true,
       userDataDir,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
-      mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
+      mcpArgs,
       color: profile.color,
       driver,
       executablePath,
@@ -595,6 +645,7 @@ export function resolveProfile(
         global: resolved.chromeMcp,
         profile: profile.chromeMcp,
         openClawManagedUserDataDir,
+        legacyDefaults: inferLegacyChromeMcpCapabilityDefaults(mcpArgs),
       }),
       ...(openClawManagedUserDataDir ? { cleanupBrowserProcesses: true } : {}),
     };
