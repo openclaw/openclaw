@@ -135,12 +135,18 @@ const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
-const TELEGRAM_PROOF_VIEW = {
-  cropWidth: 520,
+const TELEGRAM_PROOF_WINDOW = {
   height: 1000,
   width: 650,
   x: 635,
   y: 40,
+};
+const TELEGRAM_PROOF_CROP = {
+  cropWidth: 430,
+  height: TELEGRAM_PROOF_WINDOW.height,
+  width: 430,
+  x: TELEGRAM_PROOF_WINDOW.x + 220,
+  y: TELEGRAM_PROOF_WINDOW.y,
 };
 
 function usageText() {
@@ -165,7 +171,7 @@ function usageText() {
     "  --output-dir <path>           Artifact directory under the repo.",
     "  --message-id <id>             Telegram message id for proof-view deep link.",
     "  --preview-crop telegram-window Create a side-by-side friendly Telegram-window GIF.",
-    "  --preview-crop-width <pixels>  Cropped preview GIF width. Default: 520.",
+    "  --preview-crop-width <pixels>  Cropped preview GIF width. Default: 430.",
     "  --preview-fps <fps>            Motion GIF frames per second. Default: 24.",
     "  --preview-width <pixels>       Motion GIF width. Default: 1920.",
     "  --pr <number>                 Pull request number for publish.",
@@ -237,7 +243,7 @@ function parseArgs(argv: string[]): Options {
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
-    previewCropWidth: TELEGRAM_PROOF_VIEW.cropWidth,
+    previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,
     provider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "aws",
@@ -841,38 +847,46 @@ async function startLocalSutDaemon(params: {
   const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
   const mockLog = path.join(params.outputDir, "mock-openai.log");
   const gatewayLog = path.join(params.outputDir, "gateway.log");
-  const mockPid = spawnDaemon({
-    command: "node",
-    args: ["scripts/e2e/mock-openai-server.mjs"],
-    cwd: params.repoRoot,
-    env: mockServerEnv({ ...params, requestLog }),
-    logPath: mockLog,
-  });
-  if (!mockPid) {
-    throw new Error("mock-openai did not start.");
-  }
-  await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
+  let mockPid: number | undefined;
+  let gatewayPid: number | undefined;
+  try {
+    mockPid = spawnDaemon({
+      command: "node",
+      args: ["scripts/e2e/mock-openai-server.mjs"],
+      cwd: params.repoRoot,
+      env: mockServerEnv({ ...params, requestLog }),
+      logPath: mockLog,
+    });
+    if (!mockPid) {
+      throw new Error("mock-openai did not start.");
+    }
+    await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
-  const gatewayPid = spawnDaemon({
-    command: "pnpm",
-    args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
-    cwd: params.repoRoot,
-    env: gatewayEnv({ ...config, sutToken: params.sutToken }),
-    logPath: gatewayLog,
-  });
-  if (!gatewayPid) {
-    throw new Error("gateway did not start.");
+    gatewayPid = spawnDaemon({
+      command: "pnpm",
+      args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+      cwd: params.repoRoot,
+      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      logPath: gatewayLog,
+    });
+    if (!gatewayPid) {
+      throw new Error("gateway did not start.");
+    }
+    await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
+    return {
+      ...config,
+      drained,
+      gatewayLog,
+      gatewayPid,
+      mockLog,
+      mockPid,
+      requestLog,
+    };
+  } catch (error) {
+    killPidTree(gatewayPid);
+    killPidTree(mockPid);
+    throw error;
   }
-  await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
-  return {
-    ...config,
-    drained,
-    gatewayLog,
-    gatewayPid,
-    mockLog,
-    mockPid,
-    requestLog,
-  };
 }
 
 function extractLeaseId(output: string) {
@@ -939,12 +953,12 @@ async function createMotionPreview(params: {
 
 function previewCrop(opts: Options) {
   return opts.previewCrop === "telegram-window"
-    ? { ...TELEGRAM_PROOF_VIEW, cropWidth: opts.previewCropWidth }
+    ? { ...TELEGRAM_PROOF_CROP, cropWidth: opts.previewCropWidth }
     : undefined;
 }
 
 async function createCroppedMotionPreview(params: {
-  crop: typeof TELEGRAM_PROOF_VIEW;
+  crop: typeof TELEGRAM_PROOF_CROP;
   croppedGifPath: string;
   croppedVideoPath: string;
   opts: Options;
@@ -1627,20 +1641,21 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   }
 
   requireUserDriverScript(opts);
-  const credential = await leaseCredential({ localRoot, opts, root });
-  const sut = opts.sutUsername
-    ? { id: "", username: opts.sutUsername }
-    : await sutIdentity(credential.sutToken);
-  const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+  let credential: Awaited<ReturnType<typeof leaseCredential>> | undefined;
   let leaseId = opts.leaseId;
   let createdLease = false;
-  if (!leaseId) {
-    leaseId = await warmupCrabbox(opts, root);
-    createdLease = true;
-  }
-  const inspect = await inspectCrabbox(opts, root, leaseId);
   let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
   try {
+    credential = await leaseCredential({ localRoot, opts, root });
+    const sut = opts.sutUsername
+      ? { id: "", username: opts.sutUsername }
+      : await sutIdentity(credential.sutToken);
+    const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+    if (!leaseId) {
+      leaseId = await warmupCrabbox(opts, root);
+      createdLease = true;
+    }
+    const inspect = await inspectCrabbox(opts, root, leaseId);
     await writeRemoteSessionScripts({
       inspect,
       localRoot,
@@ -1706,7 +1721,9 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   } catch (error) {
     killPidTree(localSut?.gatewayPid);
     killPidTree(localSut?.mockPid);
-    await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    if (credential) {
+      await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    }
     if (leaseId && createdLease) {
       await stopCrabbox(root, opts, leaseId).catch(() => {});
     }
@@ -1811,7 +1828,7 @@ if [ -z "$win" ]; then
   exit 1
 fi
 wmctrl -ir "$win" -b remove,maximized_vert,maximized_horz,fullscreen
-wmctrl -ir "$win" -e 0,${TELEGRAM_PROOF_VIEW.x},${TELEGRAM_PROOF_VIEW.y},${TELEGRAM_PROOF_VIEW.width},${TELEGRAM_PROOF_VIEW.height}
+wmctrl -ir "$win" -e 0,${TELEGRAM_PROOF_WINDOW.x},${TELEGRAM_PROOF_WINDOW.y},${TELEGRAM_PROOF_WINDOW.width},${TELEGRAM_PROOF_WINDOW.height}
 telegram="$root/Telegram/Telegram"
 test -x "$telegram"
 set +e
@@ -1839,7 +1856,8 @@ async function viewSession(root: string, opts: Options, outputDir: string) {
   );
   fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
   return {
-    geometry: TELEGRAM_PROOF_VIEW,
+    crop: TELEGRAM_PROOF_CROP,
+    geometry: TELEGRAM_PROOF_WINDOW,
     link,
     log: path.relative(root, logPath),
     status: "pass",

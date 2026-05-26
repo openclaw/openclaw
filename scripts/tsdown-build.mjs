@@ -16,10 +16,12 @@ const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
+const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"];
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=6144";
+const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=8192";
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
@@ -169,7 +171,7 @@ function findFatalUnresolvedImport(lines) {
     const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
     if (
       !normalizedLine.includes(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      !normalizedLine.includes("node_modules/")
+      !DEPENDENCY_PATH_MARKERS.some((marker) => normalizedLine.includes(marker))
     ) {
       return normalizedLine;
     }
@@ -200,16 +202,50 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
+function normalizeTsdownNodeOptions(nodeOptions) {
+  const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
+  const normalized = [];
+  let foundMaxOldSpaceSize = false;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
+    if (inlineMatch) {
+      foundMaxOldSpaceSize = true;
+      const value = Math.max(Number(inlineMatch[1]), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB);
+      normalized.push(`--max-old-space-size=${value}`);
+      continue;
+    }
+
+    if (part === "--max-old-space-size") {
+      foundMaxOldSpaceSize = true;
+      const next = parts[index + 1];
+      const parsed = next === undefined ? Number.NaN : Number(next);
+      const value = Number.isFinite(parsed)
+        ? Math.max(Math.trunc(parsed), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB)
+        : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+      normalized.push(`--max-old-space-size=${value}`);
+      if (next !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+
+    normalized.push(part);
+  }
+
+  if (!foundMaxOldSpaceSize) {
+    normalized.push(DEFAULT_TSDOWN_NODE_OPTIONS);
+  }
+
+  return normalized.join(" ");
+}
+
 function resolveTsdownEnv(env) {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
-  if (/(?:^|\s)--max-old-space-size(?:=|\s+)/u.test(nodeOptions)) {
-    return env;
-  }
   return {
     ...env,
-    NODE_OPTIONS: nodeOptions
-      ? `${nodeOptions} ${DEFAULT_TSDOWN_NODE_OPTIONS}`
-      : DEFAULT_TSDOWN_NODE_OPTIONS,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions),
   };
 }
 
@@ -257,17 +293,28 @@ export function createTsdownOutputScanner(params = {}) {
 
 export function resolveTsdownBuildInvocation(params = {}) {
   const env = resolveTsdownEnv(params.env ?? process.env);
+  const tsdownArgs = [
+    "--config-loader",
+    "unrun",
+    "--logLevel",
+    logLevel,
+    "--no-clean",
+    ...extraArgs,
+  ];
+  if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
+    return {
+      command: params.nodeExecPath ?? process.execPath,
+      args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env,
+      },
+    };
+  }
   const runner = resolvePnpmRunner({
-    pnpmArgs: [
-      "exec",
-      "tsdown",
-      "--config-loader",
-      "unrun",
-      "--logLevel",
-      logLevel,
-      "--no-clean",
-      ...extraArgs,
-    ],
+    pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
     comSpec: params.comSpec ?? env.ComSpec,

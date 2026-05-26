@@ -219,6 +219,44 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(bridge.specs[0]);
   });
 
+  it("can register a durable tool schema while denying execution for the current turn", async () => {
+    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual([
+      "message",
+      HEARTBEAT_RESPONSE_TOOL_NAME,
+    ]);
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {},
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+        },
+      ],
+    });
+    expect(heartbeatExecute).not.toHaveBeenCalled();
+  });
+
   it("can expose all dynamic tools directly for compatibility", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
@@ -729,7 +767,7 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("passes raw tool failure state into agent tool result middleware", async () => {
     const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (_event: { isError?: boolean }) => undefined);
+    const handler = vi.fn(async (eventValue: { isError?: boolean }) => undefined);
     registry.agentToolResultMiddlewares.push({
       pluginId: "tokenjuice",
       pluginName: "Tokenjuice",
@@ -758,9 +796,84 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "failed output" }],
     });
+    expect(result.sideEffectEvidence).toBe(true);
     const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
     expect(event.isError).toBe(true);
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
+  });
+
+  it("preserves terminal async tool results without marking them as errors", async () => {
+    const bridge = createBridgeWithToolResult("image_generate", {
+      content: [{ type: "text", text: "Background task started." }],
+      details: { async: true, status: "started", taskId: "task-1" },
+      terminate: true,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "image_generate",
+      arguments: { prompt: "lighthouse" },
+    });
+
+    expect(result).toEqual(expectInputText("Background task started."));
+    expect(result.asyncStarted).toBe(true);
+    expect(result.sideEffectEvidence).toBe(true);
+    expect(result.terminate).toBe(true);
+    expect(Object.keys(result)).not.toContain("asyncStarted");
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("marks executed dynamic tool results as side-effect evidence", async () => {
+    const bridge = createBridgeWithToolResult("exec", textToolResult("done"));
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result).toEqual(expectInputText("done"));
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
+  it("does not mark pre-execution argument failures as side-effect evidence", async () => {
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "exec",
+          execute,
+          ...({
+            prepareArguments: () => {
+              throw new Error("invalid arguments");
+            },
+          } as { prepareArguments: () => never }),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: {},
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "invalid arguments" }],
+    });
+    expect(result.sideEffectEvidence).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("uses raw tool provenance for media trust after middleware rewrites details", async () => {
@@ -853,7 +966,7 @@ describe("createCodexDynamicToolBridge", () => {
     const registry = createEmptyPluginRegistry();
     const middlewareContexts: Record<string, unknown>[] = [];
     const legacyContexts: Record<string, unknown>[] = [];
-    const middleware = vi.fn(async (_event: unknown, ctx: Record<string, unknown>) => {
+    const middleware = vi.fn(async (eventValue: unknown, ctx: Record<string, unknown>) => {
       middlewareContexts.push(ctx);
       return undefined;
     });
@@ -866,7 +979,7 @@ describe("createCodexDynamicToolBridge", () => {
         ) => Promise<{ result: AgentToolResult<unknown> } | void>,
       ) => void;
     }) => {
-      codex.on("tool_result", async (_event, ctx) => {
+      codex.on("tool_result", async (eventValue, ctx) => {
         legacyContexts.push(ctx);
       });
     };
@@ -1082,6 +1195,7 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
+    expect(result.sideEffectEvidence).toBeUndefined();
     expect(execute).not.toHaveBeenCalled();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     await vi.waitFor(() => {

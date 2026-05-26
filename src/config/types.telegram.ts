@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -61,6 +62,17 @@ export type TelegramNetworkConfig = {
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+
+export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
+  /** Use Telegram-native ephemeral draft UI for DM preview tool progress. */
+  nativeToolProgress?: boolean;
+  /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
+  nativeToolProgressAllowFrom?: Array<string | number>;
+};
+
+export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
+  preview?: TelegramStreamingPreviewConfig;
+};
 
 export type TelegramExecApprovalConfig = {
   /** Enable mode for Telegram exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
@@ -148,7 +160,7 @@ export type TelegramAccountConfig = {
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: TelegramPreviewStreamingConfig;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
@@ -264,7 +276,7 @@ export type TelegramGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
-  /** Per-topic configuration (key is message_thread_id as string) */
+  /** Per-topic configuration (key is message_thread_id as string, or "*" for topic defaults). */
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
@@ -299,7 +311,7 @@ export type TelegramDirectConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** If specified, only load these skills for this DM (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
-  /** Per-topic configuration for DM topics (key is message_thread_id as string) */
+  /** Per-topic configuration for DM topics (key is message_thread_id as string, or "*" for topic defaults). */
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this DM (and its topics). */
   enabled?: boolean;

@@ -17,6 +17,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -35,6 +36,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
+  providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
@@ -535,7 +537,7 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
 }
 
 function toFiniteCostNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {
@@ -675,6 +677,7 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
+  preserveLatestAssistantThinking?: boolean;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -689,8 +692,10 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
     modelApi: params.modelApi,
+    provider: params.provider,
     policy,
   });
   const isOpenAIResponsesApi =
@@ -722,9 +727,16 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const validatedThinkingSignatures = policy.preserveSignatures
-    ? stripInvalidThinkingSignatures(sanitizedImages)
-    : sanitizedImages;
+  // Some recovery paths supply a narrow policy with preserveSignatures disabled.
+  // Native signed-thinking providers still cannot replay missing/blank
+  // signatures once the assistant turn is no longer latest in the outbound
+  // request.
+  const validatedThinkingSignatures =
+    signedThinkingProvider || policy.preserveSignatures
+      ? stripInvalidThinkingSignatures(sanitizedImages, {
+          preserveLatestAssistant: params.preserveLatestAssistantThinking ?? true,
+        })
+      : sanitizedImages;
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;

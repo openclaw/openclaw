@@ -11,6 +11,7 @@ import {
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
+  updateConfigRawValue,
   type ConfigState,
 } from "./config.ts";
 
@@ -86,13 +87,17 @@ describe("applyConfigSnapshot", () => {
   it("updates config form when clean", () => {
     const state = createState();
     applyConfigSnapshot(state, {
-      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
+      config: { gateway: { mode: "local", runtimeOnly: true } },
       valid: true,
       issues: [],
       raw: "{}",
     });
 
     expect(state.configForm).toEqual({ gateway: { mode: "local" } });
+    expect(state.configSnapshot?.config).toEqual({
+      gateway: { mode: "local", runtimeOnly: true },
+    });
   });
 
   it("sets configRawOriginal when clean for change detection", () => {
@@ -179,19 +184,68 @@ describe("applyConfigSnapshot", () => {
     expect(state.configDraftBaseHash).toBe("hash-remote");
   });
 
-  it("forces form mode when the snapshot does not include raw text", () => {
+  it("keeps raw mode when editable config can be serialized without raw text", () => {
     const state = createState();
     state.configFormMode = "raw";
 
     applyConfigSnapshot(state, {
-      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
+      config: { gateway: { mode: "local", runtimeOnly: true } },
       valid: true,
       issues: [],
       raw: null,
     });
 
-    expect(state.configFormMode).toBe("form");
+    expect(state.configFormMode).toBe("raw");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
+
+  it("does not clobber raw edits while dirty", () => {
+    const state = createState();
+    state.configFormMode = "raw";
+    applyConfigSnapshot(state, {
+      hash: "hash-original",
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
+    });
+
+    updateConfigRawValue(state, '{\n  "gateway": { "mode": "remote" }\n}\n');
+    applyConfigSnapshot(state, {
+      hash: "hash-refreshed",
+      config: { gateway: { mode: "external" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "external" }\n}\n',
+    });
+
+    expect(state.configSnapshot?.hash).toBe("hash-refreshed");
+    expect(state.configDraftBaseHash).toBe("hash-original");
+    expect(state.configRaw).toBe('{\n  "gateway": { "mode": "remote" }\n}\n');
+  });
+});
+
+describe("updateConfigRawValue", () => {
+  it("tracks raw edits as pending changes", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-original",
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
+    });
+
+    updateConfigRawValue(state, '{\n  "gateway": { "mode": "remote" }\n}\n');
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configDraftBaseHash).toBe("hash-original");
+
+    updateConfigRawValue(state, '{\n  "gateway": { "mode": "local" }\n}\n');
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configDraftBaseHash).toBe("hash-original");
   });
 });
 
@@ -221,7 +275,11 @@ describe("updateConfigFormValue", () => {
   it("seeds from snapshot when form is null", () => {
     const state = createState();
     state.configSnapshot = {
-      config: { channels: { telegram: { botToken: "t" } }, gateway: { mode: "local" } },
+      sourceConfig: { channels: { telegram: { botToken: "t" } }, gateway: { mode: "local" } },
+      config: {
+        channels: { telegram: { botToken: "t" } },
+        gateway: { mode: "local", runtimeOnly: true },
+      },
       valid: true,
       issues: [],
       raw: "{}",
@@ -698,6 +756,29 @@ describe("applyConfig", () => {
 });
 
 describe("saveConfig", () => {
+  it("submits generated raw text when the snapshot did not include raw text", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    applyConfigSnapshot(state, {
+      hash: "hash-generated-raw",
+      sourceConfig: { gateway: { mode: "local" } },
+      config: { gateway: { mode: "local", runtimeOnly: true } },
+      valid: true,
+      issues: [],
+      raw: null,
+    });
+
+    await saveConfig(state);
+
+    expect(request).toHaveBeenCalledWith("config.set", {
+      raw: '{\n  "gateway": {\n    "mode": "local"\n  }\n}\n',
+      baseHash: "hash-generated-raw",
+    });
+  });
+
   it("submits the original draft base hash after a dirty config refresh", async () => {
     const request = createRequestWithConfigGet();
     const state = createState();
@@ -828,6 +909,56 @@ describe("saveConfig", () => {
       },
     });
     expect(params.baseHash).toBe("hash-save-redacted");
+  });
+
+  it("submits source config instead of runtime-materialized provider defaults", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    applyConfigSnapshot(state, {
+      hash: "hash-source-provider",
+      sourceConfig: {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openai" },
+            },
+          },
+        },
+        ui: { theme: "light" },
+      },
+      config: {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openai" },
+              baseUrl: "",
+            },
+          },
+        },
+        ui: { theme: "light" },
+      },
+      valid: true,
+      issues: [],
+      raw: '{\n  "models": {\n    "providers": {\n      "openai": {\n        "agentRuntime": { "id": "openai" }\n      }\n    }\n  },\n  "ui": { "theme": "light" }\n}\n',
+    });
+
+    updateConfigFormValue(state, ["ui", "theme"], "dark");
+    await saveConfig(state);
+
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      models: { providers: { openai: { agentRuntime: { id: string }; baseUrl?: string } } };
+      ui: { theme: string };
+    };
+    expect(parsed.models.providers.openai.agentRuntime.id).toBe("openai");
+    expect(parsed.models.providers.openai).not.toHaveProperty("baseUrl");
+    expect(parsed.ui.theme).toBe("dark");
+    expect(params.baseHash).toBe("hash-source-provider");
   });
 
   it("drops stale loaded redacted placeholders before config.apply and keeps session key", async () => {

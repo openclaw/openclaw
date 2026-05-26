@@ -10,6 +10,21 @@ import {
 } from "./shared.js";
 
 const DEFAULT_WAIT_CONDITION_TIMEOUT_MS = 20000;
+type BrowserWaitLoadState = "load" | "domcontentloaded" | "networkidle";
+
+function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undefined {
+  const load = normalizeOptionalString(value);
+  switch (load) {
+    case undefined:
+      return undefined;
+    case "load":
+    case "domcontentloaded":
+    case "networkidle":
+      return load;
+    default:
+      throw new Error(`Invalid --load value: ${load}`);
+  }
+}
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -64,10 +79,7 @@ export function registerBrowserFormWaitEvalCommands(
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const sel = normalizeOptionalString(selector);
-        const load =
-          opts.load === "load" || opts.load === "domcontentloaded" || opts.load === "networkidle"
-            ? (opts.load as "load" | "domcontentloaded" | "networkidle")
-            : undefined;
+        const load = parseBrowserWaitLoadState(opts.load);
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const timeMs = Number.isFinite(opts.time) ? opts.time : undefined;
         const text = normalizeOptionalString(opts.text);
@@ -107,6 +119,11 @@ export function registerBrowserFormWaitEvalCommands(
     .description("Evaluate a function against the page or a ref")
     .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
     .option("--ref <id>", "Ref from snapshot")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to allow the evaluate function to run (default: 20000)",
+      (v: string) => Number(v),
+    )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
@@ -116,6 +133,7 @@ export function registerBrowserFormWaitEvalCommands(
         return;
       }
       try {
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const result = await callBrowserAct<{ result?: unknown }>({
           parent,
           profile,
@@ -124,7 +142,9 @@ export function registerBrowserFormWaitEvalCommands(
             fn: opts.fn,
             ref: normalizeOptionalString(opts.ref),
             targetId: normalizeOptionalString(opts.targetId),
+            timeoutMs,
           },
+          timeoutMs,
         });
         if (parent?.json) {
           defaultRuntime.writeJson(result);

@@ -14,7 +14,7 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand, __testing } from "./sessions.js";
+import { sessionsCommand, testing } from "./sessions.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -257,7 +257,7 @@ describe("sessionsCommand", () => {
   });
 
   it("uses a default JSON output limit of 100 sessions", () => {
-    expect(__testing.parseSessionsLimit(undefined)).toBe(100);
+    expect(testing.parseSessionsLimit(undefined)).toBe(100);
   });
 
   it("honors explicit JSON output limits", async () => {

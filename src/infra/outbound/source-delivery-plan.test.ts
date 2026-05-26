@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./target-normalization.js", () => ({
+  normalizeTargetForProvider: (_provider: string, raw?: string) => raw?.trim(),
+}));
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
   sourceDeliveryTargetsMatch,
 } from "./source-delivery-plan.js";
-
-vi.mock("./target-normalization.js", () => ({
-  normalizeTargetForProvider: (_provider: string, raw?: string) => raw?.trim() || undefined,
-}));
 
 describe("source delivery plan", () => {
   it("projects message-tool-owned delivery to existing source reply and message tool fields", () => {
@@ -175,6 +175,33 @@ describe("source delivery plan", () => {
       sourceDeliveryTargetsMatch(
         { provider: "discord", to: "channel:C1" },
         { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches same-kind delivery target prefixes without normalizing provider-owned IDs", () => {
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "slack", to: "Channel: C1" },
+        { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(true);
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "slack", to: "channel:C2" },
+        { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(false);
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "slack", to: "channel:c1" },
+        { channel: "slack", to: "channel:C1" },
+      ),
+    ).toBe(true);
+    expect(
+      sourceDeliveryTargetsMatch(
+        { provider: "mattermost", to: "channel: abc" },
+        { channel: "mattermost", to: "channel:ABC" },
       ),
     ).toBe(false);
   });

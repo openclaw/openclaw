@@ -24,6 +24,7 @@ import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-s
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
@@ -37,9 +38,16 @@ import {
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
 } from "../targets.js";
+import type { IMessageDmHistoryContext } from "./dm-history.js";
+import {
+  type IMessageReactionContext,
+  resolveIMessageReactionContext,
+} from "./reaction-context.js";
 import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
+
+export { resolveIMessageReactionContext };
 
 type IMessageReactionNotificationMode = "off" | "own" | "all";
 
@@ -48,110 +56,6 @@ type IMessageReplyContext = {
   body: string;
   sender?: string;
 };
-
-type IMessageReactionContext = {
-  action: "added" | "removed";
-  emoji: string;
-  targetGuid?: string;
-  targetGuids?: string[];
-  targetText?: string;
-};
-
-const TAPBACK_TEXT_PATTERNS: Array<{
-  prefix: string;
-  action: "added" | "removed";
-  emoji: string;
-}> = [
-  { prefix: "loved", action: "added", emoji: "❤️" },
-  { prefix: "liked", action: "added", emoji: "👍" },
-  { prefix: "disliked", action: "added", emoji: "👎" },
-  { prefix: "laughed at", action: "added", emoji: "😂" },
-  { prefix: "emphasized", action: "added", emoji: "‼️" },
-  { prefix: "questioned", action: "added", emoji: "❓" },
-  { prefix: "removed a heart from", action: "removed", emoji: "❤️" },
-  { prefix: "removed a like from", action: "removed", emoji: "👍" },
-  { prefix: "removed a dislike from", action: "removed", emoji: "👎" },
-  { prefix: "removed a laugh from", action: "removed", emoji: "😂" },
-  { prefix: "removed an emphasis from", action: "removed", emoji: "‼️" },
-  { prefix: "removed a question from", action: "removed", emoji: "❓" },
-];
-
-function normalizeReactionValue(value: unknown): string | undefined {
-  return typeof value === "string"
-    ? value.trim().replace(/^p:\d+\//iu, "") || undefined
-    : undefined;
-}
-
-function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
-  const candidates: string[] = [];
-  for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const raw = value.trim();
-    if (!raw) {
-      continue;
-    }
-    const normalized = raw.replace(/^p:\d+\//iu, "");
-    for (const candidate of [normalized, raw]) {
-      if (candidate && !candidates.includes(candidate)) {
-        candidates.push(candidate);
-      }
-    }
-  }
-  return candidates;
-}
-
-function resolveTapbackTextContext(bodyText: string): IMessageReactionContext | null {
-  const lower = bodyText.toLowerCase();
-  for (const pattern of TAPBACK_TEXT_PATTERNS) {
-    if (!lower.startsWith(pattern.prefix)) {
-      continue;
-    }
-    const afterPrefix = bodyText.slice(pattern.prefix.length).trim();
-    if (!/^["\u201c]/u.test(afterPrefix)) {
-      continue;
-    }
-    return {
-      action: pattern.action,
-      emoji: pattern.emoji,
-      targetText: afterPrefix
-        .replace(/^["\u201c]/u, "")
-        .replace(/["\u201d]$/u, "")
-        .trim(),
-    };
-  }
-  return null;
-}
-
-export function resolveIMessageReactionContext(
-  message: IMessagePayload,
-  bodyText: string,
-): IMessageReactionContext | null {
-  const explicit =
-    message.is_reaction === true ||
-    message.is_tapback === true ||
-    (typeof message.associated_message_type === "number" &&
-      Number.isFinite(message.associated_message_type) &&
-      message.associated_message_type >= 2000 &&
-      message.associated_message_type < 4000);
-  if (explicit) {
-    const targetGuids = resolveReactionTargetGuidCandidates(
-      message.reacted_to_guid,
-      message.associated_message_guid,
-    );
-    return {
-      action: message.is_reaction_add === false ? "removed" : "added",
-      emoji:
-        normalizeReactionValue(message.reaction_emoji) ??
-        normalizeReactionValue(message.reaction_type) ??
-        "reaction",
-      targetGuid: targetGuids[0],
-      targetGuids,
-    };
-  }
-  return resolveTapbackTextContext(bodyText);
-}
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
 
@@ -192,7 +96,7 @@ function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   if (legacyChatTargets.length === 0) {
     return params.groupAllowFrom;
   }
-  return Array.from(new Set([...params.groupAllowFrom, ...legacyChatTargets]));
+  return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
 }
 
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
@@ -395,6 +299,7 @@ type IMessageInboundDispatchDecision = {
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
+  hasControlCommand: boolean;
   // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
   // from `channels.imessage.groups.<chat_id>.systemPrompt` (or the `"*"`
   // wildcard) at gate time. Always undefined for DMs.
@@ -884,6 +789,7 @@ export async function resolveIMessageInboundDecision(params: {
     replyContext: filteredReplyContext,
     effectiveWasMentioned,
     commandAuthorized,
+    hasControlCommand: hasControlCommandInMessage,
     groupSystemPrompt,
   };
 }
@@ -903,6 +809,7 @@ export function buildIMessageInboundContext(params: {
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  dmHistory?: IMessageDmHistoryContext;
 }): {
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
   fromLabel: string;
@@ -962,6 +869,9 @@ export function buildIMessageInboundContext(params: {
   });
 
   let combinedBody = body;
+  if (!decision.isGroup && params.dmHistory?.body) {
+    combinedBody = `${params.dmHistory.body}\n\n${combinedBody}`;
+  }
   if (decision.isGroup && decision.historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -983,12 +893,14 @@ export function buildIMessageInboundContext(params: {
 
   const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
-    decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
-          historyKey: decision.historyKey,
-          limit: params.historyLimit,
-        })
-      : undefined;
+    !decision.isGroup && params.dmHistory?.inboundHistory
+      ? params.dmHistory.inboundHistory
+      : decision.isGroup && decision.historyKey && params.historyLimit > 0
+        ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
+            historyKey: decision.historyKey,
+            limit: params.historyLimit,
+          })
+        : undefined;
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -1031,6 +943,8 @@ export function buildIMessageInboundContext(params: {
     MediaRemoteHost: params.remoteHost,
     WasMentioned: decision.effectiveWasMentioned,
     CommandAuthorized: decision.commandAuthorized,
+    CommandSource:
+      decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
     OriginatingChannel: "imessage" as const,
     OriginatingTo: imessageTo,
   });

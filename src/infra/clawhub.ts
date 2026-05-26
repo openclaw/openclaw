@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -532,11 +533,7 @@ function satisfiesComparator(version: string, token: string): boolean {
 }
 
 function satisfiesSemverRange(version: string, range: string): boolean {
-  const tokens = range
-    .trim()
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
+  const tokens = normalizeStringEntries(range.trim().split(/\s+/));
   if (tokens.length === 0) {
     return false;
   }
@@ -551,7 +548,10 @@ function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string
 }
 
 function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search">): URL {
-  const url = new URL(params.path, `${normalizeBaseUrl(params.baseUrl)}/`);
+  const url = new URL(`${normalizeBaseUrl(params.baseUrl)}/`);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
+  url.pathname = `${basePath}${requestPath}`;
   for (const [key, value] of Object.entries(params.search ?? {})) {
     if (!value) {
       continue;

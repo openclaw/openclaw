@@ -3,11 +3,15 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
+import {
   computeBackoff,
   formatDurationPrecise,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
@@ -60,9 +64,34 @@ const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 1
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
+const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
+const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
+}
+
+type NonRetryableSpooledUpdateFailure = {
+  reason: "missing-agent-harness";
+  message: string;
+};
+
+function resolveNonRetryableSpooledUpdateFailure(
+  err: unknown,
+): NonRetryableSpooledUpdateFailure | null {
+  for (const candidate of collectErrorGraphCandidates(err, (current) => [
+    current.cause,
+    current.error,
+  ])) {
+    const message = formatErrorMessage(candidate);
+    if (
+      readErrorName(candidate) === MISSING_AGENT_HARNESS_ERROR_NAME ||
+      MISSING_AGENT_HARNESS_MESSAGE_RE.test(message)
+    ) {
+      return { reason: "missing-agent-harness", message };
+    }
+  }
+  return null;
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
@@ -457,6 +486,30 @@ export class TelegramPollingSession {
     err: unknown;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<void> {
+    const nonRetryable = resolveNonRetryableSpooledUpdateFailure(params.err);
+    if (nonRetryable) {
+      try {
+        const failed = await failTelegramSpooledUpdateClaim({
+          update: params.update,
+          reason: nonRetryable.reason,
+          message: nonRetryable.message,
+        });
+        if (!failed) {
+          this.opts.log(
+            `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}, but no processing marker remained to dead-letter.`,
+          );
+          return;
+        }
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}; dead-lettered: ${nonRetryable.message}`,
+        );
+        return;
+      } catch (failErr) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}, but could not be dead-lettered: ${formatErrorMessage(failErr)}`,
+        );
+      }
+    }
     try {
       await releaseTelegramSpooledUpdateClaim(params.update);
     } catch (releaseErr) {
@@ -685,6 +738,15 @@ export class TelegramPollingSession {
       network: ingress.network,
       proxy: ingress.proxy,
     });
+    let stopWorkerPromise: Promise<void> | undefined;
+    const stopWorker = () => {
+      stopWorkerPromise ??= Promise.resolve(worker.stop())
+        .then(() => undefined)
+        .catch(() => {
+          // Worker may already be stopped by restart/abort paths.
+        });
+      return stopWorkerPromise;
+    };
     this.opts.log(`[telegram][diag] isolated polling ingress started spool=${spoolDir}`);
     const pollState: {
       startedAt: number | null;
@@ -696,11 +758,19 @@ export class TelegramPollingSession {
       offset: null,
       outcome: "not-started",
     };
+    const liveness = new TelegramPollingLivenessTracker();
     let consecutiveDrainFailures = 0;
     let restartRequested = false;
+    let stalledRestart = false;
+    let forceCycleTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceCycleResolve: (() => void) | undefined;
+    const forceCyclePromise = new Promise<void>((resolve) => {
+      forceCycleResolve = resolve;
+    });
     const stalledBacklogKeys = new Set<string>();
     const unsubscribe = worker.onMessage((message) => {
       if (message.type === "poll-start") {
+        liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
         pollState.offset = message.offset;
         pollState.outcome = "started";
@@ -708,6 +778,8 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "poll-success") {
+        liveness.noteGetUpdatesSuccessCount(message.count, message.finishedAt);
+        liveness.noteGetUpdatesFinished();
         if (!restartRequested && stalledBacklogKeys.size === 0) {
           this.#status.notePollSuccess(message.finishedAt);
         }
@@ -716,12 +788,18 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "poll-error") {
+        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
+        liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
+        return;
+      }
+      if (message.type === "spooled") {
+        liveness.noteGetUpdatesActivity();
       }
     });
     const stopOnAbort = () => {
-      void worker.stop();
+      void stopWorker();
     };
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
@@ -762,7 +840,7 @@ export class TelegramPollingSession {
         const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
         if (timedOutRecovery?.restart) {
           restartRequested = true;
-          void worker.stop();
+          void stopWorker();
         } else if (timedOutRecovery) {
           stalledBacklogKeys.add(timedOutRecovery.handlerKey);
         }
@@ -780,9 +858,38 @@ export class TelegramPollingSession {
       void drainOnce();
     }, drainIntervalMs);
     drainTimer.unref?.();
+    const watchdog = setInterval(() => {
+      if (this.opts.abortSignal?.aborted || restartRequested) {
+        return;
+      }
+      const stall = liveness.detectStall({
+        thresholdMs: this.#stallThresholdMs,
+      });
+      if (!stall) {
+        return;
+      }
+      this.#transportState.markDirty();
+      stalledRestart = true;
+      restartRequested = true;
+      this.opts.log(`[telegram] ${stall.message}`);
+      this.#status.notePollingError(stall.message);
+      void stopWorker();
+      if (!forceCycleTimer) {
+        forceCycleTimer = setTimeout(() => {
+          if (this.opts.abortSignal?.aborted) {
+            return;
+          }
+          this.opts.log(
+            `[telegram] Isolated polling ingress stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
+          );
+          forceCycleResolve?.();
+        }, POLL_STOP_GRACE_MS);
+      }
+    }, POLL_WATCHDOG_INTERVAL_MS);
+    watchdog.unref?.();
     try {
       try {
-        await worker.task();
+        await Promise.race([worker.task(), forceCyclePromise]);
       } catch (err) {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
@@ -806,6 +913,11 @@ export class TelegramPollingSession {
         return "exit";
       }
       if (restartRequested) {
+        if (stalledRestart) {
+          this.opts.log(
+            `[telegram][diag] isolated polling ingress finished reason=polling stall detected ${liveness.formatDiagnosticFields("error")}`,
+          );
+        }
         return "continue";
       }
       const errorText = pollState.error ? ` error=${pollState.error}` : "";
@@ -817,10 +929,14 @@ export class TelegramPollingSession {
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
+      clearInterval(watchdog);
       clearInterval(drainTimer);
+      if (forceCycleTimer) {
+        clearTimeout(forceCycleTimer);
+      }
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await worker.stop();
+      await stopWorker();
       if (!restartRequested) {
         await drainOnce();
         await waitForGracefulStop(() => this.#waitForSpooledUpdateHandlers());

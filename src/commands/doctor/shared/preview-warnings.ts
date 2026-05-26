@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -20,10 +21,6 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
 
 function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
   return channelDoctorModuleLoader.load();
-}
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
@@ -45,6 +42,16 @@ function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
   }
   const load = plugins.load;
   return hasRecord(load) && Array.isArray(load.paths) && load.paths.length > 0;
+}
+
+function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
+  if (Array.isArray(cfg.agents?.defaults?.subagents?.allowAgents)) {
+    return true;
+  }
+  return listAgentRecords(cfg).some((agent) => {
+    const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
+    return Array.isArray(subagents?.allowAgents);
+  });
 }
 
 function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
@@ -363,11 +370,17 @@ export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig
   });
 }
 
-export async function collectDoctorPreviewWarnings(params: {
+export type DoctorPreviewNotes = {
+  infoNotes: string[];
+  warningNotes: string[];
+};
+
+export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<string[]> {
+}): Promise<DoctorPreviewNotes> {
+  const infoNotes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const hasChannelConfig = hasChannels(params.cfg);
@@ -435,9 +448,32 @@ export async function collectDoctorPreviewWarnings(params: {
   if (hasPluginConfig) {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
+
+    const { collectContextEngineHostCompatibilityWarnings } =
+      await import("./context-engine-host-compat.js");
+    warnings.push(
+      ...(await collectContextEngineHostCompatibilityWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      })),
+    );
   }
-  const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
-  warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));
+  if (hasSubagentAllowlistConfig(params.cfg)) {
+    const { collectStaleSubagentAllowlistWarnings, scanStaleSubagentAllowlistReferences } =
+      await import("./stale-subagent-allowlist.js");
+    const staleSubagentAllowlistHits = scanStaleSubagentAllowlistReferences(params.cfg);
+    if (staleSubagentAllowlistHits.length > 0) {
+      warnings.push(
+        collectStaleSubagentAllowlistWarnings({
+          hits: staleSubagentAllowlistHits,
+          doctorFixCommand: params.doctorFixCommand,
+        }).join("\n"),
+      );
+    }
+  }
+  const { collectCodexNativeAssetInfoNotes } = await import("./codex-native-assets.js");
+  infoNotes.push(...(await collectCodexNativeAssetInfoNotes({ cfg: params.cfg, env })));
 
   if (hasPluginLoadPaths(params.cfg)) {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
@@ -532,5 +568,13 @@ export async function collectDoctorPreviewWarnings(params: {
     );
   }
 
-  return warnings;
+  return { infoNotes, warningNotes: warnings };
+}
+
+export async function collectDoctorPreviewWarnings(params: {
+  cfg: OpenClawConfig;
+  doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

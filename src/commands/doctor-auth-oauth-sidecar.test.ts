@@ -7,7 +7,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { __testing, maybeRepairLegacyOAuthSidecarProfiles } from "./doctor-auth-oauth-sidecar.js";
+import { testing, maybeRepairLegacyOAuthSidecarProfiles } from "./doctor-auth-oauth-sidecar.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const states: OpenClawTestState[] = [];
@@ -52,13 +52,9 @@ function encryptLegacySidecarMaterial(params: {
   material: Record<string, string>;
 }) {
   const iv = Buffer.alloc(12, 7);
-  const cipher = createCipheriv(
-    "aes-256-gcm",
-    __testing.buildLegacyOAuthSecretKey(params.seed),
-    iv,
-  );
+  const cipher = createCipheriv("aes-256-gcm", testing.buildLegacyOAuthSecretKey(params.seed), iv);
   cipher.setAAD(
-    __testing.buildLegacyOAuthSecretAad({
+    testing.buildLegacyOAuthSecretAad({
       ref: params.ref,
       profileId: params.profileId,
       provider: params.provider,
@@ -143,7 +139,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(result.detected).toEqual([authPath]);
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toStrictEqual([
-      `Migrated 1 sidecar-backed Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.123.bak).`,
+      `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.123.bak).`,
     ]);
     expect(fs.existsSync(sidecarPath)).toBe(false);
     expect(JSON.parse(fs.readFileSync(`${authPath}.oauth-ref.123.bak`, "utf8"))).toEqual(auth);
@@ -394,7 +390,7 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
       expect(result.detected).toEqual([authPath]);
       expect(result.warnings).toStrictEqual([]);
       expect(result.changes).toStrictEqual([
-        `Migrated 1 sidecar-backed Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.789.bak).`,
+        `Migrated 1 legacy Codex OAuth profile in ${authPath} to inline credentials (backup: ${authPath}.oauth-ref.789.bak).`,
       ]);
       expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
         version: 1,
@@ -466,8 +462,8 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(result.detected).toEqual([mainAuthPath, workerAuthPath]);
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([
-      `Migrated 1 sidecar-backed Codex OAuth profile in ${mainAuthPath} to inline credentials (backup: ${mainAuthPath}.oauth-ref.456.bak).`,
-      `Migrated 1 sidecar-backed Codex OAuth profile in ${workerAuthPath} to inline credentials (backup: ${workerAuthPath}.oauth-ref.456.bak).`,
+      `Migrated 1 legacy Codex OAuth profile in ${mainAuthPath} to inline credentials (backup: ${mainAuthPath}.oauth-ref.456.bak).`,
+      `Migrated 1 legacy Codex OAuth profile in ${workerAuthPath} to inline credentials (backup: ${workerAuthPath}.oauth-ref.456.bak).`,
     ]);
     for (const authPath of [mainAuthPath, workerAuthPath]) {
       expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({

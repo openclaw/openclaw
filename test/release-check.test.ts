@@ -1,6 +1,6 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -17,6 +17,7 @@ import {
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
+  collectSkillShellScriptExecutableErrors,
   collectPackUnpackedSizeErrors,
   collectPackedInstalledPackageVerificationErrors,
   createPackedCompletionSmokeEnv,
@@ -27,6 +28,7 @@ import {
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
+  resolveReleaseNpmCommand,
   resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
@@ -118,12 +120,12 @@ describe("packed CLI smoke", () => {
           : `${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: "/tmp/smoke-home",
       USERPROFILE: "/tmp/smoke-home",
-      ComSpec: "C:\\Windows/System32/cmd.exe",
-      APPDATA: "/tmp/smoke-home/AppData/Roaming",
-      LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
+      ComSpec: join("C:\\Windows", "System32", "cmd.exe"),
+      APPDATA: join("/tmp/smoke-home", "AppData", "Roaming"),
+      LOCALAPPDATA: join("/tmp/smoke-home", "AppData", "Local"),
       AWS_EC2_METADATA_DISABLED: "true",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/smoke-home/.aws/credentials",
-      AWS_CONFIG_FILE: "/tmp/smoke-home/.aws/config",
+      AWS_SHARED_CREDENTIALS_FILE: join("/tmp/smoke-home", ".aws", "credentials"),
+      AWS_CONFIG_FILE: join("/tmp/smoke-home", ".aws", "config"),
       TMPDIR: "/tmp/original-tmp",
       SystemRoot: "C:\\Windows",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
@@ -157,6 +159,43 @@ describe("packed CLI smoke", () => {
   });
 });
 
+describe("resolveReleaseNpmCommand", () => {
+  it("wraps Windows npm.cmd release checks through cmd.exe without shell mode", () => {
+    const nodeDir = "C:\\Program Files\\nodejs";
+    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
+
+    expect(
+      resolveReleaseNpmCommand(["pack", "--dry-run", "--json"], {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: { PATH: "C:\\bin" },
+        execPath: win32.join(nodeDir, "node.exe"),
+        existsSync: (candidate) => candidate === npmCmdPath,
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\nodejs\\npm.cmd" pack --dry-run --json"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("rejects bare npm fallback on Windows release checks", () => {
+    expect(() =>
+      resolveReleaseNpmCommand(["pack"], {
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        existsSync: () => false,
+        platform: "win32",
+      }),
+    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
+  });
+});
+
 describe("workspace bootstrap smoke", () => {
   it("runs with a sterile env instead of maintainer provider credentials", () => {
     expect(
@@ -185,8 +224,8 @@ describe("workspace bootstrap smoke", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       AWS_EC2_METADATA_DISABLED: "true",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/bootstrap-home/.aws/credentials",
-      AWS_CONFIG_FILE: "/tmp/bootstrap-home/.aws/config",
+      AWS_SHARED_CREDENTIALS_FILE: join("/tmp/bootstrap-home", ".aws", "credentials"),
+      AWS_CONFIG_FILE: join("/tmp/bootstrap-home", ".aws", "config"),
     });
   });
 });
@@ -334,6 +373,41 @@ describe("bundled plugin package dependency checks", () => {
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
+// Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
+// statSync().mode never reports execute bits, so these tests are meaningless there.
+describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
+  it("flags non-executable shell scripts under skills/*/scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o644);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([
+        "skill shell script is not executable: skills/openai-whisper-api/scripts/transcribe.sh",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts executable shell scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o755);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -489,6 +563,7 @@ describe("collectMissingPackPaths", () => {
       PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       "dist/control-ui/index.html",
       "scripts/npm-runner.mjs",
+      "scripts/prepare-git-hooks.mjs",
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-plugin-catalog.json",
@@ -508,6 +583,7 @@ describe("collectMissingPackPaths", () => {
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
     expect(
       collectMissingPackPaths([
+        "npm-shrinkwrap.json",
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
@@ -518,6 +594,7 @@ describe("collectMissingPackPaths", () => {
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
+        "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/lib/official-external-channel-catalog.json",
         "scripts/lib/official-external-plugin-catalog.json",

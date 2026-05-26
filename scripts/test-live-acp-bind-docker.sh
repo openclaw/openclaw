@@ -173,8 +173,8 @@ WRAP
     fi
     droid --version
     if [ -z "${FACTORY_API_KEY:-}" ]; then
-      echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
-      exit 0
+      echo "ERROR: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+      exit 1
     fi
     ;;
   gemini)
@@ -306,8 +306,8 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     echo "==> Profile file: $PROFILE_STATUS"
     echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
     echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-    echo "SKIP: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
-    continue
+    echo "ERROR: Droid Docker ACP bind requires FACTORY_API_KEY; Factory OAuth/keyring auth in ~/.factory is not portable into the container." >&2
+    exit 1
   fi
 
   EXTERNAL_AUTH_MOUNTS=()
@@ -335,7 +335,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-  DOCKER_RUN_ARGS=(docker run --rm -t \
+  DOCKER_RUN_ARGS=()
+  openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s}"
+  DOCKER_RUN_ARGS+=(--rm -t \
     -u "$DOCKER_USER" \
     --entrypoint bash \
     -e ANTHROPIC_API_KEY \

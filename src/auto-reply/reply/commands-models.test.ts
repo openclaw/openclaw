@@ -42,6 +42,9 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
   hasAuthForModelProvider: ({ provider }: { provider: string }) =>
     modelProviderAuthMocks.authenticatedProviders.has(provider),
+  getCurrentProviderAuthState: () => null,
+  clearCurrentProviderAuthState: () => undefined,
+  warmCurrentProviderAuthState: async () => undefined,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -203,6 +206,40 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
 
+  it("uses read-only catalog loading and static auth checks for default browse", async () => {
+    await handleModelsCommand(buildParams("/models"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+    const authCheckerParams = firstAuthCheckerParams();
+    expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
+    expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
+  });
+
+  it("does not block default browse when read-only catalog loading is slow", async () => {
+    vi.useFakeTimers();
+    try {
+      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => undefined));
+
+      const resultPromise = handleModelsCommand(buildParams("/models"), true);
+      await vi.advanceTimersByTimeAsync(750);
+      const result = await resultPromise;
+
+      expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1);
+      expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Providers:");
+      expect(result?.reply?.text).toContain("- anthropic (1)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps explicit all browse on the full catalog path", async () => {
+    await handleModelsCommand(buildParams("/models openai all"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+  });
+
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
     modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
 
@@ -245,6 +282,7 @@ describe("handleModelsCommand", () => {
       true,
     );
 
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
     expect(result?.reply?.text).toContain("- openai-codex (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
     expect(result?.reply?.text).not.toContain("- anthropic");
@@ -656,6 +694,34 @@ describe("handleModelsCommand", () => {
       .calls as unknown as Array<[{ provider?: string; workspaceDir?: string }]>;
     expect(authLabelParams.provider).toBe("anthropic");
     expect(authLabelParams.workspaceDir).toBe("/tmp");
+  });
+
+  it("labels OpenAI provider pages with the effective Codex auth provider set", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
+      "oauth (openai-codex:user@example.com)",
+    );
+
+    const result = await handleModelsCommand(
+      buildParams("/models openai", {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.com"],
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain(
+      "Models (openai · 🔑 oauth (openai-codex:user@example.com))",
+    );
+    const openaiAuthCall = modelAuthLabelMocks.resolveModelAuthLabel.mock.calls.find(
+      ([params]) => (params as { provider?: string }).provider === "openai",
+    );
+    expect(openaiAuthCall?.[0]).toMatchObject({
+      provider: "openai",
+      acceptedProviderIds: ["openai-codex"],
+    });
   });
 
   it("uses spawned workspace for direct /models provider visibility", async () => {

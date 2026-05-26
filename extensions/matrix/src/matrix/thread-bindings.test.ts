@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/session-binding-runtime";
+import { getSessionBindingService, testing } from "openclaw/plugin-sdk/session-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
@@ -47,7 +47,7 @@ describe("matrix thread bindings", () => {
   const matrixClient = {} as never;
 
   function resetThreadBindingAdapters() {
-    __testing.resetSessionBindingAdaptersForTests();
+    testing.resetSessionBindingAdaptersForTests();
     resetMatrixThreadBindingsForTests();
   }
 
@@ -330,12 +330,14 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
+      const sendCallCount = sendMessageMatrixMock.mock.calls.length;
       await vi.advanceTimersByTimeAsync(61_000);
 
       await vi.waitFor(
-        () => expect(sendMessageMatrixMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+        () =>
+          expect(sendMessageMatrixMock.mock.calls.length).toBeGreaterThanOrEqual(sendCallCount + 2),
         {
-          interval: 1,
+          interval: 10,
           timeout: 1_000,
         },
       );
@@ -346,7 +348,7 @@ describe("matrix thread bindings", () => {
           expect(persisted.version).toBe(1);
           expect(persisted.bindings).toEqual([]);
         },
-        { interval: 1, timeout: 100 },
+        { interval: 10, timeout: 1_000 },
       );
     } finally {
       vi.useRealTimers();

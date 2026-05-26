@@ -323,6 +323,18 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "demo-config-startup",
+        channels: [],
+        activation: {
+          onStartup: false,
+          onConfigPaths: ["plugins.entries.demo-config-startup.config.autoStart"],
+        },
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "external-hook-capability",
         channels: [],
         activation: {
@@ -1061,6 +1073,34 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("loads startup-lazy bundled plugins only when their activation config is present", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            "demo-config-startup": {
+              enabled: true,
+              config: {
+                autoStart: [{ providerId: "demo" }],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "demo-config-startup"],
+    });
+  });
+
   it("loads explicit hook-capability plugins at startup", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
@@ -1364,7 +1404,7 @@ describe("resolveGatewayStartupPluginIds", () => {
   it("does not treat persisted auth alone as gateway startup intent", () => {
     listPotentialConfiguredChannelIds.mockImplementation(
       (
-        _config: OpenClawConfig,
+        configForTest: OpenClawConfig,
         _env: NodeJS.ProcessEnv,
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
@@ -1383,7 +1423,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     useManifestRegistryFixture(createManifestRegistryFixtureWithWorkspaceDemoChannel());
     listPotentialConfiguredChannelIds.mockImplementation(
       (
-        _config: OpenClawConfig,
+        configForTest: OpenClawConfig,
         _env: NodeJS.ProcessEnv,
         options?: { includePersistedAuthState?: boolean },
       ) => (options?.includePersistedAuthState === false ? [] : ["demo-channel"]),
