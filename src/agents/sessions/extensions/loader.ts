@@ -49,7 +49,9 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
   "@sinclair/typebox/compile": bundledTypeboxCompile,
   "@sinclair/typebox/value": bundledTypeboxValue,
   "openclaw/plugin-sdk/agent-core": bundledAgentCore,
+  "@openclaw/plugin-sdk/agent-core": bundledAgentCore,
   "openclaw/plugin-sdk/llm": bundledLlm,
+  "@openclaw/plugin-sdk/llm": bundledLlm,
   "openclaw/plugin-sdk/agent-sessions": bundledAgentSessions,
   "@openclaw/plugin-sdk/agent-sessions": bundledAgentSessions,
 };
