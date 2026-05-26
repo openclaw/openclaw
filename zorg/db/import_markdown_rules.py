@@ -11,6 +11,19 @@ def iter_markdown(workspace: Path, rules_dir: Path):
     candidates = []
     if rules_dir.exists():
         candidates.extend(rules_dir.glob("*.md"))
+    core_markdown = [
+        "AGENTS.md",
+        "SOUL.md",
+        "USER.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        "HEARTBEAT.md",
+        "ZORG_MEMORYDB_MASTER_RULES.md",
+    ]
+    for name in core_markdown:
+        path = workspace / name
+        if path.exists():
+            candidates.append(path)
     retired_memory = workspace / "memory"
     if retired_memory.exists():
         candidates.extend(retired_memory.rglob("*.md"))

@@ -157,6 +157,65 @@ JSON
   chmod +x "$OPENCLAW_WORKSPACE/memory_sql_tool.py" "$OPENCLAW_WORKSPACE/memory_recall_router.py"
 }
 
+install_agent_readable_markdown() {
+  log "Installing agent-readable Zorg MemoryDB markdown instructions"
+  if [[ -f "$ZORG_WORKSPACE_DIR/rules/ZORG_MEMORYDB_MASTER_RULES.md" ]]; then
+    cp "$ZORG_WORKSPACE_DIR/rules/ZORG_MEMORYDB_MASTER_RULES.md" "$OPENCLAW_WORKSPACE/ZORG_MEMORYDB_MASTER_RULES.md"
+  fi
+  python3 - "$OPENCLAW_WORKSPACE" <<'PY'
+from pathlib import Path
+import sys
+
+workspace = Path(sys.argv[1])
+marker = "<!-- ZORG_MEMORYDB_AGENT_USAGE -->"
+block = """<!-- ZORG_MEMORYDB_AGENT_USAGE -->
+## Zorg MemoryDB Agent Memory Usage
+
+Zorg MemoryDB is the active durable memory backend for this OpenClaw workspace. The agent must use the PostgreSQL-backed memory path for continuity, not MEMORY.md or memory/ markdown files as active memory.
+
+### Required Agent Behavior
+
+1. Before answering or acting, check backend database memory using the configured DB recall path.
+2. If the first DB recall pass is weak or empty, run a deeper DB recall search with alternate terms before concluding there is no prior context.
+3. Do not create, update, or rely on memory/YYYY-MM-DD.md, memory/projects/*.md, memory/*.json, or other flat-file memory as durable memory.
+4. If legacy markdown memory files exist, import them into Zorg MemoryDB, then treat them as retired source files rather than active memory.
+5. If DB recall is unavailable, repair or restore the DB path and fail closed instead of silently falling back to files.
+6. Preserve original memory data. Improve recall with additive DB structures such as indexes, source chunks, entities, associations, observations, and rule rows.
+
+### Local DB Memory Files
+
+- DB config: sql_memory_map.json
+- Recall CLI: memory_sql_tool.py
+- Recall router: memory_recall_router.py
+- Packaged rules: zorg-memorydb/rules/
+- Master public install rule file: ZORG_MEMORYDB_MASTER_RULES.md
+
+### Quick Verification Commands
+
+```bash
+python3 memory_sql_tool.py "Zorg MemoryDB" --limit 5
+python3 memory_recall_router.py "How do I use Zorg MemoryDB for memory?"
+```
+
+Expected result: the commands return DB-backed rules or source chunks explaining Zorg MemoryDB usage. A clean install is incomplete if these markdown instructions are missing from agent-readable files.
+<!-- /ZORG_MEMORYDB_AGENT_USAGE -->"""
+
+targets = [
+    "AGENTS.md",
+    "SOUL.md",
+    "USER.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "HEARTBEAT.md",
+]
+for name in targets:
+    path = workspace / name
+    existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else f"# {name}\n"
+    if marker not in existing:
+        path.write_text(block + "\n\n" + existing, encoding="utf-8")
+PY
+}
+
 import_markdown_rules() {
   if [[ ! -x "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" ]]; then
     python3 -m venv "$OPENCLAW_WORKSPACE/.venv-sqlmem" || true
@@ -235,6 +294,7 @@ main() {
   copy_packaged_components
   ensure_postgres_database
   write_memory_config
+  install_agent_readable_markdown
   import_markdown_rules
   prepare_lan_chat
   install_lan_chat_service
