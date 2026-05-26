@@ -93,7 +93,7 @@ openclaw_live_should_include_auth_file_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    codex-cli | openai-codex)
+    codex-cli | openai | openai-codex)
       printf '%s\n' ".codex/auth.json"
       printf '%s\n' ".codex/config.toml"
       ;;
@@ -204,6 +204,19 @@ openclaw_live_append_array() {
     return 0
   fi
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
+}
+
+openclaw_live_init_docker_run_args() {
+  local target_array="${1:?target array required}"
+  local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
+  local quoted_timeout
+
+  if command -v timeout >/dev/null 2>&1; then
+    quoted_timeout="$(printf '%q' "$timeout_value")"
+    eval "${target_array}=(timeout ${quoted_timeout} docker run)"
+    return
+  fi
+  eval "${target_array}=(docker run)"
 }
 
 openclaw_live_stage_auth_into_home() {

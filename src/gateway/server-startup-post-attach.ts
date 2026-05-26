@@ -4,6 +4,7 @@ import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
@@ -45,7 +46,7 @@ type GatewayMemoryStartupPolicy =
   | { mode: "idle"; delayMs: number };
 
 export type GatewayPostReadySidecarHandle = {
-  stop: () => void;
+  stop: () => Awaitable<void>;
 };
 
 export function stopPostReadySidecarsAfterCloseStarted(params: {
@@ -56,7 +57,7 @@ export function stopPostReadySidecarsAfterCloseStarted(params: {
     return;
   }
   for (const postReadySidecar of params.postReadySidecars) {
-    postReadySidecar.stop();
+    void postReadySidecar.stop();
   }
 }
 
@@ -283,6 +284,7 @@ function schedulePostReadySidecarTask(params: {
   name: string;
   log: { warn: (msg: string) => void };
   run: (isStopped: () => boolean, signal: AbortSignal) => Awaitable<void>;
+  stop?: () => Awaitable<void>;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   const abortController = new AbortController();
@@ -299,12 +301,43 @@ function schedulePostReadySidecarTask(params: {
   });
   handle.unref?.();
   return {
-    stop: () => {
+    stop: async () => {
       stopped = true;
       abortController.abort();
       clearImmediate(handle);
+      await params.stop?.();
     },
   };
+}
+
+function scheduleTranscriptsAutoStartSidecar(params: {
+  cfg: OpenClawConfig;
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+}): GatewayPostReadySidecarHandle {
+  let stopTranscriptsAutoStart: (() => Promise<void>) | undefined;
+  return schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.transcripts-auto-start",
+    log: params.log,
+    run: async (isStopped) => {
+      const { createTranscriptsAutoStartService } =
+        await import("../agents/tools/transcripts-tool.js");
+      if (isStopped()) {
+        return;
+      }
+      const service = createTranscriptsAutoStartService({
+        config: params.cfg,
+        stateDir: resolveStateDir(),
+        logger: params.log,
+      });
+      stopTranscriptsAutoStart = () => service.stop();
+      service.start();
+    },
+    stop: async () => {
+      await stopTranscriptsAutoStart?.();
+    },
+  });
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -978,6 +1011,15 @@ export async function startGatewayPostAttachRuntime(
               getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
               delayMs: params.providerAuthPrewarm?.delayMs,
+            }),
+          );
+        }
+        if (params.gatewayPluginConfigAtStart.transcripts?.autoStart?.length) {
+          gatewayLifetimeSidecars.push(
+            scheduleTranscriptsAutoStartSidecar({
+              cfg: params.gatewayPluginConfigAtStart,
+              startupTrace: params.startupTrace,
+              log: params.log,
             }),
           );
         }

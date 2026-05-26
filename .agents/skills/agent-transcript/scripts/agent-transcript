@@ -51,11 +51,26 @@ function homePath(...parts) {
   return path.join(os.homedir(), ...parts);
 }
 
+function openClawSessionRoots() {
+  const stateDir = process.env.OPENCLAW_STATE_DIR || homePath(".openclaw");
+  const agentsDir = path.join(stateDir, "agents");
+  if (!fs.existsSync(agentsDir)) return [];
+  try {
+    return fs
+      .readdirSync(agentsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(agentsDir, entry.name, "sessions"));
+  } catch {
+    return [];
+  }
+}
+
 function defaultRoots() {
   return [
     homePath(".codex", "sessions"),
     homePath(".claude", "projects"),
     homePath(".pi", "agent", "sessions"),
+    ...openClawSessionRoots(),
   ];
 }
 
@@ -110,6 +125,12 @@ function detectAgent(file, rows) {
   if (file.includes(`${path.sep}.codex${path.sep}`)) return "codex";
   if (file.includes(`${path.sep}.claude${path.sep}`)) return "claude";
   if (file.includes(`${path.sep}.pi${path.sep}`)) return "pi";
+  if (
+    file.includes(`${path.sep}.openclaw${path.sep}`) ||
+    (file.includes(`${path.sep}agents${path.sep}`) && file.includes(`${path.sep}sessions${path.sep}`))
+  ) {
+    return "openclaw";
+  }
   if (rows.some((row) => row?.type === "session_meta" || row?.type === "response_item")) return "codex";
   if (rows.some((row) => row?.sessionId && row?.userType)) return "claude";
   return "agent";

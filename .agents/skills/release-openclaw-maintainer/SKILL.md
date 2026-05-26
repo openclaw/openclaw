@@ -23,7 +23,8 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   green. Then branch from that commit so regular development can continue on
   `main` while release validation runs.
 - Before release branching, commit any dirty files in coherent groups, push,
-  pull/rebase, then run `/changelog` on `main` and commit/push/pull that
+  pull/rebase, then generate `CHANGELOG.md` on `main` from merged PRs and all
+  direct commits since the last reachable release tag. Commit/push/pull that
   changelog rewrite immediately before creating the release branch.
 - During release planning, inspect both `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` before branching and again
@@ -68,8 +69,8 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   or clawgrit reports. Report regressions explicitly. A major regression is a
   release blocker unless the operator waives it or the data clearly proves
   infrastructure noise.
-- Use `/changelog` before version/tag preparation so the top changelog section
-  is deduped and ordered by user impact.
+- Generate the changelog before version/tag preparation so the top changelog
+  section is deduped and ordered by user impact.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.
@@ -136,11 +137,25 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 
 ## Build changelog-backed release notes
 
+- `CHANGELOG.md` is release-owned. Normal PRs and direct `main` fixes should
+  not edit it.
 - Before release branching or tagging, rewrite the target `CHANGELOG.md`
-  section from commit history, not just from existing notes: scan commits since
-  the last reachable release tag, add missed user-facing changes, dedupe
-  overlapping entries, and sort each section from most to least interesting for
-  users.
+  section from history, not existing notes. Use the last reachable stable or
+  beta release tag as the base, then inspect every commit through the target
+  release SHA.
+- Include both merged PR commits and direct commits on `main`. Direct commits
+  matter: infer notes from their subject, body, touched files, linked issues,
+  tests, and nearby code when no PR body exists.
+- Prefer PR bodies, issue links, review proof, and commit bodies over commit
+  subjects alone. If a commit fixed an issue directly, the commit body should
+  name the user-visible behavior, affected surface, issue ref, and credited
+  reporter/contributor when known.
+- Treat missing context as a release-note audit gap: inspect the diff and linked
+  issue, draft the best accurate entry, and note the uncertainty for maintainer
+  review rather than inventing impact.
+- Add missed user-facing changes, remove internal-only noise, dedupe overlapping
+  PR/direct-commit entries, and sort each section from most to least interesting
+  for users.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating

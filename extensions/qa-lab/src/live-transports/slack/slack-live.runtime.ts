@@ -5,6 +5,7 @@ import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/ap
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -117,6 +118,8 @@ type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenario
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
 };
+
+type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
 
 type SlackAuthIdentity = {
   botId?: string;
@@ -586,7 +589,7 @@ function buildSlackQaConfig(
     sutBotToken: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "slack"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "slack"]);
   const approvalOverrides = params.overrides?.approvals;
   const approvalForwardingConfig =
     approvalOverrides?.exec || approvalOverrides?.plugin
@@ -1717,6 +1720,16 @@ function renderSlackQaMarkdown(params: {
   return lines.join("\n");
 }
 
+async function preserveSlackGatewayDebugArtifacts(params: {
+  cleanupIssues: string[];
+  gatewayDebugDirPath: string;
+  gatewayHarness: SlackQaGatewayHarness;
+}) {
+  await params.gatewayHarness.stop({ preserveToDir: params.gatewayDebugDirPath }).catch((error) => {
+    appendLiveLaneIssue(params.cleanupIssues, "gateway debug preservation failed", error);
+  });
+}
+
 export async function runSlackQaLive(params: {
   alternateModel?: string;
   credentialRole?: string;
@@ -1788,7 +1801,7 @@ export async function runSlackQaLive(params: {
     for (const scenario of scenarios) {
       let scenarioAttempt = 1;
       while (true) {
-        let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+        let gatewayHarness: SlackQaGatewayHarness | undefined;
         try {
           assertLeaseHealthy();
           gatewayHarness = await startQaLiveLaneGateway({
@@ -1970,11 +1983,11 @@ export async function runSlackQaLive(params: {
           });
           preservedGatewayDebugArtifacts = true;
           if (gatewayHarness) {
-            await gatewayHarness
-              .stop({ keepTemp: true, preserveToDir: gatewayDebugDirPath })
-              .catch((stopError) => {
-                appendLiveLaneIssue(cleanupIssues, "gateway debug preservation failed", stopError);
-              });
+            await preserveSlackGatewayDebugArtifacts({
+              cleanupIssues,
+              gatewayDebugDirPath,
+              gatewayHarness,
+            });
           }
           break;
         } finally {
@@ -2113,6 +2126,7 @@ export const testing = {
   findScenario,
   isSlackChannelReadyForQa,
   parseSlackQaCredentialPayload,
+  preserveSlackGatewayDebugArtifacts,
   resolveSlackChannelReadySince,
   resolveSlackApprovalCheckpointConfig,
   resolveApprovalDecision,

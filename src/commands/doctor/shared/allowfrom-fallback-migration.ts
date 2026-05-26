@@ -2,7 +2,7 @@ import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.j
 import { normalizeAnyChannelId } from "../../../channels/registry.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
+import { normalizeUniqueStringEntries } from "../../../shared/string-normalization.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import { asObjectRecord } from "./object.js";
 
@@ -23,7 +23,7 @@ function isDisabled(record: ChannelRecord): boolean {
 }
 
 function normalizeAllowFrom(raw: unknown): string[] {
-  return Array.from(new Set(normalizeStringEntries(Array.isArray(raw) ? raw : [])));
+  return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
 
 function readGroupAllowFrom(record: ChannelRecord): string[] {

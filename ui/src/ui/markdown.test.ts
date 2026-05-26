@@ -569,6 +569,20 @@ PY
       const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
       expect(html).toBe("<p><a>click</a></p>\n");
     });
+
+    it("strips href from host-local absolute file paths", () => {
+      const html = toSanitizedMarkdownHtml(
+        "[report.docx](/Users/test/.openclaw/data/skills/output/report.docx)",
+      );
+      expect(html).toBe("<p><a>report.docx</a></p>\n");
+    });
+
+    it("keeps app-relative links navigable", () => {
+      const html = toSanitizedMarkdownHtml("[usage](/usage)");
+      expect(html).toBe(
+        '<p><a href="/usage" rel="noreferrer noopener" target="_blank">usage</a></p>\n',
+      );
+    });
   });
 
   describe("ReDoS protection", () => {

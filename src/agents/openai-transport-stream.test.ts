@@ -1943,6 +1943,37 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.9);
   });
 
+  it("forwards penalty params and seed to chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        frequencyPenalty: -0.5,
+        presencePenalty: 1.25,
+        seed: 12345,
+      },
+    );
+
+    expect(params.frequency_penalty).toBe(-0.5);
+    expect(params.presence_penalty).toBe(1.25);
+    expect(params.seed).toBe(12345);
+  });
+
   it("forwards response_format to chat completions request params", () => {
     const model = {
       id: "gpt-5.4",

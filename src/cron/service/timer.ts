@@ -1,5 +1,6 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/pi-embedded-runner/execution-phase.js";
+import { resolveCronMaxConcurrentRuns } from "../../config/cron-limits.js";
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { CronConfig } from "../../config/types.cron.js";
@@ -365,11 +366,7 @@ async function cleanupTimedOutCronAgentRun(
 }
 
 function resolveRunConcurrency(state: CronServiceState): number {
-  const raw = state.deps.cronConfig?.maxConcurrentRuns;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return 1;
-  }
-  return Math.max(1, Math.floor(raw));
+  return resolveCronMaxConcurrentRuns(state.deps.cronConfig);
 }
 function timeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
   const phase = formatCronAgentExecutionPhase(execution);

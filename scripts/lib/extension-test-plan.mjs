@@ -101,6 +101,18 @@ function listTrackedTestFiles(rootPath) {
     );
 }
 
+export function listTrackedTestFilesForRoots(roots) {
+  const files = [];
+  for (const root of roots) {
+    const trackedFiles = listTrackedTestFiles(path.join(repoRoot, root));
+    if (!trackedFiles) {
+      return null;
+    }
+    files.push(...trackedFiles);
+  }
+  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
+}
+
 function countTestFiles(rootPath) {
   const trackedFiles = listTrackedTestFiles(rootPath);
   if (trackedFiles) {

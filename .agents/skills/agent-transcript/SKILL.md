@@ -37,7 +37,7 @@ Find a likely local session:
   --since-days 14
 ```
 
-`find` scans the newest 400 matching local JSONL logs by default. Use `--max-files N` for a wider local search.
+`find` scans the newest 400 matching local JSONL logs by default across Codex, Claude, Pi, and OpenClaw agent sessions. Use `--max-files N` for a wider local search.
 
 Render a PR/issue body section:
 

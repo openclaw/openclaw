@@ -512,6 +512,20 @@ describe("loadWebMedia", () => {
     });
   });
 
+  it("does not preserve an original image when the declared MIME mismatches the bytes", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      await expect(
+        optimizeImageBufferForWebMedia({
+          buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+          contentType: "image/jpeg",
+          maxBytes: 1024,
+          imageCompression: { models: [{ maxSidePx: 1024 }] },
+        }),
+      ).rejects.toThrow(/Photon did not expose/);
+    });
+  });
+
   it("does not bypass the data URL image cap when image optimization is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
@@ -687,7 +701,7 @@ describe("loadWebMedia", () => {
     });
 
     expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
+    expect(result.contentType).toBe("image/png");
     expect(result.fileName).toBe("tiny.png");
   });
 

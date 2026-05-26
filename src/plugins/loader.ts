@@ -365,7 +365,7 @@ type PluginRegistrySnapshot = {
     realtimeTranscriptionProviders: PluginRegistry["realtimeTranscriptionProviders"];
     realtimeVoiceProviders: PluginRegistry["realtimeVoiceProviders"];
     mediaUnderstandingProviders: PluginRegistry["mediaUnderstandingProviders"];
-    meetingNotesSourceProviders: PluginRegistry["meetingNotesSourceProviders"];
+    transcriptSourceProviders: PluginRegistry["transcriptSourceProviders"];
     imageGenerationProviders: PluginRegistry["imageGenerationProviders"];
     videoGenerationProviders: PluginRegistry["videoGenerationProviders"];
     musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
@@ -410,7 +410,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       realtimeTranscriptionProviders: [...registry.realtimeTranscriptionProviders],
       realtimeVoiceProviders: [...registry.realtimeVoiceProviders],
       mediaUnderstandingProviders: [...registry.mediaUnderstandingProviders],
-      meetingNotesSourceProviders: [...registry.meetingNotesSourceProviders],
+      transcriptSourceProviders: [...registry.transcriptSourceProviders],
       imageGenerationProviders: [...registry.imageGenerationProviders],
       videoGenerationProviders: [...registry.videoGenerationProviders],
       musicGenerationProviders: [...registry.musicGenerationProviders],
@@ -454,7 +454,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.realtimeTranscriptionProviders = snapshot.arrays.realtimeTranscriptionProviders;
   registry.realtimeVoiceProviders = snapshot.arrays.realtimeVoiceProviders;
   registry.mediaUnderstandingProviders = snapshot.arrays.mediaUnderstandingProviders;
-  registry.meetingNotesSourceProviders = snapshot.arrays.meetingNotesSourceProviders;
+  registry.transcriptSourceProviders = snapshot.arrays.transcriptSourceProviders;
   registry.imageGenerationProviders = snapshot.arrays.imageGenerationProviders;
   registry.videoGenerationProviders = snapshot.arrays.videoGenerationProviders;
   registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;

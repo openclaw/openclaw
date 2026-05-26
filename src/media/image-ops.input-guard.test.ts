@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createGrayscaleAlphaPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import {
   convertHeicToJpeg,
   getImageMetadata,
@@ -12,8 +11,10 @@ import {
   ImageProcessorUnavailableError,
   isImageProcessorUnavailableError,
   MAX_IMAGE_INPUT_PIXELS,
+  normalizeExifOrientation,
   resizeToJpeg,
   resizeToPng,
+  testing,
 } from "./image-ops.js";
 import { createPngBufferWithDimensions } from "./test-helpers.js";
 
@@ -89,6 +90,16 @@ describe("image input pixel guard", () => {
         quality: 80,
       }),
     ).rejects.toThrow(/pixel input limit/i);
+  });
+
+  it("rejects oversized images before EXIF normalization returns unchanged bytes", async () => {
+    await expect(normalizeExifOrientation(oversizedPng)).rejects.toThrow(/pixel input limit/i);
+  });
+
+  it("rejects unreadable images before EXIF normalization returns unchanged bytes", async () => {
+    await expect(normalizeExifOrientation(Buffer.from("not-an-image"))).rejects.toThrow(
+      /unable to determine image dimensions/i,
+    );
   });
 
   it("rejects overflowed pixel counts before resize work starts", async () => {
@@ -176,6 +187,16 @@ describe("image input pixel guard", () => {
     await expect(hasAlphaChannel(opaquePng)).resolves.toBe(false);
   });
 
+  it("returns opaque when header-unknown alpha cannot be decoded", async () => {
+    await expect(hasAlphaChannel(createHeifLikeBuffer({ width: 1, height: 1 }))).resolves.toBe(
+      false,
+    );
+  });
+
+  it("rejects oversized alpha checks before returning a safe default", async () => {
+    await expect(hasAlphaChannel(oversizedPng)).rejects.toThrow(/pixel input limit/i);
+  });
+
   it("resizes grayscale alpha PNGs through the Photon backend", async () => {
     const source = createGrayscaleAlphaPngBuffer(64, 32);
 
@@ -209,27 +230,13 @@ describe("image input pixel guard", () => {
     await expect(getImageMetadata(compressed)).resolves.toEqual({ width: 128, height: 128 });
   });
 
-  const itIfFfmpeg = resolveSystemBin("ffmpeg", { trust: "standard" }) ? it : it.skip;
-
-  itIfFfmpeg("honors enlargement when the ffmpeg fallback is selected", async () => {
-    const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
-    process.env.OPENCLAW_IMAGE_BACKEND = "ffmpeg";
-    try {
-      const out = await resizeToJpeg({
-        buffer: Buffer.from(PNG_1X1_BASE64, "base64"),
-        maxSide: 4,
-        quality: 90,
-        withoutEnlargement: false,
-      });
-
-      await expect(getImageMetadata(out)).resolves.toEqual({ width: 4, height: 4 });
-    } finally {
-      if (previousBackend === undefined) {
-        delete process.env.OPENCLAW_IMAGE_BACKEND;
-      } else {
-        process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
-      }
-    }
+  it("allows enlargement when building the ffmpeg resize filter", () => {
+    expect(testing.buildFfmpegResizeFilter(4, false)).toBe(
+      "scale=w=4:h=4:force_original_aspect_ratio=decrease",
+    );
+    expect(testing.buildFfmpegResizeFilter(4, true)).toBe(
+      "scale=w='min(4,iw)':h='min(4,ih)':force_original_aspect_ratio=decrease",
+    );
   });
 
   const itIfMac = process.platform === "darwin" ? it : it.skip;

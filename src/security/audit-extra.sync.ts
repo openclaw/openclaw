@@ -21,6 +21,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -993,7 +994,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
+  const allow = new Set(normalizeUniqueStringEntries(allowRaw.map(normalizeNodeCommand)));
   if (allow.size === 0) {
     return findings;
   }
