@@ -1656,6 +1656,7 @@ export function buildGatewaySessionRow(params: {
   rowContext?: SessionListRowContext;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
+  includeChildSessions?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
@@ -1805,12 +1806,15 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = params.storeChildSessionsByKey
-    ? mergeChildSessionKeys(
-        resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
-        params.storeChildSessionsByKey.get(key),
-      )
-    : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
+  const childSessions =
+    params.includeChildSessions === false
+      ? undefined
+      : params.storeChildSessionsByKey
+        ? mergeChildSessionKeys(
+            resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
+            params.storeChildSessionsByKey.get(key),
+          )
+        : resolveChildSessionKeys(key, store, now, rowContext?.subagentRuns);
   const compactionCheckpoints = resolveProjectableCompactionCheckpoints(entry);
   const compactionCheckpointCount = Array.isArray(entry?.compactionCheckpoints)
     ? compactionCheckpoints.length
@@ -2049,6 +2053,9 @@ export function loadGatewaySessionRow(
     includeLastMessage?: boolean;
     now?: number;
     transcriptUsageMaxBytes?: number;
+    skipTranscriptUsageFallback?: boolean;
+    lightweightListRow?: boolean;
+    includeChildSessions?: boolean;
   },
 ): GatewaySessionRow | null {
   const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
@@ -2065,6 +2072,9 @@ export function loadGatewaySessionRow(
     includeDerivedTitles: options?.includeDerivedTitles,
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
+    skipTranscriptUsageFallback: options?.skipTranscriptUsageFallback,
+    lightweightListRow: options?.lightweightListRow,
+    includeChildSessions: options?.includeChildSessions,
   });
 }
 

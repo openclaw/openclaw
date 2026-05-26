@@ -392,6 +392,46 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("lightweight event rows skip child session resolution", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const now = 10_000;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:parent": {
+        sessionId: "parent",
+        updatedAt: now,
+      },
+      "agent:main:subagent:child": {
+        sessionId: "child",
+        parentSessionKey: "agent:main:parent",
+        updatedAt: now,
+        status: "running",
+      },
+    };
+
+    const fullRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store,
+      key: "agent:main:parent",
+      entry: store["agent:main:parent"],
+      now,
+    });
+    const eventRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store,
+      key: "agent:main:parent",
+      entry: store["agent:main:parent"],
+      now,
+      skipTranscriptUsageFallback: true,
+      lightweightListRow: true,
+      includeChildSessions: false,
+    });
+
+    expect(fullRow.childSessions).toEqual(["agent:main:subagent:child"]);
+    expect(eventRow.childSessions).toBeUndefined();
+  });
+
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],

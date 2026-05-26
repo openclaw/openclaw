@@ -1943,6 +1943,11 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 0, 3, "sessions changed options")).toEqual({
       dropIfSlow: true,
     });
+    expect(loadGatewaySessionRow).toHaveBeenCalledWith("session-finished", {
+      skipTranscriptUsageFallback: true,
+      lightweightListRow: true,
+      includeChildSessions: false,
+    });
   });
 
   it("keeps tool output for Control UI recipients when verbose is on", () => {
