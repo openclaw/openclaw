@@ -19,7 +19,7 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { log as agentsLog } from "./log.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   classifySessionKeyShape,
@@ -102,7 +102,7 @@ import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
-const log = createSubsystemLogger("agents/agent-command");
+const log = agentsLog.child("agent-command");
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
