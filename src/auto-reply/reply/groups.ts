@@ -252,7 +252,7 @@ export function buildGroupChatContext(params: {
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );
   const canUseSilentReply =
-    !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
+    !messageToolOnly && params.silentToken && params.silentReplyPolicy === "allow";
   if (messageToolOnly) {
     lines.push(
       "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
@@ -308,7 +308,7 @@ export function resolveGroupSilentReplyBehavior(params: {
 } {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const canUseSilentReply = params.silentReplyPolicy !== "disallow";
+  const canUseSilentReply = params.silentReplyPolicy === "allow";
   return {
     activation,
     canUseSilentReply,

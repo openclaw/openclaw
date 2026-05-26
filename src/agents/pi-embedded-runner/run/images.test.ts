@@ -273,6 +273,15 @@ what about these images?`,
     });
   });
 
+  it("ignores paths inside .openclaw-cli-images/ sink directory", () => {
+    // These paths are written by OpenClaw itself during prior turns;
+    // re-resolving them causes sticky image re-attachment on every
+    // subsequent prompt replay. Must be skipped.
+    expectNoImageReferences("Called Read with /Users/trevor/.openclaw/workspace/.openclaw-cli-images/a1b2c3d4.png");
+    expectNoImageReferences("System reminder: file_path /tmp/.openclaw-cli-images/e5f6g7h8.jpg");
+    expectNoImageReferences("See ./.openclaw-cli-images/image.webp for details");
+  });
+
   it("ignores remote URLs entirely (local-only)", () => {
     const refs = expectImageReferenceCount(
       `To send an image: MEDIA:https://example.com/image.jpg

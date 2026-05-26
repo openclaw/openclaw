@@ -142,6 +142,17 @@ describe("group runtime loading", () => {
     ).toBe(false);
   });
 
+  it("does not inject silent-token guidance when silentReplyPolicy is unset (default)", () => {
+    const defaultUnset = groups.buildGroupChatContext({
+      sessionCtx: { Provider: "whatsapp" },
+      silentToken: "NO_REPLY",
+      // silentReplyPolicy intentionally omitted — simulates default/unset state
+    });
+    expect(defaultUnset).not.toContain("NO_REPLY");
+    expect(defaultUnset).not.toContain("Be extremely selective");
+    expect(defaultUnset).not.toContain("Never say that you are staying quiet");
+  });
+
   it("resolves requireMention through runtime and Discord fallback paths", async () => {
     vi.resetModules();
     const groupsRuntimeLoads = vi.fn();
