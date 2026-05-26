@@ -1,3 +1,7 @@
+import {
+  hasInternalRuntimeContext,
+  stripInternalRuntimeContext,
+} from "../../../agents/internal-runtime-context.js";
 import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
@@ -135,11 +139,26 @@ function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][]
   return groups;
 }
 
-function renderCollectItem(item: FollowupRun, idx: number): string {
+function resolveCollectSenderSuffix(item: FollowupRun): string {
   const senderLabel =
     item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
-  const senderSuffix = senderLabel ? ` (from ${senderLabel})` : "";
-  return `---\nQueued #${idx + 1}${senderSuffix}\n${item.prompt}`.trim();
+  return senderLabel ? ` (from ${senderLabel})` : "";
+}
+
+function renderCollectItem(item: FollowupRun, idx: number): string {
+  return `---\nQueued #${idx + 1}${resolveCollectSenderSuffix(item)}\n${item.prompt}`.trim();
+}
+
+// Transcript-safe variant: prefer the run's own transcriptPrompt (already
+// stripped at enqueue time by get-reply-run.ts); fall back to stripping
+// runtime-context wraps off the model-facing prompt. Used to build the
+// `transcriptPrompt` on the collected follow-up so wrapped internal events
+// drained into `item.prompt` (e.g. audience: "internal" cron awareness)
+// stay hidden from the user-visible transcript even when collect-mode
+// queuing concatenates queued items.
+function renderCollectItemTranscript(item: FollowupRun, idx: number): string {
+  const transcriptBody = item.transcriptPrompt ?? stripInternalRuntimeContext(item.prompt);
+  return `---\nQueued #${idx + 1}${resolveCollectSenderSuffix(item)}\n${transcriptBody}`.trim();
 }
 
 function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
@@ -473,9 +492,29 @@ export function scheduleFollowupDrain(
               summary: pendingSummary,
               renderItem: renderCollectItem,
             });
+            // Produce a transcript-safe counterpart whenever the model-facing
+            // prompt carries an INTERNAL_RUNTIME_CONTEXT wrap or any item
+            // already split its prompt vs transcriptPrompt at enqueue time
+            // (see get-reply-run.ts where queuedBody vs transcriptCommandBody
+            // are split). Without this, audience: "internal" events drained
+            // into item.prompt during an active run would surface in the
+            // user-visible transcript via the combined collect prompt.
+            const itemHasTranscriptSplit = groupItems.some(
+              (item) => item.transcriptPrompt !== undefined,
+            );
+            const transcriptPrompt =
+              hasInternalRuntimeContext(prompt) || itemHasTranscriptSplit
+                ? buildCollectPrompt({
+                    title: "[Queued messages while agent was busy]",
+                    items: groupItems,
+                    summary: pendingSummary,
+                    renderItem: renderCollectItemTranscript,
+                  })
+                : undefined;
             const drainGroup = async () => {
               await effectiveRunFollowup({
                 prompt,
+                ...(transcriptPrompt !== undefined ? { transcriptPrompt } : {}),
                 run,
                 enqueuedAt: Date.now(),
                 ...routing,

@@ -15,6 +15,7 @@ export function createDeferred<T>() {
 
 export function createQueueTestRun(params: {
   prompt: string;
+  transcriptPrompt?: string;
   messageId?: string;
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
@@ -24,6 +25,7 @@ export function createQueueTestRun(params: {
 }): FollowupRun {
   return {
     prompt: params.prompt,
+    ...(params.transcriptPrompt !== undefined ? { transcriptPrompt: params.transcriptPrompt } : {}),
     messageId: params.messageId,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,

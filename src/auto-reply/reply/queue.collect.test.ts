@@ -1533,3 +1533,111 @@ describe("resolveFollowupAuthorizationKey", () => {
     );
   });
 });
+
+describe("followup collect-mode transcript safety", () => {
+  it("strips internal runtime-context wrap from the transcriptPrompt of a collected batch", async () => {
+    const key = `test-collect-wrap-strip-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const wrappedPrompt = [
+      "user message body",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "secret cron awareness payload",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const stripped = "user message body";
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: wrappedPrompt,
+          transcriptPrompt: stripped,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second message",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const call = calls[0];
+    expect(call).toBeDefined();
+    // Model-facing prompt keeps the wrap so runtime context still reaches the model.
+    expect(call?.prompt).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(call?.prompt).toContain("secret cron awareness payload");
+    // User-visible transcript drops the wrap and the wrapped body.
+    expect(call?.transcriptPrompt).toBeDefined();
+    expect(call?.transcriptPrompt).not.toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(call?.transcriptPrompt).not.toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(call?.transcriptPrompt).not.toContain("secret cron awareness payload");
+    expect(call?.transcriptPrompt).toContain("user message body");
+    expect(call?.transcriptPrompt).toContain("second message");
+  });
+
+  it("omits transcriptPrompt when no items carry a wrap or transcript split", async () => {
+    const key = `test-collect-no-wrap-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "plain one",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "plain two",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const call = calls[0];
+    expect(call?.prompt).toContain("plain one");
+    expect(call?.prompt).toContain("plain two");
+    expect(call?.transcriptPrompt).toBeUndefined();
+  });
+});
