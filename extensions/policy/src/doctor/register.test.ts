@@ -3440,6 +3440,47 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("keeps read-only Windows binds with drive-letter destinations compliant", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "docker",
+            docker: {
+              binds: ["C:\\Users\\foo:C:\\container:ro"],
+              network: "none",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          containers: {
+            requireReadOnlyMounts: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-mount-mode-required",
+        }),
+      ]),
+    );
+  });
+
   it("applies sandbox bind policy to browser-specific binds", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

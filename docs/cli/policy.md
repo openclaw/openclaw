@@ -314,6 +314,10 @@ Every scope present in `policy.jsonc` must be valid and enforceable.
 | `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                   |
 | `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.        |
 
+Policy treats missing `sandbox.mode` as the implicit default `off`, so
+`sandbox.requireMode` reports a fresh or unconfigured sandbox as outside an
+allowlist such as `["all"]`.
+
 #### Secrets
 
 | Policy field                      | Observed state                                           | Use when                                                                |

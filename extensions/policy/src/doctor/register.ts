@@ -3726,6 +3726,7 @@ function bindHostLooksLikeDockerSocket(value: string | undefined): boolean {
   if (value === undefined) {
     return false;
   }
+  // This policy check currently observes Docker socket mounts only.
   const normalized = value.replaceAll("\\", "/").toLowerCase();
   return (
     normalized === "/var/run/docker.sock" ||

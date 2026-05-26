@@ -1324,7 +1324,7 @@ function splitPolicyBindSpec(
   }
   const host = value.slice(0, separator);
   const rest = value.slice(separator + 1);
-  const optionsStart = rest.indexOf(":");
+  const optionsStart = policyBindOptionsSeparatorIndex(rest);
   const options = optionsStart < 0 ? "" : rest.slice(optionsStart + 1);
   const mode = options
     .split(",")
@@ -1336,6 +1336,16 @@ function splitPolicyBindSpec(
 }
 
 function policyBindSeparatorIndex(value: string): number {
+  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
+  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
+    if (value[index] === ":") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function policyBindOptionsSeparatorIndex(value: string): number {
   const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
   for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
     if (value[index] === ":") {
