@@ -3,15 +3,15 @@
   "version": "2026.5.25",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/StefRush2099/Zorg_MemoryDB#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/StefRush2099/Zorg_MemoryDB/issues"
   },
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/StefRush2099/Zorg_MemoryDB.git"
   },
   "bin": {
     "openclaw": "openclaw.mjs"
@@ -27,6 +27,7 @@
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
+    "zorg/",
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",

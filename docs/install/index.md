@@ -219,3 +219,9 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 ```
 
 Then open a new terminal. See [Node setup](/install/node) for more details.
+
+## Zorg MemoryDB and LAN command chat
+
+The `StefRush2099/Zorg_MemoryDB` install package includes a Zorg bootstrap at `zorg/install-zorg-memorydb.sh`. During install it prepares PostgreSQL-backed memory, imports public-safe markdown rules into the database, keeps private/user memory tables empty on a clean public baseline, and installs LAN command chat as the local fallback console.
+
+For details, see [Zorg MemoryDB And LAN Command Chat Install](./zorg-memorydb.md).

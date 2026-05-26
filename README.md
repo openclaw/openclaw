@@ -498,3 +498,9 @@ yuweuii
 yxjsxy
 zijiess
 clawtributors:hidden:end -->
+
+## Zorg MemoryDB Install Package
+
+This fork packages Zorg MemoryDB and LAN command chat for OpenClaw installs. The installer includes a bootstrap that places the database structure, public-safe production rules, markdown-import tooling, and LAN command chat into the OpenClaw workspace without shipping private live memory rows.
+
+See [docs/install/zorg-memorydb.md](docs/install/zorg-memorydb.md).

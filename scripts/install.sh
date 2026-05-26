@@ -336,14 +336,14 @@ ui_error() {
     fi
 }
 
-INSTALL_STAGE_TOTAL=3
+INSTALL_STAGE_TOTAL=4
 INSTALL_STAGE_CURRENT=0
 
 configure_install_stage_total() {
-    INSTALL_STAGE_TOTAL=3
+    INSTALL_STAGE_TOTAL=4
     INSTALL_STAGE_CURRENT=0
     if [[ "${VERIFY_INSTALL:-0}" == "1" ]]; then
-        INSTALL_STAGE_TOTAL=4
+        INSTALL_STAGE_TOTAL=5
     fi
 }
 
@@ -2923,6 +2923,40 @@ verify_installation() {
     ui_success "Install verify complete"
 }
 
+
+run_zorg_memorydb_bootstrap() {
+    if [[ "${ZORG_MEMORYDB_SKIP_BOOTSTRAP:-0}" == "1" ]]; then
+        ui_info "Skipping Zorg MemoryDB bootstrap (ZORG_MEMORYDB_SKIP_BOOTSTRAP=1)"
+        return 0
+    fi
+    local candidate=""
+    local script_dir=""
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd -P || true)"
+    local npm_root=""
+    npm_root="$(npm root -g 2>/dev/null || true)"
+    local candidates=()
+    [[ -n "$script_dir" ]] && candidates+=("${script_dir}/../zorg/install-zorg-memorydb.sh")
+    [[ -n "$script_dir" ]] && candidates+=("${script_dir}/zorg/install-zorg-memorydb.sh")
+    [[ -n "$npm_root" ]] && candidates+=("${npm_root%/}/openclaw/zorg/install-zorg-memorydb.sh")
+    if [[ -n "${final_git_dir:-}" ]]; then
+        candidates+=("${final_git_dir%/}/zorg/install-zorg-memorydb.sh")
+    fi
+    if [[ -n "${OPENCLAW_ZORG_BOOTSTRAP_SCRIPT:-}" ]]; then
+        candidates=("${OPENCLAW_ZORG_BOOTSTRAP_SCRIPT}" "${candidates[@]}")
+    fi
+    for candidate in "${candidates[@]}"; do
+        if [[ -n "$candidate" && -f "$candidate" ]]; then
+            ui_stage "Installing Zorg MemoryDB and LAN command chat"
+            OPENCLAW_INSTALL_IN_PROGRESS=1 bash "$candidate" --from-openclaw-install
+            return $?
+        fi
+    done
+    ui_warn "Zorg MemoryDB bootstrap script was not found in the installed package"
+    ui_info "Expected: <openclaw package>/zorg/install-zorg-memorydb.sh"
+    return 0
+}
+
+
 # Main installation flow
 main() {
     if [[ "$HELP" == "1" ]]; then
@@ -3041,6 +3075,8 @@ main() {
         # Step 5: OpenClaw
         install_openclaw
     fi
+
+    run_zorg_memorydb_bootstrap || exit 1
 
     ui_stage "Finalizing setup"
 

@@ -1,0 +1,13 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: lan-chat-nginx
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
