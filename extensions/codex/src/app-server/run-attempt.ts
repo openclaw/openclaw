@@ -3807,7 +3807,7 @@ export async function runCodexAppServerAttempt(
     });
     trajectoryEndRecorded = true;
     await mirrorTranscriptBestEffort({
-      params,
+      params: activeRunAttemptParams,
       agentId: sessionAgentId,
       notifyUserMessagePersisted,
       result,
