@@ -782,6 +782,7 @@ export async function sanitizeSessionHistory(params: {
     !isOpenAIResponsesApi && policy.repairToolUseResultPairing
       ? sanitizeToolUseResultPairing(sanitizedToolIds, {
           erroredAssistantResultPolicy: "drop",
+          markRepairedLegacyToolResultsAsError: allowProviderOwnedThinkingReplay,
         })
       : sanitizedToolIds;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);

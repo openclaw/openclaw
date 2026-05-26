@@ -26,12 +26,19 @@ openclaw_active_node_version() {
   node -p 'process.versions.node' 2>/dev/null || true
 }
 
+openclaw_to_shell_path() {
+  local input_path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$input_path" 2>/dev/null || printf '%s' "$input_path"
+    return
+  fi
+  printf '%s' "$input_path"
+}
+
 openclaw_prepend_node_bin() {
   local node_bin_dir="$1"
-  local shell_node_bin_dir="$node_bin_dir"
-  if command -v cygpath >/dev/null 2>&1; then
-    shell_node_bin_dir="$(cygpath -u "$node_bin_dir" 2>/dev/null || printf '%s' "$node_bin_dir")"
-  fi
+  local shell_node_bin_dir
+  shell_node_bin_dir="$(openclaw_to_shell_path "$node_bin_dir")"
   export PATH="$shell_node_bin_dir:$PATH"
   if [[ -n "${GITHUB_PATH:-}" ]]; then
     local github_node_bin_dir="$shell_node_bin_dir"
@@ -57,6 +64,7 @@ openclaw_find_toolcache_node() {
     "/Users/runner/hostedtoolcache" \
     "/c/hostedtoolcache/windows"
   do
+    root="$(openclaw_to_shell_path "$root")"
     if [[ -d "$root/node" ]]; then
       roots+=("$root/node")
     elif [[ "$(basename "$root")" == "node" && -d "$root" ]]; then

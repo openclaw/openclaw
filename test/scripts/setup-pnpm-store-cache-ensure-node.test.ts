@@ -146,6 +146,49 @@ exit 1
     }
   });
 
+  it("normalizes Windows RUNNER_TOOL_CACHE before probing Git Bash paths", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.19.0");
+      const toolcacheRoot = join(root, "hostedtoolcache", "windows");
+      const toolcacheBin = join(toolcacheRoot, "node", "24.15.0", "x64");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "24.15.0");
+      const helperBin = join(root, "helpers");
+      mkdirSync(helperBin, { recursive: true });
+      const cygpath = join(helperBin, "cygpath");
+      writeFileSync(
+        cygpath,
+        `#!/usr/bin/env bash
+if [[ "$1" == "-u" && "$2" == "C:\\\\hostedtoolcache\\\\windows" ]]; then
+  echo "${toolcacheRoot}"
+  exit 0
+fi
+if [[ "$1" == "-u" && "$2" == "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.15.0\\\\x64" ]]; then
+  echo "${toolcacheBin}"
+  exit 0
+fi
+if [[ "$1" == "-w" ]]; then
+  echo "C:\\\\hostedtoolcache\\\\windows\\\\node\\\\24.15.0\\\\x64"
+  exit 0
+fi
+printf '%s' "$2"
+`,
+      );
+      chmodSync(cygpath, 0o755);
+      const result = runEnsureNode(root, "24.x", {
+        PATH: `${helperBin}:${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TOOL_CACHE: "C:\\hostedtoolcache\\windows",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Using Node 24.15.0 from ${toolcacheNode}`);
+      expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("repairs PATH from the container-mounted GitHub Actions toolcache", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {

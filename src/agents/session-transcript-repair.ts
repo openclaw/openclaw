@@ -24,6 +24,11 @@ type RawToolCallBlock = {
   arguments?: unknown;
 };
 
+type ToolCallLike = {
+  id: string;
+  name?: string;
+};
+
 const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",
@@ -193,6 +198,7 @@ type ErroredAssistantResultPolicy = "preserve" | "drop";
 
 type ToolUseResultPairingOptions = {
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
+  markRepairedLegacyToolResultsAsError?: boolean;
   missingToolResultText?: string;
 };
 
@@ -219,6 +225,7 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
 function collectFollowingToolResults(
   messages: AgentMessage[],
   index: number,
+  toolCalls: ToolCallLike[] = [],
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
   let sawNonToolResult = false;
@@ -233,7 +240,14 @@ function collectFollowingToolResults(
       break;
     }
     if (message.role === "toolResult") {
-      const resultIds = extractToolResultIds(message);
+      const toolResult = message as Extract<AgentMessage, { role: "toolResult" }>;
+      const resultIds = extractToolResultIds(toolResult);
+      if (resultIds.length === 0) {
+        const legacyResult = normalizeLegacyToolResultId(toolResult, toolCalls);
+        if (legacyResult) {
+          resultIds.push(legacyResult.toolCallId);
+        }
+      }
       for (const id of resultIds) {
         ids.add(id);
       }
@@ -243,6 +257,36 @@ function collectFollowingToolResults(
     sawNonToolResult = true;
   }
   return { ids, displaced };
+}
+
+function normalizeLegacyToolResultId(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+  toolCalls: ToolCallLike[],
+  options?: { markAsError?: boolean },
+): (Extract<AgentMessage, { role: "toolResult" }> & { toolCallId: string }) | null {
+  if (extractToolResultId(message)) {
+    return null;
+  }
+
+  const resultToolName =
+    normalizeOptionalString((message as { toolName?: unknown }).toolName) ??
+    normalizeOptionalString((message as { name?: unknown }).name);
+  const candidates = resultToolName
+    ? toolCalls.filter((toolCall) => normalizeOptionalString(toolCall.name) === resultToolName)
+    : toolCalls.length === 1
+      ? toolCalls
+      : [];
+  const candidate = candidates.length === 1 ? candidates[0] : undefined;
+  if (!candidate) {
+    return null;
+  }
+
+  const normalized = normalizeToolResultName(message, candidate.name);
+  return {
+    ...normalized,
+    toolCallId: candidate.id,
+    ...(options?.markAsError ? { isError: true } : {}),
+  } as Extract<AgentMessage, { role: "toolResult" }> & { toolCallId: string };
 }
 
 function repairToolCallInputs(
@@ -280,7 +324,11 @@ function repairToolCallInputs(
       // valid and already has a real tool result. Otherwise drop the
       // whole assistant turn rather than mutating provider-owned content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
-      const followingToolResults = collectFollowingToolResults(messages, index);
+      const followingToolResults = collectFollowingToolResults(
+        messages,
+        index,
+        replaySafeToolCalls,
+      );
       if (
         isReplaySafeThinkingAssistantTurn(msg.content, allowedToolNames) &&
         replaySafeToolCalls.every(
@@ -514,6 +562,23 @@ export function repairToolUseResultPairing(
             spanResultsById.set(id, normalizedToolResult);
           }
           continue;
+        }
+        if (!id) {
+          const normalizedToolResult = normalizeLegacyToolResultId(toolResult, toolCalls, {
+            markAsError: options?.markRepairedLegacyToolResultsAsError === true,
+          });
+          if (normalizedToolResult && toolCallIds.has(normalizedToolResult.toolCallId)) {
+            if (seenToolResultIds.has(normalizedToolResult.toolCallId)) {
+              droppedDuplicateCount += 1;
+              changed = true;
+              continue;
+            }
+            if (!spanResultsById.has(normalizedToolResult.toolCallId)) {
+              spanResultsById.set(normalizedToolResult.toolCallId, normalizedToolResult);
+            }
+            changed = true;
+            continue;
+          }
         }
       }
 
