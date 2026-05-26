@@ -59,11 +59,11 @@ npm error ENOTEMPTY: directory not empty, rename '/usr/lib/node_modules/openclaw
 
 That is still an existing-install collision, not the clean first-run path. Do not add `--force` for a fresh Zorg install; use the first-run installer on a clean host or explicitly choose existing repair mode.
 
-If `node --version` prints Node 12, Node 18, or any version below 22.19.0, do not use direct npm yet. Run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.
+If `node --version` prints Node 12, Node 18, or any version below 22.19.0, the direct npm lifecycle helper attempts to upgrade Node first on supported Linux package managers. When that repair succeeds, the helper exits before the old npm process continues, because npm itself was launched under the old Node runtime. Rerun the same npm command after the repair message. If automatic repair is unavailable, run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.
 
-Observed failure on old hosts: npm resolves the package dependency tree before the OpenClaw lifecycle script can run. On Node v12.22.9 this produces a long `npm WARN EBADENGINE` cascade. If the lifecycle script does run and upgrades Node during the same npm process, npm can still continue inside the temporary git package tree it already prepared. Zorg keeps a copy of the Node prerequisite repair script under `zorg/check-node-version.cjs`, which is part of the packaged add-on tree, so the lifecycle path remains available during direct git installs.
+Observed failure on old hosts: npm resolves the package dependency tree before the OpenClaw lifecycle script can run. On Node v12.22.9 this produces a long `npm WARN EBADENGINE` cascade. If the lifecycle script does run and upgrades Node during the same npm process, npm can still continue inside the temporary git package tree it already prepared. Zorg keeps a copy of the Node prerequisite repair script under `zorg/check-node-version.cjs`, which is part of the packaged add-on tree, so the lifecycle path remains available during direct git installs. After a successful runtime repair, that helper now stops the old npm process with a clear retry instruction instead of pretending the original process can continue safely.
 
-If direct npm has already failed once on an old host, verify the repaired runtime and rerun:
+If direct npm has already repaired Node or failed once on an old host, verify the repaired runtime and rerun:
 
 ```bash
 node --version

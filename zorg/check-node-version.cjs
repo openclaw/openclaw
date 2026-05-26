@@ -177,6 +177,13 @@ function currentNodeVersionFromPath() {
   return parseVersion(String(result.stdout || "").trim());
 }
 
+function versionToString(version) {
+  if (!version) {
+    return "missing";
+  }
+  return [version.major, version.minor, version.patch].join(".");
+}
+
 function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
@@ -306,6 +313,18 @@ function printManualInstallHelp() {
   );
 }
 
+function printRepairedRuntimeRetryHelp(repaired) {
+  var npm = firstPathCommand("npm") || "npm";
+  console.error(
+    [
+      "[openclaw] Node.js prerequisite repaired; node on PATH is now " + versionToString(repaired) + ".",
+      "[openclaw] The current npm process was started under " + process.version + ", so it cannot safely continue this install.",
+      "[openclaw] Rerun the same install command now that node/npm have been repaired:",
+      "[openclaw]   " + npm + " install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git",
+    ].join("\n"),
+  );
+}
+
 function printManualNpmInstallHelp() {
   console.error(
     [
@@ -341,8 +360,8 @@ if (!isAtLeast(current, minimum)) {
       repairShadowedNodePath();
       var repaired = currentNodeVersionFromPath();
       if (isAtLeast(repaired, minimum)) {
-        console.error("[openclaw] Node.js prerequisite repaired; current node is " + [repaired.major, repaired.minor, repaired.patch].join(".") + ".");
-        process.exit(0);
+        printRepairedRuntimeRetryHelp(repaired);
+        process.exit(86);
       }
       console.error("[openclaw] Automatic Node.js install completed, but node on PATH is still below v22.19.0.");
     }

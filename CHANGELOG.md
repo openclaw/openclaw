@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Zorg: make first-run installs fail closed when a host OpenClaw binary already exists, and require explicit existing-install/Docker config flags before touching upgrade or Docker/TUI compatibility paths.
 - Zorg: when the add-on bootstrap is launched through sudo, default to the invoking user's OpenClaw home and chown that workspace before creating the LAN chat service so systemd does not point at an unreadable /root/.openclaw path.
 - Zorg: keep the direct GitHub npm install Node prerequisite repair helper inside the packaged `zorg/` tree so old Linux hosts can still find it when npm runs lifecycle scripts from a temporary git install tree.
+- Zorg: after direct npm repairs a too-old Node runtime, stop the old npm process with a deterministic retry instruction instead of continuing package installation inside the Node 12 process that launched npm.
 - Install: repair too-old Node.js automatically during direct npm preinstall on supported package-manager hosts, prevent git-install preparation from inheriting global npm state, and handle Ubuntu/Debian npm and libnode development-package conflicts so fresh Zorg/OpenClaw installs can recover before package setup continues.
 - Zorg: install LAN command chat as a system service for root-run native bootstraps when a non-root OpenClaw workspace owner is available, so sudo installs can still start port 3001.
 - Discord/OpenAI voice: rotate Realtime sessions at provider max duration without logging the expected session-expiry event as an error.
