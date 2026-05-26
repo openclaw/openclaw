@@ -109,36 +109,38 @@ openclaw_node_download_platform() {
   esac
 }
 
-openclaw_windows_path() {
-  cygpath -w "$1" 2>/dev/null || printf '%s\n' "$1"
-}
-
 openclaw_download_node() {
   local requested_node="$1"
-  local version platform archive_url install_root
+  local version platform archive_url archive_path extracted_dir install_root win_archive win_install_root
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
   install_root="${RUNNER_TEMP:-/tmp}/openclaw-node-${version}-${platform}"
   mkdir -p "$install_root"
-  if [[ "$platform" == win-* ]]; then
-    local archive_path extracted_dir
-    archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
-    archive_path="$install_root/node.zip"
-    extracted_dir="$install_root/node-${version}-${platform}"
-    echo "Downloading Node ${version} from ${archive_url}"
-    curl -fsSL "$archive_url" -o "$archive_path"
-    pwsh -NoProfile -Command "Expand-Archive -LiteralPath '$(openclaw_windows_path "$archive_path")' -DestinationPath '$(openclaw_windows_path "$install_root")' -Force"
-    if [[ -d "$extracted_dir" ]]; then
+  case "$platform" in
+    win-*)
+      archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
+      archive_path="$install_root/node.zip"
+      echo "Downloading Node ${version} from ${archive_url}"
+      curl -fsSL "$archive_url" -o "$archive_path"
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$archive_path" -d "$install_root"
+      else
+        win_archive="$(cygpath -w "$archive_path")"
+        win_install_root="$(cygpath -w "$install_root")"
+        powershell.exe -NoProfile -NonInteractive -Command \
+          "Expand-Archive -LiteralPath '$win_archive' -DestinationPath '$win_install_root' -Force"
+      fi
+      extracted_dir="$install_root/node-${version}-${platform}"
+      [[ -x "$extracted_dir/node.exe" ]] || return 1
       openclaw_prepend_node_bin "$extracted_dir"
-    else
-      openclaw_prepend_node_bin "$install_root"
-    fi
-  else
-    archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
-    echo "Downloading Node ${version} from ${archive_url}"
-    curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
-    openclaw_prepend_node_bin "$install_root/bin"
-  fi
+      ;;
+    *)
+      archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
+      echo "Downloading Node ${version} from ${archive_url}"
+      curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
+      openclaw_prepend_node_bin "$install_root/bin"
+      ;;
+  esac
 }
 
 openclaw_ensure_node() {
