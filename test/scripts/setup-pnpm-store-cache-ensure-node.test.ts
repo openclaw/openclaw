@@ -251,13 +251,13 @@ esac
 exit 22
 `,
       );
-      const result = runEnsureNode(root, "24.x", {
+      const result = runEnsureNode(root, "99.x", {
         PATH: `${helperBin}:${activeBin}:${process.env.PATH ?? ""}`,
         RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
       });
 
       expect(result.status).toBe(1);
-      expect(result.stdout).toContain("::error::Expected Node '24.x'");
+      expect(result.stdout).toContain("::error::Expected Node '99.x'");
       expect(result.stdout).not.toContain("node--");
       expect(result.stdout).not.toContain("node-v-win");
     } finally {
