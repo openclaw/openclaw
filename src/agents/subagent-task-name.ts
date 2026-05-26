@@ -14,7 +14,7 @@ export function normalizeSubagentTaskName(value: unknown): NormalizeSubagentTask
   }
   if (!SUBAGENT_TASK_NAME_RE.test(taskName)) {
     return {
-      error: `Invalid taskName "${taskName}". Use 1-64 chars matching [a-z][a-z0-9_]*.`,
+      error: `Invalid taskName "${taskName}". Use 1-64 chars matching [a-z][a-z0-9_-]*.`,
     };
   }
   if (RESERVED_SUBAGENT_TASK_NAMES.has(taskName)) {
