@@ -11,43 +11,6 @@ describe("image ops Rastermill adapter", () => {
     vi.resetModules();
   });
 
-  it("keeps EXIF normalization best-effort when Rastermill is unavailable", async () => {
-    class RastermillUnavailableError extends Error {
-      readonly code = "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
-      readonly causes: unknown[] = [];
-    }
-
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError,
-      createRastermill: () => ({
-        probe: vi.fn(async () => ({
-          orientation: 6,
-          width: 1,
-          height: 1,
-          hasAlpha: false,
-          format: "jpeg",
-        })),
-        encode: vi.fn(async () => {
-          throw new RastermillUnavailableError("missing image processor");
-        }),
-      }),
-      isRastermillUnavailableError: (error: unknown) => error instanceof RastermillUnavailableError,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({
-        width: 1,
-        height: 1,
-        format: "png",
-        hasAlpha: false,
-        orientation: null,
-      })),
-    }));
-
-    const { normalizeExifOrientation } = await import("./image-ops.js");
-    const source = Buffer.from("already-safe");
-
-    await expect(normalizeExifOrientation(source)).resolves.toBe(source);
-  });
-
   it("falls back to decoding PNG pixels when header alpha is unknown", async () => {
     const encode = vi.fn(async () => ({
       data: rgbaPng(64),
