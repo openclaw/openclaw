@@ -388,6 +388,47 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
+  it("omits user MCP servers when native code mode remains enabled for native-only tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-native-only");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            notes: {
+              transport: "stdio",
+              command: "node",
+              args: ["/opt/notes-mcp/dist/index.js"],
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: true,
+      userMcpServersEnabled: false,
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as {
+      config?: {
+        "features.code_mode"?: boolean;
+        mcp_servers?: Record<string, unknown>;
+      };
+    };
+    expect(startParams?.config?.["features.code_mode"]).toBe(true);
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+  });
+
   it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
