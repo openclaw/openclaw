@@ -234,7 +234,9 @@ describeLive("music generation provider live", () => {
             ...(generateCaps?.supportsDuration ? { durationSeconds: 12 } : undefined),
             ...(generateCaps?.supportsFormat ? { format: "mp3" as const } : undefined),
             ...(liveLyrics ? { lyrics: liveLyrics } : undefined),
-            ...(generateCaps?.supportsInstrumental && !liveLyrics ? { instrumental: true } : undefined),
+            ...(generateCaps?.supportsInstrumental && !liveLyrics
+              ? { instrumental: true }
+              : undefined),
           });
 
           expect(result.tracks.length).toBeGreaterThan(0);
