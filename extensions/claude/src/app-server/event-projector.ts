@@ -200,17 +200,20 @@ export class ClaudeAppServerEventProjector {
     if (method === "item/started") {
       if (isTool) {
         this.recordToolStart(item);
-      } else {
-        emitItemEvent(this.params, "start", item);
       }
+      // Emit stream:"item" for ALL items including tools. Codex emits both
+      // stream:"tool" (transient progress-preview) AND stream:"item" with
+      // kind:"tool" (durable per-tool channel message); without the second
+      // emission, claude's tool announcements only live in the progress
+      // preview and get overwritten when the assistant text finalizes.
+      emitItemEvent(this.params, "start", item);
       return;
     }
     if (isTool) {
       this.recordToolCompletion(item);
       emitToolEvent(this.params, "result", item);
-    } else {
-      emitItemEvent(this.params, "end", item);
     }
+    emitItemEvent(this.params, "end", item);
   }
 
   private recordToolStart(item: Record<string, unknown>): void {
@@ -392,8 +395,14 @@ export function emitItemEvent(
   item: Record<string, unknown>,
 ): void {
   const itemId = typeof item.id === "string" ? item.id : undefined;
-  const kind = typeof item.type === "string" ? item.type : undefined;
-  const title = extractItemName(item) ?? kind;
+  const rawKind = typeof item.type === "string" ? item.type : undefined;
+  // Normalize tool item kinds ("toolCall"/"dynamicToolCall"/"mcpToolCall")
+  // to "tool" so channel/ACP renderers that key on kind === "tool" treat
+  // the item the same way they treat codex's tool items.
+  const isTool = isToolItem(item);
+  const kind = isTool ? "tool" : rawKind;
+  const name = extractItemName(item);
+  const title = name ?? rawKind;
   const status = typeof item.status === "string" ? item.status : undefined;
   const data: Record<string, unknown> = { phase };
   if (itemId) {
@@ -407,6 +416,14 @@ export function emitItemEvent(
   }
   if (status) {
     data.status = status;
+  }
+  if (isTool) {
+    if (name) {
+      data.name = name;
+    }
+    if (itemId) {
+      data.toolCallId = itemId;
+    }
   }
   emitProjectedAgentEvent(params, { stream: "item", data });
 }
