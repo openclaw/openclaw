@@ -2751,6 +2751,9 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      hasSeenNativeToolCalls = true;
+    }
     if (choiceDelta.content) {
       // Structured content can contain visible text and thinking blocks in the
       // same delta, so route each extracted block through the normal stream path.

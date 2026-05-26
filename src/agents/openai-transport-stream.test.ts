@@ -1709,7 +1709,7 @@ describe("openai transport stream", () => {
         type: "toolCall",
         id: "call_native_1",
         name: "read",
-        arguments: {},
+        arguments: { path: "/tmp/test.md" },
         partialArgs: '{"path":"/tmp/test.md"}',
       },
     ]);
