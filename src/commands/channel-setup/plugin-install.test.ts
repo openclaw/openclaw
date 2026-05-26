@@ -48,7 +48,7 @@ vi.mock("../../channels/plugins/catalog.js", () => {
     getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntry(...args),
     listChannelPluginCatalogEntries: (...args: unknown[]) =>
       listChannelPluginCatalogEntries(...args),
-    listChannelPluginCatalogEntriesUnfiltered: (...args: unknown[]) =>
+    listRawChannelPluginCatalogEntries: (...args: unknown[]) =>
       listChannelPluginCatalogEntries(...args),
   };
 });

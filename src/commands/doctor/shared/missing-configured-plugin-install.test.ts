@@ -98,6 +98,7 @@ function writeLegacyNpmDeclarationStub(params: {
 
 vi.mock("../../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
 vi.mock("../../../plugins/installed-plugin-index-records.js", () => ({
