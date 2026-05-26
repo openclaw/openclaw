@@ -4,7 +4,7 @@ import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-o
 import {
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,

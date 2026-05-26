@@ -103,6 +103,7 @@ Runtime send helpers also live on `channel-outbound`:
 - `sendDurableMessageBatch(...)`
 - `withDurableMessageSendContext(...)`
 - `deliverInboundReplyWithMessageSendContext(...)`
+- draft streaming/progress helpers such as `resolveChannelStreamingPreviewChunk(...)`
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 
@@ -123,4 +124,5 @@ pair:
 - `createChannelMessageReplyPipeline(...)` from `channel-outbound`
 - `runPreparedInboundReply(...)` from `channel-inbound`
 
-New channel code should prefer `message` adapters and durable send helpers.
+New channel code should prefer `message` adapters, durable send helpers, and the
+streaming/progress helpers exported here.

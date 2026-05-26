@@ -17,7 +17,7 @@ import {
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
   resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";

@@ -28,7 +28,7 @@ import {
   buildChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
   resolveTranscriptBackedChannelFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";

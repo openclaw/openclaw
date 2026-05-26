@@ -21,7 +21,7 @@ import {
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,

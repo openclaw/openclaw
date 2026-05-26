@@ -13,6 +13,7 @@
   "channel-reply-pipeline",
   "channel-runtime",
   "channel-secret-runtime",
+  "channel-streaming",
   "command-auth",
   "compat",
   "config-runtime",

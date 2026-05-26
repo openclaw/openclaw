@@ -1,5 +1,5 @@
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
-import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-streaming";
+import { formatChannelProgressDraftLineForEntry } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createMattermostPost,
   deleteMattermostPost,

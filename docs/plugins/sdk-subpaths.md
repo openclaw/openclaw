@@ -116,7 +116,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-ingress` | Deprecated low-level channel ingress compatibility facade. New receive paths should use `plugin-sdk/channel-ingress-runtime`. |
     | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
     | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
-    | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus runtime delivery helpers such as `defineChannelMessageAdapter`, `createChannelMessageAdapterFromOutbound`, `createChannelMessageReplyPipeline`, receipts, capability proofs, live preview helpers, lifecycle helpers, outbound identity/payload planning, `sendDurableMessageBatch`, `withDurableMessageSendContext`, and `deliverInboundReplyWithMessageSendContext`. See [Channel outbound API](/plugins/sdk-channel-outbound). |
+    | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus runtime delivery helpers such as `defineChannelMessageAdapter`, `createChannelMessageAdapterFromOutbound`, `createChannelMessageReplyPipeline`, receipts, capability proofs, live preview/streaming helpers, lifecycle helpers, outbound identity/payload planning, `sendDurableMessageBatch`, `withDurableMessageSendContext`, and `deliverInboundReplyWithMessageSendContext`. See [Channel outbound API](/plugins/sdk-channel-outbound). |
     | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
     | `plugin-sdk/channel-message-runtime` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
@@ -148,6 +148,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-envelope`, `plugin-sdk/channel-inbound-roots`, `plugin-sdk/channel-location`, `plugin-sdk/channel-logging` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound` or `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-pairing-paths` | Deprecated compatibility facade. Use `plugin-sdk/channel-pairing`. |
     | `plugin-sdk/channel-reply-options-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-streaming` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
     | `plugin-sdk/channel-route` | Shared route normalization, parser-driven target resolution, thread-id stringification, dedupe/compact route keys, parsed-target types, and route/target comparison helpers |

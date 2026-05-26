@@ -5,7 +5,7 @@ import {
 import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
