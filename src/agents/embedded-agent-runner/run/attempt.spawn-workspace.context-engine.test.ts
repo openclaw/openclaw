@@ -2006,6 +2006,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(params.sessionKey).toBe(sessionKey);
   });
 
+  it("forwards the normalized message channel to the embedded subscription", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        messageChannel: "TELEGRAM",
+      },
+    });
+
+    const subscriptionParams = requireRecord(
+      hoisted.subscribeEmbeddedAgentSessionMock.mock.calls[0]?.[0],
+      "subscription params",
+    );
+    expect(subscriptionParams.messageChannel).toBe("telegram");
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
