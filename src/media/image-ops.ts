@@ -93,16 +93,22 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 }
 
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
-  const rastermill = createImageProcessor();
-  const info = await rastermill.probe(buffer);
-  if (!info) {
-    await rastermill.encode(buffer, { format: "jpeg", autoOrient: true });
-    return buffer;
+  try {
+    const rastermill = createImageProcessor();
+    const info = await rastermill.probe(buffer);
+    if (!info) {
+      return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
+    }
+    if (!info?.orientation || info.orientation === 1) {
+      return buffer;
+    }
+    return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
+  } catch (error) {
+    if (isImageProcessorUnavailableError(error)) {
+      return buffer;
+    }
+    throw error;
   }
-  if (!info?.orientation || info.orientation === 1) {
-    return buffer;
-  }
-  return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
 }
 
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
