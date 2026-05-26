@@ -310,6 +310,36 @@ function schedulePostReadySidecarTask(params: {
   };
 }
 
+function scheduleTranscriptsAutoStartSidecar(params: {
+  cfg: OpenClawConfig;
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+}): GatewayPostReadySidecarHandle {
+  let stopTranscriptsAutoStart: (() => Promise<void>) | undefined;
+  return schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.transcripts-auto-start",
+    log: params.log,
+    run: async (isStopped) => {
+      const { createTranscriptsAutoStartService } =
+        await import("../agents/tools/transcripts-tool.js");
+      if (isStopped()) {
+        return;
+      }
+      const service = createTranscriptsAutoStartService({
+        config: params.cfg,
+        stateDir: resolveStateDir(),
+        logger: params.log,
+      });
+      stopTranscriptsAutoStart = () => service.stop();
+      service.start();
+    },
+    stop: async () => {
+      await stopTranscriptsAutoStart?.();
+    },
+  });
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.promises.access(filePath);
@@ -499,34 +529,6 @@ export async function startGatewaySidecars(params: {
     pluginServices = null;
   }
   params.onPluginServices?.(pluginServices);
-
-  if (params.cfg.transcripts?.autoStart?.length) {
-    let stopTranscriptsAutoStart: (() => Promise<void>) | undefined;
-    postReadySidecars.push(
-      schedulePostReadySidecarTask({
-        startupTrace: params.startupTrace,
-        name: "sidecars.transcripts-auto-start",
-        log: params.log,
-        run: async (isStopped) => {
-          const { createTranscriptsAutoStartService } =
-            await import("../agents/tools/transcripts-tool.js");
-          if (isStopped()) {
-            return;
-          }
-          const service = createTranscriptsAutoStartService({
-            config: params.cfg,
-            stateDir: resolveStateDir(),
-            logger: params.log,
-          });
-          stopTranscriptsAutoStart = () => service.stop();
-          service.start();
-        },
-        stop: async () => {
-          await stopTranscriptsAutoStart?.();
-        },
-      }),
-    );
-  }
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
@@ -1009,6 +1011,15 @@ export async function startGatewayPostAttachRuntime(
               getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
               delayMs: params.providerAuthPrewarm?.delayMs,
+            }),
+          );
+        }
+        if (params.gatewayPluginConfigAtStart.transcripts?.autoStart?.length) {
+          gatewayLifetimeSidecars.push(
+            scheduleTranscriptsAutoStartSidecar({
+              cfg: params.gatewayPluginConfigAtStart,
+              startupTrace: params.startupTrace,
+              log: params.log,
             }),
           );
         }

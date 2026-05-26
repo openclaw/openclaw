@@ -49,6 +49,11 @@ const hoisted = vi.hoisted(() => {
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthState = vi.fn(async (_cfg?: unknown, _options?: unknown) => {});
   const setAuthProfileFailureHook = vi.fn();
+  const transcriptsAutoStartService = {
+    start: vi.fn(),
+    stop: vi.fn(async () => {}),
+  };
+  const createTranscriptsAutoStartService = vi.fn(() => transcriptsAutoStartService);
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -76,6 +81,8 @@ const hoisted = vi.hoisted(() => {
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthState,
     setAuthProfileFailureHook,
+    transcriptsAutoStartService,
+    createTranscriptsAutoStartService,
   };
 });
 
@@ -179,6 +186,10 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
+vi.mock("../agents/tools/transcripts-tool.js", () => ({
+  createTranscriptsAutoStartService: hoisted.createTranscriptsAutoStartService,
+}));
+
 vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
@@ -277,6 +288,10 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.warmCurrentProviderAuthState.mockReset();
     hoisted.warmCurrentProviderAuthState.mockResolvedValue(undefined);
     hoisted.setAuthProfileFailureHook.mockClear();
+    hoisted.transcriptsAutoStartService.start.mockClear();
+    hoisted.transcriptsAutoStartService.stop.mockClear();
+    hoisted.transcriptsAutoStartService.stop.mockResolvedValue(undefined);
+    hoisted.createTranscriptsAutoStartService.mockClear();
   });
 
   afterEach(() => {
@@ -888,6 +903,52 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {
+    const onPostReadySidecars = vi.fn();
+    const onGatewayLifetimeSidecars = vi.fn();
+    const config = {
+      hooks: {
+        enabled: true,
+        internal: { enabled: false },
+        gmail: { account: "me" },
+      },
+      transcripts: {
+        autoStart: [{ providerId: "discord-voice", guildId: "g", channelId: "c" }],
+      },
+    };
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams({
+        cfgAtStart: config as never,
+        gatewayPluginConfigAtStart: config as never,
+      }),
+      providerAuthPrewarm: { enabled: false },
+      onPostReadySidecars,
+      onGatewayLifetimeSidecars,
+    });
+
+    const gmailSidecars = onPostReadySidecars.mock.calls[0]?.[0] as
+      | Array<{ stop: () => Promise<void> | void }>
+      | undefined;
+    const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
+      | Array<{ stop: () => Promise<void> | void }>
+      | undefined;
+    expect(gmailSidecars).toHaveLength(1);
+    expect(lifetimeSidecars).toHaveLength(1);
+
+    await vi.waitFor(() => {
+      expect(hoisted.transcriptsAutoStartService.start).toHaveBeenCalledTimes(1);
+    });
+
+    for (const sidecar of gmailSidecars ?? []) {
+      await sidecar.stop();
+    }
+    expect(hoisted.transcriptsAutoStartService.stop).not.toHaveBeenCalled();
+
+    await lifetimeSidecars?.[0]?.stop();
+    expect(hoisted.transcriptsAutoStartService.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels delayed provider auth prewarm when the sidecar stops before the timer fires", async () => {
     vi.useFakeTimers();
     const log = { info: vi.fn(), warn: vi.fn() };
@@ -1453,7 +1514,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps already-started Gmail watcher cleanup on close", async () => {
+  it("stops already-started Gmail watcher cleanup on close", async () => {
     const postReadySidecars = [{ stop: vi.fn() }];
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
@@ -1492,7 +1553,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
     await close();
 
-    expect(postReadySidecars[0]?.stop).not.toHaveBeenCalled();
+    expect(postReadySidecars[0]?.stop).toHaveBeenCalledTimes(1);
     expect(pluginServices.stop).toHaveBeenCalledTimes(1);
   });
 
