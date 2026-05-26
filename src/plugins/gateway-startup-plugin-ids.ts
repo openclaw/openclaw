@@ -553,6 +553,51 @@ function hasHookRuntimeStartupIntent(params: {
   );
 }
 
+function hasCommandRuntimeStartupIntent(manifest: PluginManifestRecord | undefined): boolean {
+  return Boolean(manifest?.activation?.onCommands?.length || manifest?.commandAliases?.length);
+}
+
+function canStartExplicitCommandPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: NormalizedPluginsConfig;
+  activationSource: {
+    plugins: NormalizedPluginsConfig;
+    rootConfig?: OpenClawConfig;
+  };
+  activationSourcePlugins: NormalizedPluginsConfig;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (!hasCommandRuntimeStartupIntent(params.manifest)) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSourcePlugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSourcePlugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled && activationState.explicitlyEnabled;
+}
+
 function canStartExplicitHookPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -890,6 +935,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       }
       if (
         canStartExplicitHookPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          activationSourcePlugins,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartExplicitCommandPlugin({
           plugin,
           manifest,
           config: params.config,

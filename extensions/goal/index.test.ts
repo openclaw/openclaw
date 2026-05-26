@@ -93,7 +93,7 @@ describe("goal plugin", () => {
       expect.objectContaining({
         session: expect.objectContaining({ sessionKey: "agent:main:main" }),
         leaseKey: "active-goal",
-        deliveryMode: "none",
+        deliveryMode: "announce",
       }),
     );
   });

@@ -828,6 +828,7 @@ function buildCacheKey(params: {
   toolDiscovery?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  hostServicesKey?: string;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
   activate?: boolean;
@@ -870,6 +871,7 @@ function buildCacheKey(params: {
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
+  const hostServicesKey = params.hostServicesKey ?? "host-services:none";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
@@ -879,7 +881,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${hostServicesKey}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -1160,6 +1162,10 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
+  const hostServicesKey =
+    options.hostServices === undefined
+      ? "host-services:none"
+      : `host-services:${Object.keys(options.hostServices).toSorted().join(",")}`;
   const installRecords = {
     ...(options.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env })),
     ...cfg.plugins?.installs,
@@ -1182,6 +1188,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
     runtimeSubagentMode,
+    hostServicesKey,
     pluginSdkResolution: options.pluginSdkResolution,
     ...(coreGatewayMethodNames !== undefined && { coreGatewayMethodNames }),
     activate: options.activate,

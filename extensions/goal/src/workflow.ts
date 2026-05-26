@@ -69,7 +69,7 @@ export async function applyGoalStatus(params: {
     leaseKey: GOAL_LEASE_KEY,
     message: buildGoalContinuationMessage(params.state),
     delayMs: GOAL_CONTINUATION_DELAY_MS,
-    deliveryMode: "none",
+    deliveryMode: "announce",
   });
   const next = updateGoalState(params.state, {
     status: "continue",

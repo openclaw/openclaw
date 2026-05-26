@@ -90,7 +90,7 @@ async function startGoal(params: {
     leaseKey: GOAL_LEASE_KEY,
     message: buildGoalContinuationMessage(initial),
     delayMs: 1_000,
-    deliveryMode: "none",
+    deliveryMode: "announce",
   });
   if (lease.scheduled) {
     await params.store.write(

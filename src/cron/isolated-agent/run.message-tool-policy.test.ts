@@ -1185,6 +1185,29 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     expect(prompt).toContain("Return your response as plain text");
   });
 
+  it("prompts for the message tool when wildcard toolsAllow includes plugin tools", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: ["*", "goal_status"] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt = expectEmbeddedRunPrompt();
+    expect(prompt).toContain("Use the message tool");
+    expect(prompt).toContain("will be delivered automatically");
+  });
+
   it("prompts for the message tool when toolsAllow uses wildcard access", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({

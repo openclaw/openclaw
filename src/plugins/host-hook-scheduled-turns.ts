@@ -19,6 +19,7 @@ import type {
 } from "./host-hooks.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { normalizePluginToolContractNames } from "./tool-contracts.js";
 
 const log = createSubsystemLogger("plugins/host-scheduled-turns");
 const PLUGIN_CRON_NAME_PREFIX = "plugin:";
@@ -79,6 +80,77 @@ function resolveSessionEventDeliveryMode(deliveryMode: unknown): "none" | "annou
     return deliveryMode;
   }
   return undefined;
+}
+
+function resolveSessionDeliveryTarget(
+  sessionKey: string,
+): { channel: string; to: string; accountId?: string; threadId?: string } | undefined {
+  const threadMarker = ":thread:";
+  const threadIndex = sessionKey.toLowerCase().lastIndexOf(threadMarker);
+  const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
+  const threadId =
+    threadIndex === -1
+      ? undefined
+      : normalizeOptionalString(sessionKey.slice(threadIndex + threadMarker.length));
+  const match = /^agent:[^:]+:(.+)$/u.exec(baseSessionKey);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const parts = match[1].split(":");
+  const channel = normalizeOptionalString(parts[0]);
+  if (channel !== "discord") {
+    return undefined;
+  }
+
+  const directKinds = new Set(["direct", "dm", "user"]);
+  const channelKinds = new Set(["channel", "group"]);
+  const findTarget = () => {
+    for (let index = 1; index < parts.length; index += 1) {
+      const part = parts[index];
+      if (directKinds.has(part) || channelKinds.has(part)) {
+        return { index, kind: part, id: normalizeOptionalString(parts.slice(index + 1).join(":")) };
+      }
+      const legacyDiscordChannel = /^channel-(.+)$/u.exec(part);
+      if (legacyDiscordChannel?.[1]) {
+        return { index, kind: "channel", id: normalizeOptionalString(legacyDiscordChannel[1]) };
+      }
+      const legacyDiscordDirect = /^(?:direct|dm|user)-(.+)$/u.exec(part);
+      if (legacyDiscordDirect?.[1]) {
+        return { index, kind: "direct", id: normalizeOptionalString(legacyDiscordDirect[1]) };
+      }
+    }
+    return undefined;
+  };
+
+  const target = findTarget();
+  if (!target?.id) {
+    return undefined;
+  }
+  const hasGuildQualifier =
+    target.index >= 2 &&
+    (parts[target.index - 2] === "guild" || parts[target.index - 1].startsWith("guild-"));
+  const accountId =
+    target.index === 2 && !hasGuildQualifier
+      ? normalizeOptionalString(parts[1])
+      : target.index === 4 && parts[2] === "guild"
+        ? normalizeOptionalString(parts[1])
+        : undefined;
+  const outboundKind = directKinds.has(target.kind) ? "user" : "channel";
+  return {
+    channel,
+    to: `${outboundKind}:${target.id}`,
+    ...(accountId ? { accountId } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
+function resolvePluginSessionTurnToolsAllow(params: {
+  pluginId: string;
+  ownerRegistry?: PluginRegistry;
+}): string[] | undefined {
+  const plugin = params.ownerRegistry?.plugins.find((record) => record.id === params.pluginId);
+  const pluginTools = normalizePluginToolContractNames(plugin?.contracts);
+  return pluginTools.length > 0 ? ["*", ...pluginTools] : undefined;
 }
 
 function formatScheduleLogContext(params: {
@@ -285,9 +357,16 @@ export async function schedulePluginSessionTurn(params: {
     ...(tag !== undefined ? { tag } : {}),
     ...(scheduleName ? { uniqueId: scheduleName } : {}),
   });
+  const deliveryTarget =
+    cronDeliveryMode === "announce" ? resolveSessionDeliveryTarget(sessionKey) : undefined;
+  const toolsAllow = resolvePluginSessionTurnToolsAllow({
+    pluginId: params.pluginId,
+    ownerRegistry: params.ownerRegistry,
+  });
   const cronPayload: CronJobCreate["payload"] = {
     kind: "agentTurn",
     message,
+    ...(toolsAllow ? { toolsAllow } : {}),
   };
   let result: Awaited<ReturnType<CronServiceContract["add"]>>;
   try {
@@ -302,7 +381,7 @@ export async function schedulePluginSessionTurn(params: {
       wakeMode: "now",
       delivery: {
         mode: cronDeliveryMode,
-        ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
+        ...(cronDeliveryMode === "announce" ? (deliveryTarget ?? { channel: "last" }) : {}),
       },
     });
   } catch (error) {

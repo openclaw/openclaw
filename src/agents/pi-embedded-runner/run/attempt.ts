@@ -532,6 +532,14 @@ const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_CALL_RAW_TOOL_NAME,
 ];
 
+export function shouldUseMinimalPromptForRuntimeToolsAllow(toolsAllow?: string[]): boolean {
+  return (
+    toolsAllow !== undefined &&
+    toolsAllow.length > 0 &&
+    !toolsAllow.some((entry) => normalizeToolName(entry) === "*")
+  );
+}
+
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -2279,9 +2287,14 @@ export async function runEmbeddedAttempt(
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    // Restrictive runtime allowlists get a compact prompt; wildcard allowlists preserve the normal surface.
+    const useMinimalPromptForRuntimeToolsAllow = shouldUseMinimalPromptForRuntimeToolsAllow(
+      params.toolsAllow,
+    );
+    const effectivePromptMode = useMinimalPromptForRuntimeToolsAllow
+      ? ("minimal" as const)
+      : promptMode;
+    const effectiveSkillsPrompt = useMinimalPromptForRuntimeToolsAllow ? undefined : skillsPrompt;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

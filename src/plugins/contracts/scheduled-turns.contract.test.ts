@@ -317,6 +317,180 @@ describe("plugin scheduled turns", () => {
     expectSessionTurnHandle(handle, "cron-compatible-job");
   });
 
+  it("pins announce delivery to the originating channel when the session key encodes one", async () => {
+    workflowMocks.cronAdd.mockResolvedValueOnce(makeCronJob({ id: "discord-channel-job" }));
+
+    await expect(
+      scheduleWorkflowTurn({
+        schedule: {
+          sessionKey: "agent:main:discord:channel:1508508152348414034",
+          deliveryMode: "announce",
+        },
+      }),
+    ).resolves.toMatchObject({
+      id: "discord-channel-job",
+      sessionKey: "agent:main:discord:channel:1508508152348414034",
+    });
+
+    expect(getCronAddBody().delivery).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "channel:1508508152348414034",
+    });
+  });
+
+  it("pins announce delivery to Discord direct and threaded session targets", async () => {
+    workflowMocks.cronAdd
+      .mockResolvedValueOnce(makeCronJob({ id: "discord-direct-job" }))
+      .mockResolvedValueOnce(makeCronJob({ id: "discord-thread-job" }));
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:discord:direct:353960930519810058",
+        deliveryMode: "announce",
+      },
+    });
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:discord:channel:1508508152348414034:thread:1508570817242468523",
+        deliveryMode: "announce",
+      },
+    });
+
+    expect(
+      workflowMocks.cronAdd.mock.calls.map(([body]) => (body as CronJobCreate).delivery),
+    ).toEqual([
+      {
+        mode: "announce",
+        channel: "discord",
+        to: "user:353960930519810058",
+      },
+      {
+        mode: "announce",
+        channel: "discord",
+        to: "channel:1508508152348414034",
+        threadId: "1508570817242468523",
+      },
+    ]);
+  });
+
+  it("pins announce delivery to Discord group session targets", async () => {
+    workflowMocks.cronAdd.mockResolvedValueOnce(makeCronJob({ id: "discord-group-job" }));
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:discord:group:1508508152348414034",
+        deliveryMode: "announce",
+      },
+    });
+
+    expect(getCronAddBody().delivery).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "channel:1508508152348414034",
+    });
+  });
+
+  it("pins announce delivery for Discord guild-shaped session targets", async () => {
+    workflowMocks.cronAdd
+      .mockResolvedValueOnce(makeCronJob({ id: "discord-guild-channel-job" }))
+      .mockResolvedValueOnce(makeCronJob({ id: "discord-account-guild-channel-job" }))
+      .mockResolvedValueOnce(makeCronJob({ id: "discord-legacy-guild-channel-job" }));
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:discord:guild:390228468790460426:channel:1508508152348414034",
+        deliveryMode: "announce",
+      },
+    });
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:discord:work:guild:390228468790460426:channel:1508508152348414034",
+        deliveryMode: "announce",
+      },
+    });
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:discord:guild-123:channel-456",
+        deliveryMode: "announce",
+      },
+    });
+
+    expect(
+      workflowMocks.cronAdd.mock.calls.map(([body]) => (body as CronJobCreate).delivery),
+    ).toEqual([
+      {
+        mode: "announce",
+        channel: "discord",
+        to: "channel:1508508152348414034",
+      },
+      {
+        mode: "announce",
+        channel: "discord",
+        to: "channel:1508508152348414034",
+        accountId: "work",
+      },
+      {
+        mode: "announce",
+        channel: "discord",
+        to: "channel:456",
+      },
+    ]);
+  });
+
+  it("does not pin Discord-shaped targets for non-Discord session keys", async () => {
+    workflowMocks.cronAdd
+      .mockResolvedValueOnce(makeCronJob({ id: "whatsapp-group-job" }))
+      .mockResolvedValueOnce(makeCronJob({ id: "telegram-account-job" }));
+
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:whatsapp:group:120363400867505404@g.us",
+        deliveryMode: "announce",
+      },
+    });
+    await scheduleWorkflowTurn({
+      schedule: {
+        sessionKey: "agent:main:telegram:work:dm:owner",
+        deliveryMode: "announce",
+      },
+    });
+
+    expect(
+      workflowMocks.cronAdd.mock.calls.map(([body]) => (body as CronJobCreate).delivery),
+    ).toEqual([
+      {
+        mode: "announce",
+        channel: "last",
+      },
+      {
+        mode: "announce",
+        channel: "last",
+      },
+    ]);
+  });
+
+  it("allows plugin-owned tools in scheduled plugin session turns", async () => {
+    const ownerRegistry = createEmptyPluginRegistry();
+    ownerRegistry.plugins.push(
+      createPluginRecord({
+        id: WORKFLOW_PLUGIN_ID,
+        origin: "bundled",
+        contracts: { tools: ["workflow_status"] },
+      }),
+    );
+    workflowMocks.cronAdd.mockResolvedValueOnce(makeCronJob({ id: "plugin-tools-job" }));
+
+    await expect(scheduleWorkflowTurn({ ownerRegistry })).resolves.toMatchObject({
+      id: "plugin-tools-job",
+    });
+
+    expect(getCronAddBody().payload).toMatchObject({
+      kind: "agentTurn",
+      toolsAllow: ["*", "workflow_status"],
+    });
+  });
+
   it("pages through cron.list when unscheduling tagged turns", async () => {
     const removed: string[] = [];
     const listRequests: unknown[] = [];
@@ -1207,6 +1381,59 @@ describe("plugin scheduled turns", () => {
         tag: "nudge",
       }),
     ).resolves.toEqual({ removed: 0, failed: 0 });
+  });
+
+  it("carries plugin tool contracts and explicit Discord delivery through captured plugin APIs", async () => {
+    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "job-live" }));
+    const { config, registry } = createPluginRegistryFixture({}, { hostServices: { cron } });
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "scheduler-plugin",
+        name: "Scheduler Plugin",
+        origin: "bundled",
+        contracts: { tools: ["scheduler_status"] },
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await expect(
+      capturedApi?.session.workflow.requestSessionContinuationLease({
+        session: { sessionKey: "agent:main:discord:channel:1508508152348414034" },
+        leaseKey: "active-goal",
+        message: "continue the active goal",
+        delayMs: 10,
+        deliveryMode: "announce",
+      }),
+    ).resolves.toMatchObject({
+      scheduled: true,
+      handle: {
+        id: "job-live",
+        pluginId: "scheduler-plugin",
+        sessionKey: "agent:main:discord:channel:1508508152348414034",
+        kind: "session-turn",
+      },
+    });
+
+    expect(getCronAddBody()).toMatchObject({
+      sessionTarget: "session:agent:main:discord:channel:1508508152348414034",
+      payload: {
+        kind: "agentTurn",
+        message: "continue the active goal",
+        toolsAllow: ["*", "scheduler_status"],
+      },
+      delivery: {
+        mode: "announce",
+        channel: "discord",
+        to: "channel:1508508152348414034",
+      },
+      deleteAfterRun: true,
+    });
   });
 
   it("resolves live cron service for captured plugin scheduled-turn APIs", async () => {

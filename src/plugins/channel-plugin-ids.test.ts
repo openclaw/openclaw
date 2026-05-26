@@ -354,6 +354,18 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "external-command-plugin",
+        channels: [],
+        activation: {
+          onCommands: ["demo-command"],
+        },
+        commandAliases: [{ name: "demo-command" }],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "lossless-claw",
         kind: "context-engine",
         channels: [],
@@ -1120,6 +1132,66 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["browser"],
+    });
+  });
+
+  it("loads explicit command plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-command-plugin"],
+        allowPluginIds: ["external-command-plugin"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-command-plugin"],
+    });
+  });
+
+  it("does not ambient-load command plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["browser"],
+    });
+  });
+
+  it("blocks command plugins when plugins are globally disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          enabled: false,
+          allow: ["external-command-plugin"],
+          slots: { memory: "none" },
+          entries: {
+            "external-command-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("blocks command plugins when explicitly denied", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["external-command-plugin"],
+          deny: ["external-command-plugin"],
+          slots: { memory: "none" },
+          entries: {
+            "external-command-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      expected: [],
     });
   });
 

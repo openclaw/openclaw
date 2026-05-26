@@ -92,6 +92,28 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
+  it("keeps the normal tool surface when plugin scheduled turns append contract tools to wildcard", () => {
+    const tools = [{ name: "exec" }, { name: "read" }, { name: "goal_status" }];
+    const toolsAllow = ["*", "goal_status"];
+
+    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow })).toMatchObject({
+      constructTools: true,
+      includeCoreTools: true,
+      codingToolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: true,
+        includeOpenClawTools: true,
+        includePluginTools: true,
+      },
+      runtimeToolAllowlist: toolsAllow,
+    });
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "exec",
+      "read",
+      "goal_status",
+    ]);
+  });
+
   it("keeps plugin-only allowlists on the shared tool policy path", () => {
     const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
 

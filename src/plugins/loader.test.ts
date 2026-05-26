@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
+import type { CronJob, CronJobCreate } from "../cron/types.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -25,6 +26,7 @@ import { withEnv } from "../test-utils/env.js";
 import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
+import { executePluginCommand, matchPluginCommand } from "./commands.js";
 import { listCompactionProviderIds } from "./compaction-provider.js";
 import {
   getEmbeddingProvider,
@@ -2422,6 +2424,115 @@ module.exports = { id: "throws-after-import", register() {} };`,
         acceptsArgs: true,
       },
     ]);
+
+    clearPluginCommands();
+  });
+
+  it("does not reuse no-host-service plugin command handlers for host-service loads", async () => {
+    const { bundledDir } = writeBundledPlugin({
+      id: "host-service-command-plugin",
+      body: `module.exports = {
+        id: "host-service-command-plugin",
+        register(api) {
+          api.registerCommand({
+            name: "leasecheck",
+            description: "Check host cron lease scheduling",
+            acceptsArgs: false,
+            handler: async (ctx) => {
+              const lease = await api.session.workflow.requestSessionContinuationLease({
+                session: { sessionKey: ctx.sessionKey },
+                leaseKey: "proof",
+                message: "continue",
+                delayMs: 1,
+                deliveryMode: "announce",
+              });
+              return { text: lease.scheduled ? "scheduled" : \`not-scheduled:\${lease.reason}\` };
+            },
+          });
+        },
+      };`,
+    });
+    const loadOptions = {
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          allow: ["host-service-command-plugin"],
+          entries: {
+            "host-service-command-plugin": { enabled: true },
+          },
+        },
+      },
+      onlyPluginIds: ["host-service-command-plugin"],
+    } satisfies PluginLoadOptions;
+
+    loadOpenClawPlugins(loadOptions);
+    const firstMatch = matchPluginCommand("/leasecheck");
+    expect(firstMatch).not.toBeNull();
+    await expect(
+      executePluginCommand({
+        command: firstMatch!.command,
+        channel: "discord",
+        isAuthorizedSender: true,
+        senderIsOwner: true,
+        commandBody: "/leasecheck",
+        config: {},
+        sessionKey: "agent:main:discord:channel:123",
+      }),
+    ).resolves.toEqual({ text: "not-scheduled:scheduler_unavailable" });
+
+    const cronAdd = vi.fn(
+      async (input: CronJobCreate): Promise<CronJob> => ({
+        ...input,
+        id: "host-cron-job",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        state: {},
+      }),
+    );
+    const cronListPage = vi.fn(async () => ({
+      jobs: [],
+      total: 0,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    }));
+    loadOpenClawPlugins({
+      ...loadOptions,
+      hostServices: {
+        cron: {
+          start: vi.fn(),
+          stop: vi.fn(),
+          status: vi.fn(),
+          list: vi.fn(),
+          listPage: cronListPage,
+          add: cronAdd,
+          update: vi.fn(),
+          remove: vi.fn(),
+          run: vi.fn(),
+          enqueueRun: vi.fn(),
+          getJob: vi.fn(),
+          readJob: vi.fn(),
+          getDefaultAgentId: vi.fn(),
+          wake: vi.fn(),
+        },
+      },
+    });
+    const secondMatch = matchPluginCommand("/leasecheck");
+    expect(secondMatch).not.toBeNull();
+    await expect(
+      executePluginCommand({
+        command: secondMatch!.command,
+        channel: "discord",
+        isAuthorizedSender: true,
+        senderIsOwner: true,
+        commandBody: "/leasecheck",
+        config: {},
+        sessionKey: "agent:main:discord:channel:123",
+      }),
+    ).resolves.toEqual({ text: "scheduled" });
+    expect(cronListPage).toHaveBeenCalledTimes(1);
+    expect(cronAdd).toHaveBeenCalledTimes(1);
 
     clearPluginCommands();
   });
