@@ -635,6 +635,61 @@ describe("channel-broker HTTP routes", () => {
     );
   });
 
+  it("routes inbound tool progress deliveries as broker preview updates", async () => {
+    const body = inboundBody();
+    const config = brokerConfig("broker-secret", {
+      capabilities: {
+        telegram: {
+          delivery: { text: true, thread: true, progressUpdates: true },
+        },
+      },
+    });
+    const sendOutboundRequest = vi.fn(async ({ request }) =>
+      createBrokerReceipt({
+        requestId: request.requestId,
+        providerId: "acme",
+        platform: request.platform,
+        status: "sent",
+        messageIds: ["preview-1"],
+      }),
+    );
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-preview-1",
+      sendOutboundRequest,
+    });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        mode: "preview_update",
+        payloads: [{ text: "working" }],
+        requirements: { text: true, thread: true, progressUpdates: true },
+      }),
+    });
+  });
+
   it("deduplicates broker webhook redeliveries before dispatching another turn", async () => {
     const body = inboundBody();
     const config = brokerConfig();
