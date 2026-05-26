@@ -38,17 +38,57 @@ openclaw_e2e_package_entrypoint() {
   echo "OpenClaw package entrypoint not found under $root/dist/" >&2
   return 1
 }
+openclaw_e2e_maybe_timeout() {
+  local timeout_value="$1"
+  shift
+  if [ -z "$timeout_value" ] || [ "$timeout_value" = "0" ]; then
+    "$@"
+    return
+  fi
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "timeout command not found; running OpenClaw E2E command without timeout $timeout_value" >&2
+    "$@"
+    return
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" "$timeout_value" "$@"
+  fi
+}
 openclaw_e2e_install_package() {
   local log_file="$1"
   local label="${2:-mounted OpenClaw package}"
   local prefix="${3:-}"
   local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+  local timeout_value="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
   local args=(-g)
   if [ -n "$prefix" ]; then
     args+=("--prefix" "$prefix")
   fi
   echo "Installing $label..."
-  if ! npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+  local had_errexit=0
+  case "$-" in
+    *e*) had_errexit=1 ;;
+  esac
+  set +e
+  openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1
+  local install_status=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  else
+    set +e
+  fi
+  if [ "$install_status" -ne 0 ]; then
+    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
+      echo "npm install timed out after $timeout_value for $label" >&2
+    fi
     echo "npm install failed for $label" >&2
     cat "$log_file" >&2 || true
     exit 1

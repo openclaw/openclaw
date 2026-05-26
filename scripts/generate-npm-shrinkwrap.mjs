@@ -10,6 +10,7 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
+const STABLE_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
 
 function usage() {
   return [
@@ -108,7 +109,46 @@ function collectPnpmLockPackageVersions(lockfile) {
   return versionsByName;
 }
 
-function readPnpmLockSingleVersionOverrides() {
+function stableVersionParts(version) {
+  const match = version.match(STABLE_VERSION_PATTERN);
+  return match
+    ? {
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+      }
+    : null;
+}
+
+function pnpmLockOverrideVersionForVersions(versions) {
+  const sortedVersions = [...versions].toSorted((left, right) => left.localeCompare(right));
+  if (sortedVersions.length === 1) {
+    return exactVersionFromOverrideSpec(sortedVersions[0]) === null ? null : sortedVersions[0];
+  }
+
+  const parsedVersions = sortedVersions.map((version) => ({
+    version,
+    parts: stableVersionParts(version),
+  }));
+  if (parsedVersions.some(({ parts }) => parts === null)) {
+    return null;
+  }
+
+  const [{ parts: firstParts }] = parsedVersions;
+  if (
+    parsedVersions.some(
+      ({ parts }) => parts.major !== firstParts.major || parts.minor !== firstParts.minor,
+    )
+  ) {
+    return null;
+  }
+
+  // npm patch ranges can float past the pnpm lock. Pin to the newest locked patch
+  // when the lock only contains one major/minor line, but keep true version forks free.
+  return parsedVersions.toSorted((left, right) => right.parts.patch - left.parts.patch)[0].version;
+}
+
+function readPnpmLockVersionOverrides() {
   const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
   const versionsByName = collectPnpmLockPackageVersions(lockfile);
   if (versionsByName.size === 0) {
@@ -116,9 +156,8 @@ function readPnpmLockSingleVersionOverrides() {
   }
   return Object.fromEntries(
     [...versionsByName.entries()]
-      .filter(([, versions]) => versions.size === 1)
-      .map(([name, versions]) => [name, [...versions][0]])
-      .filter(([, version]) => exactVersionFromOverrideSpec(version) !== null)
+      .map(([name, versions]) => [name, pnpmLockOverrideVersionForVersions(versions)])
+      .filter(([, version]) => version !== null)
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
 }
@@ -143,7 +182,7 @@ function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides)
 }
 
 function readShrinkwrapOverrides() {
-  return mergeOverrides(undefined, readWorkspaceOverrides(), readPnpmLockSingleVersionOverrides());
+  return mergeOverrides(undefined, readWorkspaceOverrides(), readPnpmLockVersionOverrides());
 }
 
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
@@ -709,6 +748,7 @@ export {
   applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
   packageJsonForShrinkwrap,
+  pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
   readShrinkwrapOverrides,

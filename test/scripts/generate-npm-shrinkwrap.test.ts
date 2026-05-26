@@ -9,6 +9,7 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
   shouldUseLegacyPeerDepsForShrinkwrap,
@@ -44,6 +45,12 @@ describe("generate-npm-shrinkwrap", () => {
     expect(exactVersionFromOverrideSpec("8.4.0")).toBe("8.4.0");
     expect(exactVersionFromOverrideSpec("npm:@nolyfill/domexception@1.0.28")).toBe("1.0.28");
     expect(exactVersionFromOverrideSpec("^8.4.0")).toBeNull();
+  });
+
+  it("pins same-line pnpm lock versions to the newest locked patch", () => {
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
   });
 
   it("parses nested scoped package paths", () => {

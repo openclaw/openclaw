@@ -130,20 +130,30 @@ function formatCapturedOutput(label, buffer) {
     : buffer.text;
 }
 
-function runCommand(command, args, options = {}) {
+export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const {
+      timeoutKillGraceMs = 2000,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+      ...spawnOptions
+    } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
+      detached: spawnOptions.detached ?? process.platform !== "win32",
     });
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
-    const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
     let timedOut = false;
+    let forceKillTimer;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+      signalProcessGroup(child, "SIGTERM");
+      forceKillTimer = setTimeout(
+        () => signalProcessGroup(child, "SIGKILL"),
+        timeoutKillGraceMs,
+      );
+      forceKillTimer.unref();
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedOutput(stdout, chunk);
@@ -153,10 +163,12 @@ function runCommand(command, args, options = {}) {
     });
     child.on("error", (error) => {
       clearTimeout(timer);
+      clearTimeout(forceKillTimer);
       reject(error);
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
+      clearTimeout(forceKillTimer);
       if (status === 0) {
         resolve({
           stdout: stdout.text,
@@ -183,6 +195,22 @@ function runCommand(command, args, options = {}) {
       );
     });
   });
+}
+
+function signalProcessGroup(child, signal) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {

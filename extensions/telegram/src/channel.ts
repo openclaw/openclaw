@@ -952,53 +952,60 @@ export const telegramPlugin = createChatChannelPlugin({
         let telegramBotLabel = "";
         let unauthorizedTokenReason: string | null = null;
         let botInfo: TelegramBotInfo | undefined;
-        const cachedBotInfo = await readStartupBotInfoCache({
-          accountId: account.accountId,
-          token,
-          log: ctx.log,
-        });
-        if (cachedBotInfo) {
-          botInfo = cachedBotInfo;
-          telegramBotLabel = ` (@${cachedBotInfo.username})`;
-        } else {
-          try {
-            const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
-              resolveTelegramProbe()(
-                token,
-                resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
-                {
-                  accountId: account.accountId,
-                  proxyUrl: account.config.proxy,
-                  network: account.config.network,
-                  apiRoot: account.config.apiRoot,
-                  includeWebhookInfo: false,
-                },
-              ),
-            );
-            const username = probe.ok ? probe.bot?.username?.trim() : null;
-            if (username) {
-              telegramBotLabel = ` (@${username})`;
-            }
-            botInfo = probe.ok ? probe.botInfo : undefined;
-            if (probe.ok && probe.botInfo) {
-              await writeStartupBotInfoCache({
+        try {
+          const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
+            resolveTelegramProbe()(
+              token,
+              resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
+              {
                 accountId: account.accountId,
-                token,
-                botInfo: probe.botInfo,
-                log: ctx.log,
-              });
+                proxyUrl: account.config.proxy,
+                network: account.config.network,
+                apiRoot: account.config.apiRoot,
+                includeWebhookInfo: false,
+              },
+            ),
+          );
+          const username = probe.ok ? probe.bot?.username?.trim() : null;
+          if (username) {
+            telegramBotLabel = ` (@${username})`;
+          }
+          botInfo = probe.ok ? probe.botInfo : undefined;
+          if (probe.ok && probe.botInfo) {
+            await writeStartupBotInfoCache({
+              accountId: account.accountId,
+              token,
+              botInfo: probe.botInfo,
+              log: ctx.log,
+            });
+          }
+          if (!probe.ok && probe.status === 401) {
+            await deleteStartupBotInfoCache(account.accountId);
+            unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
+          } else if (!probe.ok) {
+            botInfo = await readStartupBotInfoCache({
+              accountId: account.accountId,
+              token,
+              log: ctx.log,
+            });
+            if (botInfo) {
+              telegramBotLabel = ` (@${botInfo.username})`;
             }
-            if (!probe.ok && probe.status === 401) {
-              await deleteStartupBotInfoCache(account.accountId);
-              unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
-            }
-          } catch (err) {
-            if (ctx.abortSignal.aborted) {
-              return;
-            }
-            if (getTelegramRuntime().logging.shouldLogVerbose()) {
-              ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
-            }
+          }
+        } catch (err) {
+          if (ctx.abortSignal.aborted) {
+            return;
+          }
+          if (getTelegramRuntime().logging.shouldLogVerbose()) {
+            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          }
+          botInfo = await readStartupBotInfoCache({
+            accountId: account.accountId,
+            token,
+            log: ctx.log,
+          });
+          if (botInfo) {
+            telegramBotLabel = ` (@${botInfo.username})`;
           }
         }
         if (unauthorizedTokenReason) {

@@ -127,8 +127,8 @@ merge_framework_machos() {
 }
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
-  echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+  echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
+  (cd "$ROOT_DIR" && pnpm install --frozen-lockfile --config.node-linker=hoisted)
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -314,8 +314,51 @@ else
   fi
 fi
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+running_packaged_app_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"
+  local pid
+  pgrep -x "$PRODUCT" 2>/dev/null | while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if command -v lsof >/dev/null 2>&1 &&
+      lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed 's/^n//' | grep -Fx "$app_binary" >/dev/null; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    local command_line
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+stop_packaged_app_if_running() {
+  local pids=()
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && pids+=("$pid")
+  done < <(running_packaged_app_pids)
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "⏹  Stopping packaged OpenClaw bundle (${pids[*]})"
+  kill "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.25
+  done
+  kill -KILL "${pids[@]}" 2>/dev/null || true
+}
+
+stop_packaged_app_if_running
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

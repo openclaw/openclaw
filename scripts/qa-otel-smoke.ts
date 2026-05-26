@@ -89,7 +89,6 @@ const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
 const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
   "openclaw.harness.run",
-  "openclaw.model.call",
   "openclaw.context.assembled",
   "openclaw.message.delivery",
 ] as const;
@@ -911,6 +910,19 @@ function capturedValueKind(value: string | number | boolean | string[]): string 
   return Array.isArray(value) ? "array" : typeof value;
 }
 
+function isLatestGenAiModelCallSpan(span: CapturedSpan): boolean {
+  const operationName = span.attributes["gen_ai.operation.name"];
+  const modelName = span.attributes["gen_ai.request.model"];
+  if (typeof operationName !== "string" || typeof modelName !== "string") {
+    return false;
+  }
+  return (
+    span.name === `${operationName} ${modelName}` &&
+    typeof span.attributes["openclaw.provider"] === "string" &&
+    typeof span.attributes["openclaw.model"] === "string"
+  );
+}
+
 function assertSmoke(params: {
   childExitCode: number;
   disallowedBodyNeedles: string[];
@@ -951,6 +963,13 @@ function assertSmoke(params: {
       failures.push(`missing required span ${name}`);
     }
   }
+  const modelSpans = params.spans.filter(isLatestGenAiModelCallSpan);
+  if (modelSpans.length === 0) {
+    failures.push("missing required GenAI model-call span");
+  }
+  if (spanNames.has("openclaw.model.call")) {
+    failures.push("legacy openclaw.model.call span exported with GenAI semconv opt-in");
+  }
   const metricNames = new Set(params.metrics.map((metric) => metric.name));
   for (const name of REQUIRED_METRIC_NAMES) {
     if (!metricNames.has(name)) {
@@ -975,8 +994,10 @@ function assertSmoke(params: {
   if (contentKeys.length > 0) {
     failures.push(`content attributes exported with capture disabled: ${contentKeys.join(", ")}`);
   }
+  if (modelSpans.some((span) => Object.hasOwn(span.attributes, "gen_ai.system"))) {
+    failures.push("legacy gen_ai.system attribute exported on GenAI model-call span");
+  }
 
-  const modelSpans = params.spans.filter((span) => span.name === "openclaw.model.call");
   const modelErrorSpans = modelSpans.filter((span) => {
     const serialized = JSON.stringify(span.attributes);
     return (
@@ -985,9 +1006,6 @@ function assertSmoke(params: {
       serialized.includes("StreamAbandoned")
     );
   });
-  if (modelSpans.length === 0) {
-    failures.push("no openclaw.model.call span was exported");
-  }
   if (modelErrorSpans.length > 0) {
     failures.push("successful QA run exported model-call error attributes");
   }

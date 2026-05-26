@@ -224,7 +224,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(hello.ok).toBe(true);
 
     await vi.waitFor(() => {
-      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
+      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
   });

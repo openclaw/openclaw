@@ -38,7 +38,11 @@ fail() {
 
 run_podman_detached() {
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"
+    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+      timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"
+    else
+      timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"
+    fi
     return
   fi
   podman run "$@"
