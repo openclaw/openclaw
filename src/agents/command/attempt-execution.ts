@@ -114,6 +114,7 @@ type PersistTextTurnTranscriptParams = {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
+  sessionFileOverride?: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   sessionAgentId: string;
@@ -238,15 +239,29 @@ async function persistTextTurnTranscript(
     return params.sessionEntry;
   }
 
-  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    agentId: params.sessionAgentId,
-    threadId: params.threadId,
-  });
+  const resolvedTranscript = params.sessionFileOverride
+    ? {
+        sessionFile: params.sessionFileOverride,
+        sessionEntry: {
+          ...(params.sessionEntry ?? {
+            sessionId: params.sessionId,
+            updatedAt: Date.now(),
+            sessionStartedAt: Date.now(),
+          }),
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFileOverride,
+        },
+      }
+    : await resolveSessionTranscriptFile({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionEntry: params.sessionEntry,
+        sessionStore: params.sessionStore,
+        storePath: params.storePath,
+        agentId: params.sessionAgentId,
+        threadId: params.threadId,
+      });
+  const { sessionFile, sessionEntry } = resolvedTranscript;
   const lock = await acquireSessionWriteLock({
     sessionFile,
     ...resolveSessionWriteLockOptions(params.config),
@@ -353,6 +368,7 @@ export async function persistUserTurnTranscript(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
+  sessionFileOverride?: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   sessionAgentId: string;
@@ -397,6 +413,7 @@ export async function persistAcpTurnTranscript(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
+  sessionFileOverride?: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   sessionAgentId: string;
@@ -423,6 +440,7 @@ export async function persistCliTurnTranscript(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
+  sessionFileOverride?: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   sessionAgentId: string;
@@ -445,6 +463,7 @@ export async function persistCliTurnTranscript(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
+    sessionFileOverride: params.sessionFileOverride,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
     sessionAgentId: params.sessionAgentId,
@@ -708,6 +727,15 @@ export function runAgentAttempt(params: {
       if (params.suppressPromptPersistenceOnRetry === true) {
         return;
       }
+      const transcriptSessionEntry: SessionEntry = {
+        ...(params.sessionEntry ?? {
+          sessionId: params.sessionId,
+          updatedAt: Date.now(),
+          sessionStartedAt: Date.now(),
+        }),
+        sessionId: params.sessionId,
+        sessionFile: params.sessionFile,
+      };
       try {
         params.sessionEntry =
           (await persistUserTurnTranscript({
@@ -715,7 +743,9 @@ export function runAgentAttempt(params: {
             transcriptBody: params.transcriptBody,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey ?? params.sessionId,
-            sessionEntry: params.sessionEntry,
+            sessionEntry: transcriptSessionEntry,
+            sessionFileOverride:
+              params.sessionStore && params.storePath ? undefined : params.sessionFile,
             sessionStore: params.sessionStore,
             storePath: params.storePath,
             sessionAgentId: params.sessionAgentId,

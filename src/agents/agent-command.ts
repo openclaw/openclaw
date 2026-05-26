@@ -955,6 +955,9 @@ async function agentCommandInternal(
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       let acpUserMessagePersisted = false;
+      let acpTranscriptSessionEntry: SessionEntry | undefined = sessionEntry;
+      let acpInternalSessionFile: string | undefined;
+      let acpSessionCwd = workspaceDir;
       try {
         const {
           resolveAcpAgentPolicyError,
@@ -976,23 +979,56 @@ async function agentCommandInternal(
           throw agentPolicyError;
         }
 
+        const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
+          loadAcpSessionIdentifiersRuntime(),
+          loadTranscriptResolveRuntime(),
+        ]);
+        acpSessionCwd = resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir;
+        if (suppressVisibleSessionEffects) {
+          const internalSource = await resolveSessionTranscriptFile({
+            sessionId,
+            sessionKey,
+            sessionEntry,
+            agentId: sessionAgentId,
+            threadId: opts.threadId,
+          });
+          acpInternalSessionFile = await prepareInternalSessionEffectsTranscript({
+            sessionFile: internalSource.sessionFile,
+            runId,
+          });
+          acpTranscriptSessionEntry = {
+            ...(sessionEntry ?? {
+              sessionId,
+              updatedAt: Date.now(),
+              sessionStartedAt: Date.now(),
+            }),
+            sessionId,
+            sessionFile: acpInternalSessionFile,
+          };
+        }
+
         if (opts.suppressPromptPersistence !== true) {
           try {
-            const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
-            sessionEntry =
-              (await attemptExecutionRuntime.persistUserTurnTranscript({
-                body,
-                transcriptBody,
-                sessionId,
-                sessionKey,
-                sessionEntry,
-                sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
-                storePath: suppressVisibleSessionEffects ? undefined : storePath,
-                sessionAgentId,
-                threadId: opts.threadId,
-                sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
-                config: cfg,
-              })) ?? sessionEntry;
+            const persistedEntry = await attemptExecutionRuntime.persistUserTurnTranscript({
+              body,
+              transcriptBody,
+              sessionId,
+              sessionKey,
+              sessionEntry: acpTranscriptSessionEntry,
+              sessionFileOverride: acpInternalSessionFile,
+              sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+              storePath: suppressVisibleSessionEffects ? undefined : storePath,
+              sessionAgentId,
+              threadId: opts.threadId,
+              sessionCwd: acpSessionCwd,
+              config: cfg,
+            });
+            if (suppressVisibleSessionEffects) {
+              acpTranscriptSessionEntry = persistedEntry ?? acpTranscriptSessionEntry;
+            } else {
+              sessionEntry = persistedEntry ?? sessionEntry;
+              acpTranscriptSessionEntry = sessionEntry;
+            }
             acpUserMessagePersisted = true;
           } catch (error) {
             log.warn(
@@ -1075,52 +1111,23 @@ async function agentCommandInternal(
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
       try {
-        const [{ resolveAcpSessionCwd }, { resolveSessionTranscriptFile }] = await Promise.all([
-          loadAcpSessionIdentifiersRuntime(),
-          loadTranscriptResolveRuntime(),
-        ]);
-        const internalSource = suppressVisibleSessionEffects
-          ? await resolveSessionTranscriptFile({
-              sessionId,
-              sessionKey,
-              sessionEntry,
-              agentId: sessionAgentId,
-              threadId: opts.threadId,
-            })
-          : undefined;
-        const internalSessionFile = suppressVisibleSessionEffects
-          ? await prepareInternalSessionEffectsTranscript({
-              sessionFile: internalSource?.sessionFile,
-              runId,
-            })
-          : undefined;
-        const transcriptSessionEntry: SessionEntry | undefined = internalSessionFile
-          ? {
-              ...(sessionEntry ?? {
-                sessionId,
-                updatedAt: Date.now(),
-                sessionStartedAt: Date.now(),
-              }),
-              sessionId,
-              sessionFile: internalSessionFile,
-            }
-          : sessionEntry;
         sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           transcriptBody,
           finalText: finalTextRaw,
           sessionId,
           sessionKey,
-          sessionEntry: transcriptSessionEntry,
+          sessionEntry: acpTranscriptSessionEntry,
+          sessionFileOverride: acpInternalSessionFile,
           sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
           storePath: suppressVisibleSessionEffects ? undefined : storePath,
           sessionAgentId,
           threadId: opts.threadId,
-          sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+          sessionCwd: acpSessionCwd,
           config: cfg,
           userAlreadyPersisted: acpUserMessagePersisted,
         });
-        if (internalSessionFile) {
+        if (acpInternalSessionFile) {
           sessionEntry = prepared.sessionEntry;
         }
       } catch (error) {
@@ -2138,6 +2145,7 @@ async function agentCommandInternal(
             sessionId: effectiveSessionId,
             sessionKey: sessionKey ?? effectiveSessionId,
             sessionEntry: transcriptSessionEntry,
+            sessionFileOverride: suppressVisibleSessionEffects ? attemptSessionFile : undefined,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
             sessionAgentId,

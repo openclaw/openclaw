@@ -860,6 +860,74 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("persists internal CLI user turns to the active attempt transcript", async () => {
+    const sessionKey = "agent:main:subagent:cli-internal-user-before-failure";
+    const visibleSessionFile = path.join(tmpDir, "visible-session.jsonl");
+    const internalSessionFile = path.join(tmpDir, "internal-session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-internal-user-before-failure",
+      sessionFile: visibleSessionFile,
+      updatedAt: Date.now(),
+    };
+    await appendSessionTranscriptMessage({
+      transcriptPath: visibleSessionFile,
+      sessionId: sessionEntry.sessionId,
+      cwd: tmpDir,
+      config: {},
+      message: {
+        role: "user",
+        content: "existing visible prompt",
+        timestamp: Date.now(),
+      },
+    });
+    runCliAgentMock.mockRejectedValueOnce(new Error("cli crashed before internal reply"));
+
+    await expect(
+      runAgentAttempt({
+        providerOverride: "claude-cli",
+        originalProvider: "claude-cli",
+        modelOverride: "opus",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: internalSessionFile,
+        workspaceDir: tmpDir,
+        body: "internal runtime wrapper\ninternal visible ask",
+        transcriptBody: "internal visible ask",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-cli-internal-user-before-failure",
+        opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "claude-cli",
+        sessionHasHistory: false,
+      }),
+    ).rejects.toThrow("cli crashed before internal reply");
+
+    const internalMessages = await readSessionMessages(internalSessionFile);
+    expect(internalMessages).toHaveLength(1);
+    expectRecordFields(requireRecord(internalMessages[0], "internal user message"), {
+      role: "user",
+      content: "internal visible ask",
+    });
+
+    const visibleMessages = await readSessionMessages(visibleSessionFile);
+    expect(visibleMessages).toHaveLength(1);
+    expectRecordFields(requireRecord(visibleMessages[0], "visible user message"), {
+      role: "user",
+      content: "existing visible prompt",
+    });
+  });
+
   it("does not duplicate a user turn when the CLI user message was already persisted", async () => {
     const sessionKey = "agent:main:subagent:cli-user-already-persisted";
     const sessionEntry: SessionEntry = {
