@@ -580,6 +580,59 @@ describe("loadSessions", () => {
     expect(isSessionRunActive(current!)).toBe(false);
   });
 
+  it("keeps a locally terminal current session from being revived by a stale running list row", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: true,
+            status: "running",
+          },
+          {
+            key: "agent:main:other",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionKey: "main",
+      chatRunId: null,
+      chatRunStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "main",
+        occurredAt: 1,
+      },
+    } as Partial<SessionsState>);
+
+    await loadSessions(state);
+
+    expect(state.sessionsResult?.sessions.find((row) => row.key === "main")).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+    });
+    expect(
+      state.sessionsResult?.sessions.find((row) => row.key === "agent:main:other"),
+    ).toMatchObject({
+      hasActiveRun: true,
+      status: "running",
+    });
+  });
+
   it("omits the active-window cutoff when archived sessions are shown", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -1419,6 +1472,50 @@ describe("applySessionsChangedEvent", () => {
     expect(isSessionRunActive(current!)).toBe(false);
   });
 
+  it("keeps a locally terminal current session from being revived by a stale running websocket row", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:super:main",
+      chatRunId: null,
+      chatRunStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+        occurredAt: 1,
+      },
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    } as Partial<SessionsState>);
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "running",
+      hasActiveRun: true,
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      updatedAt: 2,
+    });
+  });
+
   it("revives active state when a new lifecycle start follows stale idle state", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -1456,6 +1553,48 @@ describe("applySessionsChangedEvent", () => {
       status: "running",
     });
     expect(isSessionRunActive(current!)).toBe(true);
+  });
+
+  it("keeps a terminal current session from being revived after the run-status toast clears", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:super:main",
+      chatRunId: null,
+      chatRunStatus: null,
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+            startedAt: 1,
+            endedAt: 2,
+          },
+        ],
+      },
+    } as Partial<SessionsState>);
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "running",
+      hasActiveRun: true,
+      startedAt: 1,
+      updatedAt: 3,
+      ts: 3,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      updatedAt: 3,
+    });
   });
 
   it("updates fresh context usage from websocket event payloads", () => {

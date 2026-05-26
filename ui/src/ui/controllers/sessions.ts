@@ -11,6 +11,7 @@ import type {
   SessionsCompactionListResult,
   SessionsCompactionRestoreResult,
   SessionsListResult,
+  SessionRunStatus,
 } from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -20,6 +21,7 @@ import {
 type SessionsChatRunState = {
   sessionKey?: string;
   chatRunId?: string | null;
+  chatRunStatus?: ChatRunUiStatus | null;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
   requestUpdate?: () => void;
@@ -147,6 +149,40 @@ function sessionPatchTargetsCurrentChatRun(
     return false;
   }
   return true;
+}
+
+function normalizeStaleCurrentSessionRunAfterLocalTerminal(
+  state: SessionsState & { sessionKey: string },
+  row: GatewaySessionRow,
+  previousRow?: GatewaySessionRow,
+): GatewaySessionRow {
+  if (row.key !== state.sessionKey || state.chatRunId != null) {
+    return row;
+  }
+  if (row.hasActiveRun !== true && row.status !== "running") {
+    return row;
+  }
+  const terminalPhase = state.chatRunStatus?.phase;
+  const previousTerminalStatus =
+    previousRow?.status && previousRow.status !== "running" ? previousRow.status : null;
+  if (
+    previousTerminalStatus &&
+    row.startedAt != null &&
+    previousRow?.endedAt != null &&
+    row.startedAt > previousRow.endedAt
+  ) {
+    return row;
+  }
+  if (terminalPhase !== "done" && terminalPhase !== "interrupted" && !previousTerminalStatus) {
+    return row;
+  }
+  const status: SessionRunStatus =
+    terminalPhase === "done" || previousTerminalStatus === "done" ? "done" : "killed";
+  return {
+    ...row,
+    hasActiveRun: false,
+    status,
+  };
 }
 
 const SESSION_EVENT_ROW_FIELDS = [
@@ -461,10 +497,13 @@ export function applySessionsChangedEvent(
       nextRow.hasActiveRun = false;
     }
   }
-  if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
-    delete nextRow.totalTokens;
+  const normalizedNextRow = hasCurrentChatSession(state)
+    ? normalizeStaleCurrentSessionRunAfterLocalTerminal(state, nextRow, existing)
+    : nextRow;
+  if (normalizedNextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
+    delete normalizedNextRow.totalTokens;
   }
-  if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
+  if (!state.sessionsShowArchived && isArchivedSessionRow(normalizedNextRow)) {
     if (existingIndex < 0) {
       return { applied: false };
     }
@@ -479,8 +518,8 @@ export function applySessionsChangedEvent(
 
   const nextRows =
     existingIndex >= 0
-      ? previousRows.map((row, index) => (index === existingIndex ? nextRow : row))
-      : [nextRow, ...previousRows];
+      ? previousRows.map((row, index) => (index === existingIndex ? normalizedNextRow : row))
+      : [normalizedNextRow, ...previousRows];
   const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
   const eventRunId =
@@ -499,7 +538,7 @@ export function applySessionsChangedEvent(
   const currentChatRunId = state.chatRunId ?? null;
   const currentChatSessionKey = hasCurrentSession ? state.sessionKey : null;
   const clearedChatRun =
-    nextRow.hasActiveRun !== true &&
+    normalizedNextRow.hasActiveRun !== true &&
     hasCurrentSession &&
     sessionPatchTargetsCurrentChatRun(state, {
       changedSessionKey: key,
@@ -509,7 +548,7 @@ export function applySessionsChangedEvent(
       publishRunStatus: false,
     });
 
-  if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
+  if (previousCheckpointSignature !== checkpointSummarySignature(normalizedNextRow)) {
     invalidateCheckpointCacheForKey(state, key);
   }
   return {
@@ -519,7 +558,7 @@ export function applySessionsChangedEvent(
     ...(clearedChatRun && currentChatSessionKey != null
       ? {
           clearedChatRunStatus: {
-            phase: nextRow.status === "done" ? "done" : "interrupted",
+            phase: normalizedNextRow.status === "done" ? "done" : "interrupted",
             runId: currentChatRunId,
             sessionKey: currentChatSessionKey,
           },
@@ -691,6 +730,16 @@ async function loadSessionsOnce(
           ? appendSessionsResult(state.sessionsResult, projected)
           : projected;
       if (hasCurrentChatSession(state)) {
+        state.sessionsResult = {
+          ...state.sessionsResult,
+          sessions: state.sessionsResult.sessions.map((row) =>
+            normalizeStaleCurrentSessionRunAfterLocalTerminal(
+              state,
+              row,
+              previousRows.get(row.key),
+            ),
+          ),
+        };
         reconcileChatRunFromCurrentSessionRow(state, {
           publishRunStatus: overrides?.publishChatRunStatus !== false,
         });
