@@ -42,7 +42,7 @@
       "order": 60,
       "exposure": {
         "configured": true,
-        "setup": true,
+        "setup": false,
         "docs": true
       }
     }
