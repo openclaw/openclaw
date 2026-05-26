@@ -244,7 +244,9 @@ describeLive("system-prompt-override on resumed cli sessions (issue #80374)", ()
           { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
         );
 
-        if (!payload1) return;
+        if (!payload1) {
+          return;
+        }
         if (payload1.status !== "ok") {
           throw new Error(`Turn 1 status=${String(payload1.status)}`);
         }
@@ -307,7 +309,9 @@ describeLive("system-prompt-override on resumed cli sessions (issue #80374)", ()
           { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
         );
 
-        if (!payload2) return;
+        if (!payload2) {
+          return;
+        }
         if (payload2.status !== "ok") {
           throw new Error(`Turn 2 status=${String(payload2.status)}`);
         }
@@ -331,9 +335,7 @@ describeLive("system-prompt-override on resumed cli sessions (issue #80374)", ()
         console.log(
           `\n[sp-resume-proof] ✓ Resumed turn honored the NEW system prompt (${MARKER_BRAVO}).`,
         );
-        console.log(
-          `  systemPromptWhen = ${String(providerDefaults?.systemPromptWhen ?? "never")}`,
-        );
+        console.log(`  systemPromptWhen = ${providerDefaults?.systemPromptWhen ?? "never"}`);
       } finally {
         await client1?.stopAndWait({ timeoutMs: 5_000 }).catch(() => {});
         await client2?.stopAndWait({ timeoutMs: 5_000 }).catch(() => {});
