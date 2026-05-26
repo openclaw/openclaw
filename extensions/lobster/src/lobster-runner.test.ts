@@ -11,15 +11,15 @@ import {
 } from "./lobster-runner.js";
 
 const requireForTest = createRequire(import.meta.url);
+const ajvInternalCacheKey = "_cache";
 
 type AjvInstance = {
-  _cache?: { size: number };
   compile: (schema: unknown) => unknown;
 };
 type AjvConstructor = new (opts?: object) => AjvInstance;
 
 function readAjvInternalCacheSize(ajv: unknown): number {
-  return (ajv as AjvInstance)._cache?.size ?? 0;
+  return (ajv as Record<string, { size: number } | undefined>)[ajvInternalCacheKey]?.size ?? 0;
 }
 
 async function importLobsterAjvConstructor(): Promise<AjvConstructor> {
