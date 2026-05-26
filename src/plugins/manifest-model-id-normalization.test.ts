@@ -168,11 +168,13 @@ function normalizeDemoModelWithEnv(
 describe("manifest model id normalization", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    clearPluginMetadataLifecycleCaches();
   });
 
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
+    clearPluginMetadataLifecycleCaches();
     restoreEnv();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
