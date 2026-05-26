@@ -13,11 +13,13 @@ type GatewayClientAuth = {
 type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
   url: string;
   urlSource: string;
+  tlsFingerprint?: string;
   auth: GatewayClientAuth;
 }>;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
     caps?: string[];
+    tlsFingerprint?: string;
     url?: string;
   };
 
@@ -371,6 +373,35 @@ describe("serveAcpGateway startup", () => {
       await Promise.resolve();
 
       expect(mockState.gatewayOptions[0]?.url).toBe("ws://127.0.0.1:19999");
+
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("passes the resolved TLS fingerprint into the ACP gateway client", async () => {
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "wss://127.0.0.1:18789",
+      urlSource: "local loopback",
+      tlsFingerprint: "sha256:local",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await Promise.resolve();
+
+      expect(mockState.gatewayOptions[0]).toEqual(
+        expect.objectContaining({
+          tlsFingerprint: "sha256:local",
+        }),
+      );
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
