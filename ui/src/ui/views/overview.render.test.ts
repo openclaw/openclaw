@@ -108,7 +108,7 @@ describe("overview view rendering", () => {
 
     const hint = container.querySelector(".mono")?.closest(".muted") ?? null;
     expect(compactText(hint)).toBe(
-      "范围升级等待批准。 此设备已配对，但请求的更广范围仍在等待批准。 openclaw devices approve req-123 openclaw devices list 在手机上？从桌面运行 openclaw dashboard --no-open 复制完整 URL（包括 #token=...）。 文档：设备配对",
+      "Scope upgrade pending approval. This device is already paired, but the requested wider scope is waiting for approval. openclaw devices approve req-123 openclaw devices list On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop. Docs: Device pairing",
     );
     expect([...container.querySelectorAll(".mono")].map((node) => node.textContent)).toEqual([
       "openclaw devices approve req-123",
@@ -128,7 +128,7 @@ describe("overview view rendering", () => {
 
     const hint = container.querySelector(".mono")?.closest(".muted") ?? null;
     expect(compactText(hint)).toBe(
-      "范围升级等待批准。 此设备已配对，但请求的更广范围仍在等待批准。 openclaw devices list 在手机上？从桌面运行 openclaw dashboard --no-open 复制完整 URL（包括 #token=...）。 文档：设备配对",
+      "Scope upgrade pending approval. This device is already paired, but the requested wider scope is waiting for approval. openclaw devices list On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop. Docs: Device pairing",
     );
     expect([...container.querySelectorAll(".mono")].map((node) => node.textContent)).toEqual([
       "openclaw devices list",
@@ -220,6 +220,6 @@ describe("overview view rendering", () => {
     await Promise.resolve();
 
     const quota = container.querySelector('[data-kind="quota"]');
-    expect(compactText(quota)).toBe("使用情况 剩余 28% Codex · Week · Claude · 5h 剩余 40%");
+    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · Claude · 5h 40% left");
   });
 });
