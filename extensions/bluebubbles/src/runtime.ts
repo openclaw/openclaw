@@ -1,7 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/compat";
 
-const runtimeStore = createPluginRuntimeStore<PluginRuntime>("BlueBubbles runtime not initialized");
+const runtimeStore = createPluginRuntimeStore<PluginRuntime>(
+  "BlueBubbles runtime not initialized",
+);
 type LegacyRuntimeLogShape = { log?: (message: string) => void };
 export const setBlueBubblesRuntime = runtimeStore.setRuntime;
 
@@ -20,7 +22,9 @@ export function getBlueBubblesRuntime(): PluginRuntime {
 export function warnBlueBubbles(message: string): void {
   const formatted = `[bluebubbles] ${message}`;
   // Backward-compatible with tests/legacy injections that pass { log }.
-  const log = (runtimeStore.tryGetRuntime() as unknown as LegacyRuntimeLogShape | null)?.log;
+  const log = (
+    runtimeStore.tryGetRuntime() as unknown as LegacyRuntimeLogShape | null
+  )?.log;
   if (typeof log === "function") {
     log(formatted);
     return;

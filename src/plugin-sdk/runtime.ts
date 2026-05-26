@@ -39,6 +39,7 @@ export function resolveRuntimeEnvWithUnavailableExit(params: {
   return resolveRuntimeEnv({
     runtime: params.runtime,
     logger: params.logger,
-    exitError: () => new Error(params.unavailableMessage ?? "Runtime exit not available"),
+    exitError: () =>
+      new Error(params.unavailableMessage ?? "Runtime exit not available"),
   });
 }
