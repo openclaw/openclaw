@@ -660,16 +660,19 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" has ClawHub origin metadata for "${originRead.origin.slug}". Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
+      const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+      const lockedRegistry =
+        locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
       if (
         locked.version !== originRead.origin.installedVersion ||
-        locked.installedAt !== originRead.origin.installedAt
+        locked.installedAt !== originRead.origin.installedAt ||
+        lockedRegistry !== originRegistry
       ) {
         return {
           ok: false,
           error: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
-      const registry = normalizeStoredRegistry(locked.registry ?? originRead.origin.registry);
       const selector: ClawHubSkillVerificationSelector = version
         ? "version"
         : tag
@@ -678,13 +681,13 @@ export async function resolveClawHubSkillVerificationTarget(params: {
       return {
         ok: true,
         slug: trackedSlug,
-        baseUrl: registry,
+        baseUrl: lockedRegistry,
         version: version ?? (tag ? undefined : locked.version),
         tag,
         resolution: {
           source: "installed",
           selector,
-          registry,
+          registry: lockedRegistry,
           skillDir,
           installedVersion: locked.version,
         },

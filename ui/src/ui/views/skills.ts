@@ -141,7 +141,7 @@ function verdictLabel(verdict: ClawHubSkillSecurityVerdict | null | undefined): 
     return "Unavailable";
   }
   const status = verdict.securityStatus?.trim() || null;
-  if (verdict.ok || verdict.decision === "pass") {
+  if (verdict.ok === true && verdict.decision === "pass") {
     return status === "clean" || !status ? "Clean" : status;
   }
   if (status === "pending" || status === "not-run") {
@@ -160,7 +160,7 @@ function verdictChipClass(verdict: ClawHubSkillSecurityVerdict | null | undefine
   if (!verdict) {
     return "chip-warn";
   }
-  if (verdict.ok || verdict.decision === "pass") {
+  if (verdict.ok === true && verdict.decision === "pass") {
     return "chip-ok";
   }
   const status = verdict.securityStatus?.trim() || null;

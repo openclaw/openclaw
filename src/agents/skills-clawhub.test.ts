@@ -593,6 +593,41 @@ describe("skills-clawhub", () => {
       }
     });
 
+    it("rejects installed origin metadata when lock registry disagrees", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
+      try {
+        await writeClawHubOriginFixture({
+          workspaceDir,
+          slug: "agentreceipt",
+          registry: "https://origin.example.com/clawhub",
+          installedVersion: "2.0.0",
+          installedAt: 123,
+        });
+        const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+        const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
+          skills: Record<string, { version: string; installedAt: number; registry: string }>;
+        };
+        lock.skills.agentreceipt = {
+          ...lock.skills.agentreceipt,
+          registry: "https://other.example.com/clawhub",
+        };
+        await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
+
+        const result = await resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "agentreceipt",
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected registry mismatch failure");
+        }
+        expect(result.error).toContain("does not match the workspace ClawHub lockfile");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
     it("uses the configured registry and latest selector for uninstalled skills", async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
       resolveClawHubBaseUrlMock.mockReturnValueOnce("https://configured.example.com/clawhub");

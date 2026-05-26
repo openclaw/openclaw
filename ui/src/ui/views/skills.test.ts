@@ -355,6 +355,66 @@ describe("renderSkills", () => {
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("trust");
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
+
+  it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+
+    const linkedSkill = createSkill({
+      skillKey: "agentreceipt",
+      name: "AgentReceipt",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.2.3",
+        installedAt: 123,
+      },
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [linkedSkill],
+    };
+    const verdictKey = "https://clawhub.ai\u0000agentreceipt\u00001.2.3";
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          detailKey: "agentreceipt",
+          clawhubVerdicts: {
+            [verdictKey]: {
+              registry: "https://clawhub.ai",
+              ok: false,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const chips = Array.from(container.querySelectorAll(".chip"));
+    const verdictChip = chips.find((chip) => normalizeText(chip) === "Unavailable");
+    expect(verdictChip).toBeDefined();
+    expect(chips.map((chip) => normalizeText(chip))).toContain("Unavailable");
+    expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
+    expect(verdictChip?.classList.contains("chip-ok")).toBe(false);
+  });
 });
 
 function installDialogMethod(
