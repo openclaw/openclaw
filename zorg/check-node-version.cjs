@@ -141,6 +141,31 @@ function installNodeWithSystemPackageManager() {
   return false;
 }
 
+function installNpmWithSystemPackageManager() {
+  if (process.platform === "win32") {
+    return false;
+  }
+  if (!canElevate() && !commandExists("brew")) {
+    console.error("[openclaw] Cannot auto-install npm because this user is not root and sudo is unavailable.");
+    return false;
+  }
+
+  if (commandExists("apt-get") || commandExists("dnf") || commandExists("yum") || commandExists("zypper") || commandExists("brew")) {
+    return installNodeWithSystemPackageManager();
+  }
+
+  if (commandExists("apk")) {
+    return runShell(["set -e", asRoot("apk add --no-cache npm")].join("\n")).status === 0;
+  }
+
+  if (commandExists("pacman")) {
+    return runShell(["set -e", asRoot("pacman -Sy --noconfirm npm")].join("\n")).status === 0;
+  }
+
+  console.error("[openclaw] No supported package manager was found for automatic npm installation.");
+  return false;
+}
+
 function currentNodeVersionFromPath() {
   var result = require("child_process").spawnSync("node", ["--version"], {
     encoding: "utf8",
@@ -281,6 +306,32 @@ function printManualInstallHelp() {
   );
 }
 
+function printManualNpmInstallHelp() {
+  console.error(
+    [
+      "[openclaw] npm is missing, but this package install requires npm to finish.",
+      "[openclaw] On fresh Linux hosts, the direct npm install now tries to repair npm automatically during preinstall.",
+      "[openclaw] If auto-repair is unavailable on this OS/user, install npm with your OS package manager, then rerun the npm install.",
+    ].join("\n"),
+  );
+}
+
+function ensureNpmAvailable() {
+  if (commandExists("npm")) {
+    return true;
+  }
+  if (shouldAutoInstall()) {
+    console.error("[openclaw] npm is missing; attempting automatic npm repair before continuing.");
+    if (installNpmWithSystemPackageManager() && commandExists("npm")) {
+      console.error("[openclaw] npm prerequisite repaired.");
+      return true;
+    }
+    console.error("[openclaw] Automatic npm repair did not leave npm on PATH.");
+  }
+  printManualNpmInstallHelp();
+  return false;
+}
+
 var current = parseVersion(process.version);
 failClosedOnAccidentalExistingInstallUpgrade();
 if (!isAtLeast(current, minimum)) {
@@ -297,5 +348,8 @@ if (!isAtLeast(current, minimum)) {
     }
   }
   printManualInstallHelp();
+  process.exit(1);
+}
+if (!ensureNpmAvailable()) {
   process.exit(1);
 }
