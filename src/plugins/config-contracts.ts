@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeSortedUniqueStringEntries,
+  normalizeStringEntries,
+} from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -22,10 +26,7 @@ type TraversalState = {
 };
 
 function normalizePathPattern(pathPattern: string): string[] {
-  return pathPattern
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(pathPattern.split("."));
 }
 
 function appendPathSegment(path: string, segment: string): string {
@@ -33,6 +34,14 @@ function appendPathSegment(path: string, segment: string): string {
     return segment;
   }
   return /^\d+$/.test(segment) ? `${path}[${segment}]` : `${path}.${segment}`;
+}
+
+function parseCanonicalArrayIndex(segment: string, length: number): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(segment)) {
+    return null;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
 }
 
 export function collectPluginConfigContractMatches(params: {
@@ -69,8 +78,8 @@ export function collectPluginConfigContractMatches(params: {
         continue;
       }
       if (Array.isArray(state.value)) {
-        const index = Number.parseInt(segment, 10);
-        if (Number.isInteger(index) && index >= 0 && index < state.value.length) {
+        const index = parseCanonicalArrayIndex(segment, state.value.length);
+        if (index !== null) {
           nextStates.push({
             segments: [...state.segments, segment],
             value: state.value[index],
@@ -106,16 +115,15 @@ export function resolvePluginConfigContractsById(params: {
   fallbackToBundledMetadataForResolvedBundled?: boolean;
   fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
+  discovery?: PluginDiscoveryResult;
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
-  const pluginIds = [
-    ...new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean)),
-  ];
+  const pluginIds = normalizeSortedUniqueStringEntries(params.pluginIds);
   if (pluginIds.length === 0) {
     return matches;
   }
   const fallbackBundledPluginIds = new Set(
-    (params.fallbackBundledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+    normalizeSortedUniqueStringEntries(params.fallbackBundledPluginIds),
   );
   const bundledContractFallbacks = new Map<string, PluginManifestConfigContracts | undefined>();
   const findBundledConfigContracts = (
@@ -124,10 +132,12 @@ export function resolvePluginConfigContractsById(params: {
     if (bundledContractFallbacks.has(pluginId)) {
       return bundledContractFallbacks.get(pluginId);
     }
-    const discovery = discoverOpenClawPlugins({
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
+    const discovery =
+      params.discovery ??
+      discoverOpenClawPlugins({
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
     const registry = loadPluginManifestRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,

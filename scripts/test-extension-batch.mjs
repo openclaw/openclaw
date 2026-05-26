@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import { resolveExtensionBatchPlan } from "./lib/extension-test-plan.mjs";
+import {
+  listTrackedTestFilesForRoots,
+  resolveExtensionBatchPlan,
+} from "./lib/extension-test-plan.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mjs";
 
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
@@ -14,8 +17,10 @@ function printUsage() {
   );
 }
 
-function parseExtensionIds(rawArgs) {
-  const args = [...rawArgs];
+export function parseExtensionIds(rawArgs) {
+  const separatorIndex = rawArgs.indexOf("--");
+  const args = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : [...rawArgs];
+  const separatorPassthroughArgs = separatorIndex >= 0 ? rawArgs.slice(separatorIndex + 1) : [];
   const extensionIds = [];
 
   while (args[0] && !args[0].startsWith("-")) {
@@ -28,7 +33,10 @@ function parseExtensionIds(rawArgs) {
     );
   }
 
-  return { extensionIds, passthroughArgs: args };
+  return {
+    extensionIds,
+    passthroughArgs: separatorIndex >= 0 ? [...args, ...separatorPassthroughArgs] : args,
+  };
 }
 
 function parsePositiveInt(value) {
@@ -82,9 +90,62 @@ function orderPlanGroups(planGroups, parallelism) {
   });
 }
 
+function normalizeRelativePath(inputPath) {
+  return path
+    .relative(process.cwd(), path.resolve(process.cwd(), inputPath))
+    .split(path.sep)
+    .join("/");
+}
+
+function isExactExcludePath(inputPath) {
+  return !/[*!?[\]{}]/u.test(inputPath);
+}
+
+export function parseExactVitestExcludePaths(vitestArgs) {
+  const excludePaths = new Set();
+  for (let index = 0; index < vitestArgs.length; index += 1) {
+    const arg = vitestArgs[index];
+    if (arg === "--exclude") {
+      const value = vitestArgs[index + 1];
+      if (value && isExactExcludePath(value)) {
+        excludePaths.add(normalizeRelativePath(value));
+      }
+      index += 1;
+      continue;
+    }
+    const prefix = "--exclude=";
+    if (arg.startsWith(prefix)) {
+      const value = arg.slice(prefix.length);
+      if (value && isExactExcludePath(value)) {
+        excludePaths.add(normalizeRelativePath(value));
+      }
+    }
+  }
+  return excludePaths;
+}
+
+function resolveGroupTargets(group, exactExcludePaths) {
+  if (exactExcludePaths.size === 0) {
+    return group.roots;
+  }
+
+  const testFiles = listTrackedTestFilesForRoots(group.roots);
+  if (!testFiles) {
+    return group.roots;
+  }
+
+  return testFiles.filter((file) => !exactExcludePaths.has(file));
+}
+
 async function runPlanGroup(group, params) {
+  const targets = resolveGroupTargets(group, params.exactExcludePaths);
+  if (targets.length === 0) {
+    console.log(`[test-extension-batch] ${group.config}: no test files remain after excludes`);
+    return 0;
+  }
+
   console.log(
-    `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${group.testFileCount} files)`,
+    `[test-extension-batch] ${group.config}: ${group.extensionIds.join(", ")} (${targets.length} targets)`,
   );
   return await params.runGroup({
     args: params.vitestArgs,
@@ -95,13 +156,14 @@ async function runPlanGroup(group, params) {
       groupIndex: params.groupIndex,
       useDedicatedCache: params.useDedicatedCache,
     }),
-    targets: group.roots,
+    targets,
   });
 }
 
 export async function runExtensionBatchPlan(batchPlan, params = {}) {
   const env = params.env ?? process.env;
   const vitestArgs = params.vitestArgs ?? [];
+  const exactExcludePaths = parseExactVitestExcludePaths(vitestArgs);
   const runGroup = params.runGroup ?? runVitestBatch;
   const parallelism = resolveExtensionBatchParallelism(batchPlan.planGroups.length, env);
   const orderedGroups = orderPlanGroups(batchPlan.planGroups, parallelism);
@@ -125,6 +187,7 @@ export async function runExtensionBatchPlan(batchPlan, params = {}) {
         env,
         groupIndex,
         runGroup,
+        exactExcludePaths,
         useDedicatedCache,
         vitestArgs,
       });
@@ -146,8 +209,7 @@ async function run() {
     return;
   }
 
-  const passthroughArgs = rawArgs.filter((arg) => arg !== "--");
-  const { extensionIds, passthroughArgs: vitestArgs } = parseExtensionIds(passthroughArgs);
+  const { extensionIds, passthroughArgs: vitestArgs } = parseExtensionIds(rawArgs);
   if (extensionIds.length === 0) {
     printUsage();
     process.exit(1);

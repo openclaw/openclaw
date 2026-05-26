@@ -14,7 +14,7 @@ import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  __testing,
+  testing,
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
@@ -26,7 +26,7 @@ afterEach(() => {
   vi.useRealTimers();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  __testing.clearNativeHookRelaysForTests();
+  testing.clearNativeHookRelaysForTests();
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -64,7 +64,7 @@ function getMockCallArg(
 }
 
 function getOnlyNativeHookRelayInvocation() {
-  const invocations = __testing.getNativeHookRelayInvocationsForTests();
+  const invocations = testing.getNativeHookRelayInvocationsForTests();
   expect(invocations).toHaveLength(1);
   return requireRecord(invocations[0], "native hook relay invocation");
 }
@@ -74,7 +74,7 @@ async function waitForNativeHookRelayBridgeRecord(
 ): Promise<Record<string, unknown>> {
   let record: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
-    record = __testing.getNativeHookRelayBridgeRecordForTests(relayId);
+    record = testing.getNativeHookRelayBridgeRecordForTests(relayId);
     expect(isRecord(record) ? record.relayId : undefined).toBe(relayId);
   });
   return record as Record<string, unknown>;
@@ -99,7 +99,7 @@ describe("native hook relay registry", () => {
 
     expectRecordFields(
       requireRecord(
-        __testing.getNativeHookRelayRegistrationForTests(relay.relayId),
+        testing.getNativeHookRelayRegistrationForTests(relay.relayId),
         "native hook relay registration",
       ),
       {
@@ -179,7 +179,7 @@ describe("native hook relay registry", () => {
     );
   });
 
-  it("allows callers to replace a relay at a stable id", () => {
+  it("allows callers to replace a relay at a stable id", async () => {
     const first = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-stable-session",
@@ -199,7 +199,7 @@ describe("native hook relay registry", () => {
     expect(second.relayId).toBe(first.relayId);
     expectRecordFields(
       requireRecord(
-        __testing.getNativeHookRelayRegistrationForTests(first.relayId),
+        testing.getNativeHookRelayRegistrationForTests(first.relayId),
         "native hook relay registration",
       ),
       {
@@ -207,6 +207,48 @@ describe("native hook relay registry", () => {
         allowedEvents: ["post_tool_use"],
       },
     );
+    const secondExpiresAtMs = requireRecord(
+      testing.getNativeHookRelayRegistrationForTests(first.relayId),
+      "replacement native hook relay registration",
+    ).expiresAtMs;
+
+    first.renew(60_000);
+    expect(
+      requireRecord(
+        testing.getNativeHookRelayRegistrationForTests(first.relayId),
+        "replacement native hook relay registration",
+      ).expiresAtMs,
+    ).toBe(secondExpiresAtMs);
+
+    first.unregister();
+    expectRecordFields(
+      requireRecord(
+        testing.getNativeHookRelayRegistrationForTests(first.relayId),
+        "replacement native hook relay registration",
+      ),
+      {
+        runId: "run-2",
+        allowedEvents: ["post_tool_use"],
+      },
+    );
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: second.relayId,
+        event: "post_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_use_id: "replacement-call",
+          tool_input: { command: "pnpm test" },
+          tool_response: { output: "ok", exit_code: 0 },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+
+    second.unregister();
+    expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
   });
 
   it("exposes registered relays through the direct hook bridge", async () => {
@@ -282,8 +324,8 @@ describe("native hook relay registry", () => {
     });
 
     const record = await waitForNativeHookRelayBridgeRecord(relay.relayId);
-    const bridgeDir = __testing.getNativeHookRelayBridgeDirForTests();
-    const registryPath = __testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId);
+    const bridgeDir = testing.getNativeHookRelayBridgeDirForTests();
+    const registryPath = testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId);
     expect(statSync(bridgeDir).mode & 0o077).toBe(0);
     expect(statSync(registryPath).mode & 0o077).toBe(0);
 
@@ -332,7 +374,7 @@ describe("native hook relay registry", () => {
     const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
     await waitForNativeHookRelayBridgeRecord(second.relayId);
     writeFileSync(
-      __testing.getNativeHookRelayBridgeRegistryPathForTests(second.relayId),
+      testing.getNativeHookRelayBridgeRegistryPathForTests(second.relayId),
       `${JSON.stringify({
         ...firstRecord,
         relayId: second.relayId,
@@ -354,7 +396,7 @@ describe("native hook relay registry", () => {
         },
       }),
     ).rejects.toThrow("native hook relay bridge target mismatch");
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("rejects oversized direct bridge responses", async () => {
@@ -379,7 +421,7 @@ describe("native hook relay registry", () => {
         throw new Error("test bridge server address unavailable");
       }
       writeFileSync(
-        __testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId),
+        testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId),
         `${JSON.stringify({
           ...record,
           port: address.port,
@@ -523,7 +565,7 @@ describe("native hook relay registry", () => {
       },
     });
 
-    const [recorded] = __testing.getNativeHookRelayInvocationsForTests();
+    const [recorded] = testing.getNativeHookRelayInvocationsForTests();
     expect(JSON.stringify(recorded?.rawPayload).length).toBeLessThan(25_000);
     const rawPayload = readRecordField(
       requireRecord(recorded, "native hook relay invocation"),
@@ -553,12 +595,12 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
+    expect(testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
 
     relay.unregister();
 
-    expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("keeps only a bounded history of retained invocations", async () => {
@@ -583,7 +625,7 @@ describe("native hook relay registry", () => {
       });
     }
 
-    const invocations = __testing.getNativeHookRelayInvocationsForTests();
+    const invocations = testing.getNativeHookRelayInvocationsForTests();
     expect(invocations).toHaveLength(200);
     expect(invocations.map((invocation) => invocation.toolUseId)).not.toContain("call-0");
     expect(invocations.at(-1)?.toolUseId).toBe("call-209");
@@ -741,16 +783,16 @@ describe("native hook relay registry", () => {
   });
 
   it("rejects expired relay ids", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-24T12:00:00Z"));
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
       runId: "run-1",
       ttlMs: 1,
     });
+    await waitForNativeHookRelayBridgeRecord(relay.relayId);
 
-    vi.setSystemTime(new Date("2026-04-24T12:00:01Z"));
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(relay.expiresAtMs + 1));
 
     await expect(
       invokeNativeHookRelay({
@@ -760,7 +802,10 @@ describe("native hook relay registry", () => {
         rawPayload: {},
       }),
     ).rejects.toThrow("expired");
-    expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
+    relay.unregister();
+    expect(testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
   });
 
   it("uses the Codex no-op output when no OpenClaw hook decides", async () => {
@@ -1177,7 +1222,7 @@ describe("native hook relay registry", () => {
         policy: {
           id: "session-extension-policy",
           description: "session extension policy",
-          evaluate(_event, ctx) {
+          evaluate(eventValue, ctx) {
             const policyState = ctx.getSessionExtension?.("policy");
             seen.push(policyState);
             if ((policyState as { block?: boolean } | undefined)?.block) {
@@ -1543,7 +1588,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
     const approvalRequester = vi.fn(async () => "allow" as const);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const response = await invokeNativeHookRelay({
       provider: "codex",
@@ -1698,7 +1743,7 @@ describe("native hook relay registry", () => {
       .fn()
       .mockResolvedValueOnce("allow" as const)
       .mockResolvedValueOnce("deny" as const);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const allow = await invokeNativeHookRelay({
       provider: "codex",
@@ -1757,7 +1802,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
     const approvalRequester = vi.fn(async () => "allow-always" as const);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const first = await invokeNativeHookRelay({
       provider: "codex",
@@ -1819,7 +1864,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
     const approvalRequester = vi.fn(async () => "allow-always" as const);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     await invokeNativeHookRelay({
       provider: "codex",
@@ -1872,7 +1917,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
     const approvalRequester = vi.fn(async () => "allow-always" as const);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     await invokeNativeHookRelay({
       provider: "codex",
@@ -1912,7 +1957,7 @@ describe("native hook relay registry", () => {
   });
 
   it("defers PermissionRequest when OpenClaw approval does not decide", async () => {
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(
       vi.fn(async () => "defer" as const),
     );
     const relay = registerNativeHookRelay({
@@ -1946,7 +1991,7 @@ describe("native hook relay registry", () => {
       resolveDecision = resolve;
     });
     const approvalRequester = vi.fn(() => pendingDecision);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const payload = {
       hook_event_name: "PermissionRequest",
@@ -2001,7 +2046,7 @@ describe("native hook relay registry", () => {
     const approvalRequester = vi.fn(async (request: { toolInput?: Record<string, unknown> }) => {
       return request.toolInput?.command === "git status" ? pendingDecision : "deny";
     });
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const first = invokeNativeHookRelay({
       provider: "codex",
@@ -2052,7 +2097,7 @@ describe("native hook relay registry", () => {
       runId: "run-1",
     });
     const approvalRequester = vi.fn(async () => "allow" as const);
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const responses = [];
     for (let index = 0; index < 13; index += 1) {
@@ -2088,7 +2133,7 @@ describe("native hook relay registry", () => {
           resolvers.push(resolve);
         }),
     );
-    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
     const duplicatePayload = {
       hook_event_name: "PermissionRequest",
@@ -2127,14 +2172,14 @@ describe("native hook relay registry", () => {
   });
 
   it("uses canonical PermissionRequest content fingerprints for ordinary objects", () => {
-    const first = __testing.permissionRequestContentFingerprintForTests({
+    const first = testing.permissionRequestContentFingerprintForTests({
       provider: "codex",
       sessionId: "session-1",
       runId: "run-1",
       toolName: "exec",
       toolInput: { a: 1, b: { x: 2, y: 3 } },
     });
-    const second = __testing.permissionRequestContentFingerprintForTests({
+    const second = testing.permissionRequestContentFingerprintForTests({
       provider: "codex",
       sessionId: "session-1",
       runId: "run-1",
@@ -2155,7 +2200,7 @@ describe("native hook relay registry", () => {
     };
 
     expect(
-      __testing.permissionRequestContentFingerprintForTests({
+      testing.permissionRequestContentFingerprintForTests({
         provider: "codex",
         sessionId: "session-1",
         runId: "run-1",
@@ -2163,7 +2208,7 @@ describe("native hook relay registry", () => {
         toolInput: firstToolInput,
       }),
     ).not.toBe(
-      __testing.permissionRequestContentFingerprintForTests({
+      testing.permissionRequestContentFingerprintForTests({
         provider: "codex",
         sessionId: "session-1",
         runId: "run-1",
@@ -2182,11 +2227,9 @@ describe("native hook relay registry", () => {
     });
 
     try {
-      expect(__testing.permissionRequestToolInputKeyFingerprintForTests(toolInput)).toContain(
-        "key-",
-      );
+      expect(testing.permissionRequestToolInputKeyFingerprintForTests(toolInput)).toContain("key-");
       expect(
-        __testing.permissionRequestContentFingerprintForTests({
+        testing.permissionRequestContentFingerprintForTests({
           provider: "codex",
           sessionId: "session-1",
           runId: "run-1",
@@ -2201,7 +2244,7 @@ describe("native hook relay registry", () => {
 
   it("sanitizes PermissionRequest approval previews and reports omitted keys", () => {
     expect(
-      __testing.formatPermissionApprovalDescriptionForTests({
+      testing.formatPermissionApprovalDescriptionForTests({
         provider: "codex",
         sessionId: "session-1",
         runId: "run-1",
@@ -2215,7 +2258,7 @@ describe("native hook relay registry", () => {
     ).toBe("Tool: exec\nCwd: /repo/red\nModel: gpt-5.4 denied\nCommand: printf 'ok' red");
 
     expect(
-      __testing.formatPermissionApprovalDescriptionForTests({
+      testing.formatPermissionApprovalDescriptionForTests({
         provider: "codex",
         sessionId: "session-1",
         runId: "run-1",

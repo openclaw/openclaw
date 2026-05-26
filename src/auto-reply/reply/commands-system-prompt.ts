@@ -7,6 +7,7 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh-state.js";
@@ -96,7 +97,6 @@ export async function resolveCommandsSystemPromptBundle(
         senderName: params.ctx.SenderName,
         senderUsername: params.ctx.SenderUsername,
         senderE164: params.ctx.SenderE164,
-        senderIsOwner: params.command.senderIsOwner,
         modelProvider: params.provider,
         modelId: params.model,
       });
@@ -105,6 +105,7 @@ export async function resolveCommandsSystemPromptBundle(
     }
   })();
   const toolNames = tools.map((t) => t.name);
+  const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: sessionAgentId,
@@ -166,7 +167,10 @@ export async function resolveCommandsSystemPromptBundle(
       config: params.cfg,
       sandboxed: sandboxRuntime.sandboxed,
     }),
-    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+    promptSurface,
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: promptSurface,
+    }),
     runtimeInfo,
     sandboxInfo,
   });

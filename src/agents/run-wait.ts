@@ -1,5 +1,12 @@
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "./run-timeout-attribution.js";
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
@@ -25,6 +32,8 @@ export type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
 };
 
 export type AgentRunsDrainResult = {
@@ -41,20 +50,33 @@ type RawAgentWaitResponse = {
   stopReason?: unknown;
   livenessState?: unknown;
   yielded?: unknown;
+  timeoutPhase?: unknown;
+  providerStarted?: unknown;
 };
 
 function normalizeAgentWaitResult(
   status: AgentWaitResult["status"],
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
+  const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const error =
+    abortedStopReason && typeof wait?.error !== "string" ? AGENT_RUN_ABORTED_ERROR : wait?.error;
+  const normalized = normalizeBlockedLivenessWaitStatus({
+    status: abortedStopReason ? "error" : status,
+    livenessState: wait?.livenessState,
+    error,
+  });
   return {
-    status,
-    error: typeof wait?.error === "string" ? wait.error : undefined,
+    status: normalized.status,
+    error: normalized.error,
     startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
     endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
-    stopReason: typeof wait?.stopReason === "string" ? wait.stopReason : undefined,
+    stopReason,
     livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
     yielded: wait?.yielded === true ? true : undefined,
+    timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
+    providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };
 }
 
@@ -249,7 +271,7 @@ export async function waitForAgentRunsToDrain(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     runWaitDeps = overrides
       ? {
@@ -259,3 +281,4 @@ export const __testing = {
       : defaultRunWaitDeps;
   },
 };
+export { testing as __testing };

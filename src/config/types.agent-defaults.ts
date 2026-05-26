@@ -2,6 +2,7 @@ import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentToolModelConfig,
   AgentRuntimePolicyConfig,
   AgentSandboxConfig,
 } from "./types.agents-shared.js";
@@ -17,6 +18,7 @@ export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
+export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -86,7 +88,7 @@ export type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
   /** Default line window for memory_get when lines is omitted (default: 120). */
   memoryGetDefaultLines?: number;
-  /** Max chars kept for a single live tool result before truncation (default: 16000). */
+  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
   toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
@@ -207,13 +209,13 @@ export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageModel?: AgentModelConfig;
+  imageModel?: AgentToolModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageGenerationModel?: AgentModelConfig;
+  imageGenerationModel?: AgentToolModelConfig;
   /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  videoGenerationModel?: AgentModelConfig;
+  videoGenerationModel?: AgentToolModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  musicGenerationModel?: AgentModelConfig;
+  musicGenerationModel?: AgentToolModelConfig;
   /**
    * When true (default), shared image/music/video generation appends other
    * auth-backed provider defaults after explicit primary/fallback refs. Set to
@@ -222,7 +224,7 @@ export type AgentDefaultsConfig = {
    */
   mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  pdfModel?: AgentModelConfig;
+  pdfModel?: AgentToolModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
@@ -364,6 +366,11 @@ export type AgentDefaultsConfig = {
    * Default: 1200.
    */
   imageMaxDimensionPx?: number;
+  /**
+   * Image compression/detail preference for image-tool media loading.
+   * Default: auto, which adapts to provider/model limits and image count.
+   */
+  imageQuality?: AgentImageQualityPreference;
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
@@ -421,7 +428,7 @@ export type AgentDefaultsConfig = {
     skipWhenBusy?: boolean;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
-     * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
+     * as a separate message prefixed with `Thinking.` (same as `/reasoning on`).
      *
      * Default: false (only the final heartbeat payload is delivered).
      */
@@ -433,7 +440,7 @@ export type AgentDefaultsConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
     delegationMode?: SubagentDelegationMode;
-    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
+    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;
@@ -505,8 +512,8 @@ export type AgentCompactionConfig = {
   memoryFlush?: AgentCompactionMemoryFlushConfig;
   /**
    * H2/H3 section names from AGENTS.md to inject after compaction.
-   * Defaults to ["Session Startup", "Red Lines"] when unset.
-   * Set to [] to disable post-compaction context injection entirely.
+   * Disabled when unset or [].
+   * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
   /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").

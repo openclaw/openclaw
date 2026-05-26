@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -23,6 +19,7 @@ import {
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  listConfiguredSessionStoreAgentIds,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -130,14 +127,27 @@ function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
   store: Record<string, SessionEntry>,
 ): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
+  const configuredAgentIds = new Set(listConfiguredSessionStoreAgentIds(cfg));
+  const isConfiguredSessionKey = (key: string | undefined) => {
+    const normalizedKey = normalizeOptionalString(key);
+    if (!normalizedKey) {
+      return false;
+    }
+    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: normalizedKey });
+    const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
+    return configuredAgentIds.has(normalizeAgentId(agentId));
+  };
   return Object.fromEntries(
-    Object.entries(store).filter(([key]) => {
+    Object.entries(store).filter(([key, entry]) => {
       if (key === "global" || key === "unknown") {
         return true;
       }
-      const parsed = parseAgentSessionKey(key);
-      return parsed ? configuredAgentIds.has(normalizeAgentId(parsed.agentId)) : false;
+      if (isConfiguredSessionKey(key)) {
+        return true;
+      }
+      return (
+        isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
+      );
     }),
   );
 }
@@ -420,6 +430,33 @@ function cloneCheckpointSessionEntry(params: {
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
+  };
+}
+
+function resolveCheckpointForkSource(
+  checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
+): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
+  if (preCompactionFile) {
+    return {
+      sourceFile: preCompactionFile,
+      sourceLeafId: checkpoint.preCompaction.leafId,
+      totalTokens: checkpoint.tokensBefore,
+    };
+  }
+  const postCompactionFile = checkpoint.postCompaction.sessionFile?.trim();
+  if (!postCompactionFile) {
+    return null;
+  }
+  const postCompactionLeafId =
+    checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+  if (!postCompactionLeafId) {
+    return null;
+  }
+  return {
+    sourceFile: postCompactionFile,
+    sourceLeafId: postCompactionLeafId,
+    totalTokens: checkpoint.tokensAfter,
   };
 }
 
@@ -889,7 +926,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
               agentId: p.agentId,
-              configuredAgentsOnly,
             }),
           {
             config: cfg,
@@ -1546,7 +1582,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint?.preCompaction.sessionFile) {
+    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
+    if (!checkpoint || !forkSource) {
       respond(
         false,
         undefined,
@@ -1555,8 +1592,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const branchedSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: checkpoint.preCompaction.sessionFile,
-      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+      sourceFile: forkSource.sourceFile,
+      sourceLeafId: forkSource.sourceLeafId,
+      sessionDir: path.dirname(forkSource.sourceFile),
     });
     if (!branchedSession?.sessionFile) {
       respond(
@@ -1574,7 +1612,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       nextSessionFile: branchedSession.sessionFile,
       label,
       parentSessionKey: canonicalKey,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: forkSource.totalTokens,
     });
 
     await updateSessionStore(target.storePath, (store) => {
@@ -1645,7 +1683,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint?.preCompaction.sessionFile) {
+    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
+    if (!checkpoint || !forkSource) {
       respond(
         false,
         undefined,
@@ -1668,8 +1707,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const restoredSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: checkpoint.preCompaction.sessionFile,
-      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+      sourceFile: forkSource.sourceFile,
+      sourceLeafId: forkSource.sourceLeafId,
+      sessionDir: path.dirname(forkSource.sourceFile),
     });
     if (!restoredSession?.sessionFile) {
       respond(
@@ -1683,7 +1723,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       currentEntry: entry,
       nextSessionId: restoredSession.sessionId,
       nextSessionFile: restoredSession.sessionFile,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: forkSource.totalTokens,
       preserveCompactionCheckpoints: true,
     });
 
@@ -2336,6 +2376,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           delete entryToUpdate.inputTokens;
           delete entryToUpdate.outputTokens;
+          delete entryToUpdate.contextBudgetStatus;
           if (
             typeof result.result?.tokensAfter === "number" &&
             Number.isFinite(result.result.tokensAfter)
@@ -2406,6 +2447,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       delete entryToUpdate.outputTokens;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
+      delete entryToUpdate.contextBudgetStatus;
       entryToUpdate.updatedAt = Date.now();
     });
 

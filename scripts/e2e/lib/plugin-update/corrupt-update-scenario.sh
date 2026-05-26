@@ -19,7 +19,7 @@ export OPENCLAW_NO_PROMPT=1
 
 baseline="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE:-openclaw@latest}"
 echo "Installing baseline OpenClaw package: $baseline"
-if ! npm install -g --prefix /tmp/npm-prefix --omit=optional "$baseline" >/tmp/openclaw-update-corrupt-baseline-install.log 2>&1; then
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$baseline" >/tmp/openclaw-update-corrupt-baseline-install.log 2>&1; then
   cat /tmp/openclaw-update-corrupt-baseline-install.log >&2 || true
   exit 1
 fi

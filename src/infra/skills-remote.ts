@@ -9,6 +9,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
@@ -94,6 +95,30 @@ function logRemoteBinProbeFailure(
     return;
   }
   log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
+}
+
+function logRemoteBinProbePreflightFailure(
+  nodeId: string,
+  err: unknown,
+  context?: { command?: string; timeoutMs?: number; requiredBinCount?: number },
+) {
+  const message = extractErrorMessage(err);
+  const label = describeNode(nodeId);
+  const details = [
+    context?.command ? `command=${context.command}` : undefined,
+    typeof context?.timeoutMs === "number" ? `timeoutMs=${context.timeoutMs}` : undefined,
+    typeof context?.requiredBinCount === "number"
+      ? `requiredBins=${context.requiredBinCount}`
+      : undefined,
+    `connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  log.info(
+    `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
+      message ?? "unknown"
+    }`,
+  );
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -252,7 +277,7 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
       ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
       : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
-      return parsed.bins.map((bin) => normalizeOptionalString(String(bin)) ?? "").filter(Boolean);
+      return normalizeStringEntries(parsed.bins);
     }
     if (parsed.bins && typeof parsed.bins === "object") {
       return Object.entries(parsed.bins)
@@ -345,6 +370,38 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const timeoutMs = params.timeoutMs ?? 15_000;
   const command = canWhich ? "system.which" : "system.run";
   const logContext = { command, timeoutMs, requiredBinCount: binsList.length };
+  const connectivityTimeoutMs = Math.min(timeoutMs, 2_000);
+  if (typeof remoteRegistry.checkConnectivity === "function") {
+    const preflightConnId = remoteRegistry.get(params.nodeId)?.connId;
+    const connectivity = await remoteRegistry.checkConnectivity(
+      params.nodeId,
+      connectivityTimeoutMs,
+    );
+    if (!connectivity.ok) {
+      const latestSession = remoteRegistry.get(params.nodeId);
+      if (preflightConnId && latestSession && latestSession.connId !== preflightConnId) {
+        await refreshRemoteNodeBinsUncoalesced({
+          nodeId: latestSession.nodeId,
+          platform: latestSession.platform,
+          deviceFamily: latestSession.deviceFamily,
+          commands: latestSession.commands,
+          cfg: params.cfg,
+          timeoutMs: params.timeoutMs,
+        });
+        return;
+      }
+      const cleared = clearRemoteNodeBins(params.nodeId);
+      logRemoteBinProbePreflightFailure(params.nodeId, connectivity.error.message, {
+        command: "websocket.ping",
+        timeoutMs: connectivityTimeoutMs,
+        requiredBinCount: binsList.length,
+      });
+      if (cleared) {
+        bumpSkillsSnapshotVersion({ reason: "remote-node" });
+      }
+      return;
+    }
+  }
   try {
     const res = await remoteRegistry.invoke(
       canWhich

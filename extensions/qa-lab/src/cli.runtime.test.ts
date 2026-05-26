@@ -76,6 +76,7 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
   runQaSuiteCommand,
@@ -778,6 +779,10 @@ describe("qa cli runtime", () => {
         "personal-redaction-no-secret-leak",
         "personal-tool-safety-followthrough",
         "personal-approval-denial-stop",
+        "personal-task-followthrough-status",
+        "personal-share-safe-diagnostics-artifact",
+        "personal-no-fake-progress",
+        "personal-failure-recovery",
       ],
     });
   });
@@ -794,6 +799,12 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "channel-chat-baseline",
         "runtime-tool-bash",
+        "auth-profile-codex-mixed-profiles",
+        "auth-profile-doctor-migration-safety",
+        "codex-plugin-cold-install",
+        "codex-plugin-install-race",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
         "runtime-first-hour-20-turn",
         "runtime-tool-apply-patch",
         "runtime-tool-edit",
@@ -848,7 +859,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         pack: "personal-admin",
       }),
-    ).rejects.toThrow('--pack must be one of personal-agent, got "personal-admin"');
+    ).rejects.toThrow('--pack must be one of personal-agent, observability, got "personal-admin"');
   });
 
   it("rejects unknown suite CLI auth modes", async () => {
@@ -965,6 +976,108 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("writes a runtime-axis token-efficiency report when requested", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-token-efficiency-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "runtime-tool-fs-read",
+              status: "pass",
+              steps: [],
+              runtimeParity: {
+                scenarioId: "runtime-tool-fs-read",
+                drift: "none",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "fs.read", argsHash: "a", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 72_000, outputTokens: 381, totalTokens: 72_381 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: Array.from({ length: 40 }, (_, index) => ({
+                      tool: "fs.read",
+                      argsHash: `a-${index}`,
+                      resultHash: `r-${index}`,
+                    })),
+                    finalText: "done",
+                    usage: { inputTokens: 118_000, outputTokens: 1_489, totalTokens: 119_489 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          counts: { total: 1, passed: 1, failed: 0 },
+          run: {
+            providerMode: "live-frontier",
+            primaryModel: "openai/gpt-5.5",
+            runtimePair: ["pi", "codex"],
+          },
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        runtimeAxis: true,
+        summary: "runtime-summary.json",
+        tokenEfficiency: true,
+      });
+
+      expect(process.exitCode).toBe(1);
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity verdict: pass"),
+      );
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime token efficiency report:"),
+      );
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime token efficiency verdict: fail"),
+      );
+      const [artifactDir] = await fs.readdir(path.join(repoRoot, ".artifacts", "qa-e2e"));
+      const tokenSummary = JSON.parse(
+        await fs.readFile(
+          path.join(
+            repoRoot,
+            ".artifacts",
+            "qa-e2e",
+            artifactDir ?? "",
+            "qa-runtime-token-efficiency-summary.json",
+          ),
+          "utf8",
+        ),
+      ) as { aggregate?: { flaggedScenarios?: string[] } };
+      expect(tokenSummary.aggregate?.flaggedScenarios).toEqual(["runtime-tool-fs-read"]);
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects token-efficiency without runtime-axis mode", async () => {
+    await expect(
+      runQaParityReportCommand({
+        repoRoot: process.cwd(),
+        candidateSummary: "candidate.json",
+        baselineSummary: "baseline.json",
+        tokenEfficiency: true,
+      }),
+    ).rejects.toThrow("--token-efficiency requires --runtime-axis.");
+  });
+
   it("prints a markdown coverage report from scenario metadata", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd() });
 
@@ -972,11 +1085,129 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "memory.recall");
   });
 
+  it("prints a focused scenario match report from coverage metadata", async () => {
+    await runQaCoverageReportCommand({
+      repoRoot: process.cwd(),
+      match: ["image roundtrip"],
+    });
+
+    expectWriteContains(stdoutWrite, "# QA Scenario Matches");
+    expectWriteContains(stdoutWrite, "image-generation-roundtrip");
+    expectWriteContains(stdoutWrite, "--scenario image-generation-roundtrip");
+    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("memory-recall");
+  });
+
+  it("rejects scenario match queries for tool coverage reports", async () => {
+    await expect(
+      runQaCoverageReportCommand({
+        repoRoot: process.cwd(),
+        tools: true,
+        match: ["runtime"],
+      }),
+    ).rejects.toThrow("--match cannot be combined with --tools.");
+  });
+
   it("prints a markdown tool coverage report from runtime tool fixtures", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd(), tools: true });
 
     expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
     expectWriteContains(stdoutWrite, "codex-native-workspace");
+  });
+
+  it("writes a curated mock JSONL replay report and summary", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-jsonl-replay-cli-"));
+    try {
+      await runQaJsonlReplayCommand({
+        repoRoot,
+        transcripts: path.resolve("qa/scenarios/jsonl-replay"),
+        outputDir: "jsonl-output",
+        runtimePair: "pi,codex",
+      });
+
+      const report = await fs.readFile(
+        path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-report.md"),
+        "utf8",
+      );
+      const summary = JSON.parse(
+        await fs.readFile(
+          path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json"),
+          "utf8",
+        ),
+      ) as { transcripts?: Array<{ userTurnCount?: number }> };
+
+      expect(report).toContain("# OpenClaw JSONL Replay Report - pi vs codex");
+      expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
+      expect(summary.transcripts).toHaveLength(7);
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps JSONL replay mock-only until real runtime cell replay is wired", async () => {
+    await expect(
+      runQaJsonlReplayCommand({
+        repoRoot: process.cwd(),
+        providerMode: "live-frontier",
+      }),
+    ).rejects.toThrow("qa jsonl-replay currently supports mock-openai curated fixtures only.");
+  });
+
+  it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
+    const priorExitCode = process.exitCode;
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-tool-coverage-"));
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "runtime-tool-web-search",
+              status: "fail",
+              runtimeParity: {
+                scenarioId: "runtime-tool-web-search",
+                drift: "tool-call-shape",
+                driftDetails: "Codex emitted no web_search call",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: "",
+                    toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                    finalText: "",
+                    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    wallClockMs: 1,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: "",
+                    toolCalls: [],
+                    finalText: "",
+                    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                    wallClockMs: 1,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          run: { runtimePair: ["pi", "codex"] },
+        }),
+        "utf8",
+      );
+
+      await runQaCoverageReportCommand({
+        repoRoot,
+        tools: true,
+        summary: "runtime-summary.json",
+      });
+
+      expect(process.exitCode).toBe(1);
+      expectWriteContains(stdoutWrite, "- Verdict: fail");
+      expectWriteContains(stdoutWrite, "web-search missing codex tool call web_search");
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves character eval paths and passes model refs through", async () => {

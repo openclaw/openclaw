@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
   collectDoctorPreviewWarnings,
   collectVisibleReplyToolPolicyWarnings,
@@ -25,6 +29,8 @@ const manifestState = vi.hoisted(
 const staleOAuthShadowState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
+
+const tempRoots = new Set<string>();
 
 vi.mock("../channel-capabilities.js", () => {
   const fallback = {
@@ -215,6 +221,43 @@ describe("doctor preview warnings", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(async () => {
+    for (const root of tempRoots) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
+  });
+
+  it("routes personal Codex asset notices to info instead of warnings", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preview-codex-assets-"));
+    tempRoots.add(root);
+    const codexHome = path.join(root, ".codex");
+    await fs.mkdir(path.join(root, ".agents", "skills", "agent-helper"), { recursive: true });
+    await fs.writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"), "");
+
+    const notes = await collectDoctorPreviewNotes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "codex",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: { CODEX_HOME: codexHome, HOME: root },
+    });
+
+    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets were found");
+    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets were found");
   });
 
   it("collects provider and shared preview warnings", async () => {
@@ -435,7 +478,7 @@ describe("doctor preview warnings", () => {
     expect(warnings.join("\n")).not.toContain("stale plugin reference");
   });
 
-  it("warns softly when default group visible replies need an unavailable message tool", () => {
+  it("does not warn when default group visible replies are automatic", () => {
     const warnings = collectVisibleReplyToolPolicyWarnings({
       channels: {
         slack: {},
@@ -445,12 +488,7 @@ describe("doctor preview warnings", () => {
       },
     });
 
-    const warning = expectSingleWarningContaining(
-      warnings,
-      'messages.groupChat.visibleReplies defaults to "message_tool"',
-    );
-    expect(warning).toContain("message tool is unavailable");
-    expect(warning).toContain("falls back to automatic group/channel replies");
+    expect(warnings).toStrictEqual([]);
   });
 
   it("warns strongly when explicit group visible replies require an unavailable message tool", () => {
@@ -491,10 +529,15 @@ describe("doctor preview warnings", () => {
         discord: {},
         telegram: {},
       },
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
       tools: {
         profile: "coding" as const,
       },
-    };
+    } satisfies OpenClawConfig;
 
     expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);
@@ -517,6 +560,11 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
       tools: {
         profile: "coding" as const,
         byProvider: {
@@ -525,10 +573,10 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expectWarningsContaining(collectVisibleReplyToolPolicyWarnings(cfg), [
-      'messages.groupChat.visibleReplies defaults to "message_tool"',
+      'messages.groupChat.visibleReplies is set to "message_tool"',
     ]);
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toEqual([
       '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
@@ -552,6 +600,11 @@ describe("doctor preview warnings", () => {
       channels: {
         discord: {},
       },
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
       tools: {
         profile: "coding" as const,
         byProvider: {
@@ -560,7 +613,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
     expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);

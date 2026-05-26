@@ -6,6 +6,7 @@ import {
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
@@ -64,10 +65,6 @@ function createGeminiToolDefinition(
       return await executeGeminiSearch(args, searchConfig, context);
     },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveGoogleModelProviderConfig(
@@ -143,8 +140,9 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
-export const __testing = {
+export const testing = {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
   resolveGeminiModel,
 } as const;
+export { testing as __testing };

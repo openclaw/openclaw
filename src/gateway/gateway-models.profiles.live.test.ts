@@ -14,6 +14,7 @@ import {
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -54,7 +55,6 @@ import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visi
 import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
@@ -87,13 +87,14 @@ const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
 );
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
+const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
 const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-flash-lite",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
   "openai/gpt-5.4-pro",
@@ -103,7 +104,7 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
@@ -243,12 +244,61 @@ function resolveGatewayLiveModelTimeoutMs(
   return Math.max(stepTimeoutMs, requested);
 }
 
+function resolveGatewayLiveTranscriptTimeoutMs(
+  stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  return Math.max(stepTimeoutMs, modelTimeoutMs);
+}
+
 function isGatewayLiveProbeTimeout(error: string): boolean {
   return /probe timeout after \d+ms/i.test(error);
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
   return /model timeout after \d+ms/i.test(error);
+}
+
+function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
+  label: string;
+  skippedCount: number;
+  timeoutSkippedCount: number;
+  total: number;
+}): void {
+  if (
+    params.total === 0 ||
+    params.skippedCount !== params.total ||
+    params.timeoutSkippedCount === 0
+  ) {
+    return;
+  }
+  throw new Error(
+    `[${params.label}] skipped all ${params.total} live model(s) after ${params.timeoutSkippedCount} timeout skip(s); increase the live gateway timeout or fix the timeout source instead of treating this as missing profile coverage.`,
+  );
+}
+
+function formatGatewayLiveFilterSet(filter: ReadonlySet<string> | null): string {
+  if (!filter || filter.size === 0) {
+    return "all";
+  }
+  return [...filter].toSorted((left, right) => left.localeCompare(right)).join(",");
+}
+
+function assertGatewayLiveSelectedSomeModels(params: {
+  label: string;
+  modelFilter: ReadonlySet<string> | null;
+  providerFilter: ReadonlySet<string> | null;
+  total: number;
+  useExplicit: boolean;
+  wantedCount: number;
+}): void {
+  if (params.wantedCount > 0 || (!params.modelFilter && !params.providerFilter)) {
+    return;
+  }
+  const mode = params.useExplicit ? "explicit" : "high-signal";
+  throw new Error(
+    `[${params.label}] selected no ${mode} live models for providers=${formatGatewayLiveFilterSet(params.providerFilter)} models=${formatGatewayLiveFilterSet(params.modelFilter)} from ${params.total} registry model(s); update the live model selection or pass explicit live model refs.`,
+  );
 }
 
 async function withGatewayLiveTimeout<T>(params: {
@@ -511,7 +561,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite",
       ),
     ).toBe("Visible");
     expect(
@@ -617,6 +667,68 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
 
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
+  });
+});
+
+describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
+  it("uses the model budget for transcript waits", () => {
+    expect(resolveGatewayLiveTranscriptTimeoutMs(90_000, 180_000)).toBe(180_000);
+  });
+
+  it("never goes below the probe timeout", () => {
+    expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);
+  });
+});
+
+describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
+  it("allows all-skip runs when no timeout skip was involved", () => {
+    expect(() =>
+      assertGatewayLiveDidNotSkipAllDueToTimeout({
+        label: "all-models",
+        skippedCount: 2,
+        timeoutSkippedCount: 0,
+        total: 2,
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails all-skip runs when timeout skips consumed the selected coverage", () => {
+    expect(() =>
+      assertGatewayLiveDidNotSkipAllDueToTimeout({
+        label: "all-models",
+        skippedCount: 1,
+        timeoutSkippedCount: 1,
+        total: 1,
+      }),
+    ).toThrow(/skipped all 1 live model/);
+  });
+});
+
+describe("assertGatewayLiveSelectedSomeModels", () => {
+  it("allows unfiltered sweeps with no high-signal models", () => {
+    expect(() =>
+      assertGatewayLiveSelectedSomeModels({
+        label: "all-models",
+        modelFilter: null,
+        providerFilter: null,
+        total: 0,
+        useExplicit: false,
+        wantedCount: 0,
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails filtered sweeps that select no models", () => {
+    expect(() =>
+      assertGatewayLiveSelectedSomeModels({
+        label: "all-models",
+        modelFilter: null,
+        providerFilter: new Set(["openai"]),
+        total: 42,
+        useExplicit: false,
+        wantedCount: 0,
+      }),
+    ).toThrow(/selected no high-signal live models/);
   });
 });
 
@@ -819,6 +931,19 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
         requestedLevel: "low",
       }),
     ).toBe("off");
+  });
+});
+
+describe("buildLiveGatewayConfig", () => {
+  it("pins selected live gateway models to the Pi runtime", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {},
+      candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
+    });
+
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
+      agentRuntime: { id: "pi" },
+    });
   });
 });
 
@@ -1086,7 +1211,7 @@ async function runAnthropicRefusalProbe(params: {
 function randomImageProbeCode(len = 6): string {
   // Chosen to avoid common OCR confusions in our 5x7 bitmap font.
   // Notably: 0↔8, B↔8, 6↔9, 3↔B, D↔0.
-  // Must stay within the glyph set in `src/gateway/live-image-probe.ts`.
+  // Must stay within the glyph set in `test/helpers/live-image-probe.ts`.
   const alphabet = "24567ACEF";
   const bytes = randomBytes(len);
   let out = "";
@@ -1353,11 +1478,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile?.type).toBe("oauth");
-      expect(sanitized.profiles.codexProfile?.provider).toBe("openai-codex");
-      expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
-      expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
-      expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
+      expect(sanitized.profiles.codexProfile).toBeUndefined();
+      expect(sanitized.order).toBeUndefined();
+      expect(sanitized.lastGood).toBeUndefined();
+      expect(sanitized.usageStats).toBeUndefined();
     } finally {
       if (previousOpenAiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -1427,11 +1551,15 @@ async function waitForSessionAssistantText(params: {
   baselineAssistantCount: number;
   context: string;
   modelKey?: string;
+  timeoutLabel?: "probe" | "model";
+  timeoutMs?: number;
 }) {
   const startedAt = Date.now();
   let lastHeartbeatAt = startedAt;
   let delayMs = 50;
-  while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
+  const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
+  const timeoutLabel = params.timeoutLabel ?? "model";
+  while (Date.now() - startedAt < timeoutMs) {
     const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     if (assistantTexts.length > params.baselineAssistantCount) {
       const freshText = assistantTexts
@@ -1451,7 +1579,7 @@ async function waitForSessionAssistantText(params: {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     delayMs = Math.min(delayMs * 2, 250);
   }
-  throw new Error(`probe timeout after ${GATEWAY_LIVE_PROBE_TIMEOUT_MS}ms (${params.context})`);
+  throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
 }
 
 async function requestGatewayAgentText(params: {
@@ -1490,6 +1618,8 @@ async function requestGatewayAgentText(params: {
     baselineAssistantCount,
     context: `${params.context}: transcript-final`,
     modelKey: params.modelKey,
+    timeoutLabel: "model",
+    timeoutMs: GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS,
   });
 }
 
@@ -1770,7 +1900,15 @@ function buildLiveGatewayConfig(params: {
         // Live tests should avoid Docker sandboxing so tool probes can
         // operate on the temporary probe files we create in the host workspace.
         sandbox: { mode: "off" },
-        models: Object.fromEntries(params.candidates.map((m) => [`${m.provider}/${m.id}`, {}])),
+        // This suite validates direct provider/API-key gateway behavior. OpenAI
+        // agent models otherwise use the implicit Codex runtime, which tests a
+        // different auth/runtime path and can hang until the model timeout.
+        models: Object.fromEntries(
+          params.candidates.map((m) => [
+            `${m.provider}/${m.id}`,
+            { agentRuntime: { id: "pi" as const } },
+          ]),
+        ),
       },
     },
     models:
@@ -1990,7 +2128,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
     );
     logProgress(
-      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s`,
+      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
     );
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {
@@ -1999,6 +2137,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     }
     const failures: Array<{ model: string; error: string }> = [];
     let skippedCount = 0;
+    let timeoutSkippedCount = 0;
     const total = params.candidates.length;
 
     for (const [index, model] of params.candidates.entries()) {
@@ -2504,11 +2643,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
           if (isGatewayLiveProbeTimeout(message)) {
             skippedCount += 1;
+            timeoutSkippedCount += 1;
             logProgress(`${progressLabel}: skip (probe timeout)`);
             break;
           }
           if (isGatewayLiveModelTimeout(message)) {
             skippedCount += 1;
+            timeoutSkippedCount += 1;
             logProgress(`${progressLabel}: skip (model timeout)`);
             break;
           }
@@ -2591,7 +2732,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       );
     }
     if (skippedCount === total) {
-      logProgress(`[${params.label}] skipped all models (missing profiles)`);
+      assertGatewayLiveDidNotSkipAllDueToTimeout({
+        label: params.label,
+        skippedCount,
+        timeoutSkippedCount,
+        total,
+      });
+      logProgress(`[${params.label}] skipped all models (no runnable profiles or provider drift)`);
     }
   } finally {
     clearRuntimeConfigSnapshot();
@@ -2735,6 +2882,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               );
         }
         logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
+        assertGatewayLiveSelectedSomeModels({
+          label: "all-models",
+          modelFilter: filter,
+          providerFilter: PROVIDERS,
+          total: all.length,
+          useExplicit,
+          wantedCount: wanted.length,
+        });
 
         const candidates: Array<Model<Api>> = [];
         const skipped: Array<{ model: string; error: string }> = [];

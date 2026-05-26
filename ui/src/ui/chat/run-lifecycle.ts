@@ -1,4 +1,5 @@
 import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionRunStatus, SessionsListResult } from "../types.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
@@ -40,6 +41,7 @@ type ReconcileOptions = {
   clearToolStream?: boolean;
   clearSideResultTerminalRuns?: boolean;
   clearRunStatus?: boolean;
+  publishRunStatus?: boolean;
 };
 
 function toSessionKey(value: string | null | undefined): string | null {
@@ -182,8 +184,10 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       occurredAt,
     };
     reconcileSessionRows(host, options, occurredAt);
-    host.chatRunStatus = status;
-    scheduleRunStatusClear(host, status);
+    if (options.publishRunStatus !== false) {
+      host.chatRunStatus = status;
+      scheduleRunStatusClear(host, status);
+    }
   } else if (options.clearRunStatus) {
     clearChatRunStatus(host);
   }
@@ -194,7 +198,10 @@ function currentSessionRow(host: RunLifecycleHost) {
   return host.sessionsResult?.sessions.find((row) => row.key === host.sessionKey);
 }
 
-export function reconcileChatRunFromCurrentSessionRow(host: RunLifecycleHost): boolean {
+export function reconcileChatRunFromCurrentSessionRow(
+  host: RunLifecycleHost,
+  options: { publishRunStatus?: boolean } = {},
+): boolean {
   if (!host.chatRunId && host.chatStream == null) {
     return false;
   }
@@ -202,7 +209,7 @@ export function reconcileChatRunFromCurrentSessionRow(host: RunLifecycleHost): b
   if (!row) {
     return false;
   }
-  if (row.hasActiveRun === true || row.status === "running") {
+  if (isSessionRunActive(row)) {
     return false;
   }
   const terminalStatus = row.status !== undefined;
@@ -216,6 +223,7 @@ export function reconcileChatRunFromCurrentSessionRow(host: RunLifecycleHost): b
     sessionKey: host.sessionKey,
     clearLocalRun: true,
     clearChatStream: true,
+    publishRunStatus: options.publishRunStatus,
   });
   return true;
 }

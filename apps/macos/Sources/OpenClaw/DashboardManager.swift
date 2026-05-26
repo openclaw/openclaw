@@ -115,9 +115,10 @@ final class DashboardManager {
 
     private func immediateDashboardConfig(mode: AppState.ConnectionMode) -> GatewayConnection.Config? {
         let root = OpenClawConfigFile.loadDict()
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         if mode == .remote,
-           GatewayRemoteConfig.resolveTransport(root: root) == .direct,
-           let url = GatewayRemoteConfig.resolveGatewayUrl(root: root)
+           resolution.transport == .direct,
+           let url = resolution.directURL
         {
             return (
                 url,

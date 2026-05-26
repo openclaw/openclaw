@@ -66,9 +66,27 @@ async function runQaParityReport(opts: {
   outputDir?: string;
   runtimeAxis?: boolean;
   summary?: string;
+  tokenEfficiency?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
+}
+
+async function runQaConfidenceReport(opts: {
+  repoRoot?: string;
+  manifest: string;
+  artifactRoot?: string;
+  outputDir?: string;
+  strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaConfidenceReportCommand(opts);
+}
+
+async function runQaConfidenceSelfTest(opts: { repoRoot?: string; outputDir?: string }) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaConfidenceSelfTestCommand(opts);
 }
 
 async function runQaCoverageReport(opts: {
@@ -77,9 +95,21 @@ async function runQaCoverageReport(opts: {
   json?: boolean;
   tools?: boolean;
   summary?: string;
+  match?: string[];
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCoverageReportCommand(opts);
+}
+
+async function runQaJsonlReplay(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaJsonlReplayCommand(opts);
 }
 
 async function runQaCharacterEval(opts: {
@@ -260,7 +290,10 @@ export function registerQaLabCli(program: Command) {
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
-    .option("--pack <id>", 'Scenario pack id; currently only "personal-agent" is supported')
+    .option(
+      "--pack <id>",
+      'Scenario pack id; currently "personal-agent" and "observability" are supported',
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--enable-plugin <id>",
@@ -353,6 +386,11 @@ export function registerQaLabCli(program: Command) {
     .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option("--runtime-axis", "Interpret --summary as a runtime-pair qa-suite-summary.json", false)
     .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
+    .option(
+      "--token-efficiency",
+      "Also write the runtime token-efficiency report for --runtime-axis summaries",
+      false,
+    )
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option(
       "--candidate-label <label>",
@@ -371,6 +409,7 @@ export function registerQaLabCli(program: Command) {
         outputDir?: string;
         runtimeAxis?: boolean;
         summary?: string;
+        tokenEfficiency?: boolean;
       }) => {
         await runQaParityReport(opts);
       },
@@ -383,6 +422,12 @@ export function registerQaLabCli(program: Command) {
     .option("--json", "Print JSON instead of Markdown", false)
     .option("--tools", "Print runtime tool fixture coverage instead of scenario coverage", false)
     .option("--summary <path>", "Runtime qa-suite-summary.json to overlay on --tools coverage")
+    .option(
+      "--match <query>",
+      "Search scenario metadata and print matching qa suite targets (repeatable)",
+      collectString,
+      [],
+    )
     .action(
       async (opts: {
         repoRoot?: string;
@@ -390,8 +435,73 @@ export function registerQaLabCli(program: Command) {
         json?: boolean;
         tools?: boolean;
         summary?: string;
+        match?: string[];
       }) => {
         await runQaCoverageReport(opts);
+      },
+    );
+
+  qa.command("confidence-report")
+    .description("Classify QA proof artifacts into a zero-unknown confidence report")
+    .requiredOption("--manifest <path>", "Confidence profile manifest JSON")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--artifact-root <path>", "Root directory for relative artifact paths", ".")
+    .option("--output-dir <path>", "Artifact directory for the confidence report")
+    .option(
+      "--strict-zero-unknowns",
+      "Fail unless every lane passes or has an explicit non-unknown verdict",
+      false,
+    )
+    .option(
+      "--strict-global-pass",
+      "Fail unless every lane passes with no blocked, missing, unknown, classified-fail, or unbackfilled skipped rows",
+      false,
+    )
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        manifest: string;
+        artifactRoot?: string;
+        outputDir?: string;
+        strictZeroUnknowns?: boolean;
+        strictGlobalPass?: boolean;
+      }) => {
+        await runQaConfidenceReport(opts);
+      },
+    );
+
+  qa.command("confidence-self-test")
+    .description("Write seeded negative-control canaries proving the confidence gate detects drift")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Artifact directory for the confidence self-test")
+    .action(async (opts: { repoRoot?: string; outputDir?: string }) => {
+      await runQaConfidenceSelfTest(opts);
+    });
+
+  qa.command("jsonl-replay")
+    .description("Replay curated JSONL transcripts through the runtime parity replay harness")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option(
+      "--transcripts <path>",
+      "Directory of curated JSONL transcripts",
+      "qa/scenarios/jsonl-replay",
+    )
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex", "pi,codex")
+    .option(
+      "--provider-mode <mode>",
+      `Provider mode (${formatQaProviderModeHelp()})`,
+      "mock-openai",
+    )
+    .option("--output-dir <path>", "Artifact directory for the JSONL replay report")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        transcripts?: string;
+        runtimePair?: string;
+        providerMode?: QaProviderModeInput;
+        outputDir?: string;
+      }) => {
+        await runQaJsonlReplay(opts);
       },
     );
 

@@ -78,8 +78,7 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 }));
 
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { __testing } from "./agents.commands.add.js";
-import { agentsAddCommand } from "./agents.js";
+import { agentsAddCommand, testing } from "./agents.commands.add.js";
 
 const runtime = createTestRuntime();
 
@@ -177,7 +176,7 @@ describe("agents add command", () => {
         "utf8",
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
         destAuthPath,
       });
@@ -222,7 +221,7 @@ describe("agents add command", () => {
         sourceAgentDir,
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
         destAuthPath,
       });
@@ -316,7 +315,7 @@ describe("agents add command", () => {
         "utf8",
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
         destAuthPath,
       });
@@ -340,7 +339,7 @@ describe("agents add command", () => {
 
   it("does not claim skipped OAuth profiles stay shared from a non-main source agent", () => {
     expect(
-      __testing.formatSkippedOAuthProfilesMessage({
+      testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "default-work",
         sourceIsInheritedMain: false,
       }),
@@ -348,7 +347,7 @@ describe("agents add command", () => {
       'OAuth profiles were not copied from "default-work"; sign in separately for this agent.',
     );
     expect(
-      __testing.formatSkippedOAuthProfilesMessage({
+      testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "main",
         sourceIsInheritedMain: true,
       }),

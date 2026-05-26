@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {
   startNodeAgentAudioBridge,
@@ -41,7 +42,7 @@ const chromeTransportDeps: {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
     chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
   },
@@ -313,7 +314,7 @@ function mergeBrowserNotes(
   }
   return {
     ...browser,
-    notes: [...new Set([...(browser.notes ?? []), ...notes])],
+    notes: uniqueStrings([...(browser.notes ?? []), ...notes]),
   };
 }
 
@@ -1062,3 +1063,4 @@ export async function launchChromeMeetOnNode(params: {
     browser: browserControl.browser ?? result.browser,
   };
 }
+export { testing as __testing };

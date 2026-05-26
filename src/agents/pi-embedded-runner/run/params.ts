@@ -70,13 +70,8 @@ export type RunEmbeddedPiAgentParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-  /** Whether the sender is an owner (required for owner-only tools). */
+  /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
-  /**
-   * Additional owner-only tools authorized by a server-side runtime grant.
-   * This must stay narrow; it does not make the sender an owner.
-   */
-  ownerOnlyToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -136,7 +131,7 @@ export type RunEmbeddedPiAgentParams = {
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
@@ -200,6 +195,11 @@ export type RunEmbeddedPiAgentParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  /**
+   * Emit lifecycle "finishing" when the model turn ends; the caller owns the
+   * final lifecycle "end" after durable post-turn maintenance completes.
+   */
+  deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
@@ -228,7 +228,11 @@ export type RunEmbeddedPiAgentParams = {
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
+  suppressAssistantErrorPersistence?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onAssistantErrorMessagePersisted?: (
+    message: Extract<AgentMessage, { role: "assistant" }>,
+  ) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must

@@ -13,9 +13,13 @@ import {
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
+  resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -114,7 +118,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -364,6 +368,8 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  const snapshotTimeoutMs =
+    normalizePositiveTimeoutMs(input.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -378,6 +384,7 @@ export async function executeSnapshotAction(params: {
     labels,
     urls,
     mode,
+    timeoutMs: snapshotTimeoutMs,
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
@@ -387,6 +394,7 @@ export async function executeSnapshotAction(params: {
           path: "/snapshot",
           profile,
           query,
+          timeoutMs: snapshotTimeoutMs,
         })) as Awaited<ReturnType<typeof browserSnapshot>>)
       : await browserToolActionDeps.browserSnapshot(baseUrl, {
           ...query,
@@ -463,6 +471,7 @@ export async function executeSnapshotAction(params: {
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
         details: safeDetails,
+        imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
     return {
@@ -602,3 +611,4 @@ export async function executeActAction(params: {
     throw err;
   }
 }
+export { testing as __testing };

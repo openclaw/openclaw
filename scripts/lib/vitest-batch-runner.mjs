@@ -1,29 +1,24 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { spawnPnpmRunner } from "../pnpm-runner.mjs";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, "../..");
-const pnpm = "pnpm";
+const scriptFile = fileURLToPath(import.meta.url);
+const scriptDir = path.dirname(scriptFile);
+const repoRoot = path.resolve(scriptDir, "../..");
 
 export async function runVitestBatch(params) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(
-      pnpm,
-      ["exec", "vitest", "run", "--config", params.config, ...params.targets, ...params.args],
-      {
-        cwd: repoRoot,
-        detached: shouldUseDetachedVitestProcessGroup(),
-        stdio: "inherit",
-        shell: process.platform === "win32",
-        env: params.env,
-      },
-    );
+    const child = spawnPnpmRunner({
+      cwd: repoRoot,
+      detached: shouldUseDetachedVitestProcessGroup(),
+      env: params.env,
+      pnpmArgs: buildVitestBatchPnpmArgs(params),
+      stdio: "inherit",
+    });
     const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
 
     child.on("error", (error) => {
@@ -39,6 +34,10 @@ export async function runVitestBatch(params) {
       resolve(code ?? 1);
     });
   });
+}
+
+export function buildVitestBatchPnpmArgs(params) {
+  return ["exec", "vitest", "run", "--config", params.config, ...params.args, ...params.targets];
 }
 
 export function isDirectScriptRun(metaUrl) {

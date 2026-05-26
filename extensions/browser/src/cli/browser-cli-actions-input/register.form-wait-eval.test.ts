@@ -64,4 +64,41 @@ describe("browser action input wait command", () => {
       | undefined;
     expect(options?.timeoutMs).toBeGreaterThan(21000);
   });
+
+  it("rejects unsupported load states before sending the wait request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "wait", "--load", "complete"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors.join("\n")).toContain("Invalid --load value: complete");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser action input evaluate command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("passes timeout-ms through to the evaluate action and outer request", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "30000"],
+      { from: "user" },
+    );
+
+    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+      | { body?: { timeoutMs?: number } }
+      | undefined;
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(request?.body?.timeoutMs).toBe(30000);
+    expect(options?.timeoutMs).toBeGreaterThan(30000);
+  });
 });

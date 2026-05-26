@@ -37,10 +37,12 @@ Capabilities are the public **native plugin** model inside OpenClaw. Every nativ
 | ---------------------- | ------------------------------------------------ | ------------------------------------ |
 | Text inference         | `api.registerProvider(...)`                      | `openai`, `anthropic`                |
 | CLI inference backend  | `api.registerCliBackend(...)`                    | `openai`, `anthropic`                |
+| Embeddings             | `api.registerEmbeddingProvider(...)`             | Provider-owned vector plugins        |
 | Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`            |
 | Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                             |
 | Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `openai`                             |
 | Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `openai`, `google`                   |
+| Meeting notes source   | `api.registerMeetingNotesSourceProvider(...)`    | `discord`, `meeting-notes`           |
 | Image generation       | `api.registerImageGenerationProvider(...)`       | `openai`, `google`, `fal`, `minimax` |
 | Music generation       | `api.registerMusicGenerationProvider(...)`       | `google`, `minimax`                  |
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | `qwen`                               |

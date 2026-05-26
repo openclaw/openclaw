@@ -41,6 +41,7 @@ import {
   resolveTelegramOutboundClientTimeoutFloorSeconds,
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
+import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -54,6 +55,19 @@ export function resolveTelegramScopedGroupConfig(
   chatId: string | number,
   messageThreadId?: number,
 ) {
+  const resolveTopicConfig = <T extends object>(
+    scopedConfig: { topics?: Record<string, T | undefined> } | undefined,
+  ): T | undefined => {
+    if (!scopedConfig || messageThreadId == null) {
+      return undefined;
+    }
+    const defaultConfig = scopedConfig.topics?.["*"];
+    const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
+    if (defaultConfig && exactConfig) {
+      return { ...defaultConfig, ...exactConfig };
+    }
+    return exactConfig ?? defaultConfig;
+  };
   const groups = telegramCfg.groups;
   const direct = telegramCfg.direct;
   const chatIdStr = String(chatId);
@@ -61,18 +75,12 @@ export function resolveTelegramScopedGroupConfig(
 
   if (isDm) {
     const groupConfig = direct?.[chatIdStr] ?? direct?.["*"];
-    const topicConfig =
-      groupConfig && messageThreadId != null
-        ? groupConfig.topics?.[String(messageThreadId)]
-        : undefined;
+    const topicConfig = resolveTopicConfig(groupConfig);
     return { groupConfig, topicConfig };
   }
 
   const groupConfig = groups?.[chatIdStr] ?? groups?.["*"];
-  const topicConfig =
-    groupConfig && messageThreadId != null
-      ? groupConfig.topics?.[String(messageThreadId)]
-      : undefined;
+  const topicConfig = resolveTopicConfig(groupConfig);
   return { groupConfig, topicConfig };
 }
 
@@ -215,34 +223,11 @@ export function createTelegramBotCore(
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
-  const MAX_RAW_UPDATE_STRING = 500;
-  const MAX_RAW_UPDATE_ARRAY = 20;
-  const stringifyUpdate = (update: unknown) => {
-    const seen = new WeakSet();
-    return JSON.stringify(update ?? null, (_key, value) => {
-      if (typeof value === "string" && value.length > MAX_RAW_UPDATE_STRING) {
-        return `${value.slice(0, MAX_RAW_UPDATE_STRING)}...`;
-      }
-      if (Array.isArray(value) && value.length > MAX_RAW_UPDATE_ARRAY) {
-        return [
-          ...value.slice(0, MAX_RAW_UPDATE_ARRAY),
-          `...(${value.length - MAX_RAW_UPDATE_ARRAY} more)`,
-        ];
-      }
-      if (value && typeof value === "object") {
-        if (seen.has(value)) {
-          return "[Circular]";
-        }
-        seen.add(value);
-      }
-      return value;
-    });
-  };
 
   bot.use(async (ctx, next) => {
     if (shouldLogVerbose()) {
       try {
-        const raw = stringifyUpdate(ctx.update);
+        const raw = stringifyTelegramRawUpdateForLog(ctx.update);
         const preview =
           raw.length > MAX_RAW_UPDATE_CHARS ? `${raw.slice(0, MAX_RAW_UPDATE_CHARS)}...` : raw;
         rawUpdateLogger.debug(`telegram update: ${preview}`);
@@ -394,6 +379,7 @@ export function createTelegramBotCore(
     groupAllowFrom,
     replyToMode,
     textLimit,
+    mediaMaxBytes,
     useAccessGroups,
     nativeEnabled,
     nativeSkillsEnabled,

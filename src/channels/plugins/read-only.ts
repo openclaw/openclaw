@@ -10,19 +10,19 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   channelPluginIdBelongsToManifest,
   resolveSetupChannelRegistration,
 } from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginDiagnostic } from "../../plugins/manifest-types.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { sortUniqueStrings, uniqueStrings } from "../../shared/string-normalization.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
 import {
@@ -248,14 +248,12 @@ function listManifestChannelAccountIds(cfg: OpenClawConfig, channelId: string): 
   const channelConfig = getChannelConfigRecord(cfg, channelId);
   const accounts = channelConfig.accounts;
   if (accounts && typeof accounts === "object" && !Array.isArray(accounts)) {
-    return [
-      ...new Set(
-        Object.keys(accounts)
-          .filter((accountId) => !isBlockedObjectKey(accountId))
-          .map((accountId) => normalizeAccountId(accountId))
-          .filter((accountId) => !isBlockedObjectKey(accountId)),
-      ),
-    ].toSorted((left, right) => left.localeCompare(right));
+    return sortUniqueStrings(
+      Object.keys(accounts)
+        .filter((accountId) => !isBlockedObjectKey(accountId))
+        .map((accountId) => normalizeAccountId(accountId))
+        .filter((accountId) => !isBlockedObjectKey(accountId)),
+    );
   }
   return hasExplicitChannelConfig({ config: cfg, channelId }) ? [DEFAULT_ACCOUNT_ID] : [];
 }
@@ -759,36 +757,25 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
-  const metadataSnapshot =
-    options.stateDir === undefined
-      ? getCurrentPluginMetadataSnapshot({
-          config: cfg,
-          env,
-          workspaceDir,
-        })
-      : undefined;
-  const manifestRecords =
-    metadataSnapshot?.plugins ??
-    loadPluginMetadataSnapshot({
-      config: cfg,
-      stateDir: options.stateDir,
-      workspaceDir,
-      env,
-    }).plugins;
+  const manifestRecords = resolvePluginMetadataSnapshot({
+    config: cfg,
+    stateDir: options.stateDir,
+    workspaceDir,
+    env,
+    allowWorkspaceScopedCurrent: true,
+  }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
-  const configuredChannelIds = [
-    ...new Set(
-      listConfiguredChannelIdsForReadOnlyScope({
-        config: cfg,
-        activationSourceConfig: options.activationSourceConfig ?? cfg,
-        workspaceDir,
-        env,
-        includePersistedAuthState: options.includePersistedAuthState,
-        manifestRecords,
-      }),
-    ),
-  ].filter(isSafeManifestChannelId);
+  const configuredChannelIds = uniqueStrings(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      activationSourceConfig: options.activationSourceConfig ?? cfg,
+      workspaceDir,
+      env,
+      includePersistedAuthState: options.includePersistedAuthState,
+      manifestRecords,
+    }),
+  ).filter(isSafeManifestChannelId);
   const byId = new Map<string, ChannelPlugin>();
   const loadFailures: ReadOnlyChannelPluginLoadFailure[] = [];
 

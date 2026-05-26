@@ -48,6 +48,8 @@ vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
+    ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   },
   installPluginFromClawHub,
 }));
@@ -760,11 +762,11 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(captured?.initialValue).toBe("clawhub");
   });
 
-  it("falls back from ClawHub to npm when the ClawHub package is unavailable", async () => {
+  it("falls back from ClawHub to npm when the ClawHub artifact is unavailable", async () => {
     installPluginFromClawHub.mockResolvedValueOnce({
       ok: false,
-      code: "package_not_found",
-      error: "Package not found on ClawHub.",
+      code: "artifact_unavailable",
+      error: "ClawHub artifact download is not available yet.",
     });
     installPluginFromNpmSpec.mockResolvedValueOnce({
       ok: true,
@@ -806,6 +808,49 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(npmCall.spec).toBe("@openclaw/demo-plugin@2026.5.2");
     expect(npmCall.expectedPluginId).toBe("demo-plugin");
     expect(result.installed).toBe(true);
+  });
+
+  it("does not fall back from ClawHub to non-OpenClaw npm packages", async () => {
+    const confirm = vi.fn(async () => true);
+    const runtimeError = vi.fn();
+    installPluginFromClawHub.mockResolvedValueOnce({
+      ok: false,
+      code: "artifact_download_unavailable",
+      error: "ClawHub ClawPack artifact is unavailable.",
+    });
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
+          npmSpec: "@someone-else/demo-plugin@2026.5.2",
+          defaultChoice: "clawhub",
+        },
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        confirm,
+        note: vi.fn(async () => {}),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: { error: runtimeError } as never,
+      promptInstall: false,
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeError).toHaveBeenCalledWith(
+      "Plugin install failed: ClawHub ClawPack artifact is unavailable.",
+    );
+    expect(result).toStrictEqual({
+      cfg: {},
+      installed: false,
+      pluginId: "demo-plugin",
+      status: "failed",
+    });
   });
 
   it("does not fall back from ClawHub to npm when ClawHub verification fails", async () => {

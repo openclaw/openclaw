@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
@@ -21,6 +22,10 @@ import {
   type JsonValue,
 } from "./app-server/protocol.js";
 import {
+  resolveCodexNativeExecutionBlock,
+  resolveCodexNativeSandboxBlock,
+} from "./app-server/sandbox-guard.js";
+import {
   clearCodexAppServerBinding,
   isCodexAppServerNativeAuthProfile,
   normalizeCodexAppServerBindingModelProvider,
@@ -29,6 +34,7 @@ import {
   type CodexAppServerAuthProfileLookup,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
+import { CODEX_NATIVE_PERSONALITY_NONE } from "./app-server/thread-lifecycle.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -52,6 +58,7 @@ export {
 
 type CodexConversationRunOptions = {
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
   timeoutMs?: number;
   resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
 };
@@ -160,6 +167,21 @@ export async function handleCodexConversationInboundClaim(
   if (!prompt) {
     return { handled: true };
   }
+  const nativeExecutionBlock =
+    data.kind === "codex-cli-node-session"
+      ? resolveCodexNativeSandboxBlock({
+          config: options.config,
+          sessionKey: event.sessionKey ?? ctx.sessionKey,
+          surface: "Codex CLI node conversation binding",
+        })
+      : resolveCodexNativeExecutionBlock({
+          config: options.config,
+          sessionKey: event.sessionKey ?? ctx.sessionKey,
+          surface: "Codex app-server conversation binding",
+        });
+  if (nativeExecutionBlock) {
+    return { handled: true, reply: { text: nativeExecutionBlock } };
+  }
   if (data.kind === "codex-cli-node-session") {
     const resume = options.resumeCodexCliSessionOnNode;
     if (!resume) {
@@ -260,6 +282,7 @@ async function attachExistingThread(params: {
       threadId: params.threadId,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
+      personality: CODEX_NATIVE_PERSONALITY_NONE,
       approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
       sandbox: params.sandbox ?? runtime.sandbox,
@@ -329,6 +352,7 @@ async function createThread(params: {
       cwd: params.workspaceDir,
       ...(params.model ? { model: params.model } : {}),
       ...(modelProvider ? { modelProvider } : {}),
+      personality: CODEX_NATIVE_PERSONALITY_NONE,
       approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
       approvalsReviewer: runtime.approvalsReviewer,
       sandbox: params.sandbox ?? runtime.sandbox,
@@ -446,6 +470,7 @@ async function runBoundTurn(params: {
           binding.cwd || params.data.workspaceDir,
         ),
         ...(binding.model ? { model: binding.model } : {}),
+        personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...((binding.serviceTier ?? runtime.serviceTier)
           ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
           : {}),
@@ -508,7 +533,11 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  return /\bthread not found:/iu.test(formatErrorMessage(error));
+  const message = formatErrorMessage(error);
+  return (
+    /\bthread not found:/iu.test(message) ||
+    /\bbound Codex conversation has no thread binding\b/u.test(message)
+  );
 }
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {

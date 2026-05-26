@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   getProviderEnvVars,
   listKnownProviderAuthEnvVarNames,
   listKnownSecretEnvVarNames,
@@ -103,7 +103,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
-    __testing.resetProviderEnvVarCachesForTests();
+    testing.resetProviderEnvVarCachesForTests();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", () => {
@@ -127,6 +127,13 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+  });
+
+  it("lets openai-codex bootstrap from Codex app-server API-key env", () => {
+    expect(resolveProviderAuthEnvVarCandidates()["openai-codex"]).toEqual([
+      "CODEX_API_KEY",
+      "OPENAI_API_KEY",
+    ]);
   });
 
   it("includes setup provider env vars without loading setup runtime", () => {

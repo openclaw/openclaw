@@ -633,6 +633,19 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
+  it("adds a WSL2 portproxy hint for empty HTTP CDP replies", () => {
+    const formatted = formatChromeCdpDiagnostic({
+      ok: false,
+      code: "http_unreachable",
+      cdpUrl: "http://172.30.144.1:9222",
+      message: "fetch failed: other side closed",
+      elapsedMs: 12,
+    });
+
+    expect(formatted).toContain("svchost/iphlpsvc owns the CDP port");
+    expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+  });
+
   it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
     // A direct WS endpoint like ws://host/devtools/browser/<uuid> is already
     // the handshake target — isChromeReachable must NOT hit /json/version.
@@ -851,6 +864,56 @@ describe("browser chrome helpers", () => {
     await stopChromeWithProc(proc, 1);
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+
+  it("stopOpenClawChrome releases the managed-proxy CDP bypass exactly once on a double stop", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const release = vi.fn();
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await stopOpenClawChrome(running, 10);
+    await stopOpenClawChrome(running, 10);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+      } as unknown as Response),
+    );
+    const proc = makeChromeTestProc();
+    const release = vi.fn();
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await stopOpenClawChrome(running, 1);
+    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stopOpenClawChrome swallows a throw from the bypass release callback", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const release = vi.fn(() => {
+      throw new Error("release blew up");
+    });
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await expect(stopOpenClawChrome(running, 10)).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
   });
 });
 

@@ -10,6 +10,7 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
+import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   createAsyncLock,
@@ -97,7 +98,13 @@ export type PairedDevice = {
 
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
-  "displayName" | "clientId" | "clientMode" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
+  | "displayName"
+  | "platform"
+  | "clientId"
+  | "clientMode"
+  | "remoteIp"
+  | "lastSeenAtMs"
+  | "lastSeenReason"
 >;
 
 export type DevicePairingList = {
@@ -431,24 +438,11 @@ function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | und
 }
 
 function preserveRoleScopedApprovalScopes(role: string, scopes: string[] | undefined): string[] {
-  if (!Array.isArray(scopes)) {
-    return [];
-  }
-  const out = new Set<string>();
-  for (const scope of scopes) {
-    const trimmed = scope.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const belongsToRole =
-      role === OPERATOR_ROLE
-        ? trimmed.startsWith(OPERATOR_SCOPE_PREFIX)
-        : !trimmed.startsWith(OPERATOR_SCOPE_PREFIX);
-    if (belongsToRole) {
-      out.add(trimmed);
-    }
-  }
-  return [...out];
+  return normalizeUniqueSingleOrTrimmedStringList(scopes).filter((scope) =>
+    role === OPERATOR_ROLE
+      ? scope.startsWith(OPERATOR_SCOPE_PREFIX)
+      : !scope.startsWith(OPERATOR_SCOPE_PREFIX),
+  );
 }
 
 function resolveApprovedTokenScopes(params: {
@@ -854,6 +848,9 @@ export async function updatePairedDeviceMetadata(
     const next = { ...existing };
     if ("displayName" in patch) {
       next.displayName = patch.displayName;
+    }
+    if ("platform" in patch) {
+      next.platform = patch.platform;
     }
     if ("clientId" in patch) {
       next.clientId = patch.clientId;

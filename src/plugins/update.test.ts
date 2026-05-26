@@ -59,7 +59,9 @@ vi.mock("./clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
     ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
+    ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
 }));
@@ -2291,6 +2293,226 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
+  it("falls back to npm for trusted official ClawHub artifact blocks", async () => {
+    const warnMessages: string[] = [];
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/discord",
+      version: "2026.5.12",
+    });
+    installPluginFromClawHubMock.mockResolvedValueOnce({
+      ok: false,
+      code: "artifact_unavailable",
+      error:
+        'ClawHub artifact download for "@openclaw/discord@2026.5.16-beta.5" is not available yet (ClawHub /api/v1/packages/%40openclaw%2Fdiscord/versions/2026.5.16-beta.5/artifact/download failed (403): Blocked: this package release has been flagged as malicious and cannot be downloaded.). Use "npm:@openclaw/discord@2026.5.16-beta.5" for launch installs while ClawHub artifact routing is being rolled out.',
+    });
+    installPluginFromNpmSpecMock.mockResolvedValueOnce(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/openclaw-plugins/discord",
+        version: "2026.5.16-beta.5",
+        npmResolution: {
+          name: "@openclaw/discord",
+          version: "2026.5.16-beta.5",
+          resolvedSpec: "@openclaw/discord@2026.5.16-beta.5",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "discord",
+        installPath,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/discord",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        spec: "clawhub:@openclaw/discord",
+      }),
+      pluginIds: ["discord"],
+      updateChannel: "beta",
+      disableOnFailure: true,
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:@openclaw/discord@beta");
+    expect(npmInstallCall()?.spec).toBe("@openclaw/discord@beta");
+    expect(npmInstallCall()?.expectedPluginId).toBe("discord");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.config.plugins?.entries?.discord?.enabled).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.discord, {
+      source: "npm",
+      spec: "@openclaw/discord",
+      installPath: "/tmp/openclaw-plugins/discord",
+      version: "2026.5.16-beta.5",
+    });
+    expect(result.config.plugins?.installs?.discord?.clawhubPackage).toBeUndefined();
+    expect(result.config.plugins?.installs?.discord?.clawhubUrl).toBeUndefined();
+    expect(result.config.plugins?.installs?.discord?.artifactKind).toBeUndefined();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "discord",
+        status: "updated",
+        currentVersion: "2026.5.12",
+        nextVersion: "2026.5.16-beta.5",
+        message:
+          "Updated discord: 2026.5.12 -> 2026.5.16-beta.5. (warning: official ClawHub artifact fallback used @openclaw/discord@beta).",
+      },
+    ]);
+    expect(warnMessages).toEqual([
+      'Plugin "discord" could not download official ClawHub artifact for clawhub:@openclaw/discord@beta; using npm @openclaw/discord@beta instead. Core update can still complete.',
+    ]);
+  });
+
+  it("uses the default npm spec when beta ClawHub falls back before an artifact block", async () => {
+    const warnMessages: string[] = [];
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/discord",
+      version: "2026.5.12",
+    });
+    installPluginFromClawHubMock
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "version_not_found",
+        error: "version not found: beta",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "artifact_unavailable",
+        error: "artifact unavailable",
+      });
+    installPluginFromNpmSpecMock.mockResolvedValueOnce(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "discord",
+        targetDir: "/tmp/openclaw-plugins/discord",
+        version: "2026.5.16",
+        npmResolution: {
+          name: "@openclaw/discord",
+          version: "2026.5.16",
+          resolvedSpec: "@openclaw/discord@2026.5.16",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "discord",
+        installPath,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/discord",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        spec: "clawhub:@openclaw/discord",
+      }),
+      pluginIds: ["discord"],
+      updateChannel: "beta",
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(clawHubInstallCall(0)?.spec).toBe("clawhub:@openclaw/discord@beta");
+    expect(clawHubInstallCall(1)?.spec).toBe("clawhub:@openclaw/discord");
+    expect(npmInstallCall()?.spec).toBe("@openclaw/discord");
+    expectRecordFields(result.config.plugins?.installs?.discord, {
+      source: "npm",
+      spec: "@openclaw/discord",
+      installPath: "/tmp/openclaw-plugins/discord",
+      version: "2026.5.16",
+    });
+    expect(result.outcomes[0]?.message).toBe(
+      "Updated discord: 2026.5.12 -> 2026.5.16. (warning: official ClawHub artifact fallback used @openclaw/discord).",
+    );
+    expect(warnMessages).toEqual([
+      'Plugin "discord" has no beta ClawHub release for clawhub:@openclaw/discord@beta; using clawhub:@openclaw/discord instead. Core update can still complete.',
+      'Plugin "discord" could not download official ClawHub artifact for clawhub:@openclaw/discord; using npm @openclaw/discord instead. Core update can still complete.',
+    ]);
+  });
+
+  it("reports npm dry-run versions for trusted official ClawHub artifact fallback", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/discord",
+      version: "2026.5.16-beta.5",
+    });
+    installPluginFromClawHubMock.mockResolvedValueOnce({
+      ok: false,
+      code: "artifact_unavailable",
+      error: "artifact unavailable",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/openclaw-plugins/discord",
+      extensions: [],
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: "2026.5.16-beta.5",
+        resolvedSpec: "@openclaw/discord@2026.5.16-beta.5",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "discord",
+        installPath,
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/discord",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        spec: "clawhub:@openclaw/discord",
+      }),
+      pluginIds: ["discord"],
+      updateChannel: "beta",
+      dryRun: true,
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/discord@beta");
+    expect(npmInstallCall()?.dryRun).toBe(true);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "discord",
+        status: "unchanged",
+        currentVersion: "2026.5.16-beta.5",
+        nextVersion: "2026.5.16-beta.5",
+        message:
+          "discord is up to date (2026.5.16-beta.5). (warning: official ClawHub artifact fallback would use @openclaw/discord@beta).",
+      },
+    ]);
+  });
+
+  it("does not fall back to trusted npm from custom ClawHub provenance", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/discord",
+      version: "2026.5.12",
+    });
+    installPluginFromClawHubMock.mockResolvedValueOnce({
+      ok: false,
+      code: "artifact_unavailable",
+      error: "artifact unavailable",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "discord",
+        installPath,
+        clawhubUrl: "https://custom-clawhub.example",
+        clawhubPackage: "@openclaw/discord",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        spec: "clawhub:@openclaw/discord",
+      }),
+      pluginIds: ["discord"],
+      updateChannel: "beta",
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "discord",
+        status: "error",
+        message:
+          "Failed to update discord: artifact unavailable (ClawHub clawhub:@openclaw/discord@beta).",
+      },
+    ]);
+  });
+
   it("preserves explicit ClawHub tags when updating on the beta channel", async () => {
     installPluginFromClawHubMock.mockResolvedValue(
       createSuccessfulClawHubUpdateResult({
@@ -3133,12 +3355,61 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 
-  it("marks official externalized ClawHub-to-npm fallbacks as trusted", async () => {
+  it("does not fall back from ClawHub to non-OpenClaw npm packages", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromClawHubMock.mockResolvedValue({
       ok: false,
       code: "package_not_found",
       error: "Package not found on ClawHub.",
+    });
+    const config: OpenClawConfig = {
+      channels: {
+        "legacy-chat": {
+          enabled: true,
+        },
+      },
+      plugins: {
+        load: { paths: [appBundledPluginRoot("legacy-chat")] },
+        installs: {
+          "legacy-chat": {
+            source: "path",
+            sourcePath: appBundledPluginRoot("legacy-chat"),
+            installPath: appBundledPluginRoot("legacy-chat"),
+          },
+        },
+      },
+    };
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
+          npmSpec: "@someone-else/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config,
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.summary.switchedToNpm).toStrictEqual([]);
+    expect(result.summary.warnings).toStrictEqual([]);
+    expect(result.summary.errors).toEqual([
+      "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+    ]);
+  });
+
+  it("falls back from official ClawHub artifact misses to trusted npm packages", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "artifact_download_unavailable",
+      error: "ClawHub ClawPack artifact is unavailable.",
     });
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({

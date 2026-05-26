@@ -64,6 +64,7 @@ const rootBundledPluginRuntimeDependencies = [
   "@grammyjs/transformer-throttler",
   "@homebridge/ciao",
   "@mozilla/readability",
+  "@silvia-odwyer/photon-node",
   "@slack/bolt",
   "@slack/types",
   "@slack/web-api",
@@ -125,7 +126,7 @@ const config = {
     "**/*.test-helpers.ts",
     "**/*.test-mocks.ts",
     "**/*.test-utils.ts",
-    "src/gateway/live-image-probe.ts",
+    "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
     "src/agents/claude-cli-runner.ts",
     "src/agents/pi-auth-json.ts",
@@ -159,7 +160,12 @@ const config = {
       ],
     },
     ui: {
-      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
+      entry: [
+        "index.html!",
+        "src/main.ts!",
+        "vite.config.ts!",
+        "vitest*.ts!",
+      ],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {

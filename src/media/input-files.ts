@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
-import { convertHeicToJpeg } from "./image-ops.js";
+import { convertHeicToJpeg } from "./media-services.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
@@ -154,7 +154,7 @@ export function parseContentType(value: string | undefined): {
 
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
-  return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+  return new Set(input.flatMap((value) => normalizeMimeType(value) ?? []));
 }
 
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {

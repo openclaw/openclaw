@@ -55,7 +55,7 @@ const transcodeAudioBufferMock = vi.hoisted(() =>
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 );
 
-vi.mock("./audio-transcode.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBuffer: transcodeAudioBufferMock,
 }));
 
@@ -107,7 +107,7 @@ vi.mock("../api.js", async () => {
 });
 
 const {
-  _test,
+  testApi,
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
@@ -233,11 +233,11 @@ describe("speech-core native voice-note routing", () => {
 
   it("resolves voice delivery support from channel capabilities", () => {
     for (const channel of nativeVoiceNoteChannels) {
-      expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
-      expect(_test.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(channel)).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
     }
-    expect(_test.supportsNativeVoiceNoteTts("slack")).toBe(false);
-    expect(_test.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
+    expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
   });
 
   it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
@@ -397,10 +397,52 @@ describe("speech-core native voice-note routing", () => {
     expect(providerConfig.apiKey).toBe("resolved-minimax-key");
   });
 
+  it("uses provider default TTS timeout when the call and config omit timeoutMs", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
+
+    const result = await synthesizeSpeech({
+      text: "Use provider timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
+    expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("keeps explicit TTS config timeout ahead of provider default timeout", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
+
+    await synthesizeSpeech({
+      text: "Use configured timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 45_000,
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    const request = requireFirstSynthesisRequest("configured timeout synthesis request");
+    expect(request.timeoutMs).toBe(45_000);
+  });
+
   it.each(["feishu", "whatsapp"] as const)(
     "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
     async (channel) => {
-      expect(_test.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
+      expect(testApi.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
       await expectTtsPayloadResult({
         channel,
         prefsName: `openclaw-speech-core-tts-${channel}-mp3-test`,

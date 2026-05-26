@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString as normalizeString } from "../../../shared/string-coerce.js";
 
 export type CodexNativeAssetHit = {
   kind: "skill" | "plugin" | "config" | "hooks";
@@ -12,14 +14,6 @@ export type CodexNativeAssetHit = {
 
 const MAX_SCAN_DEPTH = 6;
 const MAX_DISCOVERED_DIRS = 2000;
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
 
 function resolveUserHome(env: NodeJS.ProcessEnv): string {
   return env.HOME?.trim() || os.homedir();
@@ -181,7 +175,7 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
-export async function collectCodexNativeAssetWarnings(params: {
+export async function collectCodexNativeAssetInfoNotes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
@@ -201,7 +195,7 @@ export async function collectCodexNativeAssetWarnings(params: {
       "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
       `- Sources: ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)} (${counts.join(", ")}).`,
       "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
-      "- Run `openclaw migrate codex --dry-run` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+      "- If the Codex plugin is not installed, run `openclaw plugins install npm:@openclaw/codex` first. Then run `openclaw migrate plan codex` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
     ].join("\n"),
   ];
 }

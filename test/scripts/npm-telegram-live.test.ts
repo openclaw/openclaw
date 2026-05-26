@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
+import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
@@ -40,9 +40,17 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(installRunStart).toBeGreaterThanOrEqual(0);
     expect(installRunEnd).toBeGreaterThan(installRunStart);
+    expect(installRun).toContain(
+      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+    );
+    expect(installRun).toContain(
+      'timeout --foreground --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
+    expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
+    expect(installRun).not.toContain("run_logged docker run --rm");
     expect(script).toContain("run_logged docker_e2e_run_with_harness");
     expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
@@ -103,13 +111,13 @@ describe("package Telegram live Docker E2E", () => {
 
   it("lets npm-specific credential aliases override shared QA env", () => {
     expect(
-      __testing.resolveCredentialSource({
+      testing.resolveCredentialSource({
         OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
         OPENCLAW_QA_CREDENTIAL_SOURCE: "env",
       }),
     ).toBe("convex");
     expect(
-      __testing.resolveCredentialRole({
+      testing.resolveCredentialRole({
         OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: "ci",
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),
