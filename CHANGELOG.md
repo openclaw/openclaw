@@ -21,7 +21,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Plugin SDK: preserve string-const `anyOf`/`oneOf` unions as a flat string `enum` when normalizing tool schemas for the DeepSeek family so Typebox `Type.Union([Type.Literal(...)])` parameters keep every allowed literal instead of collapsing to the first const. (#86468)
 - Update: report the primary malformed `openclaw.extensions` payload error without adding a duplicate missing-main diagnostic. (#86596) Thanks @ferminquant.
 - Control UI: keep host-local Markdown file paths inert while preserving app-relative links. (#86620) Thanks @BryanTegomoh.
 - Gateway: dampen repeated unauthenticated device-required probes per URL while preserving explicit-auth and paired recovery paths. (#86575) Thanks @ferminquant.
