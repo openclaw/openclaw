@@ -83,7 +83,15 @@ func TestCodexChatArgsUsesFreshExecWhenNoSession(t *testing.T) {
 
 func TestCodexResumeChatArgsUsesExecResumeJSON(t *testing.T) {
 	args := codexResumeChatArgs("sess-1", "next turn")
-	want := []string{"exec", "resume", "--json", "--skip-git-repo-check", "sess-1", "next turn"}
+	want := []string{
+		"exec",
+		"resume",
+		"--json",
+		"-c", `sandbox_mode="danger-full-access"`,
+		"--skip-git-repo-check",
+		"sess-1",
+		"next turn",
+	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("resume args mismatch:\n got: %v\nwant: %v", args, want)
 	}
@@ -98,7 +106,7 @@ func TestCodexResumeChatArgsUsesExecResumeJSON(t *testing.T) {
 func TestCodexResumeChatArgsForbidUnsupportedFlags(t *testing.T) {
 	args := codexResumeChatArgs("sess-1", "next turn")
 	joined := strings.Join(args, " ")
-	for _, forbidden := range []string{"--sandbox", "danger-full-access", "--dangerously-bypass-approvals-and-sandbox"} {
+	for _, forbidden := range []string{"--sandbox", "--dangerously-bypass-approvals-and-sandbox"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("resume args must not contain %q, got %v", forbidden, args)
 		}

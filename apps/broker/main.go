@@ -561,6 +561,7 @@ func codexResumeChatArgs(sessionID, promptArg string) []string {
 		"exec",
 		"resume",
 		"--json",
+		"-c", `sandbox_mode="danger-full-access"`,
 		"--skip-git-repo-check",
 		sessionID,
 		promptArg,
