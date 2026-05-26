@@ -221,3 +221,4 @@ private struct HomeToolbarActionButton: View {
         .accessibilityLabel(self.accessibilityLabel)
     }
 }
+

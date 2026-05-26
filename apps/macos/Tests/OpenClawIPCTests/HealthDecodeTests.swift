@@ -30,3 +30,4 @@ struct HealthDecodeTests {
         #expect(snap == nil)
     }
 }
+

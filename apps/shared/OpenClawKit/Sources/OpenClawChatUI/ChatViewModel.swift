@@ -1044,3 +1044,4 @@ public final class OpenClawChatViewModel {
         return trimmed
     }
 }
+
