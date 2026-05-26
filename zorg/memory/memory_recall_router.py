@@ -12,7 +12,7 @@ except ModuleNotFoundError as e:
     if e.name != "psycopg2":
         raise
     venv_python = BASE / ".venv-sqlmem" / "bin" / "python"
-    if venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
+    if venv_python.exists() and Path(sys.executable) != venv_python:
         os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
     raise SystemExit(
         "psycopg2 is missing. Run: "
