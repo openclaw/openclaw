@@ -16,7 +16,7 @@ import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
 
-type QaRunPreparedTurn = Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0];
+type QaDispatchTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0];
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -133,7 +133,7 @@ function createMockQaRuntime(params?: {
         },
       },
       inbound: {
-        async runPreparedReply(turn: QaRunPreparedTurn) {
+        async dispatchReply(turn: QaDispatchTurn) {
           await turn.recordInboundSession({
             storePath: turn.storePath,
             sessionKey:
@@ -148,7 +148,19 @@ function createMockQaRuntime(params?: {
             dispatched: true,
             ctxPayload: turn.ctxPayload,
             routeSessionKey: turn.routeSessionKey,
-            dispatchResult: await turn.runDispatch(),
+            dispatchResult: await turn.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: turn.ctxPayload,
+              cfg: turn.cfg,
+              dispatcherOptions: {
+                ...turn.dispatcherOptions,
+                deliver: async (...args: Parameters<typeof turn.delivery.deliver>) => {
+                  await turn.delivery.deliver(...args);
+                },
+                onError: turn.delivery.onError,
+              },
+              replyOptions: turn.replyOptions,
+              replyResolver: turn.replyResolver,
+            }),
           };
         },
       },

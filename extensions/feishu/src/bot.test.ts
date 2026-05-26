@@ -219,9 +219,6 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPreparedReply: vi.fn(async (params) => ({
-          dispatchResult: await params.runDispatch(),
-        })),
       },
       ...overrides.channel,
     },

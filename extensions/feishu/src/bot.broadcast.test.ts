@@ -149,26 +149,6 @@ describe("broadcast dispatch", () => {
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPreparedReply: vi.fn(
-          async (turn: Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]) => {
-            await turn.recordInboundSession({
-              storePath: turn.storePath,
-              sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-              ctx: turn.ctxPayload,
-              groupResolution: turn.record?.groupResolution,
-              createIfMissing: turn.record?.createIfMissing,
-              updateLastRoute: turn.record?.updateLastRoute,
-              onRecordError: turn.record?.onRecordError ?? (() => undefined),
-            });
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: turn.ctxPayload,
-              routeSessionKey: turn.routeSessionKey,
-              dispatchResult: await turn.runDispatch(),
-            };
-          },
-        ),
       },
       pairing: {
         readAllowFromStore: vi.fn().mockResolvedValue([]),
