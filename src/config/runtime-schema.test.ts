@@ -38,6 +38,10 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => ({
     manifestRegistry: mockLoadPluginManifestRegistry(...args),
   }),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    mockGetCurrentPluginMetadataSnapshot(...args) ?? {
+      manifestRegistry: mockLoadPluginManifestRegistry(...args),
+    },
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
@@ -165,6 +169,16 @@ async function readSchemaNodes() {
   return { channelProps, entryProps };
 }
 
+function getManifestRegistryLoadArg(index = 0): Record<string, unknown> | undefined {
+  const arg = mockLoadPluginManifestRegistry.mock.calls[index]?.[0];
+  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
+}
+
+function getCurrentMetadataSnapshotArg(index = 0): Record<string, unknown> | undefined {
+  const arg = mockGetCurrentPluginMetadataSnapshot.mock.calls[index]?.[0];
+  return arg && typeof arg === "object" ? (arg as Record<string, unknown>) : undefined;
+}
+
 beforeAll(async () => {
   ({ readBestEffortRuntimeConfigSchema, loadGatewayRuntimeConfigSchema } =
     await import("./runtime-schema.js"));
@@ -191,15 +205,11 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
-    );
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledChannelConfigCollector",
-    );
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    const loadArg = getManifestRegistryLoadArg();
+    expect(loadArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
+    expect(loadArg).not.toHaveProperty("cache", false);
+    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
     expect(entryProps).toHaveProperty("demo");
@@ -210,15 +220,11 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
     const { channelProps, entryProps } = await readSchemaNodes();
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { enabled: true } },
-      }),
-    );
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledChannelConfigCollector",
-    );
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    const loadArg = getManifestRegistryLoadArg();
+    expect(loadArg?.config).toEqual({ plugins: { enabled: true } });
+    expect(loadArg).not.toHaveProperty("cache", false);
+    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("slack");
     expect(entryProps?.demo).toBeUndefined();
@@ -238,14 +244,10 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
 
-    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
-    );
-    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
-      "bundledChannelConfigCollector",
-    );
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    const loadArg = getManifestRegistryLoadArg();
+    expect(loadArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
+    expect(loadArg).not.toHaveProperty("bundledChannelConfigCollector");
     expect(channelProps).toHaveProperty("telegram");
     expect(channelProps).toHaveProperty("matrix");
   });
@@ -288,11 +290,9 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
     const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
 
-    expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { plugins: { entries: { demo: { enabled: true } } } },
-      }),
-    );
+    expect(mockGetCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    const metadataArg = getCurrentMetadataSnapshotArg();
+    expect(metadataArg?.config).toEqual({ plugins: { entries: { demo: { enabled: true } } } });
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(channelProps).toHaveProperty("telegram");
     expect(JSON.stringify(channelProps?.telegram)).toContain("botToken");

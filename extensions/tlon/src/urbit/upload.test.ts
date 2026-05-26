@@ -53,6 +53,18 @@ async function setupSuccessfulUpload(params?: {
   return { mockBlob };
 }
 
+function requireUploadParams(): { blob?: Blob; contentType?: string; fileName?: string } {
+  const [call] = mockUploadFile.mock.calls;
+  if (!call) {
+    throw new Error("expected Tlon uploadFile call");
+  }
+  const [uploadParams] = call;
+  if (!uploadParams || typeof uploadParams !== "object" || Array.isArray(uploadParams)) {
+    throw new Error("expected Tlon uploadFile params");
+  }
+  return uploadParams as { blob?: Blob; contentType?: string; fileName?: string };
+}
+
 describe("uploadImageFromUrl", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -67,12 +79,9 @@ describe("uploadImageFromUrl", () => {
 
     expect(result).toBe("https://memex.tlon.network/uploaded.png");
     expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        blob: mockBlob,
-        contentType: "image/png",
-      }),
-    );
+    const uploadParams = requireUploadParams();
+    expect(uploadParams.blob).toBe(mockBlob);
+    expect(uploadParams.contentType).toBe("image/png");
   });
 
   it("returns original URL if fetch fails", async () => {
@@ -125,11 +134,7 @@ describe("uploadImageFromUrl", () => {
 
     await uploadImageFromUrl("https://example.com/path/to/my-image.jpg");
 
-    expect(mockUploadFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fileName: "my-image.jpg",
-      }),
-    );
+    expect(requireUploadParams().fileName).toBe("my-image.jpg");
   });
 
   it("uses default filename when URL has no path", async () => {
@@ -145,10 +150,6 @@ describe("uploadImageFromUrl", () => {
 
     await uploadImageFromUrl("https://example.com/");
 
-    expect(mockUploadFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fileName: expect.stringMatching(/^upload-\d+\.png$/),
-      }),
-    );
+    expect(requireUploadParams().fileName).toMatch(/^upload-\d+\.png$/);
   });
 });

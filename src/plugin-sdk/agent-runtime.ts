@@ -1,4 +1,7 @@
-// Public agent/model/runtime helpers for plugins that integrate with core agent flows.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused agent/runtime subpaths
+ * and avoid adding new imports here.
+ */
 
 export * from "../agents/agent-scope.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
@@ -33,7 +36,7 @@ export {
   CODEX_CLI_PROFILE_ID,
   dedupeProfileIds,
   listProfilesForProvider,
-  markAuthProfileGood,
+  markAuthProfileSuccess,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
@@ -55,8 +58,9 @@ export {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
-  markAuthProfileUsed,
+  refreshOAuthCredentialForRuntime,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   resolveApiKeyForProfile,
@@ -69,6 +73,8 @@ export {
 export type {
   ApiKeyCredential,
   AuthCredentialReasonCode,
+  AuthProfileBlockedReason,
+  AuthProfileBlockedSource,
   AuthProfileCredential,
   AuthProfileEligibilityReasonCode,
   AuthProfileFailureReason,

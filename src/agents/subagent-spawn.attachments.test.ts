@@ -36,7 +36,6 @@ describe("decodeStrictBase64", () => {
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result).not.toBeNull();
     expect(result?.toString("utf8")).toBe(input);
   });
 
@@ -79,7 +78,6 @@ describe("decodeStrictBase64", () => {
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result).not.toBeNull();
     expect(result?.byteLength).toBe(1024);
   });
 });
@@ -179,6 +177,31 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {
+    const explicitWorkspaceDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-subagent-cwd-attachments-${process.pid}-${Date.now()}-`),
+    );
+    try {
+      const { spawnSubagentDirect } = subagentSpawnModule;
+      const result = await spawnSubagentDirect(
+        {
+          task: "test",
+          cwd: explicitWorkspaceDir,
+          attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+        },
+        ctx,
+      );
+
+      expect(result.status).toBe("accepted");
+      const explicitAttachmentsRoot = path.join(explicitWorkspaceDir, ".openclaw", "attachments");
+      const targetAttachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
+      expect(fs.existsSync(explicitAttachmentsRoot)).toBe(true);
+      expect(fs.existsSync(targetAttachmentsRoot)).toBe(false);
+    } finally {
+      fs.rmSync(explicitWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("removes materialized attachments when lineage patching fails", async () => {
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     const store: Record<string, Record<string, unknown>> = {};
@@ -218,10 +241,15 @@ describe("spawnSubagentDirect filename validation", () => {
       : [];
     expect(retainedDirs).toHaveLength(0);
     const deleteCall = calls.find((entry) => entry.method === "sessions.delete");
-    expect(deleteCall?.params).toMatchObject({
-      key: expect.stringMatching(/^agent:main:subagent:/),
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
+    const deleteParams = deleteCall?.params as
+      | {
+          key?: string;
+          deleteTranscript?: boolean;
+          emitLifecycleHooks?: boolean;
+        }
+      | undefined;
+    expect(deleteParams?.key).toMatch(/^agent:main:subagent:/);
+    expect(deleteParams?.deleteTranscript).toBe(true);
+    expect(deleteParams?.emitLifecycleHooks).toBe(false);
   });
 });

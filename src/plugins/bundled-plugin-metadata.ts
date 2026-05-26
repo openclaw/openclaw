@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   collectBundledPluginPublicSurfaceArtifacts,
@@ -231,9 +232,10 @@ function listBundledPluginEntryBaseDirs(params: {
   const baseDirs = [
     ...(params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : []),
     path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
+    path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
     path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
   ];
-  return baseDirs.filter((entry, index, all) => all.indexOf(entry) === index);
+  return uniqueStrings(baseDirs);
 }
 
 export function resolveBundledPluginGeneratedPath(
@@ -255,7 +257,10 @@ export function resolveBundledPluginGeneratedPath(
   });
   for (const baseDir of baseDirs) {
     for (const entryPath of entryOrder) {
-      const candidate = path.resolve(baseDir, normalizeRelativePluginEntryPath(entryPath));
+      const candidate = resolveBundledPluginEntryCandidate(baseDir, entryPath);
+      if (!candidate) {
+        continue;
+      }
       if (fs.existsSync(candidate)) {
         return candidate;
       }
@@ -266,6 +271,18 @@ export function resolveBundledPluginGeneratedPath(
 
 function normalizeRelativePluginEntryPath(entryPath: string): string {
   return entryPath.replace(/^\.\//u, "");
+}
+
+function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string): string | null {
+  const normalizedEntryPath = normalizeRelativePluginEntryPath(entryPath);
+  const candidate = path.isAbsolute(normalizedEntryPath)
+    ? path.normalize(normalizedEntryPath)
+    : path.resolve(baseDir, normalizedEntryPath);
+  const relative = path.relative(baseDir, candidate);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+  return candidate;
 }
 
 export function resolveBundledPluginRepoEntryPath(params: {
@@ -297,7 +314,10 @@ export function resolveBundledPluginRepoEntryPath(params: {
 
   for (const baseDir of baseDirs) {
     for (const entryPath of entryOrder) {
-      const candidate = path.resolve(baseDir, normalizeRelativePluginEntryPath(entryPath));
+      const candidate = resolveBundledPluginEntryCandidate(baseDir, entryPath);
+      if (!candidate) {
+        continue;
+      }
       if (fs.existsSync(candidate)) {
         return candidate;
       }

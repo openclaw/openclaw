@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
@@ -30,6 +31,73 @@ function createBackupManifest(assetArchivePath: string, archiveRoot = TEST_ARCHI
       },
     ],
   };
+}
+
+function encodeTarEntry(params: {
+  path: string;
+  contents?: string;
+  type?: "File" | "Link";
+  linkpath?: string;
+}): Buffer {
+  const body = Buffer.from(params.contents ?? "", "utf8");
+  const header = new tar.Header({
+    path: params.path,
+    type: params.type ?? "File",
+    size: params.type === "Link" ? 0 : body.length,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    mtime: new Date(0),
+    ...(params.linkpath ? { linkpath: params.linkpath } : {}),
+  });
+  const headerBlock = Buffer.alloc(512);
+  header.encode(headerBlock);
+  if (params.type === "Link") {
+    return headerBlock;
+  }
+  const padding = Buffer.alloc((512 - (body.length % 512)) % 512);
+  return Buffer.concat([headerBlock, body, padding]);
+}
+
+async function createArchiveWithManifestContent(
+  options: {
+    tempPrefix: string;
+    manifestContent: string;
+    payloadArchivePath?: string;
+  },
+  run: (archivePath: string) => Promise<void>,
+) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), options.tempPrefix));
+  const archivePath = path.join(tempDir, "broken.tar.gz");
+  const manifestPath = path.join(tempDir, "manifest.json");
+  const payloadPath = path.join(tempDir, "payload.txt");
+  const payloadArchivePath =
+    options.payloadArchivePath ?? `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
+  try {
+    await fs.writeFile(manifestPath, options.manifestContent, "utf8");
+    await fs.writeFile(payloadPath, "payload\n", "utf8");
+    await tar.c(
+      {
+        file: archivePath,
+        gzip: true,
+        portable: true,
+        preservePaths: true,
+        onWriteEntry: (entry) => {
+          if (entry.path === manifestPath) {
+            entry.path = `${TEST_ARCHIVE_ROOT}/manifest.json`;
+            return;
+          }
+          if (entry.path === payloadPath) {
+            entry.path = payloadArchivePath;
+          }
+        },
+      },
+      [manifestPath, payloadPath],
+    );
+    await run(archivePath);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function withBrokenArchiveFixture(
@@ -196,6 +264,24 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("reports malformed manifest JSON without leaking parser internals", async () => {
+    await createArchiveWithManifestContent(
+      {
+        tempPrefix: "openclaw-backup-bad-manifest-json-",
+        manifestContent: '{"schemaVersion":1,',
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /^Backup manifest is not valid JSON\.$/u,
+        );
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.not.toThrow(
+          /position|Unexpected|Expected|SyntaxError/u,
+        );
+      },
+    );
+  });
+
   it("rejects unsafe archive paths", async () => {
     for (const { tempPrefix, archivePath, error } of [
       {
@@ -222,6 +308,71 @@ describe("backupVerifyCommand", () => {
           ).rejects.toThrow(error);
         },
       );
+    }
+  });
+
+  it("rejects unsafe hardlink targets", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-linkpath-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/target.txt`;
+    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/hardlink.txt`;
+    try {
+      const archive = gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: `${JSON.stringify(createBackupManifest(payloadArchivePath), null, 2)}\n`,
+          }),
+          encodeTarEntry({ path: payloadArchivePath, contents: "payload\n" }),
+          encodeTarEntry({
+            path: hardlinkArchivePath,
+            type: "Link",
+            linkpath: `${TEST_ARCHIVE_ROOT}/payload/../escaped.txt`,
+          }),
+          Buffer.alloc(1024),
+        ]),
+      );
+      await fs.writeFile(archivePath, archive);
+
+      const runtime = createBackupVerifyRuntime();
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /hardlink target.*path traversal segments/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects hardlink targets missing from archive entries", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-linkpath-"));
+    const archivePath = path.join(tempDir, "broken.tar.gz");
+    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/target.txt`;
+    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/hardlink.txt`;
+    const missingTargetPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/missing-target.txt`;
+    try {
+      const archive = gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: `${JSON.stringify(createBackupManifest(payloadArchivePath), null, 2)}\n`,
+          }),
+          encodeTarEntry({ path: payloadArchivePath, contents: "payload\n" }),
+          encodeTarEntry({
+            path: hardlinkArchivePath,
+            type: "Link",
+            linkpath: missingTargetPath,
+          }),
+          Buffer.alloc(1024),
+        ]),
+      );
+      await fs.writeFile(archivePath, archive);
+
+      const runtime = createBackupVerifyRuntime();
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /hardlink target is missing from archive entries/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
@@ -56,16 +57,14 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return Object.values(plugin.providerAuthEnvVars ?? {}).some((envVars) =>
-    envVars.some((name) => {
-      const value = env[name]?.trim();
-      return value !== undefined && value !== "";
-    }),
-  );
-}
-
-function dedupeSorted(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  const envVars = [
+    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
+    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
+  ];
+  return envVars.some((name) => {
+    const value = env[name]?.trim();
+    return value !== undefined && value !== "";
+  });
 }
 
 function resolveProviderDiscoveryEntryPlugins(params: {
@@ -135,7 +134,7 @@ function resolveSelectiveFullPluginIds(params: {
     .filter((plugin) => !params.entryResult.entryPluginIds.has(plugin.id))
     .filter((plugin) => hasProviderAuthEnvCredential(plugin, params.env))
     .map((plugin) => plugin.id);
-  return dedupeSorted([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
+  return sortUniqueStrings([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
 }
 
 export function resolvePluginDiscoveryProvidersRuntime(params: {

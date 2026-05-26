@@ -2,7 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordCurrentConversationIdentity } from "./conversation-identity.js";
 import { normalizeDiscordMessagingTarget } from "./normalize.js";
 import { parseDiscordTarget } from "./target-parsing.js";
@@ -141,19 +141,4 @@ export function resolveDiscordInboundConversation(params: {
     fallbackTo: params.conversationId,
   });
   return conversationId ? { conversationId } : null;
-}
-
-export function parseDiscordExplicitTarget(raw: string) {
-  try {
-    const target = parseDiscordTarget(raw, { defaultKind: "channel" });
-    if (!target) {
-      return null;
-    }
-    return {
-      to: target.normalized,
-      chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
-    };
-  } catch {
-    return null;
-  }
 }

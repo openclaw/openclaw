@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -133,6 +134,16 @@ async function requestWithProviderCapacityRetry<T>(
       return await request();
     } catch (error) {
       if (!isProviderCapacityError(error) || attempt >= maxAttempts) {
+        if (
+          shouldSkipLiveProviderDrift({
+            error,
+            allowAuth: true,
+            allowBilling: true,
+          })
+        ) {
+          console.warn(`SKIP: ${label} skipped because provider account/auth drift blocked it.`);
+          return undefined;
+        }
         if (providerId === "claude-cli" && isProviderCapacityError(error)) {
           console.warn(`SKIP: ${label} skipped because Claude API stayed overloaded.`);
           return undefined;
@@ -359,8 +370,10 @@ describeLive("gateway live (cli backend)", () => {
             ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
             model: { primary: configModelKey },
             models: {
-              [configModelKey]: {},
-              ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
+              [configModelKey]: { agentRuntime: modelSelection.agentRuntime },
+              ...(modelSwitchTarget
+                ? { [modelSwitchTarget]: { agentRuntime: modelSelection.agentRuntime } }
+                : {}),
             },
             agentRuntime: modelSelection.agentRuntime,
             cliBackends: {
@@ -461,11 +474,13 @@ describeLive("gateway live (cli backend)", () => {
           } else {
             expect(text).toContain(`CLI-BACKEND-${nonce}`);
           }
-          expect(
+          const injectedFileNames =
             resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
               (entry) => entry.name,
-            ) ?? [],
-          ).toEqual(expect.arrayContaining(bootstrapWorkspace?.expectedInjectedFiles ?? []));
+            ) ?? [];
+          for (const expectedFile of bootstrapWorkspace?.expectedInjectedFiles ?? []) {
+            expect(injectedFileNames).toContain(expectedFile);
+          }
         }
 
         if (modelSwitchTarget) {
@@ -577,14 +592,12 @@ describeLive("gateway live (cli backend)", () => {
         if (enableCliMcpProbe) {
           logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
             sessionKey,
-            senderIsOwner: true,
           });
           await verifyCliCronMcpLoopbackPreflight({
             sessionKey,
             port,
             token,
             env: process.env,
-            senderIsOwner: true,
             expectedSchemaProbeToolName: schemaProbePluginPath
               ? MCP_SCHEMA_PROBE_TOOL_NAME
               : undefined,

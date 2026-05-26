@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { installMSTeamsTestRuntime } from "../monitor-handler.test-helpers.js";
 
@@ -11,6 +11,12 @@ type MessageHandlerDepsOptions = {
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
+  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
 };
 
 export function createMessageHandlerDeps(
@@ -39,6 +45,12 @@ export function createMessageHandlerDeps(
     upsertPairingRequest,
     recordInboundSession,
     resolveAgentRoute,
+    hasControlCommand: options.hasControlCommand,
+    isControlCommandMessage: options.isControlCommandMessage,
+    shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
+    shouldHandleTextCommands: options.shouldHandleTextCommands,
+    createInboundDebouncer: options.createInboundDebouncer,
+    resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
     resolveStorePath: () => "/tmp/test-store",
   });

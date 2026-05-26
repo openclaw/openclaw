@@ -34,10 +34,10 @@ describe("cli json stdout contract", () => {
         const stdout = result.stdout.trim();
         expect(stdout.length).toBeGreaterThan(0);
         const parsed = JSON.parse(stdout) as unknown;
-        expect(typeof parsed).toBe("object");
-        expect(parsed).not.toBeNull();
-        expect(Array.isArray(parsed)).toBe(false);
-        expect(Object.keys(parsed as Record<string, unknown>).sort()).toEqual([
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error(`Expected JSON object stdout, got: ${stdout}`);
+        }
+        expect(Object.keys(parsed).toSorted((a, b) => a.localeCompare(b))).toEqual([
           "availability",
           "channel",
           "update",

@@ -4,7 +4,7 @@ import {
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createChannelMessageReplyPipeline,
   logTypingFailure,
@@ -399,6 +399,7 @@ export function createMSTeamsReplyDispatcher(params: {
               );
             },
             onItemEvent: async (payload: {
+              itemId?: string;
               kind?: string;
               progressText?: string;
               meta?: string;
@@ -411,6 +412,7 @@ export function createMSTeamsReplyDispatcher(params: {
               await streamController.pushProgressLine(
                 buildChannelProgressDraftLineForEntry(msteamsCfg, {
                   event: "item",
+                  itemId: payload.itemId,
                   itemKind: payload.kind,
                   title: payload.title,
                   name: payload.name,

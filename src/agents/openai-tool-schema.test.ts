@@ -57,8 +57,8 @@ describe("OpenAI strict tool schema normalization", () => {
     const schema = {};
     const normalized = normalizeStrictOpenAIJsonSchema(schema) as Record<string, unknown>;
     expect(normalized.type).toBe("object");
-    expect(normalized.properties).toEqual({});
-    expect(normalized.required).toEqual([]);
+    expect(normalized.properties).toStrictEqual({});
+    expect(normalized.required).toStrictEqual([]);
     expect(normalized.additionalProperties).toBe(false);
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
   });

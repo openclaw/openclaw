@@ -1,13 +1,17 @@
 import "./fs-safe-defaults.js";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { writeViaSiblingTempPath } from "@openclaw/fs-safe/advanced";
+import {
+  ensureDirectoryWithinRoot,
+  findExistingAncestor,
+  writeViaSiblingTempPath,
+} from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot, type ReadResult } from "@openclaw/fs-safe/root";
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
-  ensureAbsoluteDirectory,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
@@ -19,6 +23,7 @@ export {
 } from "@openclaw/fs-safe/advanced";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
 export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
@@ -26,6 +31,7 @@ export {
   readRegularFile,
   readRegularFileSync,
   resolveRegularFileAppendFlags,
+  statRegularFile,
   statRegularFileSync,
 } from "@openclaw/fs-safe/advanced";
 export {
@@ -62,6 +68,39 @@ export type ExternalFileWriteOptions = {
 export type ExternalFileWriteResult = {
   path: string;
 };
+
+export async function ensureAbsoluteDirectory(
+  dirPath: string,
+  options?: { scopeLabel?: string; mode?: number },
+): Promise<{ ok: true; path: string } | { ok: false; error: Error }> {
+  const absolutePath = path.resolve(dirPath);
+  const scopeLabel = options?.scopeLabel ?? "directory";
+  const existingAncestor = await findExistingAncestor(absolutePath);
+  if (!existingAncestor) {
+    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  }
+  if (existingAncestor === absolutePath) {
+    try {
+      const stat = await fs.lstat(absolutePath);
+      if (!stat.isSymbolicLink() && stat.isDirectory()) {
+        return { ok: true, path: absolutePath };
+      }
+    } catch {
+      // Fall through to the uniform invalid-path result below.
+    }
+    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  }
+  const result = await ensureDirectoryWithinRoot({
+    rootDir: existingAncestor,
+    requestedPath: path.relative(existingAncestor, absolutePath),
+    scopeLabel,
+    mode: options?.mode,
+  });
+  if (result.ok) {
+    return result;
+  }
+  return { ok: false, error: new Error(result.error) };
+}
 
 export async function writeExternalFileWithinRoot(
   options: ExternalFileWriteOptions,

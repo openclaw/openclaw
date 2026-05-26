@@ -14,6 +14,34 @@ const { postTranscriptionRequestMock } = vi.hoisted(() => ({
   ),
 }));
 
+function requireLastPostTranscriptionCall(): {
+  url?: string;
+  timeoutMs?: number;
+  auditContext?: string;
+  headers: Headers;
+  body: BodyInit;
+} {
+  const params = (postTranscriptionRequestMock.mock.calls as unknown as Array<[unknown]>).at(
+    -1,
+  )?.[0] as
+    | {
+        url?: string;
+        timeoutMs?: number;
+        auditContext?: string;
+        headers?: Headers;
+        body?: BodyInit;
+      }
+    | undefined;
+  if (!params?.headers || !params.body) {
+    throw new Error("Expected transcription request params");
+  }
+  return {
+    ...params,
+    headers: params.headers,
+    body: params.body,
+  };
+}
+
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
   return {
@@ -37,17 +65,13 @@ describe("xai stt", () => {
     });
 
     expect(result).toEqual({ text: "hello from audio", model: XAI_DEFAULT_STT_MODEL });
-    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.x.ai/v1/stt",
-        timeoutMs: 10_000,
-        auditContext: "xai stt",
-      }),
-    );
-    const call = postTranscriptionRequestMock.mock.calls[0]?.[0];
-    expect(call?.headers.get("authorization")).toBe("Bearer xai-key");
-    expect(call?.body).toBeInstanceOf(FormData);
-    const form = call?.body as FormData;
+    const call = requireLastPostTranscriptionCall();
+    expect(call.url).toBe("https://api.x.ai/v1/stt");
+    expect(call.timeoutMs).toBe(10_000);
+    expect(call.auditContext).toBe("xai stt");
+    expect(call.headers.get("authorization")).toBe("Bearer xai-key");
+    expect(call.body).toBeInstanceOf(FormData);
+    const form = call.body as FormData;
     expect(form.get("model")).toBe(XAI_DEFAULT_STT_MODEL);
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBeNull();
@@ -55,11 +79,28 @@ describe("xai stt", () => {
   });
 
   it("registers as an audio media-understanding provider", () => {
-    expect(buildXaiMediaUnderstandingProvider()).toMatchObject({
-      id: "xai",
-      capabilities: ["audio"],
-      defaultModels: { audio: XAI_DEFAULT_STT_MODEL },
-      autoPriority: { audio: 25 },
+    const provider = buildXaiMediaUnderstandingProvider();
+    expect(provider.id).toBe("xai");
+    expect(provider.capabilities).toEqual(["audio"]);
+    expect(provider.defaultModels).toEqual({ audio: XAI_DEFAULT_STT_MODEL });
+    expect(provider.autoPriority).toEqual({ audio: 25 });
+  });
+
+  it("trusts the core-resolved apiKey on transcribeAudio (no plugin-side OAuth fallback)", async () => {
+    const provider = buildXaiMediaUnderstandingProvider();
+    if (!provider.transcribeAudio) {
+      throw new Error("xAI media-understanding provider should register transcribeAudio");
+    }
+    await provider.transcribeAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "sample.wav",
+      mime: "audio/wav",
+      apiKey: "core-resolved-bearer",
+      baseUrl: "https://api.x.ai/v1/",
+      model: XAI_DEFAULT_STT_MODEL,
+      timeoutMs: 10_000,
     });
+    const call = requireLastPostTranscriptionCall();
+    expect(call.headers.get("authorization")).toBe("Bearer core-resolved-bearer");
   });
 });

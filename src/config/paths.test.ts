@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   DEFAULT_GATEWAY_PORT,
+  normalizeStateDirEnv,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
@@ -123,6 +124,30 @@ describe("state + config path candidates", () => {
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
   });
 
+  it("normalizes relative OPENCLAW_STATE_DIR overrides to absolute paths", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: ".",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
+  });
+
+  it("pins a relative state-dir override before later resolution", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "relative-state",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+    const normalized = env.OPENCLAW_STATE_DIR;
+
+    expect(normalized).toBe(path.resolve("relative-state"));
+    expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
+  });
+
   it("uses OPENCLAW_HOME for default state/config locations", () => {
     const env = {
       OPENCLAW_HOME: "/srv/openclaw-home",
@@ -200,9 +225,13 @@ describe("resolveIncludeRoots", () => {
   const HOME = path.parse(process.cwd()).root + "fakehome";
 
   it("returns an empty list when OPENCLAW_INCLUDE_ROOTS is unset or blank", () => {
-    expect(resolveIncludeRoots(envWith({}), () => HOME)).toEqual([]);
-    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "" }), () => HOME)).toEqual([]);
-    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "   " }), () => HOME)).toEqual([]);
+    expect(resolveIncludeRoots(envWith({}), () => HOME)).toStrictEqual([]);
+    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "" }), () => HOME)).toStrictEqual(
+      [],
+    );
+    expect(
+      resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "   " }), () => HOME),
+    ).toStrictEqual([]);
   });
 
   it("splits on the platform path delimiter and resolves each entry to an absolute path", () => {

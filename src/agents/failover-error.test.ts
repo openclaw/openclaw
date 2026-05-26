@@ -3,6 +3,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  isNonProviderRuntimeCoordinationError,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -21,6 +22,9 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Issue-backed Moonshot/Kimi exhausted-balance shape surfaced under HTTP 429 (#43447).
+const MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD =
+  '{"error":{"type":"rate_limit_reached","message":"Insufficient account balance. Please recharge your Moonshot account."}}';
 const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
   '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
@@ -44,6 +48,9 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+// Structured OpenAI-compatible server_error payload shape seen in Codex/OpenAI runs.
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
@@ -288,6 +295,46 @@ describe("failover-error", () => {
         message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
       }),
     ).toBe("overloaded");
+  });
+
+  it("lets Moonshot/Kimi billing-shaped 429 payloads win over generic rate limit status", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "moonshot",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError(
+        {
+          status: 429,
+          message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+        },
+        "kimi-claw",
+      ),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "moonshot",
+        status: 429,
+        message: OPENAI_RATE_LIMIT_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverSignal({
+        provider: "moonshot",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
   });
 
   it("classifies OpenRouter no-endpoints 404s as model_not_found", () => {
@@ -843,13 +890,13 @@ describe("failover-error", () => {
         "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
     });
 
-    expect(describeFailoverError(err)).toMatchObject({
-      message: "LLM request failed: provider rejected the request schema.",
-      rawError:
-        "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
-      reason: "format",
-      status: 400,
-    });
+    const description = describeFailoverError(err);
+    expect(description.message).toBe("LLM request failed: provider rejected the request schema.");
+    expect(description.rawError).toBe(
+      "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
+    );
+    expect(description.reason).toBe("format");
+    expect(description.status).toBe(400);
   });
 
   it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
@@ -864,6 +911,10 @@ describe("failover-error", () => {
 
   it("maps overloaded to a 503 fallback status", () => {
     expect(resolveFailoverStatus("overloaded")).toBe(503);
+  });
+
+  it("maps server_error to a 500 fallback status", () => {
+    expect(resolveFailoverStatus("server_error")).toBe(500);
   });
 
   it("coerces format errors with a 400 status", () => {
@@ -892,6 +943,37 @@ describe("failover-error", () => {
     );
   });
 
+  it("Codex deactivated workspace marker returns auth_permanent", () => {
+    expect(resolveFailoverReasonFromError({ message: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ message: "deactivated workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(resolveFailoverReasonFromError({ code: "deactivated_workspace" })).toBe(
+      "auth_permanent",
+    );
+    expect(
+      resolveFailoverReasonFromError({
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "Forbidden",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "Bad request",
+        detail: { code: "deactivated_workspace" },
+      }),
+    ).toBe("auth_permanent");
+  });
+
   it("403 OpenRouter 'Key limit exceeded' returns billing (model fallback trigger)", () => {
     // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
     // when the monthly key spending limit is reached. This must trigger billing failover
@@ -910,6 +992,28 @@ describe("failover-error", () => {
         message: "403 Key limit exceeded (monthly limit)",
       }),
     ).toBe("billing");
+  });
+
+  it("403 OpenRouter API-key budget limit errors return billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+      }),
+    ).toBe("billing");
+  });
+
+  it("uses model-fallback provider context for OpenRouter API-key budget limit errors", () => {
+    const err = coerceToFailoverError(
+      Object.assign(
+        new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
+        { status: 403 },
+      ),
+      { provider: "openrouter", model: "xiaomi/mimo-v2-pro" },
+    );
+
+    expect(err?.reason).toBe("billing");
   });
 
   it("401 billing-style message returns billing instead of generic auth", () => {
@@ -973,6 +1077,39 @@ describe("failover-error", () => {
     expect(described.reason).toBeUndefined();
   });
 
+  it("classifies OpenAI-compatible server_error payloads at the error boundary", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+
+    const err = coerceToFailoverError(
+      {
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      },
+      { provider: "openai-codex", model: "gpt-5.4" },
+    );
+    expect(err?.reason).toBe("server_error");
+    expect(err?.status).toBe(500);
+  });
+
+  it("keeps explicit 4xx classification ahead of server_error markers", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(resolveFailoverReasonFromError({ status: 401, message: payload })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 402, message: payload })).toBe("billing");
+    expect(resolveFailoverReasonFromError({ status: 422, message: payload })).toBe("format");
+    expect(resolveFailoverReasonFromError(`402 Payment Required ${payload}`)).toBe("billing");
+  });
+
   it("propagates sessionId/lane/provider attribution through FailoverError (#42713)", () => {
     const err = new FailoverError("all fallbacks exhausted", {
       reason: "rate_limit",
@@ -985,15 +1122,14 @@ describe("failover-error", () => {
     });
     expect(err.sessionId).toBe("session:browser-abcd");
     expect(err.lane).toBe("answer");
-    expect(describeFailoverError(err)).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      profileId: "profile-2",
-      sessionId: "session:browser-abcd",
-      lane: "answer",
-      reason: "rate_limit",
-      status: 429,
-    });
+    const description = describeFailoverError(err);
+    expect(description.provider).toBe("anthropic");
+    expect(description.model).toBe("claude-opus-4-6");
+    expect(description.profileId).toBe("profile-2");
+    expect(description.sessionId).toBe("session:browser-abcd");
+    expect(description.lane).toBe("answer");
+    expect(description.reason).toBe("rate_limit");
+    expect(description.status).toBe(429);
   });
 
   it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
@@ -1007,5 +1143,55 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
+  });
+
+  describe("isNonProviderRuntimeCoordinationError", () => {
+    const makeSessionLockError = () =>
+      new SessionWriteLockTimeoutError({
+        timeoutMs: 10_000,
+        owner: "pid=37121",
+        lockPath: "/tmp/openclaw/session.jsonl.lock",
+      });
+    const makeEmbeddedTakeoverError = () => {
+      const err = new Error(
+        "session file changed while embedded prompt lock was released: /tmp/openclaw/session.jsonl",
+      );
+      err.name = "EmbeddedAttemptSessionTakeoverError";
+      return err;
+    };
+
+    it("returns true for direct session write-lock timeout errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeSessionLockError())).toBe(true);
+    });
+
+    it("returns true for direct embedded attempt session takeover errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+    });
+
+    it("returns true when the coordination error is nested via cause", () => {
+      const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
+      expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
+
+      const wrappedTakeover = new Error("wrapper", { cause: makeEmbeddedTakeoverError() });
+      expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
+    });
+
+    it("returns false for plain timeouts and provider errors", () => {
+      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
+      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
+        false,
+      );
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 429,
+          code: "RESOURCE_EXHAUSTED",
+          message: "upstream quota pressure",
+          cause: makeSessionLockError(),
+        }),
+      ).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
+    });
   });
 });

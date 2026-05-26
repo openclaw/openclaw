@@ -5,7 +5,7 @@ import {
   MarkdownConfigSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-primitives";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const MattermostGroupSchema = z
@@ -84,6 +84,7 @@ const MattermostStreamingProgressSchema = z
     label: z.union([z.string(), z.literal(false)]).optional(),
     labels: z.array(z.string()).optional(),
     maxLines: z.number().int().positive().optional(),
+    maxLineChars: z.number().int().positive().optional(),
     toolProgress: z.boolean().optional(),
   })
   .strict();

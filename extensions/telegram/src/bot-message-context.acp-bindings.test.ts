@@ -165,13 +165,10 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
       },
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.route.sessionKey).toBe("agent:codex:acp:binding:telegram:work:abc123");
-    expect(ctx?.turn.record).toMatchObject({
-      updateLastRoute: undefined,
-    });
+    expect(ctx?.turn.record.updateLastRoute).toBeUndefined();
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 

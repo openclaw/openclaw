@@ -13,10 +13,9 @@ describe("Codex native hook relay config", () => {
     });
 
     expect(config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PreToolUse": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -31,7 +30,6 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.PostToolUse": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -46,7 +44,6 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.PermissionRequest": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -61,7 +58,6 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.Stop": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -74,8 +70,43 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:post_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:post_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:stop:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:stop:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
     });
     expect(JSON.stringify(config)).not.toContain("timeoutSec");
+    expect(JSON.stringify(config)).not.toContain('"matcher":null');
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
   });
@@ -87,10 +118,9 @@ describe("Codex native hook relay config", () => {
         events: ["permission_request"],
       }),
     ).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PermissionRequest": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -103,22 +133,118 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
     });
   });
 
-  it("leaves matchers open so Codex MCP tool names reach the relay", () => {
+  it("clears requested hook events when the relay reports no local work", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
+        events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+      }),
+    ).toEqual({
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --event pre_tool_use",
+              timeout: 5,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
+      "hooks.PostToolUse": [],
+      "hooks.Stop": [],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
+    });
+  });
+
+  it("clears omitted hook events when requested", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay(),
+        events: ["permission_request"],
+        clearOmittedEvents: true,
+      }),
+    ).toEqual({
+      "features.hooks": true,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --event permission_request",
+              timeout: 5,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
+      "hooks.Stop": [],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+        "<session-flags>/config.toml:stop:0:0": { enabled: false },
+      },
+    });
+  });
+
+  it("omits matchers so Codex MCP tool names reach the relay with a stable trust hash", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
       events: ["pre_tool_use", "post_tool_use"],
     });
 
-    expect(config["hooks.PreToolUse"]).toEqual([expect.objectContaining({ matcher: null })]);
-    expect(config["hooks.PostToolUse"]).toEqual([expect.objectContaining({ matcher: null })]);
+    expect((config["hooks.PreToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
+      "matcher",
+    );
+    expect((config["hooks.PostToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
+      "matcher",
+    );
   });
 
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
-      "features.codex_hooks": false,
+      "features.hooks": false,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
@@ -127,7 +253,10 @@ describe("Codex native hook relay config", () => {
   });
 });
 
-function createRelay(): NativeHookRelayRegistrationHandle {
+function createRelay(options?: {
+  inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+}): NativeHookRelayRegistrationHandle {
+  const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
     relayId: "relay-1",
     provider: "codex",
@@ -136,8 +265,10 @@ function createRelay(): NativeHookRelayRegistrationHandle {
     runId: "run-1",
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
+    shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --event ${event}`,
+    renew: () => undefined,
     unregister: () => undefined,
   };
 }

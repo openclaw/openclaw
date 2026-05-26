@@ -136,6 +136,23 @@ ${text}
 \`\`\``;
 }
 
+export function formatCollapsedToolSummaryText(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return undefined;
+  }
+  const withoutConnector = normalized.replace(/^with\s+/i, "").trim();
+  return withoutConnector || normalized;
+}
+
+export function formatCollapsedToolPreviewText(value: string | undefined): string | undefined {
+  const normalized = formatCollapsedToolSummaryText(value);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.slice(0, 120);
+}
+
 function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
   for (let i = cards.length - 1; i >= 0; i--) {
     const card = cards[i];
@@ -392,11 +409,14 @@ function renderToolDataBlock(params: {
 
 function renderCollapsedToolSummary(params: {
   label: string;
-  name: string;
+  icon: ReturnType<typeof html> | undefined;
+  name?: string;
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const { label, name, expanded, onToggleExpanded } = params;
+  const { label, icon, name, expanded, onToggleExpanded } = params;
+  const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
+  const displayName = formatCollapsedToolSummaryText(name);
   return html`
     <button
       class="chat-tool-msg-summary"
@@ -404,11 +424,25 @@ function renderCollapsedToolSummary(params: {
       aria-expanded=${String(expanded)}
       @click=${() => onToggleExpanded()}
     >
-      <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
-      <span class="chat-tool-msg-summary__label">${label}</span>
-      <span class="chat-tool-msg-summary__names">${name}</span>
+      <span class="chat-tool-msg-summary__icon">${icon}</span>
+      <span class="chat-tool-msg-summary__label">${displayLabel}</span>
+      ${displayName
+        ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
+        : nothing}
     </button>
   `;
+}
+
+export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | undefined) {
+  const directDetail = displayDetail?.trim();
+  if (directDetail) {
+    return displayDetail;
+  }
+  if (typeof card.args !== "string") {
+    return undefined;
+  }
+  const inputText = card.inputText?.trim() ? card.inputText : card.args;
+  return formatCollapsedToolPreviewText(inputText);
 }
 
 export function renderToolCard(
@@ -423,7 +457,10 @@ export function renderToolCard(
   },
 ) {
   const hasOutput = Boolean(card.outputText?.trim());
-  const previewLabel = hasOutput ? "Tool output" : "Tool call";
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const collapsedDetail = resolveCollapsedToolDetail(card, display.detail);
+  const previewLabel = collapsedDetail ?? display.label;
+  const previewName = collapsedDetail && hasOutput ? "output" : undefined;
 
   return html`
     <div
@@ -433,7 +470,8 @@ export function renderToolCard(
     >
       ${renderCollapsedToolSummary({
         label: previewLabel,
-        name: card.name,
+        icon: icons[display.icon],
+        name: previewName,
         expanded: opts.expanded,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}

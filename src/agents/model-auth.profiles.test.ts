@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -313,11 +313,9 @@ it("resolves config-only aws-sdk profiles without stored credentials", async () 
     cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
   });
 
-  expect(resolved).toMatchObject({
-    mode: "aws-sdk",
-    profileId: "amazon-bedrock:default",
-    source: "profile:amazon-bedrock:default",
-  });
+  expect(resolved.mode).toBe("aws-sdk");
+  expect(resolved.profileId).toBe("amazon-bedrock:default");
+  expect(resolved.source).toBe("profile:amazon-bedrock:default");
   expect(resolved.apiKey).toBeUndefined();
 });
 
@@ -328,11 +326,9 @@ it("uses configured aws-sdk profile order without stored credentials", async () 
     cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
   });
 
-  expect(resolved).toMatchObject({
-    mode: "aws-sdk",
-    profileId: "amazon-bedrock:default",
-    source: "profile:amazon-bedrock:default",
-  });
+  expect(resolved.mode).toBe("aws-sdk");
+  expect(resolved.profileId).toBe("amazon-bedrock:default");
+  expect(resolved.source).toBe("profile:amazon-bedrock:default");
   expect(resolved.apiKey).toBeUndefined();
 });
 
@@ -372,15 +368,13 @@ async function resolveDemoLocalApiKey(params: {
   storedKeys: string[];
   configuredApiKey: string;
 }) {
-  let resolved!: Awaited<ReturnType<typeof resolveApiKeyForProvider>>;
-  await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
-    resolved = await resolveApiKeyForProvider({
+  return await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
+    return await resolveApiKeyForProvider({
       provider: "demo-local",
       store: buildDemoLocalStore(params.storedKeys),
       cfg: buildDemoLocalProviderCfg(params.configuredApiKey),
     });
   });
-  return resolved;
 }
 
 describe("getApiKeyForModel", () => {
@@ -419,6 +413,94 @@ describe("getApiKeyForModel", () => {
           agentDir: process.env.OPENCLAW_AGENT_DIR,
         });
         expect(apiKey.apiKey).toBe(oauthFixture.access);
+      },
+    );
+  });
+
+  it("uses the config default agent dir when resolving provider profiles", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "process-default-key",
+              },
+            },
+          },
+          "main",
+        );
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "configured-agent-key",
+              },
+            },
+          },
+          "configured",
+        );
+
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: state.agentDir("configured"),
+              },
+            ],
+          },
+        };
+
+        const resolved = await resolveApiKeyForProvider({ provider: "xai", cfg });
+        expect(resolved.apiKey).toBe("configured-agent-key");
+        expect(resolved.source).toBe("profile:xai:default");
+      },
+    );
+  });
+
+  it("reports the config default agent dir when provider auth is missing", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-missing-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        const configuredAgentDir = state.agentDir("configured");
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: configuredAgentDir,
+              },
+            ],
+          },
+        };
+
+        await expect(resolveApiKeyForProvider({ provider: "xai", cfg })).rejects.toThrow(
+          `agentDir: ${configuredAgentDir}`,
+        );
       },
     );
   });
@@ -503,18 +585,17 @@ describe("getApiKeyForModel", () => {
       },
       async () => {
         const resolved = await resolveApiKeyForProvider({ provider: "claude-cli" });
-        expect(resolved).toMatchObject({
-          apiKey: "claude-cli-access",
-          profileId: "anthropic:claude-cli",
-          source: "profile:anthropic:claude-cli",
-          mode: "oauth",
-        });
+        expect(resolved.apiKey).toBe("claude-cli-access");
+        expect(resolved.profileId).toBe("anthropic:claude-cli");
+        expect(resolved.source).toBe("profile:anthropic:claude-cli");
+        expect(resolved.mode).toBe("oauth");
       },
     );
 
-    expect(cliCredentialMocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith(
-      expect.objectContaining({ allowKeychainPrompt: false }),
-    );
+    const options = cliCredentialMocks.readClaudeCliCredentialsCached.mock.calls.at(0)?.[0] as
+      | { allowKeychainPrompt?: boolean }
+      | undefined;
+    expect(options?.allowKeychainPrompt).toBe(false);
   });
 
   it("throws when ZAI API key is missing", async () => {
@@ -668,27 +749,27 @@ describe("getApiKeyForModel", () => {
 
     try {
       await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        expect(
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: { allow: ["workspace-cloud"] } },
             store,
           }),
-        ).toBe(true);
-        expect(
+        ).resolves.toBe(true);
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: {} },
             store,
           }),
-        ).toBe(false);
+        ).resolves.toBe(false);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("reuses runtime auth availability for provider auth checks", () => {
+  it("reuses runtime auth availability for provider auth checks", async () => {
     const store = { version: 1 as const, profiles: {} };
     const localNoKeyConfig = {
       models: {
@@ -707,30 +788,30 @@ describe("getApiKeyForModel", () => {
       },
     } as OpenClawConfig;
 
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "amazon-bedrock",
         cfg: {} as OpenClawConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "vllm",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "remote",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
@@ -1331,5 +1412,21 @@ describe("getApiKeyForModel", () => {
 
     expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
     expect(resolved?.source).toBe("gcloud adc");
+  });
+
+  it("resolveEnvApiKey skips plugin setup fallback when precomputed maps are authoritative", () => {
+    const resolved = resolveEnvApiKey(
+      "anthropic-vertex",
+      {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      } as NodeJS.ProcessEnv,
+      {
+        candidateMap: {},
+        authEvidenceMap: {},
+        skipSetupProviderFallback: true,
+      },
+    );
+
+    expect(resolved).toBeNull();
   });
 });

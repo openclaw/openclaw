@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import "./test-helpers/pi-coding-agent-token-mock.js";
@@ -89,10 +89,10 @@ describe("splitMessagesByTokenShare", () => {
     const messages = makeMessages(4, 4000);
 
     const parts = splitMessagesByTokenShare(messages, 2);
-    expect(parts.length).toBeGreaterThanOrEqual(2);
-    expect(parts[0]?.length).toBeGreaterThan(0);
-    expect(parts[1]?.length).toBeGreaterThan(0);
-    expect(parts.flat().length).toBe(messages.length);
+    expect(parts.map((chunk) => chunk.map((msg) => msg.timestamp))).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
   });
 
   it("preserves message order across parts", () => {
@@ -146,8 +146,7 @@ describe("splitMessagesByTokenShare", () => {
     const resultTimestamps = chunkWithAssistant
       .filter((m) => m.role === "toolResult")
       .map((m) => m.timestamp);
-    expect(resultTimestamps).toContain(3);
-    expect(resultTimestamps).toContain(4);
+    expect(resultTimestamps).toEqual([3, 4]);
     expect(parts.flat().length).toBe(messages.length);
   });
 
@@ -177,11 +176,7 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 2);
 
-    expect(parts.length).toBe(2);
-    const chunk1Roles = parts[0].map((m) => m.role);
-    expect(chunk1Roles).toContain("assistant");
-    expect(chunk1Roles).toContain("toolResult");
-    expect(parts.flat().length).toBe(messages.length);
+    expect(parts.map((chunk) => chunk.map((msg) => msg.timestamp))).toEqual([[1, 2], [3]]);
   });
 
   it("splits before a trailing completed tool-call pair", () => {
@@ -207,8 +202,7 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 2);
 
-    expect(parts.length).toBe(2);
-    expect(parts.flat().length).toBe(messages.length);
+    expect(parts.map((chunk) => chunk.map((msg) => msg.timestamp))).toEqual([[1], [2, 3]]);
   });
 
   it("splits before unfinished tool-call turns that never get a result", () => {
@@ -230,9 +224,9 @@ describe("pruneHistoryForContextShare", () => {
   it("drops older chunks until the history budget is met", () => {
     const { pruned, maxContextTokens } = pruneLargeSimpleHistory();
 
-    expect(pruned.droppedChunks).toBeGreaterThan(0);
+    expect(pruned.droppedChunks).toBe(2);
     expect(pruned.keptTokens).toBeLessThanOrEqual(Math.floor(maxContextTokens * 0.5));
-    expect(pruned.messages.length).toBeGreaterThan(0);
+    expect(pruned.messages.map((msg) => msg.timestamp)).toEqual([4]);
   });
 
   it("keeps the newest messages when pruning", () => {
@@ -264,13 +258,14 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedChunks).toBe(0);
     expect(pruned.messages.length).toBe(messages.length);
     expect(pruned.keptTokens).toBe(estimateMessagesTokens(messages));
-    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.droppedMessagesList).toStrictEqual([]);
   });
 
   it("returns droppedMessagesList containing dropped messages", () => {
     const { messages, pruned } = pruneLargeSimpleHistory();
 
-    expect(pruned.droppedChunks).toBeGreaterThan(0);
+    expect(pruned.droppedChunks).toBe(2);
+    expect(pruned.droppedMessagesList.map((msg) => msg.timestamp)).toEqual([1, 2, 3]);
     expect(pruned.droppedMessagesList.length).toBe(pruned.droppedMessages);
 
     const allIds = [
@@ -291,7 +286,7 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     expect(pruned.droppedChunks).toBe(0);
-    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.droppedMessagesList).toStrictEqual([]);
     expect(pruned.messages.length).toBe(1);
   });
 

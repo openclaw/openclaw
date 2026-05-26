@@ -1,5 +1,5 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   parseReplyDirectives,
@@ -16,6 +16,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -254,7 +255,7 @@ export function readPendingToolMediaReply(
   }
   return {
     mediaUrls: state.pendingToolMediaUrls.length
-      ? Array.from(new Set(state.pendingToolMediaUrls))
+      ? uniqueStrings(state.pendingToolMediaUrls)
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
@@ -288,7 +289,7 @@ function mergeReplyDirectiveResults(
   if (!second) {
     return first;
   }
-  const mediaUrls = Array.from(new Set([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]));
+  const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
@@ -871,6 +872,8 @@ export function handleMessageEnd(
           );
         } else {
           ctx.state.lastBlockReplyText = text;
+          ctx.state.lastDeliveredBlockReplyText = text;
+          ctx.state.toolExecutionSinceLastBlockReply = false;
           emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
         }
       }

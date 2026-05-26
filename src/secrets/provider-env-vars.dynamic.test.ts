@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   getProviderEnvVars,
   listKnownProviderAuthEnvVarNames,
   listKnownSecretEnvVarNames,
@@ -63,6 +63,15 @@ const pluginRegistryMocks = vi.hoisted(() => {
   };
 });
 
+function requireLastMetadataSnapshotCall(): unknown[] {
+  const calls = pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected plugin metadata snapshot call");
+  }
+  return call;
+}
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
 }));
@@ -94,7 +103,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
-    __testing.resetProviderEnvVarCachesForTests();
+    testing.resetProviderEnvVarCachesForTests();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", () => {
@@ -118,6 +127,13 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+  });
+
+  it("lets openai-codex bootstrap from Codex app-server API-key env", () => {
+    expect(resolveProviderAuthEnvVarCandidates()["openai-codex"]).toEqual([
+      "CODEX_API_KEY",
+      "OPENAI_API_KEY",
+    ]);
   });
 
   it("includes setup provider env vars without loading setup runtime", () => {
@@ -180,9 +196,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         source: "external cloud credentials",
       },
     ]);
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
-      preferPersisted: false,
-    });
+    const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
+    expect(snapshotOptions.preferPersisted).toBe(false);
   });
 
   it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {
@@ -474,13 +489,13 @@ describe("provider env vars dynamic manifest metadata", () => {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       mod.getProviderEnvVars("workspace-setup", {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       mod.listKnownProviderAuthEnvVarNames({
         config: { plugins: {} },
@@ -550,7 +565,7 @@ describe("provider env vars dynamic manifest metadata", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps selected workspace context engine env vars when requested", async () => {

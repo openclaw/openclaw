@@ -47,6 +47,15 @@ function requirePropertyDescriptor(
   return descriptor;
 }
 
+function expectEnumerableConfigurableDescriptor(
+  target: Record<string, unknown>,
+  propertyName: string,
+): void {
+  const descriptor = requirePropertyDescriptor(target, propertyName);
+  expect(descriptor.configurable).toBe(true);
+  expect(descriptor.enumerable).toBe(true);
+}
+
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
   distEntries?: string[];
@@ -65,21 +74,22 @@ function loadRootAliasWithStubs(options?: {
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
   };
+  const context = {
+    process: {
+      env: options?.env ?? {},
+      platform: options?.platform ?? "darwin",
+    },
+  };
   const wrapper = vm.runInNewContext(
     `(function (exports, require, module, __filename, __dirname) {${rootAliasSource}\n})`,
-    {
-      process: {
-        env: options?.env ?? {},
-        platform: options?.platform ?? "darwin",
-      },
-    },
+    context,
     { filename: rootAliasPath },
   ) as (
     exports: Record<string, unknown>,
     require: NodeJS.Require,
     module: { exports: Record<string, unknown> },
-    __filename: string,
-    __dirname: string,
+    filename: string,
+    dirname: string,
   ) => void;
   const module = { exports: {} as Record<string, unknown> };
   const aliasPath = options?.aliasPath ?? rootAliasPath;
@@ -149,6 +159,7 @@ function loadRootAliasWithStubs(options?: {
       return createJitiOptions;
     },
     loadedSpecifiers,
+    globalContext: context as Record<PropertyKey, unknown>,
   };
 }
 
@@ -280,10 +291,7 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.createJitiOptions.at(-1)?.tryNative).toBe(false);
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
-    expect(requirePropertyDescriptor(lazyRootSdk, "slowHelper")).toMatchObject({
-      configurable: true,
-      enumerable: true,
-    });
+    expectEnumerableConfigurableDescriptor(lazyRootSdk, "slowHelper");
   });
 
   it.each([
@@ -321,7 +329,7 @@ describe("plugin-sdk root alias", () => {
       expectedTryNative: false,
     },
     {
-      name: "prefers source loading on Windows even when compat resolves to dist",
+      name: "prefers native loading on Windows when compat resolves to dist",
       options: {
         distExists: true,
         env: { NODE_ENV: "production" },
@@ -330,7 +338,7 @@ describe("plugin-sdk root alias", () => {
           slowHelper: (): string => "loaded",
         },
       },
-      expectedTryNative: false,
+      expectedTryNative: true,
     },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);
@@ -374,16 +382,15 @@ describe("plugin-sdk root alias", () => {
     });
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
-    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
-      "openclaw/plugin-sdk": rootAliasPath,
-      "@openclaw/plugin-sdk": rootAliasPath,
-      "openclaw/plugin-sdk/group-access": expect.stringContaining(
-        path.join("src", "plugin-sdk", "group-access.ts"),
-      ),
-      "@openclaw/plugin-sdk/group-access": expect.stringContaining(
-        path.join("src", "plugin-sdk", "group-access.ts"),
-      ),
-    });
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["openclaw/plugin-sdk"]).toBe(rootAliasPath);
+    expect(aliasMap["@openclaw/plugin-sdk"]).toBe(rootAliasPath);
+    expect(aliasMap["openclaw/plugin-sdk/group-access"]).toContain(
+      path.join("src", "plugin-sdk", "group-access.ts"),
+    );
+    expect(aliasMap["@openclaw/plugin-sdk/group-access"]).toContain(
+      path.join("src", "plugin-sdk", "group-access.ts"),
+    );
   });
 
   it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
@@ -417,10 +424,17 @@ describe("plugin-sdk root alias", () => {
 
   it("ignores unsafe private local-only plugin-sdk subpaths in the CJS root alias", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const qaLabPath = path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts");
+    const ssrfRuntimeInternalPath = path.join(
+      packageRoot,
+      "src",
+      "plugin-sdk",
+      "ssrf-runtime-internal.ts",
+    );
     const lazyModule = loadRootAliasWithStubs({
       env: { OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" },
-      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path"],
-      existingPaths: [path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts")],
+      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path", "ssrf-runtime-internal"],
+      existingPaths: [qaLabPath, ssrfRuntimeInternalPath],
       monolithicExports: {
         slowHelper: (): string => "loaded",
       },
@@ -428,14 +442,36 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
-    expect(aliasMap["openclaw/plugin-sdk/qa-lab"]).toBe(
-      path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts"),
-    );
-    expect(aliasMap["@openclaw/plugin-sdk/qa-lab"]).toBe(
-      path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts"),
-    );
+    expect(aliasMap["openclaw/plugin-sdk/qa-lab"]).toBe(qaLabPath);
+    expect(aliasMap["@openclaw/plugin-sdk/qa-lab"]).toBe(qaLabPath);
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/../escape");
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/nested/path");
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/ssrf-runtime-internal");
+    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/ssrf-runtime-internal");
+  });
+
+  it("keeps non-QA private local-only plugin-sdk subpaths out of the CJS root alias", () => {
+    const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const sourceCodexMcpProjectionPath = path.join(
+      packageRoot,
+      "src",
+      "plugin-sdk",
+      "codex-mcp-projection.ts",
+    );
+    const sourceQaRuntimePath = path.join(packageRoot, "src", "plugin-sdk", "qa-runtime.ts");
+    const lazyModule = loadRootAliasWithStubs({
+      privateLocalOnlySubpaths: ["codex-mcp-projection", "qa-runtime"],
+      existingPaths: [sourceCodexMcpProjectionPath, sourceQaRuntimePath],
+      monolithicExports: {
+        slowHelper: (): string => "loaded",
+      },
+    });
+
+    expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/codex-mcp-projection");
+    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/codex-mcp-projection");
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/qa-runtime");
   });
 
   it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
@@ -451,20 +487,13 @@ describe("plugin-sdk root alias", () => {
     });
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
-    expect(lazyModule.createJitiOptions.at(-1)?.alias).toMatchObject({
-      "openclaw/plugin-sdk/channel-runtime": path.join(
-        packageRoot,
-        "src",
-        "plugin-sdk",
-        "channel-runtime.mts",
-      ),
-      "@openclaw/plugin-sdk/channel-runtime": path.join(
-        packageRoot,
-        "src",
-        "plugin-sdk",
-        "channel-runtime.mts",
-      ),
-    });
+    const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
+    expect(aliasMap["openclaw/plugin-sdk/channel-runtime"]).toBe(
+      path.join(packageRoot, "src", "plugin-sdk", "channel-runtime.mts"),
+    );
+    expect(aliasMap["@openclaw/plugin-sdk/channel-runtime"]).toBe(
+      path.join(packageRoot, "src", "plugin-sdk", "channel-runtime.mts"),
+    );
   });
 
   it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
@@ -494,6 +523,31 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.loadedSpecifiers).not.toContain(
       path.join(packageRoot, "dist", "diagnostic-events-zeta.js"),
     );
+  });
+
+  it("bridges diagnostic listeners through shared process state when the lazy module is isolated", () => {
+    const seen: string[] = [];
+    const lazyModule = loadDiagnosticEventsAlias(["diagnostic-events-W3Hz61fI.js"]);
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )((event) => {
+      seen.push(event.type);
+    });
+    const state = lazyModule.globalContext[Symbol.for("openclaw.diagnosticEvents.state.v1")] as {
+      listeners: Set<(event: { type: string }, metadata: { trusted: boolean }) => void>;
+    };
+
+    for (const listener of state.listeners) {
+      listener({ type: "model.usage" }, { trusted: false });
+      listener({ type: "log.record" }, { trusted: false });
+      listener({ type: "model.usage" }, { trusted: true });
+    }
+    unsubscribe();
+
+    expect(seen).toEqual(["model.usage"]);
+    expect(state.listeners.size).toBe(0);
   });
 
   it.each([
@@ -543,24 +597,21 @@ describe("plugin-sdk root alias", () => {
     );
     const lazyModule = loadRootAliasWithStubs({ monolithicExports });
 
-    expect(rootSdk).toEqual(
-      expect.objectContaining({
-        emptyPluginConfigSchema: expect.any(Function),
-        resolveControlCommandGate: expect.any(Function),
-        onDiagnosticEvent: expect.any(Function),
-      }),
-    );
+    expect(rootSdk.emptyPluginConfigSchema).toBeTypeOf("function");
+    expect(rootSdk.resolveControlCommandGate).toBeTypeOf("function");
+    expect(rootSdk.onDiagnosticEvent).toBeTypeOf("function");
 
     for (const name of legacyRootExportNames) {
       expect(lazyModule.moduleExports[name]).toBe(monolithicExports[name]);
     }
     expect(lazyModule.jitiLoadCalls).toBe(1);
-    expect(Object.keys(lazyModule.moduleExports)).toEqual(
-      expect.arrayContaining([...legacyRootExportNames]),
-    );
+    const exportKeys = Object.keys(lazyModule.moduleExports);
+    for (const name of legacyRootExportNames) {
+      expect(exportKeys).toContain(name);
+    }
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
-    expect(rootSdk.__esModule).toBe(true);
+    expect(rootSdk["__esModule"]).toBe(true);
   });
 
   it("keeps legacy root export names present in the compat source", () => {
@@ -593,10 +644,7 @@ describe("plugin-sdk root alias", () => {
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
     expect(keys).toContain("onDiagnosticEvent");
-    expect(requirePropertyDescriptor(rootSdk, "resolveControlCommandGate")).toMatchObject({
-      configurable: true,
-      enumerable: true,
-    });
+    expectEnumerableConfigurableDescriptor(rootSdk, "resolveControlCommandGate");
     expect(typeof requirePropertyDescriptor(rootSdk, "onDiagnosticEvent").value).toBe("function");
   });
 });

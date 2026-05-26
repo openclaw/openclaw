@@ -3,13 +3,14 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../channels/registry.js";
+import { formatUnknownChannelMessage } from "../cli/error-format.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listManifestChannelContributionIds } from "../plugins/manifest-contribution-ids.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 export { describeBinding } from "./agents.binding-format.js";
@@ -21,9 +22,7 @@ function bindingMatchKey(match: AgentRouteBinding["match"]) {
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
-  const roles = Array.isArray(match.roles)
-    ? Array.from(new Set(normalizeStringEntries(match.roles).toSorted()))
-    : [];
+  const roles = Array.isArray(match.roles) ? normalizeSortedUniqueStringEntries(match.roles) : [];
   return JSON.stringify([
     match.channel,
     match.peer?.kind ?? "",
@@ -265,6 +264,10 @@ function resolveBindingAccountId(params: {
     return pluginAccountId.trim();
   }
 
+  if (plugin && plugin.config.listAccountIds(params.config).length > 1) {
+    return "*";
+  }
+
   if (plugin?.meta.forceAccountBinding) {
     return resolveDefaultAccountId(params.config, params.channel);
   }
@@ -313,12 +316,14 @@ export function parseBindingSpecs(params: {
     const [channelRaw, accountRaw] = trimmed.split(":", 2);
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
-      errors.push(`Unknown channel "${channelRaw}".`);
+      errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
       continue;
     }
     let accountId: string | undefined = accountRaw?.trim();
     if (accountRaw !== undefined && !accountId) {
-      errors.push(`Invalid binding "${trimmed}" (empty account id).`);
+      errors.push(
+        `Invalid binding "${trimmed}". Account id is empty. Use <channel>:<account>, for example telegram:default.`,
+      );
       continue;
     }
     accountId = resolveBindingAccountId({

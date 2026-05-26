@@ -5,13 +5,38 @@ type SlackPayload = {
   text: string;
   blocks?: unknown;
 };
+type ChatUpdatePayload = {
+  channel?: string;
+  ts?: string;
+  text?: string;
+  blocks?: unknown;
+};
 const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 
 function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
   return blocks.find((block) => block.type === "actions");
 }
 
+function readChatUpdatePayload(
+  chatUpdate: { mock: { calls: unknown[][] } },
+  index: number,
+): ChatUpdatePayload {
+  const call = chatUpdate.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected Slack chat.update call #${index + 1}`);
+  }
+  const [payload] = call;
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`Expected Slack chat.update payload #${index + 1}`);
+  }
+  return payload as ChatUpdatePayload;
+}
+
 describe("slackApprovalNativeRuntime", () => {
+  it("subscribes to plugin approval events", () => {
+    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin"]);
+  });
+
   it("renders only the allowed pending actions", async () => {
     const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
@@ -68,6 +93,81 @@ describe("slackApprovalNativeRuntime", () => {
     expect(JSON.stringify(payload.blocks)).not.toContain("Allow Always");
   });
 
+  it("renders plugin pending approvals with plugin approval actions", async () => {
+    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        app: {} as never,
+        config: {} as never,
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Share screen with Computer Use",
+          description: "Computer Use wants to inspect the desktop.",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        phase: "pending",
+        approvalId: "plugin:req-1",
+        title: "Share screen with Computer Use",
+        description: "Computer Use wants to inspect the desktop.",
+        severity: "warning",
+        pluginId: "computer-use",
+        toolName: "screenshot",
+        metadata: [
+          { label: "Severity", value: "Warning" },
+          { label: "Plugin", value: "computer-use" },
+        ],
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve plugin:req-1 allow-once",
+            style: "success",
+          },
+          {
+            decision: "allow-always",
+            label: "Allow Always",
+            command: "/approve plugin:req-1 allow-always",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:req-1 deny",
+            style: "danger",
+          },
+        ],
+        expiresAtMs: 60_000,
+      },
+    })) as SlackPayload;
+
+    expect(payload.text).toContain("*Plugin approval required*");
+    expect(payload.text).toContain("Share screen with Computer Use");
+    expect(payload.text).toContain("*Approval ID:* plugin:req-1");
+    expect(payload.text).not.toContain("*Command*");
+    const actionsBlock = findSlackActionsBlock(
+      payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
+    );
+    const labels = (actionsBlock?.elements ?? []).map((element) =>
+      typeof element === "object" &&
+      element &&
+      typeof (element as { text?: { text?: unknown } }).text?.text === "string"
+        ? (element as { text: { text: string } }).text.text
+        : "",
+    );
+
+    expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
+    expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
+  });
+
   it("renders resolved updates without interactive blocks", async () => {
     const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
       cfg: {} as never,
@@ -112,6 +212,101 @@ describe("slackApprovalNativeRuntime", () => {
     expect(payload.text).toContain("Resolved by <@U123APPROVER>.");
     expect(
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
+    ).toBe(false);
+  });
+
+  it("renders plugin resolved and expired updates without command text", async () => {
+    const resolved = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        app: {} as never,
+        config: {} as never,
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Share screen with Computer Use",
+          description: "Computer Use wants to inspect the desktop.",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      resolved: {
+        id: "plugin:req-1",
+        decision: "allow-once",
+        resolvedBy: "U123APPROVER",
+        ts: 0,
+      } as never,
+      view: {
+        approvalKind: "plugin",
+        phase: "resolved",
+        approvalId: "plugin:req-1",
+        title: "Share screen with Computer Use",
+        description: "Computer Use wants to inspect the desktop.",
+        severity: "warning",
+        pluginId: "computer-use",
+        toolName: "screenshot",
+        metadata: [{ label: "Plugin", value: "computer-use" }],
+        decision: "allow-once",
+        resolvedBy: "U123APPROVER",
+      },
+      entry: {
+        channelId: "D123APPROVER",
+        messageTs: "1712345678.999999",
+      },
+    });
+    const expired = await slackApprovalNativeRuntime.presentation.buildExpiredResult({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        app: {} as never,
+        config: {} as never,
+      },
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Share screen with Computer Use",
+          description: "Computer Use wants to inspect the desktop.",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      view: {
+        approvalKind: "plugin",
+        phase: "expired",
+        approvalId: "plugin:req-1",
+        title: "Share screen with Computer Use",
+        description: "Computer Use wants to inspect the desktop.",
+        severity: "warning",
+        pluginId: "computer-use",
+        toolName: "screenshot",
+        metadata: [{ label: "Plugin", value: "computer-use" }],
+      },
+      entry: {
+        channelId: "D123APPROVER",
+        messageTs: "1712345678.999999",
+      },
+    });
+
+    expect(resolved.kind).toBe("update");
+    expect(expired.kind).toBe("update");
+    if (resolved.kind !== "update" || expired.kind !== "update") {
+      throw new Error("expected Slack update payloads");
+    }
+    const resolvedPayload = resolved.payload as SlackPayload;
+    const expiredPayload = expired.payload as SlackPayload;
+    expect(resolvedPayload.text).toContain("*Plugin approval: Allowed once*");
+    expect(resolvedPayload.text).toContain("Resolved by <@U123APPROVER>.");
+    expect(resolvedPayload.text).toContain("Share screen with Computer Use");
+    expect(resolvedPayload.text).not.toContain("*Command*");
+    expect(expiredPayload.text).toContain("*Plugin approval expired*");
+    expect(expiredPayload.text).toContain("Share screen with Computer Use");
+    expect(expiredPayload.text).not.toContain("*Command*");
+    expect(
+      (resolvedPayload.blocks as Array<{ type?: string }>).some(
+        (block) => block.type === "actions",
+      ),
     ).toBe(false);
   });
 
@@ -167,24 +362,17 @@ describe("slackApprovalNativeRuntime", () => {
       phase: "resolved",
     });
 
-    expect(chatUpdate).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        channel: "C123",
-        ts: "1712345678.999999",
-        text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT),
-        blocks,
-      }),
-    );
-    expect(chatUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        ts: "1712345678.999999",
-        text: expect.stringMatching(/…$/),
-        blocks,
-      }),
-    );
-    expect(chatUpdate.mock.calls[1]?.[0].text).toHaveLength(SLACK_CHAT_UPDATE_TEXT_LIMIT);
+    const firstUpdate = readChatUpdatePayload(chatUpdate, 0);
+    const secondUpdate = readChatUpdatePayload(chatUpdate, 1);
+    expect(firstUpdate.channel).toBe("C123");
+    expect(firstUpdate.ts).toBe("1712345678.999999");
+    expect(firstUpdate.text).toBe("a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT));
+    expect(firstUpdate.blocks).toBe(blocks);
+    expect(secondUpdate.channel).toBe("C123");
+    expect(secondUpdate.ts).toBe("1712345678.999999");
+    expect(secondUpdate.text).toMatch(/…$/);
+    expect(secondUpdate.blocks).toBe(blocks);
+    expect(secondUpdate.text).toHaveLength(SLACK_CHAT_UPDATE_TEXT_LIMIT);
   });
 
   it("keeps pending metadata context within Slack Block Kit limits", async () => {

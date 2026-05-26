@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind, __testing } from "./room-info.js";
+import { resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const readFileSync = vi.hoisted(() => vi.fn());
@@ -23,8 +23,20 @@ vi.mock("node:fs", () => {
 afterEach(() => {
   fetchWithSsrFGuard.mockReset();
   readFileSync.mockReset();
-  __testing.resetRoomCache();
+  testing.resetRoomCache();
 });
+
+function requireFirstFetchParams(): { auditContext?: string; url?: string } {
+  const [call] = fetchWithSsrFGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected Nextcloud Talk room info fetch call");
+  }
+  const [fetchParams] = call;
+  if (!fetchParams || typeof fetchParams !== "object" || Array.isArray(fetchParams)) {
+    throw new Error("expected Nextcloud Talk room info fetch call");
+  }
+  return fetchParams as { auditContext?: string; url?: string };
+}
 
 describe("nextcloud talk room info", () => {
   it("resolves direct rooms from the room info endpoint", async () => {
@@ -56,12 +68,11 @@ describe("nextcloud talk room info", () => {
     });
 
     expect(kind).toBe("direct");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
-        auditContext: "nextcloud-talk.room-info",
-      }),
+    const fetchParams = requireFirstFetchParams();
+    expect(fetchParams.url).toBe(
+      "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
     );
+    expect(fetchParams.auditContext).toBe("nextcloud-talk.room-info");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -96,6 +107,39 @@ describe("nextcloud talk room info", () => {
     expect(kind).toBeUndefined();
     expect(readFileSync).toHaveBeenCalledWith("/tmp/nextcloud-secret", "utf-8");
     expect(log).toHaveBeenCalledWith("nextcloud-talk: room lookup failed (403) token=room-group");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports malformed room info JSON with a stable channel error", async () => {
+    const release = vi.fn(async () => {});
+    const log = vi.fn();
+    const error = vi.fn();
+    const exit = vi.fn();
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const kind = await resolveNextcloudTalkRoomKind({
+      account: {
+        accountId: "acct-malformed",
+        baseUrl: "https://nc.example.com",
+        config: {
+          apiUser: "bot",
+          apiPassword: "secret",
+        },
+      } as never,
+      roomToken: "room-malformed",
+      runtime: { log, error, exit },
+    });
+
+    expect(kind).toBeUndefined();
+    expect(error).toHaveBeenCalledWith(
+      "nextcloud-talk: room lookup error: Error: Nextcloud Talk room info failed: malformed JSON response",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 

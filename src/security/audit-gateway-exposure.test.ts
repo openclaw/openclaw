@@ -10,6 +10,32 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
+function requireDangerousFlagsFindings(
+  findings: ReturnType<typeof collectGatewayConfigFindings>,
+  label: string,
+) {
+  const dangerousFindings = findings.filter(
+    (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
+  );
+  if (dangerousFindings.length === 0) {
+    throw new Error(`Expected dangerous flags finding for ${label}`);
+  }
+  return dangerousFindings;
+}
+
+function requireFinding(
+  findings: ReturnType<typeof collectGatewayConfigFindings>,
+  checkId: string,
+  label: string,
+) {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  if (!finding) {
+    throw new Error(`Expected ${checkId} finding for ${label}`);
+  }
+  expect(finding.checkId, label).toBe(checkId);
+  return finding;
+}
+
 describe("security audit gateway exposure findings", () => {
   it("warns on insecure or dangerous flags", () => {
     const cases = [
@@ -65,19 +91,20 @@ describe("security audit gateway exposure findings", () => {
     for (const testCase of cases) {
       const findings = collectGatewayConfigFindings(testCase.cfg, testCase.cfg, {});
       if ("expectedFinding" in testCase) {
-        expect(findings, testCase.name).toEqual(
-          expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+        const exposureFinding = requireFinding(
+          findings,
+          testCase.expectedFinding.checkId,
+          testCase.name,
         );
+        expect(exposureFinding.severity, testCase.name).toBe(testCase.expectedFinding.severity);
       }
-      const finding = findings.find(
-        (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
-      );
-      expect(finding, testCase.name).toMatchObject({
-        checkId: "config.insecure_or_dangerous_flags",
-      });
-      expect(finding?.severity, testCase.name).toBe("warn");
+      const dangerousFindings = requireDangerousFlagsFindings(findings, testCase.name);
+      expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
       for (const snippet of testCase.expectedDangerousDetails) {
-        expect(finding?.detail, `${testCase.name}:${snippet}`).toContain(snippet);
+        expect(
+          dangerousFindings.some((finding) => finding.detail.includes(snippet)),
+          `${testCase.name}:${snippet}`,
+        ).toBe(true);
       }
     }
   });
@@ -126,7 +153,8 @@ describe("security audit gateway exposure findings", () => {
     },
   ])("$name", ({ cfg, expectedFinding, expectedNoFinding }) => {
     const findings = collectGatewayConfigFindings(cfg, cfg, {});
-    expect(findings).toEqual(expect.arrayContaining([expect.objectContaining(expectedFinding)]));
+    const finding = requireFinding(findings, expectedFinding.checkId, expectedFinding.checkId);
+    expect(finding.severity).toBe(expectedFinding.severity);
     if (expectedNoFinding) {
       expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
     }
@@ -150,12 +178,12 @@ describe("security audit gateway exposure findings", () => {
     expect(
       findings.some((finding) => finding.checkId === "gateway.control_ui.allowed_origins_required"),
     ).toBe(false);
-    const flags = findings.find(
-      (finding) => finding.checkId === "config.insecure_or_dangerous_flags",
-    );
-    expect(flags?.detail ?? "").toContain(
-      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
-    );
+    const flags = requireDangerousFlagsFindings(findings, "host header origin fallback");
+    expect(
+      flags.some((finding) =>
+        finding.detail.includes("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true"),
+      ),
+    ).toBe(true);
   });
 
   it.each([

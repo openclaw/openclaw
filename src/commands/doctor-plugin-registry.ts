@@ -4,10 +4,23 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import { resolveDefaultPluginNpmDir } from "../plugins/install-paths.js";
-import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  type InstalledPluginIndexRecordStoreOptions,
+} from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import {
+  auditOpenClawPeerDependenciesInManagedNpmRoot,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "../plugins/plugin-peer-link.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
+import {
+  listStaleLocalBundledPluginInstallRecords,
+  type StaleLocalBundledPluginInstallRecord,
+} from "../plugins/stale-local-bundled-plugin-install-records.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -32,9 +45,10 @@ type StaleManagedNpmBundledPlugin = {
   version?: string;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+type PluginRegistryDoctorNoteLogger = {
+  info: (message: string) => void;
+  warn: (message: string) => void;
+};
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
   const parsed = tryReadJsonSync(filePath);
@@ -52,6 +66,12 @@ function readStringMap(value: unknown): Record<string, string> {
     }
   }
   return result;
+}
+
+function resolveManagedPluginNpmRoot(params: PluginRegistryDoctorRepairParams): string {
+  return params.stateDir
+    ? path.join(params.stateDir, "npm")
+    : resolveDefaultPluginNpmDir(params.env);
 }
 
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
@@ -84,14 +104,14 @@ function listStaleManagedNpmBundledPlugins(
   const bundledByPackage = new Map(
     currentBundled.map((plugin) => [plugin.packageName, plugin] as const),
   );
-  const npmRoot = params.stateDir
-    ? path.join(params.stateDir, "npm")
-    : resolveDefaultPluginNpmDir(params.env);
+  const npmRoot = resolveManagedPluginNpmRoot(params);
   const npmPackageJsonPath = path.join(npmRoot, "package.json");
   const dependencies = readStringMap(readJsonObject(npmPackageJsonPath)?.dependencies);
   const stale: StaleManagedNpmBundledPlugin[] = [];
 
-  for (const packageName of Object.keys(dependencies).toSorted()) {
+  for (const packageName of Object.keys(dependencies).toSorted((left, right) =>
+    left.localeCompare(right),
+  )) {
     if (!packageName.startsWith("@openclaw/")) {
       continue;
     }
@@ -114,6 +134,40 @@ function listStaleManagedNpmBundledPlugins(
   }
 
   return stale;
+}
+
+function loadCurrentBundledPluginSources(
+  params: PluginRegistryDoctorRepairParams,
+): Map<string, BundledPluginSource> {
+  const currentBundled = loadInstalledPluginIndex({
+    ...params,
+    installRecords: {},
+  }).plugins.filter((plugin) => plugin.origin === "bundled");
+  return new Map(
+    currentBundled.map(
+      (plugin) =>
+        [
+          plugin.pluginId,
+          {
+            pluginId: plugin.pluginId,
+            localPath: plugin.rootDir,
+            ...(plugin.packageName ? { npmSpec: plugin.packageName } : {}),
+            ...(plugin.packageVersion ? { version: plugin.packageVersion } : {}),
+          },
+        ] as const,
+    ),
+  );
+}
+
+async function listStaleLocalBundledPluginInstallRecordShadows(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<StaleLocalBundledPluginInstallRecord[]> {
+  return listStaleLocalBundledPluginInstallRecords({
+    installRecords: await loadInstalledPluginIndexInstallRecords(params),
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    bundled: loadCurrentBundledPluginSources(params),
+  });
 }
 
 function removeManagedNpmDependency(params: {
@@ -225,6 +279,95 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   return true;
 }
 
+export async function maybeRepairStaleLocalBundledPluginInstallRecords(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<string[]> {
+  const stale = await listStaleLocalBundledPluginInstallRecordShadows(params);
+  if (stale.length === 0) {
+    return [];
+  }
+
+  if (!params.prompter.shouldRepair) {
+    note(
+      [
+        "Local bundled plugin install records shadow bundled plugins:",
+        ...stale.map((record) => `- ${record.pluginId}: ${shortenHomePath(record.stalePath)}`),
+        `Repair with ${formatCliCommand("openclaw doctor --fix")} to remove stale local install records and rebuild the plugin registry.`,
+      ].join("\n"),
+      "Plugin registry",
+    );
+    return [];
+  }
+
+  note(
+    [
+      "Removed stale local bundled plugin install record(s) shadowing bundled plugins:",
+      ...stale.map((record) => `- ${record.pluginId}: ${shortenHomePath(record.stalePath)}`),
+    ].join("\n"),
+    "Plugin registry",
+  );
+  return stale.map((record) => record.pluginId);
+}
+
+export async function maybeRepairManagedNpmOpenClawPeerLinks(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<boolean> {
+  const npmRoot = resolveManagedPluginNpmRoot(params);
+  if (!params.prompter.shouldRepair) {
+    const audit = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
+    if (audit.broken > 0) {
+      note(
+        [
+          "Managed npm OpenClaw host peer links need repair:",
+          ...audit.issues.map((issue) => `- ${issue.packageName}: ${issue.reason}`),
+          `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink managed npm plugin packages.`,
+        ].join("\n"),
+        "Plugin registry",
+      );
+    }
+    return false;
+  }
+
+  const messages: { level: "info" | "warn"; message: string }[] = [];
+  const logger: PluginRegistryDoctorNoteLogger = {
+    info: (message) => messages.push({ level: "info", message }),
+    warn: (message) => messages.push({ level: "warn", message }),
+  };
+  const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+    npmRoot,
+    logger,
+  });
+
+  if (result.repaired > 0) {
+    note(
+      `Repaired OpenClaw host peer link(s) for ${result.repaired} managed npm plugin package(s).`,
+      "Plugin registry",
+    );
+  }
+  const warnings = messages
+    .filter((message) => message.level === "warn")
+    .map((message) => `- ${message.message}`);
+  if (warnings.length > 0) {
+    note(
+      ["Could not repair all managed npm OpenClaw host peer links:", ...warnings].join("\n"),
+      "Plugin registry",
+    );
+  }
+
+  return result.repaired > 0;
+}
+
+async function loadInstallRecordsWithoutPluginIds(
+  params: PluginRegistryDoctorRepairParams,
+  pluginIds: readonly string[],
+) {
+  const records = await loadInstalledPluginIndexInstallRecords(params);
+  for (const pluginId of pluginIds) {
+    delete records[pluginId];
+  }
+  return records;
+}
+
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {
@@ -244,7 +387,19 @@ export async function maybeRepairPluginRegistryState(
     ...params,
     config: params.config,
   };
+  const staleManagedNpmBundledPluginIds = listStaleManagedNpmBundledPlugins(params).map(
+    (plugin) => plugin.pluginId,
+  );
   const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
+  const removedStaleLocalBundledPluginIds =
+    await maybeRepairStaleLocalBundledPluginInstallRecords(params);
+  const repairedManagedNpmOpenClawPeerLinks = await maybeRepairManagedNpmOpenClawPeerLinks(params);
+  const stalePluginIdsToRemove = [
+    ...new Set([
+      ...(removedStaleManagedNpmBundledPlugins ? staleManagedNpmBundledPluginIds : []),
+      ...removedStaleLocalBundledPluginIds,
+    ]),
+  ];
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
       note(
@@ -259,7 +414,17 @@ export async function maybeRepairPluginRegistryState(
   }
 
   if (preflight.action === "migrate") {
-    const result = await migratePluginRegistryForInstall(migrationParams);
+    const result = await migratePluginRegistryForInstall({
+      ...migrationParams,
+      ...(stalePluginIdsToRemove.length > 0
+        ? {
+            installRecords: await loadInstallRecordsWithoutPluginIds(
+              params,
+              stalePluginIdsToRemove,
+            ),
+          }
+        : {}),
+    });
     if (result.migrated) {
       const total = result.current.plugins.length;
       const enabled = result.current.plugins.filter((plugin) => plugin.enabled).length;
@@ -271,10 +436,23 @@ export async function maybeRepairPluginRegistryState(
     return params.config;
   }
 
-  if (preflight.action === "skip-existing" || removedStaleManagedNpmBundledPlugins) {
+  if (
+    preflight.action === "skip-existing" ||
+    removedStaleManagedNpmBundledPlugins ||
+    removedStaleLocalBundledPluginIds.length > 0 ||
+    repairedManagedNpmOpenClawPeerLinks
+  ) {
     const index = await refreshPluginRegistry({
       ...migrationParams,
       reason: "migration",
+      ...(stalePluginIdsToRemove.length > 0
+        ? {
+            installRecords: await loadInstallRecordsWithoutPluginIds(
+              params,
+              stalePluginIdsToRemove,
+            ),
+          }
+        : {}),
     });
     const total = index.plugins.length;
     const enabled = index.plugins.filter((plugin) => plugin.enabled).length;

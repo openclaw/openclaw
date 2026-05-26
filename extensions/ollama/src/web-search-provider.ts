@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
@@ -17,7 +17,7 @@ import {
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -64,6 +64,14 @@ type OllamaWebSearchAttempt = {
   path: string;
   apiKey?: string;
 };
+
+async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
+  try {
+    return (await response.json()) as OllamaWebSearchResponse;
+  } catch (cause) {
+    throw new Error("Ollama web search returned malformed JSON", { cause });
+  }
+}
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
   try {
@@ -211,7 +219,7 @@ export async function runOllamaWebSearch(params: {
         }
         throw new Error(message);
       }
-      payload = (await response.json()) as OllamaWebSearchResponse;
+      payload = await readOllamaWebSearchResponse(response);
       break;
     } catch (error) {
       if (error instanceof Error) {
@@ -328,7 +336,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
-export const __testing = {
+export const testing = {
   buildOllamaWebSearchAttempts,
   normalizeOllamaWebSearchResult,
   resolveConfiguredOllamaWebSearchApiKey,
@@ -336,5 +344,7 @@ export const __testing = {
   resolveOllamaWebSearchApiKey,
   resolveOllamaWebSearchBaseUrl,
   isOllamaCloudBaseUrl,
+  readOllamaWebSearchResponse,
   warnOllamaWebSearchPrereqs,
 };
+export { testing as __testing };

@@ -4,14 +4,14 @@ import {
   serializeCommandArgs,
   type ChatCommandDefinition,
   type CommandArgs,
-} from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Container,
   TextDisplay,
@@ -27,6 +27,7 @@ import {
 import {
   loadDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
+  resolveDiscordModelPickerPageForModel,
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
@@ -83,12 +84,6 @@ function buildDiscordModelPickerCurrentModel(
   defaultModel: string,
 ): string {
   return `${defaultProvider}/${defaultModel}`;
-}
-
-function resolveConfiguredAgentRuntimeId(value: {
-  agentRuntime?: { id?: unknown };
-}): string | undefined {
-  return normalizeOptionalString(value.agentRuntime?.id);
 }
 
 export function buildDiscordModelPickerAllowedModelRefs(
@@ -277,19 +272,9 @@ export function resolveDiscordModelPickerCurrentRuntime(params: {
     if (sessionRuntime) {
       return sessionRuntime;
     }
-  } catch {
-    // Fall through to configured defaults when the session store is unavailable.
-  }
+  } catch {}
 
-  const agentRuntime = resolveConfiguredAgentRuntimeId(
-    params.cfg.agents?.list?.find(
-      (entry) => normalizeOptionalString(entry.id) === params.route.agentId,
-    ) ?? {},
-  );
-  if (agentRuntime) {
-    return agentRuntime;
-  }
-  return resolveConfiguredAgentRuntimeId(params.cfg.agents?.defaults ?? {}) ?? "auto";
+  return "auto";
 }
 
 export async function replyWithDiscordModelPickerProviders(params: {
@@ -327,13 +312,26 @@ export async function replyWithDiscordModelPickerProviders(params: {
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
     limit: 5,
   });
+  const parsedCurrentRef = splitDiscordModelRef(currentModel ?? "");
+  const initialProvider =
+    parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
+      ? parsedCurrentRef.provider
+      : (data.providers[0] ?? data.resolvedDefault.provider);
+  const initialPage =
+    parsedCurrentRef && parsedCurrentRef.provider === initialProvider
+      ? resolveDiscordModelPickerPageForModel({
+          data,
+          provider: initialProvider,
+          model: parsedCurrentRef.model,
+        })
+      : 1;
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
     userId: params.userId,
     data,
-    provider: splitDiscordModelRef(currentModel ?? "")?.provider ?? data.resolvedDefault.provider,
-    page: 1,
+    provider: initialProvider,
+    page: initialPage,
     providerPage: 1,
     currentModel,
     currentRuntime,

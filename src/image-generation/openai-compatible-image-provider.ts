@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -10,11 +10,8 @@ import {
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import {
-  parseOpenAiCompatibleImageResponse,
-  type OpenAiCompatibleImageResponsePayload,
-} from "./image-assets.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -141,6 +138,9 @@ export function createOpenAiCompatibleImageGenerationProvider(
     id: options.id,
     label: options.label,
     defaultModel: options.defaultModel,
+    ...(options.defaultTimeoutMs !== undefined
+      ? { defaultTimeoutMs: options.defaultTimeoutMs }
+      : {}),
     models: [...options.models],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
@@ -234,6 +234,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork: resolvedAllowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             })
           : postJsonRequest({
@@ -247,6 +248,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork: resolvedAllowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
 
@@ -258,12 +260,20 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(
-          (await response.json()) as OpenAiCompatibleImageResponsePayload,
-          options.response,
-        );
-        if (options.emptyResponseError && images.length === 0) {
-          throw new Error(options.emptyResponseError);
+        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+          ...options.response,
+          malformedResponseError:
+            mode === "edit"
+              ? `${options.label} image edit response malformed`
+              : `${options.label} image generation response malformed`,
+        });
+        if (images.length === 0) {
+          throw new Error(
+            options.emptyResponseError ??
+              (mode === "edit"
+                ? `${options.label} image edit response missing image data`
+                : `${options.label} image generation response missing image data`),
+          );
         }
         return { images, model };
       } finally {

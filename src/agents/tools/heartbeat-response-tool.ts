@@ -6,6 +6,7 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../../auto-reply/heartbeat-tool-response.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
@@ -23,10 +24,6 @@ const HeartbeatResponseToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function readRequiredBoolean(params: Record<string, unknown>, key: string): boolean {
   const raw = readSnakeCaseParamRaw(params, key);
   if (typeof raw !== "boolean") {
@@ -36,12 +33,13 @@ function readRequiredBoolean(params: Record<string, unknown>, key: string): bool
 }
 
 export function createHeartbeatResponseTool(): AnyAgentTool {
+  let recorded = false;
   return {
     label: "Heartbeat",
     name: HEARTBEAT_RESPONSE_TOOL_NAME,
-    displaySummary: "Record a heartbeat outcome and whether it should notify the user.",
+    displaySummary: "Record heartbeat outcome/notify choice.",
     description:
-      "Record the result of a heartbeat run. Use notify=false when nothing should be sent visibly. Use notify=true with notificationText when the user should receive a concise heartbeat alert.",
+      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {
@@ -54,6 +52,10 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
           "Invalid heartbeat response. Provide outcome, notify, and non-empty summary.",
         );
       }
+      if (recorded) {
+        throw new ToolInputError("heartbeat_respond already recorded for this turn");
+      }
+      recorded = true;
       return jsonResult({
         status: "recorded",
         ...response,

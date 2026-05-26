@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  asRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
 } from "./config.js";
@@ -32,16 +36,6 @@ type NodeBridgeSession = {
 };
 
 const sessions = new Map<string, NodeBridgeSession>();
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
@@ -473,7 +467,14 @@ function stopChrome(params: Record<string, unknown>) {
 }
 
 export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null): Promise<string> {
-  const raw = paramsJSON ? JSON.parse(paramsJSON) : {};
+  let raw: unknown = {};
+  if (paramsJSON) {
+    try {
+      raw = JSON.parse(paramsJSON) as unknown;
+    } catch {
+      throw new Error("Google Meet node host received malformed params JSON.");
+    }
+  }
   const params = asRecord(raw);
   const action = readString(params.action);
   let result: unknown;

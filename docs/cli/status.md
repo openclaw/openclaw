@@ -26,11 +26,14 @@ Notes:
 - When the current session snapshot is sparse, `/status` can backfill token and cache counters from the most recent transcript usage log. Existing nonzero live values still win over transcript fallback values.
 - `/status` includes compact Gateway process uptime and host system uptime.
 - Transcript fallback can also recover the active runtime model label when the live session entry is missing it. If that transcript model differs from the selected model, status resolves the context window against the recovered runtime model instead of the selected one.
+- When a session is pinned to a model that differs from the configured primary, status prints both values, the reason (`session override`), and the clear hint (`/model <configured-default>` or `/reset`). The configured primary applies to new or unpinned sessions; existing pinned sessions keep their session selection until cleared.
 - For prompt-size accounting, transcript fallback prefers the larger prompt-oriented total when session metadata is missing or smaller, so custom-provider sessions do not collapse to `0` token displays.
 - Output includes per-agent session stores when multiple agents are configured.
 - Overview includes Gateway + node host service install/runtime status when available.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status prints a hint to run `openclaw update` (see [Updating](/install/updating)).
+- Model pricing refresh failures are shown as optional pricing warnings. They do
+  not mean the Gateway or channels are unhealthy.
 - Read-only status surfaces (`status`, `status --json`, `status --all`) resolve supported SecretRefs for their targeted config paths when possible.
 - If a supported channel SecretRef is configured but unavailable in the current command path, status stays read-only and reports degraded output instead of crashing. Human output shows warnings such as "configured token unavailable in this command path", and JSON output includes `secretDiagnostics`.
 - When command-local SecretRef resolution succeeds, status prefers the resolved snapshot and clears transient "secret unavailable" channel markers from the final output.

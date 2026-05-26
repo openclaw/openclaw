@@ -1,7 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls, renderChatMobileToggle } from "./app-render.helpers.ts";
+import {
+  renderChatControls,
+  renderChatMobileToggle,
+  renderTab,
+  renderTopbarThemeModeToggle,
+} from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -19,6 +24,8 @@ function createState(overrides: Partial<AppViewState> = {}) {
     chatSending: false,
     chatStream: null,
     onboarding: false,
+    basePath: "",
+    tab: "chat",
     sessionKey: "main",
     sessionsHideCron: true,
     sessionsResult: {
@@ -44,13 +51,22 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatFocusMode: false,
       chatShowThinking: false,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
     },
     applySettings: () => undefined,
+    setThemeMode: () => undefined,
     chatMobileControlsOpen: false,
     setChatMobileControlsOpen: () => undefined,
     chatModelCatalog: [],
     chatModelOverrides: {},
     chatModelsLoading: false,
+    chatSessionPickerOpen: false,
+    chatSessionPickerSurface: null,
+    chatSessionPickerQuery: "",
+    chatSessionPickerAppliedQuery: "",
+    chatSessionPickerLoading: false,
+    chatSessionPickerError: null,
+    chatSessionPickerResult: null,
     client: { request: vi.fn() },
     ...overrides,
   } as unknown as AppViewState;
@@ -63,11 +79,49 @@ function renderRefreshButton(overrides: Partial<AppViewState> = {}) {
   const button = container.querySelector<HTMLButtonElement>(
     `.chat-controls .btn--icon[data-tooltip="${t("chat.refreshTitle")}"]`,
   );
-  expect(button).not.toBeNull();
-  return button!;
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("Expected chat refresh button");
+  }
+  return button;
+}
+
+function requireButton(
+  button: HTMLButtonElement | null | undefined,
+  label: string,
+): HTMLButtonElement {
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected ${label} button`);
+  }
+  return button;
+}
+
+function requireElement<T extends Element>(element: T | null | undefined, label: string): T {
+  expect(element).toBeInstanceOf(Element);
+  if (!element) {
+    throw new Error(`Expected ${label} element`);
+  }
+  return element;
 }
 
 describe("chat header controls (browser)", () => {
+  it("keeps the sidebar settings entry active for nested settings tabs", async () => {
+    const state = createState({ tab: "appearance" });
+    const container = document.createElement("div");
+    render(renderTab(state, "config"), container);
+    await Promise.resolve();
+
+    const link = requireElement(
+      container.querySelector<HTMLAnchorElement>(".nav-item"),
+      "nav item",
+    );
+    expect(link.classList.contains("nav-item--active")).toBe(true);
+    expect(link.getAttribute("href")).toBe("/config");
+    expect(link.getAttribute("title")).toBe("Settings");
+    expect(link.textContent?.trim()).toBe("Settings");
+  });
+
   it("renders explicit hover tooltip metadata for the top-right action buttons", async () => {
     const container = document.createElement("div");
     render(renderChatControls(createState()), container);
@@ -77,11 +131,12 @@ describe("chat header controls (browser)", () => {
       container.querySelectorAll<HTMLButtonElement>(".chat-controls .btn--icon[data-tooltip]"),
     );
 
-    expect(buttons).toHaveLength(5);
+    expect(buttons).toHaveLength(6);
 
     const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
     expect(labels).toEqual([
       t("chat.refreshTitle"),
+      `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
       t("chat.thinkingToggle"),
       t("chat.toolCallsToggle"),
       t("chat.focusToggle"),
@@ -92,6 +147,31 @@ describe("chat header controls (browser)", () => {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
       expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
     }
+  });
+
+  it("renders explicit hover tooltip metadata for the color mode buttons", async () => {
+    const container = document.createElement("div");
+    render(renderTopbarThemeModeToggle(createState({ themeMode: "system" })), container);
+    await Promise.resolve();
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".topbar-theme-mode__btn[data-tooltip]"),
+    );
+
+    expect(buttons).toHaveLength(3);
+
+    const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
+    expect(labels).toEqual([
+      t("common.colorModeOption", { mode: t("common.system") }),
+      t("common.colorModeOption", { mode: t("common.light") }),
+      t("common.colorModeOption", { mode: t("common.dark") }),
+    ]);
+
+    for (const button of buttons) {
+      expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
+      expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
+    }
+    expect(buttons[0]?.classList.contains("topbar-theme-mode__btn--active")).toBe(true);
   });
 
   it.each([
@@ -139,17 +219,43 @@ describe("chat header controls (browser)", () => {
       container.querySelectorAll<HTMLButtonElement>(".chat-controls__thinking .btn--icon"),
     );
 
-    expect(buttons).toHaveLength(4);
-    const cronButton = buttons.at(-1);
-    expect(cronButton?.classList.contains("active")).toBe(true);
-    expect(cronButton?.getAttribute("aria-pressed")).toBe("true");
-    expect(cronButton?.getAttribute("title")).toBe(
-      t("chat.showCronSessionsHidden", { count: "1" }),
-    );
+    expect(buttons).toHaveLength(5);
+    const autoScrollButton = requireButton(buttons.at(0), "auto-scroll mode");
+    expect(autoScrollButton.dataset.chatAutoScrollMode).toBe("near-bottom");
+    const cronButton = requireButton(buttons.at(-1), "cron sessions");
+    expect([...cronButton.classList]).toEqual(["btn", "btn--sm", "btn--icon", "active"]);
+    expect(cronButton.getAttribute("aria-pressed")).toBe("true");
+    expect(cronButton.getAttribute("title")).toBe(t("chat.showCronSessionsHidden", { count: "1" }));
 
-    cronButton?.click();
+    cronButton.click();
 
     expect(state.sessionsHideCron).toBe(false);
+  });
+
+  it("renders and applies the chat auto-scroll mode toggle", async () => {
+    const applySettings = vi.fn();
+    const state = createState({ applySettings });
+    const container = document.createElement("div");
+    render(renderChatControls(state), container);
+    await Promise.resolve();
+
+    const toggle = requireButton(
+      container.querySelector<HTMLButtonElement>('[data-chat-auto-scroll-toggle="true"]'),
+      "auto-scroll toggle",
+    );
+    expect(toggle.getAttribute("aria-label")).toBe(
+      `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
+    );
+    expect(toggle.getAttribute("data-tooltip")).toBe(toggle.getAttribute("aria-label"));
+    expect(toggle.dataset.chatAutoScrollMode).toBe("near-bottom");
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+
+    toggle.click();
+
+    expect(applySettings).toHaveBeenCalledWith({
+      ...state.settings,
+      chatAutoScroll: "always",
+    });
   });
 
   it("uses the shared chat session controls in the mobile dropdown", async () => {
@@ -182,10 +288,24 @@ describe("chat header controls (browser)", () => {
 
     const sessionRows = container.querySelectorAll(".chat-controls__session-row");
     expect(sessionRows).toHaveLength(1);
-    expect(container.querySelector('select[data-chat-agent-filter="true"]')).not.toBeNull();
-    expect(container.querySelector('select[data-chat-session-select="true"]')).not.toBeNull();
-    expect(container.querySelector('select[data-chat-model-select="true"]')).not.toBeNull();
-    expect(container.querySelector('select[data-chat-thinking-select="true"]')).not.toBeNull();
+    const sessionTrigger = requireButton(
+      container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]'),
+      "session trigger",
+    );
+    expect(sessionTrigger.dataset.chatSessionSelect).toBe("true");
+
+    const selectDatasets = Array.from(container.querySelectorAll("select")).map(
+      (select) => select.dataset,
+    );
+    expect(selectDatasets).toHaveLength(3);
+    expect(selectDatasets[0]?.chatAgentFilter).toBe("true");
+    expect(selectDatasets[1]?.chatModelSelect).toBe("true");
+    expect(selectDatasets[2]?.chatThinkingSelect).toBe("true");
+    const autoScrollToggle = requireButton(
+      container.querySelector<HTMLButtonElement>('[data-chat-auto-scroll-toggle="true"]'),
+      "auto-scroll toggle",
+    );
+    expect(autoScrollToggle.dataset.chatAutoScrollMode).toBe("near-bottom");
   });
 
   it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {
@@ -198,19 +318,23 @@ describe("chat header controls (browser)", () => {
     render(renderChatMobileToggle(state), container);
     await Promise.resolve();
 
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
-    const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
-    expect(toggle).not.toBeNull();
-    expect(dropdown).not.toBeNull();
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle?.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
-    expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");
-    expect(dropdown?.classList.contains("open")).toBe(false);
+    const toggle = requireButton(
+      container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle"),
+      "mobile controls toggle",
+    );
+    const dropdown = requireElement(
+      container.querySelector<HTMLElement>(".chat-controls-dropdown"),
+      "mobile controls dropdown",
+    );
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
+    expect(dropdown.id).toBe("chat-mobile-controls-dropdown");
+    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
 
-    toggle?.click();
+    toggle.click();
 
     expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
-    expect(dropdown?.classList.contains("open")).toBe(false);
+    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
 
     render(
       renderChatMobileToggle(
@@ -223,9 +347,15 @@ describe("chat header controls (browser)", () => {
     );
     await Promise.resolve();
 
-    const openToggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
-    const openDropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
-    expect(openToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(openDropdown?.classList.contains("open")).toBe(true);
+    const openToggle = requireButton(
+      container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle"),
+      "open mobile controls toggle",
+    );
+    const openDropdown = requireElement(
+      container.querySelector<HTMLElement>(".chat-controls-dropdown"),
+      "open mobile controls dropdown",
+    );
+    expect(openToggle.getAttribute("aria-expanded")).toBe("true");
+    expect([...openDropdown.classList]).toEqual(["chat-controls-dropdown", "open"]);
   });
 });

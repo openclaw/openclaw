@@ -1,3 +1,4 @@
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
@@ -17,7 +18,7 @@ const permissionRouteDeps = {
   getPwAiModule,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
     permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
   },
@@ -57,7 +58,7 @@ function readPermissions(raw: unknown): string[] | null {
   if (permissions.length !== raw.length) {
     return null;
   }
-  return [...new Set(permissions)];
+  return uniqueStrings(permissions);
 }
 
 async function grantPermissions(params: {
@@ -193,3 +194,4 @@ export function registerBrowserPermissionRoutes(
     }),
   );
 }
+export { testing as __testing };

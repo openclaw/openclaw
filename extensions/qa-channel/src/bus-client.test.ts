@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
 
@@ -32,6 +31,22 @@ async function startJsonServer(
       });
     },
   };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 describe("qa-bus client", () => {
@@ -102,14 +117,13 @@ describe("qa-bus client", () => {
     });
     abort.abort();
 
-    await expect(
-      Promise.race([
-        request,
-        sleep(500).then(() => {
-          throw new Error("poll abort did not settle");
-        }),
-      ]),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    try {
+      await withTimeout(request, 500, "poll abort did not settle");
+      throw new Error("expected poll abort to reject");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("AbortError");
+    }
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {
@@ -128,8 +142,11 @@ describe("qa-bus client", () => {
     }));
     stops.push(server.stop);
 
-    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toMatchObject({
+    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toEqual({
       cursor: 1,
+      conversations: [],
+      threads: [],
+      messages: [],
       events: [],
     });
   });

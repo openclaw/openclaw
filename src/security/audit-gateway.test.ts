@@ -112,6 +112,29 @@ describe("security audit gateway config findings", () => {
     ]);
   });
 
+  it("honors runtime password auth override for bind auth checks", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {},
+      },
+    };
+
+    const findings = collectGatewayConfigFindings(
+      cfg,
+      cfg,
+      {},
+      {
+        gatewayAuthOverride: {
+          mode: "password",
+          password: "runtime-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    expect(hasFinding("gateway.bind_no_auth", findings)).toBe(false);
+  });
+
   it("warns when OPENCLAW_GATEWAY_TOKEN shadows a different configured token source", () => {
     const cfg: OpenClawConfig = {
       gateway: { auth: { token: "config-token" } },
@@ -121,6 +144,18 @@ describe("security audit gateway config findings", () => {
     });
 
     expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(true);
+  });
+
+  it("does not warn inside the managed gateway service credential context", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "config-token" } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
   });
 
   it("does not warn when gateway.auth.token resolves from OPENCLAW_GATEWAY_TOKEN", () => {

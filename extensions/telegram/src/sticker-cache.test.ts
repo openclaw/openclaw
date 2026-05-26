@@ -59,7 +59,11 @@ describe("sticker-cache", () => {
       };
 
       stickerCache.cacheSticker(sticker);
-      expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
+      const cachedSticker = stickerCache.getCachedSticker("unique123");
+      if (!cachedSticker) {
+        throw new Error("expected cached Telegram sticker");
+      }
+      expect(cachedSticker.fileUniqueId).toBe("unique123");
 
       jsonStoreMocks.store.value = null;
 
@@ -202,7 +206,7 @@ describe("sticker-cache", () => {
   describe("getAllCachedStickers", () => {
     it("returns empty array when cache is empty", () => {
       const result = stickerCache.getAllCachedStickers();
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
     });
 
     it("returns all cached stickers", () => {

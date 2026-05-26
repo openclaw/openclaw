@@ -84,6 +84,16 @@ const matrixNamedAccountPromotionKeys = [
 ] as const;
 const telegramSingleAccountKeysToMove = ["streaming"] as const;
 
+function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  for (const accountId of Object.keys(accounts)) {
+    if (accountId) {
+      ids.push(accountId);
+    }
+  }
+  return ids;
+}
+
 function resolveMatrixSingleAccountPromotionTarget(params: {
   channel: { defaultAccount?: string; accounts?: Record<string, unknown> };
 }): string {
@@ -98,7 +108,7 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
       ) ?? DEFAULT_ACCOUNT_ID
     );
   }
-  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  const namedAccounts = collectNamedAccountIds(accounts);
   return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
 }
 
@@ -152,10 +162,14 @@ function createTokenPrompter(params: { confirms: boolean[]; texts: string[] }) {
 }
 
 function parseCsvInputs(value: string): string[] {
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const entries: string[] = [];
+  for (const part of value.split(",")) {
+    const entry = part.trim();
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+  return entries;
 }
 
 type AllowFromResolver = (params: {
@@ -2104,12 +2118,14 @@ describe("resolveAccountIdForConfigure", () => {
     });
 
     expect(accountId).toBe("prompted-id");
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Signal account",
-        initialValue: "fallback",
-      }),
-    );
+    const selectCalls = prompter.select.mock.calls as unknown as Array<
+      [{ message?: string; initialValue?: string }]
+    >;
+    const selectOptions = selectCalls[0]?.[0] as
+      | { message?: string; initialValue?: string }
+      | undefined;
+    expect(selectOptions?.message).toBe("Signal account");
+    expect(selectOptions?.initialValue).toBe("fallback");
     expect(prompter.text).not.toHaveBeenCalled();
   });
 });

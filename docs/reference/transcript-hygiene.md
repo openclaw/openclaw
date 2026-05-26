@@ -7,7 +7,7 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, but only for malformed lines or persisted turns that are invalid durable records. Delivered assistant replies are preserved on disk; provider-specific assistant-prefill stripping happens only while constructing outbound payloads. When a repair occurs, the original file is backed up alongside the session file.
+OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, but only for malformed lines or persisted turns that are invalid durable records. Delivered assistant replies are preserved on disk; provider-specific assistant-prefill stripping happens only while constructing outbound payloads. When a repair occurs, the original file is written to a transient `*.bak-<pid>-<ts>` sibling before the atomic replace and removed once the replace succeeds; the backup is only retained if cleanup itself fails (in which case the path is reported back).
 
 Scope includes:
 
@@ -124,12 +124,15 @@ inter-session user turns that only have provenance metadata.
 - Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
-**OpenAI-compatible Gemma 4**
+**OpenAI-compatible Chat Completions**
 
-- Historical assistant thinking/reasoning blocks are stripped before replay so local
-  OpenAI-compatible Gemma 4 servers do not receive prior-turn reasoning content.
+- Historical assistant thinking/reasoning blocks are stripped before replay so
+  local and proxy-style OpenAI-compatible servers do not receive prior-turn
+  reasoning fields such as `reasoning` or `reasoning_content`.
 - Current same-turn tool-call continuations keep the assistant reasoning block
   attached to the tool call until the tool result has been replayed.
+- Provider-owned exceptions can opt out when their wire protocol requires
+  replayed reasoning metadata.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
 

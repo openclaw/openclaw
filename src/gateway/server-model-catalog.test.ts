@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayModelChoice } from "./server-model-catalog.js";
 import {
-  __resetModelCatalogCacheForTest,
+  resetModelCatalogCacheForTest,
   loadGatewayModelCatalog,
   markGatewayModelCatalogStaleForReload,
 } from "./server-model-catalog.js";
@@ -17,12 +17,15 @@ type LoadModelCatalogForTest = NonNullable<
 >;
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((error: unknown) => void) | undefined;
   const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -34,7 +37,7 @@ const getConfig = () => ({}) as OpenClawConfig;
 
 describe("loadGatewayModelCatalog", () => {
   beforeEach(async () => {
-    await __resetModelCatalogCacheForTest();
+    await resetModelCatalogCacheForTest();
   });
 
   it("caches the first successful catalog until reload marks it stale", async () => {

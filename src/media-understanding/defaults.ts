@@ -1,8 +1,12 @@
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
-import { normalizeMediaProviderId } from "./provider-registry.js";
+import {
+  normalizeMediaExecutionProviderId,
+  normalizeMediaProviderId,
+} from "./provider-registry.js";
 import { providerSupportsCapability } from "./provider-supports.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 export {
@@ -65,11 +69,11 @@ function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): string | undefined {
+  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
   const providers = params.cfg?.models?.providers;
   if (!providers || typeof providers !== "object") {
     return undefined;
   }
-  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
   for (const [providerKey, providerCfg] of Object.entries(providers)) {
     if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
       continue;
@@ -93,7 +97,7 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
   }
   const configured: string[] = [];
   for (const [providerKey, providerCfg] of Object.entries(providers)) {
-    const normalizedProviderId = normalizeMediaProviderId(providerKey);
+    const normalizedProviderId = normalizeMediaExecutionProviderId(providerKey);
     if (!normalizedProviderId || configured.includes(normalizedProviderId)) {
       continue;
     }
@@ -108,14 +112,39 @@ function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
   return configured;
 }
 
+function isExecutionAliasProvider(providerId: string): boolean {
+  return normalizeMediaProviderId(providerId) !== providerId;
+}
+
+function insertConfiguredImageProviders(params: {
+  prioritized: string[];
+  configured: string[];
+}): string[] {
+  const merged = [...params.prioritized];
+  for (const providerId of params.configured.filter(isExecutionAliasProvider)) {
+    const canonicalProviderId = normalizeMediaProviderId(providerId);
+    const canonicalIndex = merged.indexOf(canonicalProviderId);
+    if (canonicalIndex >= 0) {
+      merged.splice(canonicalIndex, 0, providerId);
+    } else {
+      merged.unshift(providerId);
+    }
+  }
+  for (const providerId of params.configured.filter((id) => !isExecutionAliasProvider(id))) {
+    merged.push(providerId);
+  }
+  return uniqueStrings(merged);
+}
+
 export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
+  includeConfiguredImageModels?: boolean;
 }): string | undefined {
-  if (!params.providerRegistry) {
+  if (!params.providerRegistry && params.includeConfiguredImageModels !== false) {
     const configuredImageModel =
       params.capability === "image"
         ? resolveConfiguredImageProviderModel({
@@ -130,7 +159,13 @@ export function resolveDefaultMediaModel(params: {
   const registry =
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
+  const manifestDefaultModel = normalizeOptionalString(
+    provider?.defaultModels?.[params.capability],
+  );
+  if (manifestDefaultModel) {
+    return manifestDefaultModel;
+  }
+  return undefined;
 }
 
 export function resolveAutoMediaKeyProviders(params: {
@@ -165,7 +200,10 @@ export function resolveAutoMediaKeyProviders(params: {
   if (params.providerRegistry || params.capability !== "image") {
     return prioritized;
   }
-  return [...new Set([...prioritized, ...resolveConfiguredImageProviderIds(params.cfg)])];
+  return insertConfiguredImageProviders({
+    prioritized,
+    configured: resolveConfiguredImageProviderIds(params.cfg),
+  });
 }
 
 export function providerSupportsNativePdfDocument(params: {
@@ -178,4 +216,22 @@ export function providerSupportsNativePdfDocument(params: {
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
+}
+
+export function resolveDocumentMediaModel(params: {
+  providerId: string;
+  document: "pdf";
+  mode: "textExtraction" | "image";
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+}): string | false | undefined {
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const value = provider?.documentModels?.[params.document]?.[params.mode];
+  if (value === false) {
+    return false;
+  }
+  return normalizeOptionalString(value);
 }

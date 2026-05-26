@@ -2,11 +2,12 @@ import type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-} from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
@@ -14,7 +15,6 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
 > & {
-  ownerOnly?: boolean;
   displaySummary?: string;
 };
 
@@ -30,7 +30,6 @@ type ErasedAgentToolExecute = {
 
 export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
   ErasedAgentToolExecute & {
-    ownerOnly?: boolean;
     displaySummary?: string;
   };
 
@@ -51,8 +50,6 @@ export type ActionGate<T extends Record<string, boolean | undefined>> = (
   key: keyof T,
   defaultValue?: boolean,
 ) => boolean;
-
-export const OWNER_ONLY_TOOL_ERROR = "Tool restricted to owner senders.";
 
 export class ToolInputError extends Error {
   readonly status: number = 400;
@@ -119,6 +116,23 @@ export function readStringParam(
     return undefined;
   }
   return value;
+}
+
+/**
+ * Normalize tool model override input.
+ * - empty/whitespace => undefined
+ * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
+ * - otherwise returns trimmed explicit model string
+ */
+export function normalizeToolModelOverride(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function readStringOrNumberParam(
@@ -189,10 +203,7 @@ export function readStringArrayParam(
   const { required = false, label = key } = options;
   const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
-    const values = raw
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
     if (values.length === 0) {
       if (required) {
         throw new ToolInputError(`${label} required`);
@@ -284,21 +295,6 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
 
 export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return textResult(JSON.stringify(payload, null, 2), payload);
-}
-
-export function wrapOwnerOnlyToolExecution(
-  tool: AnyAgentTool,
-  senderIsOwner: boolean,
-): AnyAgentTool {
-  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
-    return tool;
-  }
-  return {
-    ...tool,
-    execute: async () => {
-      throw new Error(OWNER_ONLY_TOOL_ERROR);
-    },
-  };
 }
 
 export async function imageResult(params: {

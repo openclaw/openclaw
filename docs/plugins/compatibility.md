@@ -69,16 +69,14 @@ not publish the inspector binary from the main `openclaw` package.
 
 ### Maintainer acceptance lane
 
-Use Blacksmith Testbox for the installable-package acceptance lane when validating
-the external inspector against OpenClaw plugin packages. Run it from a clean
-OpenClaw checkout after the package is built:
+Use Crabbox-backed Blacksmith Testbox for the installable-package acceptance
+lane when validating the external inspector against OpenClaw plugin packages.
+Run it from a clean OpenClaw checkout after the package is built:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
-blacksmith testbox run --id <tbx_id> "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
-blacksmith testbox run --id <tbx_id> "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
-blacksmith testbox stop <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
 ```
 
 Keep this lane opt-in for maintainers because it installs an external npm
@@ -114,6 +112,8 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `api.on("deactivate", ...)` cleanup hook names while plugins migrate to
+  `gateway_stop`
 - legacy `activate(api)` plugin entrypoints while plugins migrate to
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,

@@ -190,6 +190,50 @@ export type ToolLoopDetectionConfig = {
   postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
+export type ToolSearchConfig =
+  | boolean
+  | {
+      /** Enable compact search/call cataloging for large tool sets. */
+      enabled?: boolean;
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
+      mode?: "code" | "tools";
+      /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
+      codeTimeoutMs?: number;
+      /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count. Runtime clamps to 1..50. */
+      maxSearchLimit?: number;
+    };
+
+export type CodeModeConfig =
+  | boolean
+  | {
+      /** Enable generic OpenClaw code mode. Default: false. */
+      enabled?: boolean;
+      /** Guest runtime. Only quickjs-wasi is supported. */
+      runtime?: "quickjs-wasi";
+      /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
+      mode?: "only";
+      /** Accepted source languages. */
+      languages?: Array<"javascript" | "typescript">;
+      /** Wall-clock limit in milliseconds for one exec or wait call. */
+      timeoutMs?: number;
+      /** QuickJS heap limit in bytes. */
+      memoryLimitBytes?: number;
+      /** Maximum serialized output bytes. */
+      maxOutputBytes?: number;
+      /** Maximum serialized snapshot bytes. */
+      maxSnapshotBytes?: number;
+      /** Maximum concurrent nested tool calls. */
+      maxPendingToolCalls?: number;
+      /** Retention for suspended snapshots. */
+      snapshotTtlSeconds?: number;
+      /** Default search result count for tools.search. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count for tools.search. */
+      maxSearchLimit?: number;
+    };
+
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
@@ -212,7 +256,7 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
-export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
 
 export function parseToolsBySenderTypedKey(
@@ -240,6 +284,7 @@ export function parseToolsBySenderTypedKey(
  * Per-sender overrides.
  *
  * Prefer explicit key prefixes:
+ * - channel:<channelId>:<senderId>
  * - id:<senderId>
  * - e164:<phone>
  * - username:<handle>
@@ -253,9 +298,9 @@ export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig
 export type ExecToolConfig = {
   /** Exec host routing (default: auto). */
   host?: "auto" | "sandbox" | "gateway" | "node";
-  /** Exec security mode (default: deny). */
+  /** Exec security mode (default: full; sandbox host defaults to deny). */
   security?: "deny" | "allowlist" | "full";
-  /** Exec ask mode (default: on-miss). */
+  /** Exec ask mode (default: off). */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
@@ -268,6 +313,8 @@ export type ExecToolConfig = {
    * Prevents silent allowlist reuse and allow-always persistence for those forms.
    */
   strictInlineEval?: boolean;
+  /** Render parser-derived command highlights in exec approval prompts (default: false). */
+  commandHighlighting?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -321,6 +368,10 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
+  codeMode?: CodeModeConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -334,6 +385,8 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Message tool configuration for this agent. */
+  message?: MessageToolsConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -513,6 +566,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   web?: {
     search?: {
       /** Enable managed web_search and optional Codex-native web search. */
@@ -596,32 +651,7 @@ export type ToolsConfig = {
   media?: MediaToolsConfig;
   links?: LinkToolsConfig;
   /** Message tool configuration. */
-  message?: {
-    /**
-     * @deprecated Use tools.message.crossContext settings.
-     * Allows cross-context sends across providers.
-     */
-    allowCrossContextSend?: boolean;
-    crossContext?: {
-      /** Allow sends to other channels within the same provider (default: true). */
-      allowWithinProvider?: boolean;
-      /** Allow sends across different providers (default: false). */
-      allowAcrossProviders?: boolean;
-      /** Cross-context marker configuration. */
-      marker?: {
-        /** Enable origin markers for cross-context sends (default: true). */
-        enabled?: boolean;
-        /** Text prefix template, supports {channel}. */
-        prefix?: string;
-        /** Text suffix template, supports {channel}. */
-        suffix?: string;
-      };
-    };
-    broadcast?: {
-      /** Enable broadcast action (default: true). */
-      enabled?: boolean;
-    };
-  };
+  message?: MessageToolsConfig;
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
     enabled?: boolean;
@@ -656,10 +686,12 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
+  toolSearch?: ToolSearchConfig;
+  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  codeMode?: CodeModeConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
       /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
@@ -680,5 +712,36 @@ export type ToolsConfig = {
   experimental?: {
     /** Enable the structured `update_plan` tool explicitly outside strict-agentic execution mode. */
     planTool?: boolean;
+  };
+};
+
+export type MessageToolsConfig = {
+  /**
+   * @deprecated Use tools.message.crossContext settings.
+   * Allows cross-context sends across providers.
+   */
+  allowCrossContextSend?: boolean;
+  crossContext?: {
+    /** Allow sends to other channels within the same provider (default: true). */
+    allowWithinProvider?: boolean;
+    /** Allow sends across different providers (default: false). */
+    allowAcrossProviders?: boolean;
+    /** Cross-context marker configuration. */
+    marker?: {
+      /** Enable origin markers for cross-context sends (default: true). */
+      enabled?: boolean;
+      /** Text prefix template, supports {channel}. */
+      prefix?: string;
+      /** Text suffix template, supports {channel}. */
+      suffix?: string;
+    };
+  };
+  actions?: {
+    /** Message action names exposed and accepted by the message tool. */
+    allow?: string[];
+  };
+  broadcast?: {
+    /** Enable broadcast action (default: true). */
+    enabled?: boolean;
   };
 };

@@ -38,8 +38,8 @@ describe("diffs tool", () => {
 
     const text = readTextContent(result, 0);
     expect(text).toContain("http://127.0.0.1:18789/plugins/diffs/view/");
-    expect(readDetails(result).viewerUrl).toEqual(
-      expect.stringContaining("http://127.0.0.1:18789/plugins/diffs/view/"),
+    expect(String(readDetails(result).viewerUrl)).toContain(
+      "http://127.0.0.1:18789/plugins/diffs/view/",
     );
   });
 
@@ -63,8 +63,8 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain(
       "https://example.com/openclaw/plugins/diffs/view/",
     );
-    expect((result?.details as Record<string, unknown>).viewerUrl).toEqual(
-      expect.stringContaining("https://example.com/openclaw/plugins/diffs/view/"),
+    expect(String((result?.details as Record<string, unknown>).viewerUrl)).toContain(
+      "https://example.com/openclaw/plugins/diffs/view/",
     );
   });
 
@@ -89,8 +89,8 @@ describe("diffs tool", () => {
     expect(readTextContent(result, 0)).toContain(
       "https://preview.example.com/review/plugins/diffs/view/",
     );
-    expect((result?.details as Record<string, unknown>).viewerUrl).toEqual(
-      expect.stringContaining("https://preview.example.com/review/plugins/diffs/view/"),
+    expect(String((result?.details as Record<string, unknown>).viewerUrl)).toContain(
+      "https://preview.example.com/review/plugins/diffs/view/",
     );
   });
 
@@ -112,12 +112,10 @@ describe("diffs tool", () => {
         expect(html).toContain("../../assets/viewer.js");
       },
       assertImage: (image) => {
-        expect(image).toMatchObject({
-          format: "png",
-          qualityPreset: "standard",
-          scale: 2,
-          maxWidth: 960,
-        });
+        expect(image.format).toBe("png");
+        expect(image.qualityPreset).toBe("standard");
+        expect(image.scale).toBe(2);
+        expect(image.maxWidth).toBe(960);
       },
     });
 
@@ -215,9 +213,35 @@ describe("diffs tool", () => {
 
       vi.setSystemTime(new Date(now.getTime() + 2_000));
       await store.cleanupExpired();
-      await expect(fs.stat(filePath)).rejects.toMatchObject({
-        code: "ENOENT",
+      await expectFsEnoent(fs.stat(filePath));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses default ttlSeconds when tool input omits ttlSeconds", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+    try {
+      const screenshotter = createPngScreenshotter();
+      const tool = createToolWithScreenshotter(store, screenshotter, {
+        ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+        ttlSeconds: 60,
       });
+
+      const result = await tool.execute?.("tool-2c-default-ttl", {
+        before: "one\n",
+        after: "two\n",
+        mode: "file",
+      });
+      const filePath = (result?.details as Record<string, unknown>).filePath as string;
+      const stat = await fs.stat(filePath);
+      expect(stat.isFile()).toBe(true);
+
+      vi.setSystemTime(new Date(now.getTime() + 61_000));
+      await store.cleanupExpired();
+      await expectFsEnoent(fs.stat(filePath));
     } finally {
       vi.useRealTimers();
     }
@@ -226,11 +250,9 @@ describe("diffs tool", () => {
   it("accepts image* tool options for backward compatibility", async () => {
     const screenshotter = createPngScreenshotter({
       assertImage: (image) => {
-        expect(image).toMatchObject({
-          qualityPreset: "hq",
-          scale: 2.4,
-          maxWidth: 1100,
-        });
+        expect(image.qualityPreset).toBe("hq");
+        expect(image.scale).toBe(2.4);
+        expect(image.maxWidth).toBe(1100);
       },
     });
 
@@ -397,7 +419,7 @@ describe("diffs tool", () => {
     });
 
     const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
-    const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
+    const id = extractViewerArtifactId(viewerPath);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
@@ -410,12 +432,10 @@ describe("diffs tool", () => {
         expect(html).toContain("../../assets/viewer.js");
       },
       assertImage: (image) => {
-        expect(image).toMatchObject({
-          format: "png",
-          qualityPreset: "print",
-          scale: 2.75,
-          maxWidth: 1320,
-        });
+        expect(image.format).toBe("png");
+        expect(image.qualityPreset).toBe("print");
+        expect(image.scale).toBe(2.75);
+        expect(image.maxWidth).toBe(1320);
       },
     });
     const tool = createToolWithScreenshotter(store, screenshotter, {
@@ -446,7 +466,7 @@ describe("diffs tool", () => {
     expect((result?.details as Record<string, unknown>).fileScale).toBe(2.75);
     expect((result?.details as Record<string, unknown>).fileMaxWidth).toBe(1320);
     const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
-    const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
+    const id = extractViewerArtifactId(viewerPath);
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="dark"');
   });
@@ -580,6 +600,22 @@ function readDetails(result: unknown): Record<string, unknown> {
   return details;
 }
 
+function extractViewerArtifactId(viewerPath: string): string {
+  let previousSegment: string | undefined;
+  let currentSegment: string | undefined;
+  for (const segment of viewerPath.split("/")) {
+    if (segment.length === 0) {
+      continue;
+    }
+    previousSegment = currentSegment;
+    currentSegment = segment;
+  }
+  if (!previousSegment) {
+    throw new Error(`Missing artifact id in viewer path: ${viewerPath}`);
+  }
+  return previousSegment;
+}
+
 function readParametersProperties(parameters: unknown): Record<string, unknown> {
   if (isRecord(parameters) && isRecord(parameters.properties)) {
     return parameters.properties;
@@ -592,6 +628,16 @@ function requireString(value: unknown, label: string): string {
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+async function expectFsEnoent(promise: Promise<unknown>): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error("expected ENOENT");
 }
 
 function readTextContent(result: unknown, index: number): string {

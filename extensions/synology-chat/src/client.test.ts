@@ -7,17 +7,20 @@ const ssrfMocks = {
 };
 
 // Mock http and https modules before importing the client
-vi.mock("node:https", () => {
+vi.mock("node:https", async () => {
+  const actual = await vi.importActual<typeof import("node:https")>("node:https");
   const httpsRequest = vi.fn();
   const httpsGet = vi.fn();
-  const httpsModule = { request: httpsRequest, get: httpsGet };
-  return { default: httpsModule, request: httpsRequest, get: httpsGet };
+  const httpsModule = { ...actual, request: httpsRequest, get: httpsGet };
+  return { ...actual, default: httpsModule, request: httpsRequest, get: httpsGet };
 });
 
-vi.mock("node:http", () => {
+vi.mock("node:http", async () => {
+  const actual = await vi.importActual<typeof import("node:http")>("node:http");
   const httpRequest = vi.fn();
   const httpGet = vi.fn();
-  return { default: { request: httpRequest, get: httpGet }, request: httpRequest, get: httpGet };
+  const httpModule = { ...actual, request: httpRequest, get: httpGet };
+  return { ...actual, default: httpModule, request: httpRequest, get: httpGet };
 });
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -38,6 +41,27 @@ type MockRequestHandler = (
   options: RequestOptions,
   callback?: RequestCallback,
 ) => ClientRequest;
+type MockHttpCall = [
+  string | URL,
+  RequestOptions & { rejectUnauthorized?: boolean },
+  RequestCallback?,
+];
+
+function firstHttpsRequestCall(label = "Synology Chat HTTPS request"): MockHttpCall {
+  const call = vi.mocked(https.request).mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call as MockHttpCall;
+}
+
+function firstHttpsGetCall(label = "Synology Chat HTTPS get"): MockHttpCall {
+  const call = vi.mocked(https.get).mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call as MockHttpCall;
+}
 
 function createMockResponseEmitter(statusCode: number): IncomingMessage {
   const res = new EventEmitter() as Partial<IncomingMessage>;
@@ -120,8 +144,8 @@ describe("Synology Chat TLS verification defaults", () => {
   it.each(tlsVerificationDefaultCases)("$name verifies TLS by default", async ({ invoke }) => {
     mockSuccessResponse();
     await settleTimers(invoke());
-    const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+    const firstCall = firstHttpsRequestCall();
+    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });
 
@@ -143,17 +167,16 @@ describe("sendMessage", () => {
   it("includes user_ids when userId is numeric", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", 42));
-    const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest).toHaveBeenCalled();
-    const callArgs = httpsRequest.mock.calls[0];
+    expect(vi.mocked(https.request)).toHaveBeenCalled();
+    const callArgs = firstHttpsRequestCall();
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
 
   it("only disables TLS verification when explicitly requested", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
-    const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: false });
+    const firstCall = firstHttpsRequestCall();
+    expect(firstCall[1]?.rejectUnauthorized).toBe(false);
   });
 });
 
@@ -255,6 +278,10 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
   const baseUrl2 =
     "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test-2%22";
 
+  beforeAll(async () => {
+    ({ resolveLegacyWebhookNameToChatUserId } = await import("./client.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
@@ -324,12 +351,10 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       incomingUrl: baseUrl,
       mutableWebhookUsername: "anyone",
     });
-    const httpsGet = vi.mocked(https.get);
-    expect(httpsGet).toHaveBeenCalledWith(
-      expect.stringContaining("method=user_list"),
-      expect.any(Object),
-      expect.any(Function),
-    );
+    const call = firstHttpsGetCall("Synology Chat user_list request");
+    expect(String(call[0])).toBe(baseUrl.replace("method=chatbot", "method=user_list"));
+    expect(call[1]).toEqual({ rejectUnauthorized: true });
+    expect(typeof call[2]).toBe("function");
   });
 
   it("keeps user cache scoped per incoming URL", async () => {
@@ -375,7 +400,7 @@ describe("fetchChatUsers", () => {
 
     await fetchChatUsers(freshUrl);
 
-    const httpsGet = vi.mocked(https.get);
-    expect(httpsGet.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+    const firstCall = firstHttpsGetCall();
+    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });

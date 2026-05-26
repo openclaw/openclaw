@@ -4,6 +4,7 @@ import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import {
   buildGetReplyGroupCtx,
+  createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(async (..._args: unknown[]) => undefined),
   resolveReplyDirectives: vi.fn(),
+  handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
 }));
 
@@ -46,9 +48,18 @@ vi.mock("./commands-core.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
+let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ resolveDefaultModel: resolveDefaultModelMock } =
+    await import("./directive-handling.defaults.js"));
+  ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
+}
+
+function emptyAliasIndex() {
+  return { byAlias: new Map(), byKey: new Map() };
 }
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
@@ -65,6 +76,18 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   });
 }
 
+function hookEventCall(index: number): [string, string, string, Record<string, unknown>] {
+  const call = mocks.createInternalHookEvent.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected hook event call ${index + 1}`);
+  }
+  return call as [string, string, string, Record<string, unknown>];
+}
+
+function verboseMessages(): string[] {
+  return vi.mocked(logVerbose).mock.calls.map(([message]) => message);
+}
+
 describe("getReplyFromConfig message hooks", () => {
   beforeEach(async () => {
     await loadGetReplyRuntimeForTest();
@@ -74,7 +97,10 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.createInternalHookEvent.mockReset();
     mocks.triggerInternalHook.mockReset();
     mocks.resolveReplyDirectives.mockReset();
+    mocks.handleInlineActions.mockReset();
     mocks.initSessionState.mockReset();
+    vi.mocked(resolveDefaultModelMock).mockReset();
+    vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(logVerbose).mockReset();
 
     mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
@@ -95,7 +121,26 @@ describe("getReplyFromConfig message hooks", () => {
       }),
     );
     mocks.triggerInternalHook.mockResolvedValue(undefined);
+    mocks.handleInlineActions.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as {
+        directives?: unknown;
+        cleanedBody?: string;
+        abortedLastRun?: boolean;
+      };
+      return {
+        kind: "continue",
+        directives: params.directives ?? {},
+        cleanedBody: params.cleanedBody ?? "",
+        abortedLastRun: params.abortedLastRun,
+      };
+    });
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+    vi.mocked(resolveDefaultModelMock).mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
         sessionKey: "agent:main:telegram:-100123",
@@ -111,29 +156,131 @@ describe("getReplyFromConfig message hooks", () => {
     await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
-    expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
-      1,
-      "message",
-      "transcribed",
-      "agent:main:telegram:-100123",
-      expect.objectContaining({
-        transcript: "voice transcript",
-        channelId: "telegram",
-        conversationId: "telegram:-100123",
-      }),
-    );
-    expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
-      2,
-      "message",
-      "preprocessed",
-      "agent:main:telegram:-100123",
-      expect.objectContaining({
-        transcript: "voice transcript",
-        isGroup: true,
-        groupId: "telegram:-100123",
-      }),
-    );
+    const transcribed = hookEventCall(0);
+    expect(transcribed[0]).toBe("message");
+    expect(transcribed[1]).toBe("transcribed");
+    expect(transcribed[2]).toBe("agent:main:telegram:-100123");
+    expect(transcribed[3].transcript).toBe("voice transcript");
+    expect(transcribed[3].channelId).toBe("telegram");
+    expect(transcribed[3].conversationId).toBe("telegram:-100123");
+
+    const preprocessed = hookEventCall(1);
+    expect(preprocessed[0]).toBe("message");
+    expect(preprocessed[1]).toBe("preprocessed");
+    expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
+    expect(preprocessed[3].transcript).toBe("voice transcript");
+    expect(preprocessed[3].isGroup).toBe(true);
+    expect(preprocessed[3].groupId).toBe("telegram:-100123");
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);
+  });
+
+  it("enriches staged text-only images before reply without switching the reply model", async () => {
+    const enrichedBody = "describe image\n\n[Image 1]\na tiny dot image";
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: emptyAliasIndex(),
+    });
+    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const params = args[0] as {
+        ctx: MsgContext;
+        activeModel?: { provider: string; model: string };
+        agentId?: string;
+      };
+      expect(params.activeModel).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      expect(params.agentId).toBe("main");
+      params.ctx.MediaUnderstanding = [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "openai",
+          model: "gpt-4o",
+          text: "a tiny dot image",
+        },
+      ];
+      params.ctx.Body = enrichedBody;
+      params.ctx.BodyForAgent = enrichedBody;
+      params.ctx.BodyForCommands = enrichedBody;
+      params.ctx.CommandBody = enrichedBody;
+      params.ctx.RawBody = enrichedBody;
+    });
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: enrichedBody,
+        abortKey: "agent:main:webchat:direct:user",
+        from: "webchat:user",
+        to: "webchat:local",
+        senderId: "webchat:user",
+        commandSource: "native",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+
+    await expect(
+      getReplyFromConfig(
+        buildCtx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          Body: "describe image",
+          BodyForAgent: "describe image",
+          RawBody: "describe image",
+          CommandBody: "describe image",
+          BodyForCommands: "describe image",
+          SessionKey: "agent:main:webchat:direct:user",
+          From: "webchat:user",
+          To: "webchat:local",
+          MediaPath: "/tmp/1.png",
+          MediaPaths: ["/tmp/1.png"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png"],
+          MediaStaged: true,
+          MediaUrl: undefined,
+        }),
+        undefined,
+        withFastReplyConfig({
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-6",
+              imageModel: { primary: "openai/gpt-4o" },
+            },
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(runParams).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+    expect(runParams?.ctx.BodyForAgent).toContain("a tiny dot image");
+    expect(runParams?.ctx.MediaUnderstanding).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4o",
+        text: "a tiny dot image",
+      }),
+    ]);
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {
@@ -147,12 +294,11 @@ describe("getReplyFromConfig message hooks", () => {
     await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "preprocessed",
-      "agent:main:telegram:-100123",
-      expect.any(Object),
-    );
+    const preprocessed = hookEventCall(0);
+    expect(preprocessed[0]).toBe("message");
+    expect(preprocessed[1]).toBe("preprocessed");
+    expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
+    expect(preprocessed[3]).toBeTypeOf("object");
   });
 
   it("skips message hooks in fast test mode", async () => {
@@ -213,15 +359,16 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "preprocessed",
-      "agent:main:telegram:-100123",
-      expect.any(Object),
-    );
-    expect(logVerbose).toHaveBeenCalledWith(
-      expect.stringContaining("media understanding failed, proceeding with raw content"),
-    );
+    const preprocessed = hookEventCall(0);
+    expect(preprocessed[0]).toBe("message");
+    expect(preprocessed[1]).toBe("preprocessed");
+    expect(preprocessed[2]).toBe("agent:main:telegram:-100123");
+    expect(preprocessed[3]).toBeTypeOf("object");
+    expect(
+      verboseMessages().some((message) =>
+        message.includes("media understanding failed, proceeding with raw content"),
+      ),
+    ).toBe(true);
   });
 
   it("continues dispatching URL messages when link understanding fails before reply routing", async () => {
@@ -254,8 +401,10 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.applyLinkUnderstanding).toHaveBeenCalledTimes(1);
     expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
-    expect(logVerbose).toHaveBeenCalledWith(
-      expect.stringContaining("link understanding failed, proceeding with raw content"),
-    );
+    expect(
+      verboseMessages().some((message) =>
+        message.includes("link understanding failed, proceeding with raw content"),
+      ),
+    ).toBe(true);
   });
 });

@@ -1,10 +1,8 @@
 import {
-  createContractFallbackConfig,
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 
@@ -12,7 +10,22 @@ vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,
 }));
 
+const contractFallbackOverride = [
+  `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
+];
+
 describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
+  beforeAll(async () => {
+    await runWithModelFallback({
+      cfg: undefined,
+      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: [],
+      run: vi.fn().mockResolvedValue(createContractRunResult({ meta: { durationMs: 1 } })),
+      skipAuthProfileRuntime: true,
+    });
+  });
+
   const fallbackClassificationCases = [
     ["empty", "empty_result"],
     ["reasoning-only", "reasoning_only_result"],
@@ -22,21 +35,21 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it.each(fallbackClassificationCases)(
     "maps harness classification %s to a format fallback code",
     (classification, code) => {
-      expect(
-        classifyEmbeddedPiRunResultForModelFallback({
-          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-          result: createContractRunResult({
-            meta: {
-              durationMs: 1,
-              agentHarnessResultClassification: classification,
-            },
-          }),
+      const fallback = classifyEmbeddedPiRunResultForModelFallback({
+        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+        result: createContractRunResult({
+          meta: {
+            durationMs: 1,
+            agentHarnessResultClassification: classification,
+          },
         }),
-      ).toMatchObject({
-        reason: "format",
-        code,
       });
+      if (!fallback || !("reason" in fallback)) {
+        throw new Error(`Expected format fallback detail for ${classification}`);
+      }
+      expect(fallback?.reason).toBe("format");
+      expect(fallback?.code).toBe(code);
     },
   );
 
@@ -54,9 +67,10 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback({
-      cfg: createContractFallbackConfig() as unknown as OpenClawConfig,
+      cfg: undefined,
       provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: contractFallbackOverride,
       run,
       classifyResult: ({ provider, model, result }) =>
         classifyEmbeddedPiRunResultForModelFallback({
@@ -64,20 +78,19 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
           model,
           result,
         }),
+      skipAuthProfileRuntime: true,
     });
 
     expect(result.result).toBe(fallback);
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]).toEqual([
+    expect(run.mock.calls.at(1)).toEqual([
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
     ]);
-    expect(result.attempts[0]).toMatchObject({
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      reason: "format",
-      code: "empty_result",
-    });
+    expect(result.attempts[0]?.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider);
+    expect(result.attempts[0]?.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
+    expect(result.attempts[0]?.reason).toBe("format");
+    expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
   const nonFallbackCases = [
@@ -168,9 +181,10 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     const contractCase = nonFallbackCases[0];
     const run = vi.fn().mockResolvedValue(contractCase.result);
     const result = await runWithModelFallback({
-      cfg: createContractFallbackConfig() as unknown as OpenClawConfig,
+      cfg: undefined,
       provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: contractFallbackOverride,
       run,
       classifyResult: ({ provider, model, result }) =>
         classifyEmbeddedPiRunResultForModelFallback({
@@ -180,10 +194,11 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
           hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
           hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),
+      skipAuthProfileRuntime: true,
     });
 
     expect(result.result).toBe(contractCase.result);
-    expect(result.attempts).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
     expect(run).toHaveBeenCalledTimes(1);
   });
 });

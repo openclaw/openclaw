@@ -1,14 +1,13 @@
 import type { IMessagePayload } from "./types.js";
 
-// Mirrors BlueBubbles' `combineDebounceEntries` semantics (caps, ID tracking,
-// reply-context preference) deliberately, so a future SDK lift into
-// `openclaw/plugin-sdk/channel-inbound` is a mechanical extraction instead of
-// a behavioral redesign. Both bundled Apple-store readers (BlueBubbles and
-// imsg) face the same Apple split-send pipeline.
+// Keep the coalescing contract narrow (caps, ID tracking, reply-context
+// preference) so a future SDK lift into `openclaw/plugin-sdk/channel-inbound`
+// is a mechanical extraction instead of a behavioral redesign. Apple's
+// split-send pipeline is the behavior this protects.
 
 /**
  * Bounds on the merged output when multiple inbound iMessage payloads are
- * folded into one agent turn. Mirrors the BlueBubbles caps so a sender who
+ * folded into one agent turn. Caps each merge so a sender who
  * rapid-fires DMs inside the debounce window cannot amplify the downstream
  * prompt past a safe ceiling. Every source GUID still surfaces via
  * `coalescedMessageGuids` so a future replay path can recognize duplicates.
@@ -24,6 +23,10 @@ export type CoalescedIMessagePayload = IMessagePayload & {
    * dedupe paths can still recognize them.
    */
   coalescedMessageGuids?: string[];
+  coalescedCatchupCursor?: {
+    lastSeenMs: number;
+    lastSeenRowid: number;
+  };
 };
 
 /**
@@ -92,6 +95,19 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   const latestCreatedAt =
     createdAts.length > 0 ? createdAts.reduce((a, b) => (a > b ? a : b)) : first.created_at;
 
+  let maxRowid = -Infinity;
+  let maxDateMs = -Infinity;
+  for (const payload of payloads) {
+    if (typeof payload.id === "number" && Number.isFinite(payload.id)) {
+      maxRowid = Math.max(maxRowid, payload.id);
+    }
+    const dateMs =
+      typeof payload.created_at === "string" ? Date.parse(payload.created_at) : Number.NaN;
+    if (Number.isFinite(dateMs)) {
+      maxDateMs = Math.max(maxDateMs, dateMs);
+    }
+  }
+
   // Walk the unbounded `payloads` so even GUIDs whose text/attachments were
   // dropped by the cap are still remembered for downstream dedupe.
   const seenGuids = new Set<string>();
@@ -119,5 +135,9 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
     reply_to_text: entryWithReply?.reply_to_text ?? first.reply_to_text ?? null,
     reply_to_sender: entryWithReply?.reply_to_sender ?? first.reply_to_sender ?? null,
     coalescedMessageGuids: coalescedMessageGuids.length > 0 ? coalescedMessageGuids : undefined,
+    coalescedCatchupCursor:
+      Number.isFinite(maxRowid) && Number.isFinite(maxDateMs)
+        ? { lastSeenMs: maxDateMs, lastSeenRowid: maxRowid }
+        : undefined,
   };
 }

@@ -30,10 +30,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     });
 
     expect(appended).toBe(false);
-    expect(sessionManager.appendCustomEntry).not.toHaveBeenCalledWith(
-      ATTEMPT_CACHE_TTL_CUSTOM_TYPE,
-      expect.anything(),
-    );
+    expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
   });
 
   it("appends cache-ttl when no compaction completed during the attempt", () => {
@@ -61,13 +58,10 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     });
 
     expect(appended).toBe(true);
-    expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(
-      ATTEMPT_CACHE_TTL_CUSTOM_TYPE,
-      expect.objectContaining({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-20250514",
-        timestamp: 123,
-      }),
-    );
+    expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+      timestamp: 123,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+    });
   });
 });

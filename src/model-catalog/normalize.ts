@@ -1,7 +1,17 @@
-import { MODEL_APIS, type ModelApi, type ModelCompatConfig } from "../config/types.models.js";
+import {
+  MODEL_APIS,
+  isModelThinkingFormat,
+  type ModelApi,
+  type ModelCompatConfig,
+  type ModelImageInputConfig,
+  type ModelMediaInputConfig,
+} from "../config/types.models.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import {
   buildModelCatalogMergeKey,
@@ -169,6 +179,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     "supportsTools",
     "supportsStrictMode",
     "requiresStringContent",
+    "strictMessageKeys",
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
@@ -219,12 +230,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
-  if (
-    thinkingFormat === "openai" ||
-    thinkingFormat === "openrouter" ||
-    thinkingFormat === "deepseek" ||
-    thinkingFormat === "zai"
-  ) {
+  if (isModelThinkingFormat(thinkingFormat)) {
     compat.thinkingFormat = thinkingFormat;
   }
 
@@ -234,6 +240,33 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
 function normalizeModelCatalogStatus(value: unknown): ModelCatalogStatus | undefined {
   const status = normalizeOptionalString(value) ?? "";
   return MODEL_CATALOG_STATUSES.has(status) ? (status as ModelCatalogStatus) : undefined;
+}
+
+function normalizeModelCatalogImageTokenMode(value: unknown): ModelImageInputConfig["tokenMode"] {
+  const tokenMode = normalizeOptionalString(value) ?? "";
+  if (tokenMode === "tile" || tokenMode === "detail" || tokenMode === "provider") {
+    return tokenMode;
+  }
+  return undefined;
+}
+
+function normalizeModelCatalogMediaInput(value: unknown): ModelMediaInputConfig | undefined {
+  if (!isRecord(value) || !isRecord(value.image)) {
+    return undefined;
+  }
+  const maxBytes = normalizePositiveInteger(value.image.maxBytes);
+  const maxPixels = normalizePositiveInteger(value.image.maxPixels);
+  const maxSidePx = normalizePositiveInteger(value.image.maxSidePx);
+  const preferredSidePx = normalizePositiveInteger(value.image.preferredSidePx);
+  const tokenMode = normalizeModelCatalogImageTokenMode(value.image.tokenMode);
+  const normalizedImage = {
+    ...(maxBytes !== undefined ? { maxBytes } : {}),
+    ...(maxPixels !== undefined ? { maxPixels } : {}),
+    ...(maxSidePx !== undefined ? { maxSidePx } : {}),
+    ...(preferredSidePx !== undefined ? { preferredSidePx } : {}),
+    ...(tokenMode ? { tokenMode } : {}),
+  };
+  return Object.keys(normalizedImage).length > 0 ? { image: normalizedImage } : undefined;
 }
 
 function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefined {
@@ -255,6 +288,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const cost = normalizeModelCatalogCost(value.cost);
   const compat = normalizeModelCatalogCompat(value.compat);
+  const mediaInput = normalizeModelCatalogMediaInput(value.mediaInput);
   const status = normalizeModelCatalogStatus(value.status);
   const statusReason = normalizeOptionalString(value.statusReason) ?? "";
   const replaces = normalizeTrimmedStringList(value.replaces);
@@ -273,6 +307,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(cost ? { cost } : {}),
     ...(compat ? { compat } : {}),
+    ...(mediaInput ? { mediaInput } : {}),
     ...(status ? { status } : {}),
     ...(statusReason ? { statusReason } : {}),
     ...(replaces.length > 0 ? { replaces } : {}),
@@ -424,18 +459,15 @@ export function normalizeModelCatalog(
   const aliases = normalizeModelCatalogAliases(value.aliases, ownedProviders);
   const suppressions = normalizeModelCatalogSuppressions(value.suppressions);
   const discovery = normalizeModelCatalogDiscovery(value.discovery, ownedProviders);
+  const runtimeAugment = value.runtimeAugment === true;
   const catalog = {
     ...(providers ? { providers } : {}),
     ...(aliases ? { aliases } : {}),
     ...(suppressions ? { suppressions } : {}),
     ...(discovery ? { discovery } : {}),
+    ...(runtimeAugment ? { runtimeAugment } : {}),
   } satisfies ModelCatalog;
   return Object.keys(catalog).length > 0 ? catalog : undefined;
-}
-
-function normalizeStringList(value: unknown): string[] | undefined {
-  const normalized = normalizeTrimmedStringList(value);
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function normalizeModelCatalogProviderRows(params: {
@@ -465,10 +497,11 @@ export function normalizeModelCatalogProviderRows(params: {
     const maxTokens = normalizePositiveNumber(model.maxTokens);
     const cost = normalizeModelCatalogCost(model.cost);
     const compat = normalizeModelCatalogCompat(model.compat);
+    const mediaInput = normalizeModelCatalogMediaInput(model.mediaInput);
     const statusReason = normalizeOptionalString(model.statusReason) ?? "";
     const replacedBy = normalizeOptionalString(model.replacedBy) ?? "";
-    const replaces = normalizeStringList(model.replaces);
-    const tags = normalizeStringList(model.tags);
+    const replaces = normalizeOptionalTrimmedStringList(model.replaces);
+    const tags = normalizeOptionalTrimmedStringList(model.tags);
     rows.push({
       provider,
       id,
@@ -487,6 +520,7 @@ export function normalizeModelCatalogProviderRows(params: {
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(cost ? { cost } : {}),
       ...(compat ? { compat } : {}),
+      ...(mediaInput ? { mediaInput } : {}),
       ...(statusReason ? { statusReason } : {}),
       ...(replaces ? { replaces } : {}),
       ...(replacedBy ? { replacedBy } : {}),

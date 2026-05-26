@@ -50,9 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
-   - Large pre-compaction debug checkpoints are skipped once the active
-     transcript exceeds the checkpoint size cap, avoiding a second giant
-     `.checkpoint.*.jsonl` copy.
+   - Compaction checkpoints are metadata over the compacted successor
+     transcript. New compactions do not write a second `.checkpoint.*.jsonl`
+     copy.
 
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
@@ -97,7 +97,11 @@ OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups duri
 Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
 `session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
 ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
-longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
+longer on slow machines. `session.writeLock.staleMs` controls when an existing lock can be
+reclaimed as stale; the default is `1800000` ms. `session.writeLock.maxHoldMs` controls the
+in-process watchdog release threshold; the default is `300000` ms. Emergency env overrides are
+`OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`, `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`, and
+`OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
@@ -200,7 +204,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ## Transcript structure (`*.jsonl`)
 
-Transcripts are managed by `@mariozechner/pi-coding-agent`'s `SessionManager`.
+Transcripts are managed by `@earendil-works/pi-coding-agent`'s `SessionManager`.
 
 The file is JSONL:
 
@@ -244,6 +248,10 @@ After compaction, future turns see:
 - The compaction summary
 - Messages after `firstKeptEntryId`
 
+AGENTS.md section reinjection after compaction is opt-in via
+`agents.defaults.compaction.postCompactionSections`; when unset or `[]`,
+OpenClaw does not append AGENTS.md excerpts on top of the compaction summary.
+
 Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Compaction chunk boundaries and tool pairing
@@ -270,6 +278,15 @@ In the embedded Pi agent, auto-compaction triggers in two cases:
 number of tokens`, `input token count exceeds the maximum number of input
 tokens`, `input is too long for the model`, `ollama error: context length
 exceeded`, and similar provider-shaped variants) → compact → retry.
+   When the provider reports the attempted token count, OpenClaw forwards that
+   observed count into overflow recovery compaction. If the provider confirms
+   overflow but does not expose a parseable count, OpenClaw passes a minimally
+   over-budget synthetic count to compaction engines and diagnostics.
+   If overflow recovery still fails, OpenClaw surfaces explicit guidance to the
+   user and preserves the current session mapping instead of silently rotating
+   the session key to a fresh session id. The next step is operator-controlled:
+   retry the message, run `/compact`, or run `/new` when a fresh session is
+   preferred.
 2. **Threshold maintenance**: after a successful turn, when:
 
 `contextTokens > contextWindow - reserveTokens`
@@ -340,8 +357,8 @@ OpenClaw also enforces a safety floor for embedded runs:
   disable.
 - When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
   OpenClaw rotates the active transcript to a compacted successor JSONL after
-  compaction. The old full transcript remains archived and linked from the
-  compaction checkpoint instead of being rewritten in place.
+  compaction. Branch/restore checkpoint actions use that compacted successor;
+  legacy pre-compaction checkpoint files remain readable while referenced.
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
@@ -376,6 +393,7 @@ You can observe compaction and session state via:
 - `/status` (in any chat session)
 - `openclaw status` (CLI)
 - `openclaw sessions` / `sessions --json`
+- Gateway logs (`pnpm gateway:watch` or `openclaw logs --follow`): `embedded run auto-compaction start` + `complete`
 - Verbose mode: `🧹 Auto-compaction complete` + compaction count
 
 ---

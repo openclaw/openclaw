@@ -21,6 +21,11 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 class MockGoogleLiveWebSocket {
   static OPEN = 1;
 
@@ -166,6 +171,18 @@ function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
+function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [call] = onTalkEvent.mock.calls;
+  if (!call) {
+    throw new Error("expected talk event");
+  }
+  const [event] = call;
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    throw new Error("expected talk event record");
+  }
+  return event as Record<string, unknown>;
+}
+
 describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
@@ -196,13 +213,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
     expect(ws.binaryType).toBe("arraybuffer");
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
-    expect(onTalkEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "session.ready",
-        sessionId: "main:google:provider-websocket",
-        transport: "provider-websocket",
-      }),
-    );
+    const readyEvent = requireFirstTalkEvent(onTalkEvent);
+    expect(readyEvent.type).toBe("session.ready");
+    expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
+    expect(readyEvent.transport).toBe("provider-websocket");
   });
 
   it("decodes Blob setup messages", async () => {
@@ -236,13 +250,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitMessage(encodeJsonFrame({ serverContent: { interrupted: true } }));
 
     await vi.waitFor(() => expect(source?.stop).toHaveBeenCalledTimes(1));
-    expect(onTalkEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "turn.cancelled",
-        final: true,
-        payload: { reason: "provider-interrupted" },
-      }),
-    );
+    const cancelledEvent = onTalkEvent.mock.calls.find(
+      ([event]) => event.type === "turn.cancelled",
+    )?.[0];
+    expect(cancelledEvent?.final).toBe(true);
+    expect(cancelledEvent?.payload).toStrictEqual({ reason: "provider-interrupted" });
   });
 
   it("emits common Talk events for Google Live transcript and audio frames", async () => {
@@ -285,11 +297,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ]);
     expect(onTranscript).toHaveBeenCalledWith({ role: "user", text: "hello", final: true });
     expect(onTranscript).toHaveBeenCalledWith({ role: "assistant", text: "hi", final: false });
-    expect(onTalkEvent.mock.calls[2]?.[0]).toMatchObject({
-      payload: { byteLength: 4, mimeType: "audio/pcm;rate=24000" },
-      sessionId: "main:google:provider-websocket",
-      transport: "provider-websocket",
-    });
+    const audioEvent = onTalkEvent.mock.calls[2]?.[0];
+    expect(audioEvent?.payload).toStrictEqual({ byteLength: 4, mimeType: "audio/pcm;rate=24000" });
+    expect(audioEvent?.sessionId).toBe("main:google:provider-websocket");
+    expect(audioEvent?.transport).toBe("provider-websocket");
   });
 
   it("ignores late WebSocket events after stop", async () => {
@@ -302,8 +313,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitOpen();
     ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(ws.sent).toEqual([]);
+    await flushMicrotasks();
+    expect(ws.sent).toStrictEqual([]);
     expect(onStatus).not.toHaveBeenCalled();
   });
 
@@ -322,12 +333,8 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
           return { ok: true, aborted: true };
         }
         expect(method).toBe("talk.client.toolCall");
-        expect(params).toEqual(
-          expect.objectContaining({
-            callId: "call-1",
-            name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-          }),
-        );
+        expect(params.callId).toBe("call-1");
+        expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
         return { runId };
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
@@ -355,9 +362,244 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       listener({ event: "chat", payload: { runId, state: "final", message: { text: "done" } } });
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+    });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
+  });
+
+  it("sends spoken active-control acknowledgements through Google Live", async () => {
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "status",
+          sessionKey: "main",
+          active: true,
+          message: "OpenClaw is working in read (running).",
+          speak: true,
+          show: true,
+          suppress: false,
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createTransport({}, client);
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { question: "status?" },
+            },
+          ],
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+    );
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "status", finished: true },
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+    );
+    expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
+    const sent = ws.sent.map((payload) => JSON.parse(payload));
+    expect(sent).toContainEqual({
+      clientContent: {
+        turns: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
+              },
+            ],
+          },
+        ],
+        turnComplete: true,
+      },
+    });
+    transport.stop();
+  });
+
+  it("replaces queued output with a spoken active-control steering acknowledgement in Google Live", async () => {
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "steer",
+          sessionKey: "main",
+          active: true,
+          queued: true,
+          message: "Got it. I steered the active run.",
+          speak: true,
+          show: true,
+          suppress: false,
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createTransport({}, client);
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { question: "status?" },
+            },
+          ],
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+    );
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "actually focus on WebUI", finished: true },
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+    );
+    expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
+    const sent = ws.sent.map((payload) => JSON.parse(payload));
+    expect(sent).toContainEqual({
+      clientContent: {
+        turns: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: expect.stringContaining('Status: "Got it. I steered the active run."'),
+              },
+            ],
+          },
+        ],
+        turnComplete: true,
+      },
+    });
+    transport.stop();
+  });
+
+  it("interrupts queued output when active-control cancel is suppressed in Google Live", async () => {
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "cancel",
+          sessionKey: "main",
+          active: true,
+          aborted: true,
+          message: "Cancelled the active OpenClaw run.",
+          speak: true,
+          show: true,
+          suppress: false,
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createTransport({}, client);
+    await transport.start();
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          modelTurn: {
+            parts: [{ inlineData: { data: "AAAAAA==", mimeType: "audio/pcm;rate=24000" } }],
+          },
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    ws.emitMessage(
+      encodeJsonFrame({
+        toolCall: {
+          functionCalls: [
+            {
+              id: "call-1",
+              name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+              args: { question: "status?" },
+            },
+          ],
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object)),
+    );
+
+    ws.emitMessage(
+      encodeJsonFrame({
+        serverContent: {
+          inputTranscription: { text: "cancel that", finished: true },
+        },
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+    );
+    expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
+    const sent = ws.sent.map((payload) => JSON.parse(payload));
+    expect(sent.some((event) => event.clientContent)).toBe(false);
+    transport.stop();
   });
 });
 

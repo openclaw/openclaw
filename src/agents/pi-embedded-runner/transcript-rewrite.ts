@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -11,7 +11,7 @@ import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
 import {
   acquireSessionWriteLock,
   type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { log } from "./logger.js";
 import {
@@ -252,6 +252,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 export function rewriteTranscriptEntriesInState(params: {
   state: TranscriptFileState;
   replacements: TranscriptRewriteReplacement[];
+  allowedRewriteSuffixEntryIds?: string[];
 }): TranscriptRewriteResult & { appendedEntries: SessionBranchEntry[] } {
   const replacementsById = new Map(
     params.replacements
@@ -320,6 +321,22 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
+  if (params.allowedRewriteSuffixEntryIds) {
+    const allowedIds = new Set(params.allowedRewriteSuffixEntryIds);
+    const hasUnexpectedSuffixEntry = branch
+      .slice(matchedIndices[0])
+      .some((entry) => typeof entry.id === "string" && !allowedIds.has(entry.id));
+    if (hasUnexpectedSuffixEntry) {
+      return {
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+        reason: "rewrite suffix guard failed",
+        appendedEntries: [],
+      };
+    }
+  }
+
   if (!firstMatchedEntry.parentId) {
     params.state.resetLeaf();
   } else {
@@ -366,12 +383,15 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
   try {
     sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+      ...resolveSessionWriteLockOptions(params.config),
     });
     const state = await readTranscriptFileState(params.sessionFile);
     const result = rewriteTranscriptEntriesInState({
       state,
       replacements: params.request.replacements,
+      ...(params.request.allowedRewriteSuffixEntryIds
+        ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
+        : {}),
     });
     if (result.changed) {
       await persistTranscriptStateMutation({

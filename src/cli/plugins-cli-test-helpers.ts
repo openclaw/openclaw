@@ -204,6 +204,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  resolveIsNixMode: () => false,
   resolveStateDir: () => resolveStateDir(),
 }));
 
@@ -601,6 +602,7 @@ vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   },
   installPluginFromClawHub: ((
     ...args: Parameters<(typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"]>

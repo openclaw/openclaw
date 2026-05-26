@@ -9,11 +9,11 @@ title: "iMessage"
 <Note>
 For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host. If your Gateway runs on Linux or Windows, point `channels.imessage.cliPath` at an SSH wrapper that runs `imsg` on the Mac.
 
-**Known gap: no gateway-downtime catchup.** Messages that arrive while the gateway is down (crash, restart, Mac sleep, machine off) are not delivered to the agent once the gateway comes back up — `imsg watch` resumes from the current state and ignores anything that landed in `chat.db` during the gap. Tracked at [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
+**Gateway-downtime catchup is opt-in.** When enabled (`channels.imessage.catchup.enabled: true`), the gateway replays inbound messages that landed in `chat.db` while it was offline (crash, restart, Mac sleep) on next startup. Disabled by default — see [Catching up after gateway downtime](#catching-up-after-gateway-downtime). Closes [openclaw#78649](https://github.com/openclaw/openclaw/issues/78649).
 </Note>
 
 <Warning>
-BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only.
+BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw supports iMessage through `imsg` only. Start with [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short announcement, or [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full migration table.
 </Warning>
 
 Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port). Advanced actions require `imsg launch` and a successful private API probe.
@@ -118,6 +118,18 @@ exec ssh -T gateway-host imsg "$@"
     OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
+<Warning>
+Any `cliPath` wrapper or SSH proxy you put in front of `imsg` MUST behave like a transparent stdio pipe for long-lived JSON-RPC. OpenClaw exchanges small newline-framed JSON-RPC messages over the wrapper's stdin/stdout for the lifetime of the channel:
+
+- Forward each stdin chunk/line **as soon as bytes are available** — don't wait for EOF.
+- Forward each stdout chunk/line promptly in the reverse direction.
+- Preserve newlines.
+- Avoid fixed-size blocking reads (`read(4096)`, `cat | buffer`, default shell `read`) that can starve small frames.
+- Keep stderr separate from the JSON-RPC stdout stream.
+
+A wrapper that buffers stdin until a large block fills will produce symptoms that look like an iMessage outage — `imsg rpc timeout (chats.list)` or repeated channel restarts — even though `imsg rpc` itself is healthy. `ssh -T host imsg "$@"` (above) is safe because it forwards OpenClaw's `cliPath` arguments such as `rpc` and `--db`. Pipelines like `ssh host imsg | grep -v '^DEBUG'` are NOT — line-buffered tools can still hold frames; use `stdbuf -oL -eL` on every stage if you must filter.
+</Warning>
+
   </Tab>
 </Tabs>
 
@@ -217,7 +229,7 @@ If SIP-disabled isn't acceptable for your threat model:
 
     Allowlist field: `channels.imessage.allowFrom`.
 
-    Allowlist entries can be handles or chat targets (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`).
+    Allowlist entries must identify senders: handles or static sender access groups (`accessGroup:<name>`). Use `channels.imessage.groupAllowFrom` for chat targets such as `chat_id:*`, `chat_guid:*`, or `chat_identifier:*`; use `channels.imessage.groups` for numeric `chat_id` registry keys.
 
   </Tab>
 
@@ -230,7 +242,9 @@ If SIP-disabled isn't acceptable for your threat model:
 
     Group sender allowlist: `channels.imessage.groupAllowFrom`.
 
-    Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
+    `groupAllowFrom` entries can also reference static sender access groups (`accessGroup:<name>`).
+
+    Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks use `allowFrom`; set `groupAllowFrom` when DM and group admission should differ.
     Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     <Warning>
@@ -270,6 +284,37 @@ If SIP-disabled isn't acceptable for your threat model:
     - with no configured patterns, mention gating cannot be enforced
 
     Control commands from authorized senders can bypass mention gating in groups.
+
+    Per-group `systemPrompt`:
+
+    Each entry under `channels.imessage.groups.*` accepts an optional `systemPrompt` string. The value is injected into the agent's system prompt on every turn that handles a message in that group. Resolution mirrors the per-group prompt resolution used by `channels.whatsapp.groups`:
+
+    1. **Group-specific system prompt** (`groups["<chat_id>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`) the wildcard is suppressed and no system prompt is applied to that group.
+    2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
+
+    ```json5
+    {
+      channels: {
+        imessage: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15555550123"],
+          groups: {
+            "*": { systemPrompt: "Use British spelling." },
+            "8421": {
+              requireMention: true,
+              systemPrompt: "This is the on-call rotation chat. Keep replies under 3 sentences.",
+            },
+            "9907": {
+              // explicit suppression: the wildcard "Use British spelling." does not apply here
+              systemPrompt: "",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Per-group prompts only apply to group messages — direct messages in this channel are unaffected.
 
   </Tab>
 
@@ -397,13 +442,20 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
 
   </Accordion>
+
+  <Accordion title="Direct-message history">
+    Set `channels.imessage.dmHistoryLimit` to seed new direct-message sessions with recent decoded `imsg` history for that conversation. Use `channels.imessage.dms["<sender>"].historyLimit` for per-sender overrides, including `0` to disable history for a sender.
+
+    iMessage DM history is fetched on demand from `imsg`. Leaving `dmHistoryLimit` unset disables global DM history seeding, but a positive per-sender `channels.imessage.dms["<sender>"].historyLimit` still enables seeding for that sender.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Media, chunking, and delivery targets
 
 <AccordionGroup>
   <Accordion title="Attachments and media">
-    - inbound attachment ingestion is optional: `channels.imessage.includeAttachments`
+    - inbound attachment ingestion is **off by default** — set `channels.imessage.includeAttachments: true` to forward photos, voice memos, video, and other attachments to the agent. With it disabled, attachment-only iMessages are dropped before reaching the agent and may produce no `Inbound message` log line at all.
     - remote attachment paths can be fetched via SCP when `remoteHost` is set
     - attachment paths must match allowed roots:
       - `channels.imessage.attachmentRoots` (local)
@@ -506,6 +558,37 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
     Older `imsg` builds that pre-date the per-method capability list will gate off typing/read silently; OpenClaw logs a one-time warning per restart so the missing receipt is attributable.
 
   </Accordion>
+
+  <Accordion title="Inbound tapbacks">
+    OpenClaw subscribes to iMessage tapbacks and routes accepted reactions as system events instead of normal message text, so a user tapback does not trigger an ordinary reply loop.
+
+    Notification mode is controlled by `channels.imessage.reactionNotifications`:
+
+    - `"own"` (default): notify only when users react to bot-authored messages.
+    - `"all"`: notify for all inbound tapbacks from authorized senders.
+    - `"off"`: ignore inbound tapbacks.
+
+    Per-account overrides use `channels.imessage.accounts.<id>.reactionNotifications`.
+
+  </Accordion>
+
+  <Accordion title="Approval reactions (👍 / 👎)">
+    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes to iMessage, the gateway delivers an approval prompt natively and accepts a tapback to resolve it:
+
+    - `👍` (Like tapback) → `allow-once`
+    - `👎` (Dislike tapback) → `deny`
+    - `allow-always` remains a manual fallback: send `/approve <id> allow-always` as a regular reply.
+
+    Reaction handling requires the reacting user's handle to be an explicit approver. The approver list is read from `channels.imessage.allowFrom` (or `channels.imessage.accounts.<id>.allowFrom`); add the user's phone number in E.164 form or their Apple ID email. The wildcard entry `"*"` is honored but allows any sender to approve. The reaction shortcut intentionally bypasses `reactionNotifications`, `dmPolicy`, and `groupAllowFrom` because the explicit-approver allowlist is the only gate that matters for approval resolution.
+
+    **Behavior change with this release:** When `channels.imessage.allowFrom` is non-empty, the `/approve <id> <decision>` text command is now authorized against that approver list (not the broader DM allowlist). Senders permitted on the DM allowlist but not in `allowFrom` will receive an explicit denial. Add every operator who should be able to approve via `/approve` (and via reactions) to `allowFrom` to preserve the previous behavior. When `allowFrom` is empty the legacy "same-chat fallback" stays in effect and `/approve` continues to authorize anyone the DM allowlist permits.
+
+    Operator notes:
+    - The reaction binding is stored both in memory (with TTL matched to the approval expiry) and in the gateway's persistent keyed store, so a tapback that lands shortly after a gateway restart still resolves the approval.
+    - Cross-device `is_from_me=true` tapbacks (the operator's own reaction on a paired Apple device) are intentionally ignored so the bot cannot self-approve.
+    - Legacy text-style tapbacks (`Liked "…"` plain text from very old Apple clients) cannot resolve approvals because they carry no message GUID; reaction resolution requires the structured tapback metadata that current macOS / iOS clients emit.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Config writes
@@ -603,6 +686,67 @@ The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalesc
 | Rapid flood (>10 small DMs inside window)                          | N rows                | N turns                                 | One turn, bounded output (first + latest, text/attachment caps applied) |
 | Two people typing in a group chat                                  | N rows from M senders | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                |
 
+## Catching up after gateway downtime
+
+When the gateway is offline (crash, restart, Mac sleep, machine off), `imsg watch` resumes from the current `chat.db` state once the gateway comes back up — anything that arrived during the gap is, by default, never seen. Catchup replays those messages on the next startup so the agent does not silently miss inbound traffic.
+
+Catchup is **disabled by default**. Enable it per channel:
+
+```ts
+channels: {
+  imessage: {
+    catchup: {
+      enabled: true,             // master switch (default: false)
+      maxAgeMinutes: 120,        // skip rows older than now - 2h (default: 120, clamp 1..720)
+      perRunLimit: 50,           // max rows replayed per startup (default: 50, clamp 1..500)
+      firstRunLookbackMinutes: 30, // first run with no cursor: look back 30 min (default: 30)
+      maxFailureRetries: 10,     // give up on a wedged guid after 10 dispatch failures (default: 10)
+    },
+  },
+}
+```
+
+### How it runs
+
+One pass per `monitorIMessageProvider` startup, sequenced as `imsg launch` ready → `watch.subscribe` → `performIMessageCatchup` → live dispatch loop. Catchup itself uses `chats.list` + per-chat `messages.history` against the same JSON-RPC client used by `imsg watch`. Anything that arrives during the catchup pass flows through live dispatch normally; the existing inbound-dedupe cache absorbs any overlap with replayed rows.
+
+Each replayed row is fed through the live dispatch path (`evaluateIMessageInbound` + `dispatchInboundMessage`), so allowlists, group policy, debouncer, echo cache, and read receipts behave identically on replayed and live messages.
+
+### Cursor and retry semantics
+
+Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<account>__<hash>.json` (the OpenClaw state dir defaults to `~/.openclaw`, overridable with `OPENCLAW_STATE_DIR`):
+
+```json
+{
+  "lastSeenMs": 1717900800000,
+  "lastSeenRowid": 482910,
+  "updatedAt": 1717900801234,
+  "failureRetries": { "<guid>": 1 }
+}
+```
+
+- The cursor advances on each successful dispatch and is held when a row's dispatch throws — the next startup retries the same row from the held cursor.
+- After the startup catchup query succeeds, later live-handled rows also advance the same cursor so a gateway restart does not replay messages that were already handled live. Live cursor writes do not jump past catchup failures that are still below `maxFailureRetries`.
+- After `maxFailureRetries` consecutive throws against the same `guid`, catchup logs a `warn` and force-advances the cursor past the wedged message so subsequent startups can make progress.
+- Already-given-up guids are skipped on sight (no dispatch attempt) on later runs and counted under `skippedGivenUp` in the run summary.
+
+### Operator-visible signals
+
+```
+imessage catchup: replayed=N skippedFromMe=… skippedGivenUp=… failed=… givenUp=… fetchedCount=…
+imessage catchup: giving up on guid=<guid> after <N> failures; advancing cursor past it
+imessage catchup: fetched <X> rows across chats, capped to perRunLimit=<Y>
+```
+
+A `WARN ... capped to perRunLimit` line means a single startup did not drain the full backlog. Raise `perRunLimit` (max 500) if your gaps regularly exceed the default 50-row pass.
+
+### When to leave it off
+
+- Gateway runs continuously with watchdog auto-restart and gaps are always < a few seconds — the default of off is fine.
+- DM volume is low and missed messages would not change agent behavior — the `firstRunLookbackMinutes` initial window can dispatch surprising old context on first enable.
+
+When you turn catchup on, the first startup with no cursor only looks back `firstRunLookbackMinutes` (30 min default), not the full `maxAgeMinutes` window — this avoids replaying a long history of pre-enable messages.
+
 ## Troubleshooting
 
 <AccordionGroup>
@@ -687,6 +831,7 @@ openclaw channels status --probe --channel imessage
 ## Related
 
 - [Channels Overview](/channels) — all supported channels
+- [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) — announcement and migration summary
 - [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) — config translation table and step-by-step cutover
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating

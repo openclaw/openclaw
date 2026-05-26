@@ -73,6 +73,18 @@ describe("pw-tools-core", () => {
     }
   }
 
+  function requireSaveAsPath(saveAs: ReturnType<typeof vi.fn>): string {
+    const [call] = saveAs.mock.calls;
+    if (!call) {
+      throw new Error("expected download saveAs call");
+    }
+    const [savedPath] = call;
+    if (typeof savedPath !== "string") {
+      throw new Error("expected download saveAs path");
+    }
+    return savedPath;
+  }
+
   async function waitForImplicitDownloadOutput(params: {
     downloadUrl: string;
     suggestedFilename: string;
@@ -96,11 +108,19 @@ describe("pw-tools-core", () => {
     });
 
     const res = await p;
-    const outPath = (vi.mocked(saveAs).mock.calls as unknown as Array<[string]>)[0]?.[0];
-    if (typeof outPath !== "string") {
-      throw new Error("download save path was not captured");
-    }
+    const outPath = requireSaveAsPath(saveAs);
     return { res, outPath };
+  }
+
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    let error: unknown;
+    try {
+      await fs.access(targetPath);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   }
 
   function createDownloadEventHarness() {
@@ -134,14 +154,17 @@ describe("pw-tools-core", () => {
     targetPath: string;
     content: string;
   }) {
-    const savedPath = params.saveAs.mock.calls[0]?.[0];
-    expect(typeof savedPath).toBe("string");
+    const savedPath = requireSaveAsPath(params.saveAs);
     expect(savedPath).not.toBe(params.targetPath);
-    expect(path.basename(path.dirname(String(savedPath)))).toContain("fs-safe-output");
-    expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
-    expect(path.basename(String(savedPath))).toMatch(/\.part$/);
+    const savedParentName = path.basename(path.dirname(savedPath));
+    expect(
+      savedParentName.includes("fs-safe-output") ||
+        savedParentName === path.basename(path.dirname(params.targetPath)),
+    ).toBe(true);
+    expect(path.basename(savedPath)).toContain(path.basename(params.targetPath));
+    expect(path.basename(savedPath)).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
-    await expect(fs.access(String(savedPath))).rejects.toThrow();
+    await expectPathMissing(savedPath);
   }
 
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
@@ -253,8 +276,8 @@ describe("pw-tools-core", () => {
         await expect(p).rejects.toThrow(/path alias|outside workspace|directory changed/i);
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
-        await expect(fs.access(outsideTargetPath)).rejects.toThrow();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expectPathMissing(outsideTargetPath);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );
@@ -424,7 +447,7 @@ describe("pw-tools-core", () => {
 
         await expect(p).rejects.toThrow(/output directory/i);
         expect(saveAs).not.toHaveBeenCalled();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );

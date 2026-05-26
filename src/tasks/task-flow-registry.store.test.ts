@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
@@ -90,15 +91,14 @@ describe("task-flow-registry store runtime", () => {
       },
     });
 
-    expect(getTaskFlowById("flow-restored")).toMatchObject({
-      flowId: "flow-restored",
-      syncMode: "managed",
-      controllerId: "tests/restored-controller",
-      revision: 4,
-      stateJson: { lane: "triage", done: 3 },
-      waitJson: { kind: "task", taskId: "task-restored" },
-      cancelRequestedAt: 115,
-    });
+    const restored = getTaskFlowById("flow-restored");
+    expect(restored?.flowId).toBe("flow-restored");
+    expect(restored?.syncMode).toBe("managed");
+    expect(restored?.controllerId).toBe("tests/restored-controller");
+    expect(restored?.revision).toBe(4);
+    expect(restored?.stateJson).toEqual({ lane: "triage", done: 3 });
+    expect(restored?.waitJson).toEqual({ kind: "task", taskId: "task-restored" });
+    expect(restored?.cancelRequestedAt).toBe(115);
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
     createManagedTaskFlow({
@@ -110,11 +110,19 @@ describe("task-flow-registry store runtime", () => {
     });
 
     expect(saveSnapshot).toHaveBeenCalled();
-    const latestSnapshot = saveSnapshot.mock.calls.at(-1)?.[0] as {
+    const latestCall = saveSnapshot.mock.calls[saveSnapshot.mock.calls.length - 1];
+    if (!latestCall) {
+      throw new Error("Expected task flow snapshot save call");
+    }
+    const latestSnapshot = latestCall[0] as {
       flows: ReadonlyMap<string, TaskFlowRecord>;
     };
     expect(latestSnapshot.flows.size).toBe(2);
-    expect(latestSnapshot.flows.get("flow-restored")?.goal).toBe("Restored flow");
+    const restoredFlow = latestSnapshot.flows.get("flow-restored");
+    if (!restoredFlow) {
+      throw new Error("Expected restored task flow");
+    }
+    expect(restoredFlow.goal).toBe("Restored flow");
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
@@ -137,31 +145,29 @@ describe("task-flow-registry store runtime", () => {
         stateJson: { phase: "ask_user" },
         waitJson: { kind: "external_event", topic: "forum" },
       });
-      expect(waiting).toMatchObject({
-        applied: true,
-      });
+      expect(waiting.applied).toBe(true);
+      if (!waiting.applied) {
+        throw new Error("Expected wait state update to apply");
+      }
       const cancelRequested = requestFlowCancel({
         flowId: created.flowId,
-        expectedRevision: waiting.applied ? waiting.flow.revision : -1,
+        expectedRevision: waiting.flow.revision,
         cancelRequestedAt: 444,
       });
-      expect(cancelRequested).toMatchObject({
-        applied: true,
-      });
+      expect(cancelRequested.applied).toBe(true);
 
       resetTaskFlowRegistryForTests({ persist: false });
 
-      expect(getTaskFlowById(created.flowId)).toMatchObject({
-        flowId: created.flowId,
-        syncMode: "managed",
-        controllerId: "tests/persisted-flow",
-        revision: 2,
-        status: "waiting",
-        currentStep: "ask_user",
-        stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "forum" },
-        cancelRequestedAt: 444,
-      });
+      const restored = getTaskFlowById(created.flowId);
+      expect(restored?.flowId).toBe(created.flowId);
+      expect(restored?.syncMode).toBe("managed");
+      expect(restored?.controllerId).toBe("tests/persisted-flow");
+      expect(restored?.revision).toBe(2);
+      expect(restored?.status).toBe("waiting");
+      expect(restored?.currentStep).toBe("ask_user");
+      expect(restored?.stateJson).toEqual({ phase: "ask_user" });
+      expect(restored?.waitJson).toEqual({ kind: "external_event", topic: "forum" });
+      expect(restored?.cancelRequestedAt).toBe(444);
     });
   });
 
@@ -180,11 +186,43 @@ describe("task-flow-registry store runtime", () => {
 
       resetTaskFlowRegistryForTests({ persist: false });
 
-      expect(getTaskFlowById(created.flowId)).toMatchObject({
-        flowId: created.flowId,
-        stateJson: null,
-        waitJson: null,
+      const restored = getTaskFlowById(created.flowId);
+      expect(restored?.flowId).toBe(created.flowId);
+      expect(restored?.stateJson).toBeNull();
+      expect(restored?.waitJson).toBeNull();
+    });
+  });
+
+  it("drops malformed requester origin json from sqlite flow state", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        controllerId: "tests/malformed-origin",
+        goal: "Restore malformed origin",
+        status: "running",
       });
+
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(`UPDATE flow_runs SET requester_origin_json = ? WHERE flow_id = ?`).run(
+        JSON.stringify(["notifychat", "123"]),
+        created.flowId,
+      );
+      db.close();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const restored = getTaskFlowById(created.flowId);
+      expect(restored?.flowId).toBe(created.flowId);
+      expect(restored?.requesterOrigin).toBeUndefined();
     });
   });
 

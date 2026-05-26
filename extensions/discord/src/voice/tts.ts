@@ -5,9 +5,9 @@ import {
   resolveTtsPrefsPath,
   type ResolvedTtsConfig,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 
@@ -40,7 +40,7 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   const baseProviders = base.providers ?? {};
   const overrideProviders = override.providers ?? {};
   const mergedProviders = Object.fromEntries(
-    [...new Set([...Object.keys(baseProviders), ...Object.keys(overrideProviders)])].map(
+    uniqueStrings([...Object.keys(baseProviders), ...Object.keys(overrideProviders)]).map(
       (providerId) => {
         const baseProvider = baseProviders[providerId] ?? {};
         const overrideProvider = overrideProviders[providerId] ?? {};

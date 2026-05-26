@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareFileConsentActivityFs } from "./file-consent-helpers.js";
 import {
   getPendingUploadFs,
@@ -56,6 +56,7 @@ describe("msteams pending uploads (fs-backed)", () => {
 
   afterEach(async () => {
     await cleanupTempDirs();
+    vi.useRealTimers();
   });
 
   it("stores and retrieves a pending upload by id", async () => {
@@ -136,7 +137,14 @@ describe("msteams pending uploads (fs-backed)", () => {
       },
       { env },
     );
-    expect(await requirePendingUpload("upload-rm", env)).toMatchObject({ id: "upload-rm" });
+    const loaded = await requirePendingUpload("upload-rm", env);
+    expect(loaded.id).toBe("upload-rm");
+    expect(loaded.filename).toBe("rm.bin");
+    expect(loaded.contentType).toBeUndefined();
+    expect(loaded.conversationId).toBe("19:conv@thread.v2");
+    expect(loaded.consentCardActivityId).toBeUndefined();
+    expect(loaded.buffer.toString("utf8")).toBe("x");
+    expect(Number.isFinite(loaded.createdAt)).toBe(true);
 
     await removePendingUploadFs("upload-rm", { env });
     expect(await getPendingUploadFs("upload-rm", { env })).toBeUndefined();
@@ -153,6 +161,8 @@ describe("msteams pending uploads (fs-backed)", () => {
   it("expires entries past their ttl on read", async () => {
     const stateDir = await makeTempStateDir();
     const env = makeEnv(stateDir);
+    const now = new Date("2026-05-08T00:00:00.000Z");
+    vi.useFakeTimers({ now });
 
     await storePendingUploadFs(
       {
@@ -163,8 +173,7 @@ describe("msteams pending uploads (fs-backed)", () => {
       },
       { env, ttlMs: 1 },
     );
-    // Wait past ttl
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    vi.setSystemTime(now.getTime() + 2);
     expect(await getPendingUploadFs("upload-old", { env, ttlMs: 1 })).toBeUndefined();
   });
 

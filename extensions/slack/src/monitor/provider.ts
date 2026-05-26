@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/allow-from";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import type { SessionScope } from "openclaw/plugin-sdk/config-types";
+import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
@@ -20,15 +20,15 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
 } from "../accounts.js";
+import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
-import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -296,14 +296,29 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let teamId = "";
   let apiAppId = "";
   const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
+  let authTestFailed = false;
+  let authTestError: string | undefined;
   try {
     const auth = await app.client.auth.test({ token: botToken });
     botUserId = auth.user_id ?? "";
     botId = (auth as { bot_id?: string }).bot_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-  } catch {
-    // auth test failing is non-fatal; message handler falls back to regex mentions.
+    if (!botUserId) {
+      authTestFailed = true;
+      authTestError = "auth.test returned no user_id";
+    }
+  } catch (err) {
+    authTestFailed = true;
+    authTestError = err instanceof Error ? err.message : String(err);
+  }
+  if (authTestFailed) {
+    runtime.log?.(
+      warn(
+        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
+          "explicit bot-mention detection will be disabled until restart with a valid bot token",
+      ),
+    );
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
@@ -360,7 +375,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
   if (
-    isSlackExecApprovalClientEnabled({
+    isSlackAnyNativeApprovalClientEnabled({
       cfg,
       accountId: account.accountId,
     })
@@ -645,7 +660,7 @@ export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
-export const __testing = {
+export const testing = {
   formatSlackChannelResolved,
   formatSlackUserResolved,
   publishSlackConnectedStatus,
@@ -661,3 +676,4 @@ export const __testing = {
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };
+export { testing as __testing };

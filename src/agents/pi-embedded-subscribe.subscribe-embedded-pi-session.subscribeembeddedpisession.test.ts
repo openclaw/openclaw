@@ -1,5 +1,6 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
@@ -52,6 +53,7 @@ describe("subscribeEmbeddedPiSession", () => {
     subscribeEmbeddedPiSession({
       session,
       ...options,
+      trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
     return { emit };
   }
@@ -110,6 +112,55 @@ describe("subscribeEmbeddedPiSession", () => {
       isError: params.isError,
       result: params.result,
     });
+  }
+
+  function findBlockReplyPayload(
+    onBlockReply: { mock: { calls: unknown[][] } },
+    text: string,
+  ): { mediaUrls?: unknown } | undefined {
+    return onBlockReply.mock.calls
+      .map((call) => call[0] as { text?: unknown; mediaUrls?: unknown })
+      .find((payload) => payload.text === text);
+  }
+
+  function mockCallArg(mock: { mock: { calls: unknown[][] } }, callIndex = 0): unknown {
+    const call = mock.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`expected mock call ${callIndex + 1}`);
+    }
+    return call[0];
+  }
+
+  function latestMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
+    return mockCallArg(mock, mock.mock.calls.length - 1);
+  }
+
+  function expectBlockReplyPayload(
+    onBlockReply: { mock: { calls: unknown[][] } },
+    expected: { text: string; mediaUrls?: string[] },
+  ): void {
+    const payload = findBlockReplyPayload(onBlockReply, expected.text);
+    if (!payload) {
+      throw new Error(`Expected block reply text: ${expected.text}`);
+    }
+    if (expected.mediaUrls !== undefined) {
+      expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
+    }
+  }
+
+  function expectLifecyclePayload(
+    payloads: Array<Record<string, unknown>>,
+    expected: { phase: string; livenessState: string; replayInvalid: boolean },
+  ): void {
+    const payload = payloads.find(
+      (item) =>
+        item.phase === expected.phase &&
+        item.livenessState === expected.livenessState &&
+        item.replayInvalid === expected.replayInvalid,
+    );
+    if (!payload) {
+      throw new Error(`Expected lifecycle payload for phase ${expected.phase}`);
+    }
   }
 
   it("captures usage from completions timings on done events", () => {
@@ -212,7 +263,7 @@ describe("subscribeEmbeddedPiSession", () => {
       await flushBlockReplyCallbacks();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+      expect((mockCallArg(onBlockReply) as { text?: string }).text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
@@ -301,13 +352,11 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const payload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(payload?.text ?? "").toContain("Fetched page");
-    expect(payload?.mediaUrls).toBeUndefined();
+    const payload = latestMockCallArg(onToolResult) as { text?: string; mediaUrls?: string[] };
+    expect(payload.text ?? "").toContain("Fetched page");
+    expect(payload.mediaUrls).toBeUndefined();
   });
 
   it("delivers generated image media once in markdown verbose output", async () => {
@@ -343,13 +392,14 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(toolPayload?.text ?? "").toContain("Generated 1 image");
-    expect(toolPayload?.mediaUrls).toBeUndefined();
+    const toolPayload = latestMockCallArg(onToolResult) as {
+      text?: string;
+      mediaUrls?: string[];
+    };
+    expect(toolPayload.text ?? "").toContain("Generated 1 image");
+    expect(toolPayload.mediaUrls).toBeUndefined();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Here is the image.");
@@ -362,12 +412,10 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     await flushBlockReplyCallbacks();
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Here is the image.",
-        mediaUrls: ["/tmp/generated.png"],
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Here is the image.",
+      mediaUrls: ["/tmp/generated.png"],
+    });
   });
 
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
@@ -403,7 +451,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -417,12 +465,10 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     await flushBlockReplyCallbacks();
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Here is the selected image.",
-        mediaUrls: ["./selected.png"],
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Here is the selected image.",
+      mediaUrls: ["./selected.png"],
+    });
   });
 
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
@@ -459,21 +505,19 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Generated 1 image.\n");
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Generated 1 image.",
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Generated 1 image.",
+    });
     const earlyMediaPayloads = onBlockReply.mock.calls
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.length);
-    expect(earlyMediaPayloads).toEqual([]);
+    expect(earlyMediaPayloads).toStrictEqual([]);
 
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
     emit({
@@ -542,12 +586,10 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "agent_end" });
     await flushBlockReplyCallbacks();
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Here it is.",
-        mediaUrls: ["/tmp/lobster-boss.mp3"],
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Here it is.",
+      mediaUrls: ["/tmp/lobster-boss.mp3"],
+    });
   });
 
   it.each([
@@ -610,15 +652,13 @@ describe("subscribeEmbeddedPiSession", () => {
       emit({ type: "message_start", message: { role: "assistant" } });
       emitAssistantTextDelta(emit, firstChunk);
 
-      expect(onBlockReply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: firstChunk.trim(),
-        }),
-      );
+      expectBlockReplyPayload(onBlockReply, {
+        text: firstChunk.trim(),
+      });
       const earlyMediaPayloads = onBlockReply.mock.calls
         .map(([payload]) => payload)
         .filter((payload) => payload.mediaUrls?.length);
-      expect(earlyMediaPayloads).toEqual([]);
+      expect(earlyMediaPayloads).toStrictEqual([]);
 
       emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
       emit({
@@ -679,6 +719,39 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("counts orphaned tool media emitted through block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["tts"]),
+      onBlockReply,
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
@@ -708,16 +781,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
       await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts).toEqual(["Final answer"]);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
       }
-      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-      expect(combined).toBe("Final answer");
     },
   );
 
@@ -1031,9 +1102,12 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toMatchObject({
-      data: { error: expect.stringContaining("API rate limit reached") },
-    });
+    if (!lifecycleError) {
+      throw new Error("Expected lifecycle error event");
+    }
+    const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
+    expect(typeof error).toBe("string");
+    expect(error).toContain("API rate limit reached");
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
@@ -1067,13 +1141,11 @@ describe("subscribeEmbeddedPiSession", () => {
       hadPotentialSideEffects: true,
     });
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        livenessState: "abandoned",
-        replayInvalid: true,
-      }),
-    );
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "abandoned",
+      replayInvalid: true,
+    });
   });
 
   it("preserves deterministic side-effect liveness across compaction retries", () => {
@@ -1099,12 +1171,110 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        livenessState: "working",
-        replayInvalid: true,
-      }),
-    );
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "working",
+      replayInvalid: true,
+    });
+  });
+
+  it("preserves accepted session spawn terminal evidence across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-spawn-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "sessions_spawn",
+      toolCallId: "spawn-1",
+      args: { prompt: "continue in a child session" },
+      isError: false,
+      result: {
+        details: {
+          status: "accepted",
+          runId: "run-child",
+          childSessionKey: "agent:claude:subagent:child",
+        },
+      },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+    expect(subscription.getAcceptedSessionSpawns()).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "working",
+      replayInvalid: true,
+    });
+  });
+
+  it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onHeartbeatToolResponse = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-heartbeat-terminal",
+      sessionKey: "agent:main:main",
+      onHeartbeatToolResponse,
+    });
+
+    const result = {
+      details: {
+        status: "recorded",
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+    };
+    emitToolRun({
+      emit,
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolCallId: "heartbeat-1",
+      args: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isError: false,
+      result,
+    });
+    emitToolRun({
+      emit,
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolCallId: "heartbeat-2",
+      args: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isError: false,
+      result,
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(subscription.getHeartbeatToolResponse()).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+    expect(onHeartbeatToolResponse).toHaveBeenCalledTimes(1);
+    expect(onHeartbeatToolResponse).toHaveBeenCalledWith({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
   });
 });

@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   computeEffectiveSettings,
@@ -149,7 +149,7 @@ function createContextHandler(): ContextHandler {
         handler = fn as ContextHandler;
       }
     },
-    appendEntry: (_type: string, _data?: unknown) => {},
+    appendEntry: (_type: string, dataValue?: unknown) => {},
   } as unknown as ExtensionAPI;
 
   contextPruningExtension(api);
@@ -405,7 +405,7 @@ describe("context-pruning", () => {
     });
 
     const tool = findToolResult(next, "t1");
-    expect(tool.content.filter((block) => block.type === "image")).toEqual([]);
+    expect(tool.content.some((block) => block.type === "image")).toBe(false);
     expect(toolText(tool)).toContain("[image removed during context pruning]");
     expect(toolText(tool)).toContain("visible tool text");
   });

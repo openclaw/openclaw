@@ -10,6 +10,8 @@ describe("talk normalization", () => {
       modelId: "eleven_v3",
       outputFormat: "pcm_44100",
       apiKey: "secret-key", // pragma: allowlist secret
+      consultThinkingLevel: " low ",
+      consultFastMode: true,
       speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
@@ -17,6 +19,8 @@ describe("talk normalization", () => {
 
     expect(normalized).toEqual({
       speechLocale: "ru-RU",
+      consultThinkingLevel: "low",
+      consultFastMode: true,
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
@@ -43,6 +47,7 @@ describe("talk normalization", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -67,6 +72,7 @@ describe("talk normalization", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -127,6 +133,24 @@ describe("talk normalization", () => {
       speechLocale: "ru-RU",
       interruptOnSpeech: true,
     });
+  });
+
+  it("preserves normalized realtime instructions in talk.config payloads", () => {
+    const payload = buildTalkConfigResponse({
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+            voice: "alloy",
+          },
+        },
+        instructions: " Speak with crisp diction. ",
+      },
+    });
+
+    expect(payload?.realtime?.provider).toBe("openai");
+    expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
   it("does not report an active provider when the configured speech provider cannot resolve", () => {

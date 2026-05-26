@@ -51,7 +51,7 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   runChannelTurn,
   runPreparedChannelTurn,
   runResolvedChannelTurn,
@@ -70,7 +70,12 @@ import {
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
+import {
+  fetchRemoteMedia,
+  readRemoteMediaBuffer,
+  saveRemoteMedia,
+  saveResponseMedia,
+} from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -128,7 +133,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         }),
     },
     media: {
+      readRemoteMediaBuffer,
       fetchRemoteMedia,
+      saveRemoteMedia,
+      saveResponseMedia,
       saveMediaBuffer,
     },
     activity: {
@@ -174,8 +182,9 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     turn: {
       run: runChannelTurn,
+      runAssembled: dispatchAssembledChannelTurn,
       runResolved: runResolvedChannelTurn,
-      buildContext: buildChannelTurnContext,
+      buildContext: buildChannelInboundEventContext,
       runPrepared: runPreparedChannelTurn,
       dispatchAssembled: dispatchAssembledChannelTurn,
     },

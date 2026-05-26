@@ -5,6 +5,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   expandToolGroups,
+  normalizeToolList,
   normalizeToolName,
 } from "../../tool-policy.js";
 
@@ -109,6 +110,24 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+export function mergeForcedEmbeddedAttemptToolsAllow(
+  toolsAllow: string[] | undefined,
+  params: { forceMessageTool?: boolean },
+): string[] | undefined {
+  if (
+    !params.forceMessageTool ||
+    toolsAllow === undefined ||
+    hasWildcardToolAllowlist(toolsAllow)
+  ) {
+    return toolsAllow;
+  }
+  if (toolsAllow.length === 0) {
+    return ["message"];
+  }
+  const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
+  return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
+}
+
 function resolveCodingToolConstructionPlanForAllowlist(
   toolsAllow?: string[],
 ): OpenClawCodingToolConstructionPlan {
@@ -122,7 +141,7 @@ function resolveCodingToolConstructionPlanForAllowlist(
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
   const expanded = expandToolGroups(toolsAllow);
-  const normalized = expanded.map((entry) => normalizeToolName(entry)).filter(Boolean);
+  const normalized = normalizeToolList(expanded);
   const includeBaseCodingTools = normalized.some((name) =>
     BASE_CODING_TOOL_FACTORY_NAMES.has(name),
   );
@@ -148,6 +167,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   disableTools?: boolean;
   isRawModelRun?: boolean;
   toolsAllow?: string[];
+  forceMessageTool?: boolean;
 }): {
   constructTools: boolean;
   includeCoreTools: boolean;
@@ -161,9 +181,10 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
       codingToolConstructionPlan: cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN),
     };
   }
-  const codingToolConstructionPlan = resolveCodingToolConstructionPlanForAllowlist(
-    params.toolsAllow,
-  );
+  const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
+    forceMessageTool: params.forceMessageTool,
+  });
+  const codingToolConstructionPlan = resolveCodingToolConstructionPlanForAllowlist(toolsAllow);
   const includeCoreTools =
     codingToolConstructionPlan.includeBaseCodingTools ||
     codingToolConstructionPlan.includeShellTools ||
@@ -176,7 +197,7 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   return {
     constructTools,
     includeCoreTools,
-    ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
+    ...(toolsAllow ? { runtimeToolAllowlist: toolsAllow } : {}),
     codingToolConstructionPlan,
   };
 }

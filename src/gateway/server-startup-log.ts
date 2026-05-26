@@ -3,6 +3,7 @@ import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
+  buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
   legacyModelKey,
@@ -11,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 
 type StartupThinkLevel =
   | "off"
@@ -98,6 +100,17 @@ function resolveExplicitStartupThinking(params: {
   );
 }
 
+function isConfiguredReasoningDisabled(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  return buildConfiguredModelCatalog({ cfg: params.cfg }).some(
+    (entry) =>
+      entry.provider === params.provider && entry.id === params.model && entry.reasoning === false,
+  );
+}
+
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -118,7 +131,13 @@ export function formatAgentModelStartupDetails(params: {
       provider: params.provider,
       model: params.model,
     });
-  const thinking = explicitThinking ?? (resolvedThinking === "off" ? "medium" : resolvedThinking);
+  const thinking =
+    explicitThinking ??
+    (isConfiguredReasoningDisabled(params)
+      ? "off"
+      : resolvedThinking === "off"
+        ? "medium"
+        : resolvedThinking);
   const fast = resolveFastModeState({
     cfg: params.cfg,
     provider: params.provider,
@@ -133,9 +152,7 @@ function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,
 ) {
-  const pluginIds = [...new Set(loadedPluginIds.map((id) => id.trim()).filter(Boolean))].toSorted(
-    (a, b) => a.localeCompare(b),
-  );
+  const pluginIds = normalizeSortedUniqueStringEntries(loadedPluginIds);
   const pluginSummary =
     pluginIds.length === 0
       ? "0 plugins"

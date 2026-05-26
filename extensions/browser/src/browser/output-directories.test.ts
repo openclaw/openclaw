@@ -13,6 +13,17 @@ async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> 
   }
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 describe("ensureOutputDirectory", () => {
   it("creates nested missing output directories", async () => {
     await withTempDir(async (tempDir) => {
@@ -37,7 +48,7 @@ describe("ensureOutputDirectory", () => {
         await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
           /symlink|output directory/i,
         );
-        await expect(fs.access(path.join(outsideDir, "nested"))).rejects.toThrow();
+        await expectPathMissing(path.join(outsideDir, "nested"));
       });
     },
   );

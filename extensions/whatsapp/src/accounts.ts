@@ -6,9 +6,9 @@ import {
   resolveUserPath,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
-import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import {
   listConfiguredAccountIds,
@@ -16,7 +16,7 @@ import {
   resolveDefaultWhatsAppAccountId,
 } from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
-import { hasWebCredsSync } from "./creds-files.js";
+import { hasWebCredsRegularFileSync, hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
@@ -88,11 +88,7 @@ function resolveLegacyAuthDir(): string {
 }
 
 function legacyAuthExists(authDir: string): boolean {
-  try {
-    return fs.existsSync(path.join(authDir, "creds.json"));
-  } catch {
-    return false;
-  }
+  return hasWebCredsRegularFileSync(authDir);
 }
 
 export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {

@@ -25,6 +25,14 @@ vi.mock("../../infra/net/fetch-guard.js", () => {
   };
 });
 
+function firstFetchCall(): Record<string, unknown> {
+  const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("Expected guarded fetch call");
+  }
+  return call as Record<string, unknown>;
+}
+
 describe("web-guarded-fetch", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -39,17 +47,14 @@ describe("web-guarded-fetch", () => {
 
     await withTrustedWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
 
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com",
-        policy: {
-          allowRfc2544BenchmarkRange: true,
-          allowIpv6UniqueLocalRange: true,
-          hostnameAllowlist: ["example.com"],
-        },
-        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
-      }),
-    );
+    const call = firstFetchCall();
+    expect(call?.url).toBe("https://example.com");
+    expect(call?.policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["example.com"],
+    });
+    expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
   });
 
   it("uses private-network policy only for self-hosted web tools endpoints", async () => {
@@ -61,17 +66,13 @@ describe("web-guarded-fetch", () => {
 
     await withSelfHostedWebToolsEndpoint({ url: "http://127.0.0.1:8080" }, async () => undefined);
 
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:8080",
-        policy: expect.objectContaining({
-          dangerouslyAllowPrivateNetwork: true,
-          allowRfc2544BenchmarkRange: true,
-          allowIpv6UniqueLocalRange: true,
-        }),
-        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
-      }),
-    );
+    const call = firstFetchCall();
+    expect(call?.url).toBe("http://127.0.0.1:8080");
+    const policy = call.policy as Record<string, unknown> | undefined;
+    expect(policy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(policy?.allowRfc2544BenchmarkRange).toBe(true);
+    expect(policy?.allowIpv6UniqueLocalRange).toBe(true);
+    expect(call?.mode).toBe(GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY);
   });
 
   it("keeps strict endpoint policy unchanged", async () => {
@@ -83,12 +84,8 @@ describe("web-guarded-fetch", () => {
 
     await withStrictWebToolsEndpoint({ url: "https://example.com" }, async () => undefined);
 
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com",
-      }),
-    );
-    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    const call = firstFetchCall();
+    expect(call?.url).toBe("https://example.com");
     expect(call?.policy).toBeUndefined();
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
   });

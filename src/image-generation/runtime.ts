@@ -8,6 +8,7 @@ import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
+  resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
@@ -55,7 +56,7 @@ export async function generateImage(
   const getProvider = deps.getProvider ?? getImageGenerationProvider;
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   const logger = deps.log ?? log;
-  const timeoutMs =
+  const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
   const candidates = resolveCapabilityModelCandidates({
@@ -91,6 +92,10 @@ export async function generateImage(
     }
 
     try {
+      const timeoutMs = resolveMediaProviderRequestTimeoutMs({
+        timeoutMs: requestedTimeoutMs,
+        providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+      });
       const sanitized = resolveImageGenerationOverrides({
         provider,
         size: params.size,
@@ -118,6 +123,7 @@ export async function generateImage(
         inputImages: params.inputImages,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,
+        ssrfPolicy: params.ssrfPolicy,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");

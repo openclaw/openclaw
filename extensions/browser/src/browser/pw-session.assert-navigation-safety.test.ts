@@ -38,6 +38,17 @@ function fakePage(url = "https://blocked.example/admin"): {
   return { page, close };
 }
 
+function firstNavigationResultRequest(): Parameters<
+  typeof assertBrowserNavigationResultAllowed
+>[0] {
+  const [call] = mockedResultAllowed.mock.calls;
+  if (!call) {
+    throw new Error("Expected navigation result guard call");
+  }
+  const [request] = call;
+  return request;
+}
+
 describe("assertPageNavigationCompletedSafely", () => {
   it("does not close the tab when a read-only caller hits an SSRF-blocked URL (response: null)", async () => {
     // A read-only caller (snapshot/screenshot/interactions) passes response: null
@@ -117,8 +128,7 @@ describe("assertPageNavigationCompletedSafely", () => {
     ).resolves.toBeUndefined();
 
     expect(close).not.toHaveBeenCalled();
-    expect(mockedResultAllowed).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://allowed.example/" }),
-    );
+    expect(mockedResultAllowed).toHaveBeenCalledTimes(1);
+    expect(firstNavigationResultRequest().url).toBe("https://allowed.example/");
   });
 });

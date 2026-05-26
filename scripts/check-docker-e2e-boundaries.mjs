@@ -14,7 +14,15 @@ const packageJson = JSON.parse(readText("package.json"));
 const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
 // These lanes prove package-installed surfaces against live auth, so they
 // intentionally need both live credentials and a package-backed image.
-const livePackageBackedLanes = new Set(["live-codex-npm-plugin", "openwebui"]);
+const livePackageBackedLanes = new Set([
+  "live-codex-npm-plugin",
+  "live-plugin-tool",
+  "openai-chat-tools",
+  "openwebui",
+]);
+// These lanes intentionally build a focused source-checkout image instead of
+// consuming the shared package E2E images.
+const sourceCheckoutImageLanes = new Set(["plugin-binding-command-escape"]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");
@@ -62,6 +70,7 @@ function validateUniqueLanes(label, lanes) {
 
 function validateLane(label, lane) {
   const resources = laneResources(lane);
+  const sourceCheckoutImageLane = sourceCheckoutImageLanes.has(lane.name);
   if (!lane.name || typeof lane.name !== "string") {
     errors.push(`${label}: Docker E2E lane is missing a string name`);
   }
@@ -77,8 +86,13 @@ function validateLane(label, lane) {
   if (lane.live && lane.e2eImageKind && !livePackageBackedLanes.has(lane.name)) {
     errors.push(`${label}: live Docker E2E lane '${lane.name}' must not require a package image`);
   }
-  if (!lane.live && !lane.e2eImageKind) {
+  if (!lane.live && !lane.e2eImageKind && !sourceCheckoutImageLane) {
     errors.push(`${label}: package Docker E2E lane '${lane.name}' must declare an e2e image kind`);
+  }
+  if (sourceCheckoutImageLane && !/\bOPENCLAW_SKIP_DOCKER_BUILD=0\b/u.test(lane.command)) {
+    errors.push(
+      `${label}: source-checkout Docker E2E lane '${lane.name}' must force a local image build`,
+    );
   }
   if (laneWeight(lane) < 1) {
     errors.push(`${label}: Docker E2E lane '${lane.name}' must have positive weight`);

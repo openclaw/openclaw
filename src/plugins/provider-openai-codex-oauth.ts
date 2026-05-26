@@ -1,4 +1,4 @@
-import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import { loginOpenAICodex, type OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -166,7 +166,8 @@ export async function loginOpenAICodexOAuth(params: {
       ? [
           "You are running in a remote/VPS environment.",
           "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
+          "Open it, sign in, then paste the redirect URL here.",
+          "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
         ].join("\n")
       : [
           "Browser will open for OpenAI authentication.",

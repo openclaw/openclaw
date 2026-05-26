@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -37,6 +38,7 @@ type GatewayTestHoistedState = {
       provider: string;
       contextWindow?: number;
       reasoning?: boolean;
+      input?: string[];
     }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;

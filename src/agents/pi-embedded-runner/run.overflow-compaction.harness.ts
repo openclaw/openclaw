@@ -39,25 +39,25 @@ export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
   runBeforeAgentReply: vi.fn(
     async (
-      _event: { cleanedBody: string },
+      _eventValue: { cleanedBody: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
   ),
   runBeforeAgentStart: vi.fn(
     async (
-      _event: { prompt: string; messages?: unknown[] },
+      _eventValue: { prompt: string; messages?: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
   ),
   runBeforePromptBuild: vi.fn(
     async (
-      _event: { prompt: string; messages: unknown[] },
+      _eventValue: { prompt: string; messages: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforePromptBuildResult | undefined> => undefined,
   ),
   runBeforeModelResolve: vi.fn(
     async (
-      _event: { prompt: string },
+      _eventValue: { prompt: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
   ),
@@ -182,6 +182,7 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
   return (
     lower.includes("request_too_large") ||
     lower.includes("context window exceeded") ||
+    (lower.includes("context window") && lower.includes("ran out of room")) ||
     lower.includes("prompt is too long")
   );
 });
@@ -221,8 +222,13 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
-export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(() => ({}));
-export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
+);
+export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string[]>(
+  (_params?: unknown) => [],
+);
+export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
@@ -355,6 +361,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     return (
       lower.includes("request_too_large") ||
       lower.includes("context window exceeded") ||
+      (lower.includes("context window") && lower.includes("ran out of room")) ||
       lower.includes("prompt is too long")
     );
   });
@@ -407,6 +414,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({});
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedMarkAuthProfileSuccess.mockReset();
+  mockedMarkAuthProfileSuccess.mockResolvedValue(undefined);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
@@ -455,8 +464,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: vi.fn(() => false),
     markAuthProfileFailure: vi.fn(async () => {}),
-    markAuthProfileGood: vi.fn(async () => {}),
-    markAuthProfileUsed: vi.fn(async () => {}),
+    markAuthProfileSuccess: mockedMarkAuthProfileSuccess,
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
   }));
 
@@ -548,6 +556,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(() => 0),
   }));
 
   vi.doMock("../../utils/message-channel.js", () => ({
@@ -569,6 +578,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn(() => "session-lane"),
+    resolveEmbeddedSessionLane: vi.fn(() => "session-lane"),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 

@@ -8,8 +8,8 @@ import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export type ReleaseAsset = {
   name?: string;
@@ -297,7 +297,14 @@ export async function installSignalCliFromRelease(
         error: `Failed to fetch release info (${response.status})`,
       };
     }
-    payload = (await response.json()) as ReleaseResponse;
+    try {
+      payload = (await response.json()) as ReleaseResponse;
+    } catch {
+      return {
+        ok: false,
+        error: "Failed to parse signal-cli release info.",
+      };
+    }
   } finally {
     await release();
   }

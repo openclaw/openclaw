@@ -3,18 +3,7 @@ import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
-import type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsRuntimeFacade,
-  TtsSynthesisResult,
-  TtsSynthesisStreamResult,
-  TtsStreamResult,
-  TtsTelephonyResult,
-} from "./tts-runtime.types.js";
+import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -37,9 +26,11 @@ export function prewarmTtsRuntimeFacade(): void {
   loadFacadeModule();
 }
 
-export const _test: FacadeModule["_test"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule()._test,
+export const testApi: FacadeModule["testApi"] = createLazyFacadeObjectValue(
+  () => loadFacadeModule().testApi,
 );
+/** @deprecated Use `testApi`. */
+export { testApi as _test };
 export const buildTtsSystemPromptHint: FacadeModule["buildTtsSystemPromptHint"] =
   createLazyFacadeRuntimeValue(loadFacadeModule, "buildTtsSystemPromptHint");
 export const getLastTtsAttempt: FacadeModule["getLastTtsAttempt"] = createLazyFacadeRuntimeValue(

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
+  asFiniteNumber,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import YAML from "yaml";
 
 const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
@@ -276,7 +277,7 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
 }
 
 function normalizeOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {

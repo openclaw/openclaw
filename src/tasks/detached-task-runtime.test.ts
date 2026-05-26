@@ -53,6 +53,26 @@ function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
   };
 }
 
+function findWarningPayload(message: string): Record<string, unknown> | undefined {
+  const payload = mockLogWarn.mock.calls.find(([entry]) => entry === message)?.[1];
+  return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
+}
+
+function requireFirstCallArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("detached-task-runtime", () => {
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -125,30 +145,42 @@ describe("detached-task-runtime", () => {
       taskId: runningTask.taskId,
     });
 
-    expect(fakeRuntime.createQueuedTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-queued", task: "Queue task" }),
+    const queuedArgs = requireFirstCallArg(vi.mocked(fakeRuntime.createQueuedTaskRun), "queued");
+    expect(queuedArgs.runId).toBe("run-queued");
+    expect(queuedArgs.task).toBe("Queue task");
+    const runningArgs = requireFirstCallArg(vi.mocked(fakeRuntime.createRunningTaskRun), "running");
+    expect(runningArgs.runId).toBe("run-running");
+    expect(runningArgs.task).toBe("Run task");
+    const startArgs = requireFirstCallArg(vi.mocked(fakeRuntime.startTaskRunByRunId), "start");
+    expect(startArgs.runId).toBe("run-running");
+    expect(startArgs.startedAt).toBe(10);
+    const progressArgs = requireFirstCallArg(
+      vi.mocked(fakeRuntime.recordTaskRunProgressByRunId),
+      "progress",
     );
-    expect(fakeRuntime.createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", task: "Run task" }),
+    expect(progressArgs.runId).toBe("run-running");
+    expect(progressArgs.lastEventAt).toBe(20);
+    const finalizeMock = fakeRuntime.finalizeTaskRunByRunId;
+    if (!finalizeMock) {
+      throw new Error("Expected fake runtime finalizer");
+    }
+    const finalizeArgs = requireFirstCallArg(vi.mocked(finalizeMock), "finalize");
+    expect(finalizeArgs.runId).toBe("run-running");
+    expect(finalizeArgs.status).toBe("succeeded");
+    expect(finalizeArgs.endedAt).toBe(25);
+    const completeArgs = requireFirstCallArg(
+      vi.mocked(fakeRuntime.completeTaskRunByRunId),
+      "complete",
     );
-    expect(fakeRuntime.startTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", startedAt: 10 }),
-    );
-    expect(fakeRuntime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", lastEventAt: 20 }),
-    );
-    expect(fakeRuntime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", status: "succeeded", endedAt: 25 }),
-    );
-    expect(fakeRuntime.completeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", endedAt: 30 }),
-    );
-    expect(fakeRuntime.failTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", endedAt: 40 }),
-    );
-    expect(fakeRuntime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-running", deliveryStatus: "delivered" }),
-    );
+    expect(completeArgs.runId).toBe("run-running");
+    expect(completeArgs.endedAt).toBe(30);
+    const failArgs = requireFirstCallArg(vi.mocked(fakeRuntime.failTaskRunByRunId), "fail");
+    expect(failArgs.runId).toBe("run-running");
+    expect(failArgs.endedAt).toBe(40);
+    const deliveryArgs = vi.mocked(fakeRuntime.setDetachedTaskDeliveryStatusByRunId).mock
+      .calls[0]?.[0];
+    expect(deliveryArgs?.runId).toBe("run-running");
+    expect(deliveryArgs?.deliveryStatus).toBe("delivered");
     expect(fakeRuntime.cancelDetachedTaskRunById).toHaveBeenCalledWith({
       cfg: {} as never,
       taskId: runningTask.taskId,
@@ -165,17 +197,18 @@ describe("detached-task-runtime", () => {
 
     registerDetachedTaskRuntime("tests/detached-runtime", runtime);
 
-    expect(getDetachedTaskLifecycleRuntimeRegistration()).toMatchObject({
-      pluginId: "tests/detached-runtime",
-      runtime,
-    });
+    const registration = getDetachedTaskLifecycleRuntimeRegistration();
+    expect(registration?.pluginId).toBe("tests/detached-runtime");
+    expect(registration?.runtime).toBe(runtime);
     expect(getDetachedTaskLifecycleRuntime()).toBe(runtime);
   });
 
   it("falls back to legacy complete and fail hooks when a runtime has no finalizer", () => {
     const defaultRuntime = getDetachedTaskLifecycleRuntime();
-    const completeTaskRunByRunIdSpy = vi.fn(() => []);
-    const failTaskRunByRunIdSpy = vi.fn(() => []);
+    const completeTaskRunByRunIdSpy = vi.fn(
+      (_params: Parameters<typeof completeTaskRunByRunId>[0]) => [],
+    );
+    const failTaskRunByRunIdSpy = vi.fn((_params: Parameters<typeof failTaskRunByRunId>[0]) => []);
     const legacyRuntime = {
       ...defaultRuntime,
       completeTaskRunByRunId: completeTaskRunByRunIdSpy,
@@ -188,12 +221,14 @@ describe("detached-task-runtime", () => {
     finalizeTaskRunByRunId({ runId: "legacy-ok", status: "succeeded", endedAt: 10 });
     finalizeTaskRunByRunId({ runId: "legacy-timeout", status: "timed_out", endedAt: 20 });
 
-    expect(completeTaskRunByRunIdSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "legacy-ok", status: "succeeded", endedAt: 10 }),
-    );
-    expect(failTaskRunByRunIdSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "legacy-timeout", status: "timed_out", endedAt: 20 }),
-    );
+    const completeArgs = requireFirstCallArg(completeTaskRunByRunIdSpy, "legacy complete");
+    expect(completeArgs.runId).toBe("legacy-ok");
+    expect(completeArgs.status).toBe("succeeded");
+    expect(completeArgs.endedAt).toBe(10);
+    const failArgs = requireFirstCallArg(failTaskRunByRunIdSpy, "legacy fail");
+    expect(failArgs.runId).toBe("legacy-timeout");
+    expect(failArgs.status).toBe("timed_out");
+    expect(failArgs.endedAt).toBe(20);
   });
 
   describe("tryRecoverTaskBeforeMarkLost", () => {
@@ -253,14 +288,16 @@ describe("detached-task-runtime", () => {
         now: 1_000,
       });
       expect(result).toEqual({ recovered: false });
-      expect(mockLogWarn).toHaveBeenCalledWith(
+      const warningPayload = findWarningPayload(
         "Detached task recovery hook threw, proceeding with markTaskLost",
-        expect.objectContaining({
-          taskId: "task-throw",
-          runtime: "acp",
-          elapsedMs: expect.any(Number),
-        }),
       );
+      expect(warningPayload?.taskId).toBe("task-throw");
+      expect(warningPayload?.runtime).toBe("acp");
+      expect(typeof warningPayload?.elapsedMs).toBe("number");
+      if (typeof warningPayload?.elapsedMs !== "number") {
+        throw new Error("Expected detached task recovery warning elapsedMs");
+      }
+      expect(warningPayload.elapsedMs).toBeGreaterThanOrEqual(0);
     });
 
     it("returns not recovered and logs warning when hook returns invalid result", async () => {
@@ -276,10 +313,11 @@ describe("detached-task-runtime", () => {
         now: 2_000,
       });
       expect(result).toEqual({ recovered: false });
-      expect(mockLogWarn).toHaveBeenCalledWith(
+      const warningPayload = findWarningPayload(
         "Detached task recovery hook returned invalid result, proceeding with markTaskLost",
-        expect.objectContaining({ taskId: "task-invalid", runtime: "cron" }),
       );
+      expect(warningPayload?.taskId).toBe("task-invalid");
+      expect(warningPayload?.runtime).toBe("cron");
     });
 
     it("logs when the recovery hook is slow", async () => {
@@ -297,10 +335,10 @@ describe("detached-task-runtime", () => {
         now: 3_000,
       });
       expect(result).toEqual({ recovered: true });
-      expect(mockLogWarn).toHaveBeenCalledWith(
-        "Detached task recovery hook was slow",
-        expect.objectContaining({ taskId: "task-slow", runtime: "subagent", elapsedMs: 6_000 }),
-      );
+      const warningPayload = findWarningPayload("Detached task recovery hook was slow");
+      expect(warningPayload?.taskId).toBe("task-slow");
+      expect(warningPayload?.runtime).toBe("subagent");
+      expect(warningPayload?.elapsedMs).toBe(6_000);
       dateNowSpy.mockRestore();
     });
   });

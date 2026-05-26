@@ -61,23 +61,29 @@ describe("commitments full-chain integration", () => {
           }: {
             items: CommitmentExtractionItem[];
           }): Promise<CommitmentExtractionBatchResult> => ({
-            candidates: [
-              {
-                itemId: items[0]?.itemId ?? "",
-                kind: "event_check_in",
-                sensitivity: "routine",
-                source: "inferred_user_context",
-                reason: "The user mentioned an interview happening today.",
-                suggestedText: "How did the interview go?",
-                dedupeKey: "interview:2026-04-29",
-                confidence: 0.93,
-                dueWindow: {
-                  earliest: new Date(dueMs).toISOString(),
-                  latest: new Date(dueMs + 60 * 60_000).toISOString(),
-                  timezone: "America/Los_Angeles",
+            candidates: (() => {
+              const [firstItem] = items;
+              if (!firstItem) {
+                throw new Error("Expected commitment extraction item");
+              }
+              return [
+                {
+                  itemId: firstItem.itemId,
+                  kind: "event_check_in",
+                  sensitivity: "routine",
+                  source: "inferred_user_context",
+                  reason: "The user mentioned an interview happening today.",
+                  suggestedText: "How did the interview go?",
+                  dedupeKey: "interview:2026-04-29",
+                  confidence: 0.93,
+                  dueWindow: {
+                    earliest: new Date(dueMs).toISOString(),
+                    latest: new Date(dueMs + 60 * 60_000).toISOString(),
+                    timezone: "America/Los_Angeles",
+                  },
                 },
-              },
-            ],
+              ];
+            })(),
           }),
         ),
         setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
@@ -102,17 +108,19 @@ describe("commitments full-chain integration", () => {
 
       const pendingStore = await loadCommitmentStore();
       expect(pendingStore.commitments).toHaveLength(1);
-      expect(pendingStore.commitments[0]).toMatchObject({
-        status: "pending",
-        agentId: "main",
-        sessionKey,
-        channel: "telegram",
-        to: "155462274",
-        suggestedText: "How did the interview go?",
-      });
-      expect(pendingStore.commitments[0]?.dueWindow.earliestMs).toBe(dueMs);
-      expect(pendingStore.commitments[0]).not.toHaveProperty("sourceUserText");
-      expect(pendingStore.commitments[0]).not.toHaveProperty("sourceAssistantText");
+      const [pendingCommitment] = pendingStore.commitments;
+      if (!pendingCommitment) {
+        throw new Error("Expected pending commitment");
+      }
+      expect(pendingCommitment.status).toBe("pending");
+      expect(pendingCommitment.agentId).toBe("main");
+      expect(pendingCommitment.sessionKey).toBe(sessionKey);
+      expect(pendingCommitment.channel).toBe("telegram");
+      expect(pendingCommitment.to).toBe("155462274");
+      expect(pendingCommitment.suggestedText).toBe("How did the interview go?");
+      expect(pendingCommitment.dueWindow.earliestMs).toBe(dueMs);
+      expect(pendingCommitment).not.toHaveProperty("sourceUserText");
+      expect(pendingCommitment).not.toHaveProperty("sourceAssistantText");
 
       vi.setSystemTime(dueMs + 60_000);
       const sendTelegram = vi.fn().mockResolvedValue({
@@ -124,13 +132,16 @@ describe("commitments full-chain integration", () => {
           ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
           opts?: { disableTools?: boolean },
         ) => {
+          if (!opts) {
+            throw new Error("Expected commitment heartbeat reply options");
+          }
           expect(ctx.Body).toContain("Due inferred follow-up commitments");
           expect(ctx.Body).toContain("How did the interview go?");
           expect(ctx.Body).not.toContain("I have an interview later today.");
           expect(ctx.Body).not.toContain("Good luck, I hope it goes well.");
           expect(ctx.OriginatingChannel).toBe("telegram");
           expect(ctx.OriginatingTo).toBe("155462274");
-          expect(opts?.disableTools).toBe(true);
+          expect(opts.disableTools).toBe(true);
           return { text: "How did the interview go?" };
         },
       );
@@ -148,17 +159,22 @@ describe("commitments full-chain integration", () => {
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledWith(
-        "155462274",
-        "How did the interview go?",
-        expect.objectContaining({ accountId: "primary" }),
-      );
+      expect(sendTelegram).toHaveBeenCalledOnce();
+      const sendCall = sendTelegram.mock.calls[0];
+      if (!sendCall) {
+        throw new Error("Expected Telegram send call");
+      }
+      expect(sendCall[0]).toBe("155462274");
+      expect(sendCall[1]).toBe("How did the interview go?");
+      expect(sendCall[2]?.accountId).toBe("primary");
       const deliveredStore = await loadCommitmentStore();
-      expect(deliveredStore.commitments[0]).toMatchObject({
-        status: "sent",
-        attempts: 1,
-        sentAtMs: dueMs + 60_000,
-      });
+      const [deliveredCommitment] = deliveredStore.commitments;
+      if (!deliveredCommitment) {
+        throw new Error("Expected delivered commitment");
+      }
+      expect(deliveredCommitment.status).toBe("sent");
+      expect(deliveredCommitment.attempts).toBe(1);
+      expect(deliveredCommitment.sentAtMs).toBe(dueMs + 60_000);
     });
   });
 });

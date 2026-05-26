@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeMock = vi.hoisted(() => ({
   getCachedIMessagePrivateApiStatus: vi.fn(),
+  probeIMessagePrivateApi: vi.fn(),
 }));
 
 const runtimeMock = vi.hoisted(() => ({
@@ -13,8 +14,30 @@ const runtimeMock = vi.hoisted(() => ({
   sendAttachment: vi.fn(),
 }));
 
+const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
+
+const loggerMock = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  fatal: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: () => loggerMock,
+  };
+});
+
 vi.mock("./probe.js", () => ({
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
 }));
 
 vi.mock("./private-api-status.js", () => ({
@@ -24,6 +47,16 @@ vi.mock("./private-api-status.js", () => ({
 vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: runtimeMock,
 }));
+
+vi.mock("./monitor-reply-cache.js", async () => {
+  const actual = await vi.importActual<typeof import("./monitor-reply-cache.js")>(
+    "./monitor-reply-cache.js",
+  );
+  return {
+    ...actual,
+    rememberIMessageReplyCache: rememberIMessageReplyCacheMock,
+  };
+});
 
 const { imessageMessageActions } = await import("./actions.js");
 
@@ -39,6 +72,15 @@ function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function imsgOptions(chatGuid = "") {
+  return {
+    cliPath: "imsg",
+    dbPath: "/tmp/messages.db",
+    timeoutMs: undefined,
+    chatGuid,
+  };
+}
+
 describe("imessage message actions", () => {
   beforeEach(() => {
     runtimeMock.resolveIMessageMessageId.mockClear();
@@ -47,7 +89,10 @@ describe("imessage message actions", () => {
     runtimeMock.sendReaction.mockReset();
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
+    rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
+    probeMock.probeIMessagePrivateApi.mockReset();
+    loggerMock.warn.mockReset();
   });
 
   it("does not advertise private API actions when the bridge is known unavailable", () => {
@@ -62,7 +107,7 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toEqual([]);
+    expect(described?.actions).toStrictEqual([]);
   });
 
   it("advertises private API actions while private API status is unknown", () => {
@@ -73,9 +118,18 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toEqual(
-      expect.arrayContaining(["react", "reply", "sendWithEffect", "upload-file"]),
-    );
+    expect(described?.actions).toStrictEqual([
+      "react",
+      "edit",
+      "reply",
+      "sendWithEffect",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+      "upload-file",
+    ]);
   });
 
   it("advertises BB-parity actions when private API and selectors are available", () => {
@@ -93,21 +147,19 @@ describe("imessage message actions", () => {
       currentChannelId: "chat_guid:iMessage;+;chat0000",
     } as never);
 
-    expect(described?.actions).toEqual(
-      expect.arrayContaining([
-        "react",
-        "edit",
-        "unsend",
-        "reply",
-        "sendWithEffect",
-        "renameGroup",
-        "setGroupIcon",
-        "addParticipant",
-        "removeParticipant",
-        "leaveGroup",
-        "upload-file",
-      ]),
-    );
+    expect(described?.actions).toStrictEqual([
+      "react",
+      "edit",
+      "unsend",
+      "reply",
+      "sendWithEffect",
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+      "upload-file",
+    ]);
   });
 
   it("respects configured action gates", () => {
@@ -128,6 +180,33 @@ describe("imessage message actions", () => {
     expect(described?.actions).not.toContain("react");
     expect(described?.actions).not.toContain("reply");
     expect(described?.actions).toContain("edit");
+  });
+
+  it("emits a channels/imessage WARN when the private API bridge is unavailable", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
+    probeMock.probeIMessagePrivateApi.mockResolvedValue({
+      available: false,
+      v2Ready: false,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow(/imsg private API bridge/);
+
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    const warnArg = String(loggerMock.warn.mock.calls[0]?.[0]);
+    expect(warnArg).toMatch(/iMessage react blocked: private API bridge unavailable/);
+    expect(warnArg).toMatch(/imsg launch/);
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
   it("rejects configured-off actions at execution time", async () => {
@@ -170,16 +249,18 @@ describe("imessage message actions", () => {
       },
     } as never);
 
-    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;chat0000",
-        messageId: "message-guid",
-        reaction: "like",
-        options: expect.objectContaining({
-          dbPath: "/tmp/messages.db",
-        }),
-      }),
-    );
+    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          reaction: "like",
+          remove: undefined,
+          partIndex: undefined,
+          options: imsgOptions("iMessage;+;chat0000"),
+        },
+      ],
+    ]);
   });
 
   it("resolves chat_id targets before invoking bridge actions", async () => {
@@ -201,16 +282,26 @@ describe("imessage message actions", () => {
       },
     } as never);
 
-    expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: { kind: "chat_id", chatId: 42 },
-      }),
-    );
-    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;resolved",
-      }),
-    );
+    expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
+      [
+        {
+          target: { kind: "chat_id", chatId: 42 },
+          options: imsgOptions(),
+        },
+      ],
+    ]);
+    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;resolved",
+          messageId: "message-guid",
+          reaction: "like",
+          remove: undefined,
+          partIndex: undefined,
+          options: imsgOptions("iMessage;+;resolved"),
+        },
+      ],
+    ]);
   });
 
   it("resolves short message ids before invoking bridge actions", async () => {
@@ -240,11 +331,18 @@ describe("imessage message actions", () => {
         chatId: undefined,
       },
     });
-    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "full-guid",
-      }),
-    );
+    expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "full-guid",
+          reaction: "like",
+          remove: undefined,
+          partIndex: undefined,
+          options: imsgOptions("iMessage;+;chat0000"),
+        },
+      ],
+    ]);
   });
 
   it("resolves chat_identifier targets before invoking bridge actions", async () => {
@@ -266,16 +364,180 @@ describe("imessage message actions", () => {
       },
     } as never);
 
-    expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
-      }),
-    );
-    expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatGuid: "iMessage;+;resolved-ident",
-      }),
-    );
+    expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
+      [
+        {
+          target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
+          options: imsgOptions(),
+        },
+      ],
+    ]);
+    expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+      [
+        {
+          chatGuid: "iMessage;+;resolved-ident",
+          text: "reply",
+          replyToMessageId: "message-guid",
+          partIndex: undefined,
+          attachment: undefined,
+          options: imsgOptions("iMessage;+;resolved-ident"),
+        },
+      ],
+    ]);
+    expect(rememberIMessageReplyCacheMock).toHaveBeenCalledWith({
+      accountId: "default",
+      messageId: "reply-guid",
+      chatGuid: "iMessage;+;resolved-ident",
+      timestamp: expect.any(Number),
+      isFromMe: true,
+    });
+  });
+
+  describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
+    // The core message-action runner hydrates path/media/filePath/etc.
+    // through the outbound media resolver (mediaLocalRoots/sandbox/size)
+    // before reaching this handler, writing the result into `buffer` +
+    // `filename`. These tests cover the post-hydration contract: the
+    // handler trusts only the buffer and refuses any unhydrated path
+    // param so an agent cannot bypass the resolver.
+    const stringPath = "/tmp/cute-lobster.png";
+    const base64Png = Buffer.from("PNGDATA").toString("base64");
+
+    function readLastAttachment():
+      | {
+          kind?: string;
+          buffer?: Uint8Array;
+          filename?: string;
+        }
+      | undefined {
+      const call = runtimeMock.sendRichMessage.mock.calls.at(-1)?.[0] as
+        | { attachment?: { kind: string; buffer?: Uint8Array; filename?: string } }
+        | undefined;
+      return call?.attachment;
+    }
+
+    it("threads a hydrated buffer attachment through to sendRichMessage when imsg supports send-rich --file", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+      await imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "🦞 here it is",
+          buffer: base64Png,
+          filename: "card.png",
+        },
+      } as never);
+      expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;+;resolved-ident",
+            text: "🦞 here it is",
+            replyToMessageId: "message-guid",
+            partIndex: undefined,
+            attachment: {
+              kind: "buffer",
+              buffer: Uint8Array.from(Buffer.from("PNGDATA")),
+              filename: "card.png",
+            },
+            options: imsgOptions("iMessage;+;resolved-ident"),
+          },
+        ],
+      ]);
+    });
+
+    it("falls back to attachment.bin when filename is missing (post-hydration)", async () => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+      await imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "🦞 here it is",
+          buffer: base64Png,
+        },
+      } as never);
+      expect(readLastAttachment()?.filename).toBe("attachment.bin");
+    });
+
+    it("rejects unhydrated path-shaped params so agents cannot bypass the media resolver", async () => {
+      // The runner's hydrateAttachmentParamsForAction loads any
+      // path/media/filePath/mediaUrl/fileUrl through the media resolver
+      // and writes the result into `buffer`. If we ever see a path-shaped
+      // param without a `buffer`, hydration was skipped — refuse instead
+      // of forwarding a raw host path to imsg.
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: true },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+      for (const field of ["filePath", "path", "media", "mediaUrl", "fileUrl"]) {
+        runtimeMock.sendRichMessage.mockClear();
+        await expect(
+          imessageMessageActions.handleAction?.({
+            action: "reply",
+            cfg: cfg(),
+            params: {
+              chatIdentifier: "team-thread",
+              messageId: "message-guid",
+              text: "🦞 here it is",
+              [field]: stringPath,
+            },
+          } as never),
+        ).rejects.toThrow(/did not pass through the outbound media resolver/);
+        expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+      }
+    });
+
+    it("rejects reply + attachment when imsg does not advertise send-rich --file", async () => {
+      // Older imsg builds reject `--file` on send-rich, so refuse loudly
+      // here rather than letting send-rich ship the text alone and silently
+      // drop the attachment (the original openclaw/openclaw#79822 symptom).
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+        cliCapabilities: { sendRichSupportsAttachment: false },
+      });
+      runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+      runtimeMock.sendRichMessage.mockClear();
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "reply",
+          cfg: cfg(),
+          params: {
+            chatIdentifier: "team-thread",
+            messageId: "message-guid",
+            text: "🦞 here it is",
+            buffer: base64Png,
+            filename: "card.png",
+          },
+        } as never),
+      ).rejects.toThrow(/needs an imsg build that exposes `send-rich --file`/);
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
   });
 
   describe("phone-number target end-to-end (regressions caught the hard way)", () => {
@@ -306,29 +568,41 @@ describe("imessage message actions", () => {
 
       // resolveChatGuid synthesizes the chat_identifier; the runtime then
       // does the chats.list lookup against it.
-      expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
-        expect.objectContaining({
-          target: {
-            kind: "chat_identifier",
-            chatIdentifier: "iMessage;-;+12069106512",
+      expect(runtimeMock.resolveChatGuidForTarget.mock.calls).toStrictEqual([
+        [
+          {
+            target: {
+              kind: "chat_identifier",
+              chatIdentifier: "iMessage;-;+12069106512",
+            },
+            options: imsgOptions(),
           },
-        }),
-      );
+        ],
+      ]);
       // The cache lookup uses the synthesized chat_identifier as scope so
       // cross-chat checks have something to match against.
       expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith("5", {
         requireKnownShortId: true,
-        chatContext: expect.objectContaining({
+        chatContext: {
+          chatGuid: undefined,
           chatIdentifier: "iMessage;-;+12069106512",
-        }),
+          chatId: undefined,
+        },
       });
       // sendReaction lands on the real registered chat guid, not the
       // synthesized stand-in.
-      expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "any;-;+12069106512",
-        }),
-      );
+      expect(runtimeMock.sendReaction.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "any;-;+12069106512",
+            messageId: "full-guid",
+            reaction: "like",
+            remove: undefined,
+            partIndex: undefined,
+            options: imsgOptions("any;-;+12069106512"),
+          },
+        ],
+      ]);
     });
 
     it("rejects react/edit/unsend when the synthesized chat is not registered", async () => {
@@ -382,11 +656,18 @@ describe("imessage message actions", () => {
         },
       } as never);
 
-      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "iMessage;-;+18001234567",
-        }),
-      );
+      expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;-;+18001234567",
+            text: "first contact",
+            replyToMessageId: "parent-guid",
+            partIndex: undefined,
+            attachment: undefined,
+            options: imsgOptions("iMessage;-;+18001234567"),
+          },
+        ],
+      ]);
     });
 
     it("removes a tapback by fanning out across all known kinds when emoji is empty/unknown and remove:true", async () => {
@@ -468,11 +749,16 @@ describe("imessage message actions", () => {
         },
       } as never);
 
-      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          effectId: "com.apple.MobileSMS.expressivesend.impact",
-        }),
-      );
+      expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;+;chat0000",
+            text: "boom",
+            effectId: "com.apple.MobileSMS.expressivesend.impact",
+            options: imsgOptions("iMessage;+;chat0000"),
+          },
+        ],
+      ]);
     });
 
     it.each([
@@ -505,9 +791,16 @@ describe("imessage message actions", () => {
           },
         } as never);
 
-        expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
-          expect.objectContaining({ effectId: canonical }),
-        );
+        expect(runtimeMock.sendRichMessage.mock.calls).toStrictEqual([
+          [
+            {
+              chatGuid: "iMessage;+;chat0000",
+              text: "boom",
+              effectId: canonical,
+              options: imsgOptions("iMessage;+;chat0000"),
+            },
+          ],
+        ]);
       },
     );
 
@@ -556,13 +849,17 @@ describe("imessage message actions", () => {
         },
       } as never);
 
-      expect(runtimeMock.sendAttachment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          chatGuid: "iMessage;+;chat0000",
-          filename: "photo.jpg",
-          asVoice: true,
-        }),
-      );
+      expect(runtimeMock.sendAttachment.mock.calls).toStrictEqual([
+        [
+          {
+            chatGuid: "iMessage;+;chat0000",
+            buffer: Uint8Array.from(Buffer.from("image")),
+            filename: "photo.jpg",
+            asVoice: true,
+            options: imsgOptions("iMessage;+;chat0000"),
+          },
+        ],
+      ]);
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );

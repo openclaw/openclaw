@@ -17,6 +17,7 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -75,6 +76,16 @@ async function createCaseDir(prefix: string): Promise<string> {
 
 async function expectPathExists(targetPath: string): Promise<void> {
   await expect(fs.access(targetPath)).resolves.toBeUndefined();
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -151,7 +162,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath);
     expect(loaded.stale).toBeUndefined();
     expect(loaded).toHaveProperty("fresh");
-    await expect(fs.stat(staleTranscript)).rejects.toThrow();
+    await expectPathMissing(staleTranscript);
     await expectPathExists(freshTranscript);
     const dirEntries = await fs.readdir(testDir);
     const archived = dirEntries.filter((entry) =>
@@ -211,8 +222,8 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await saveSessionStore(storePath, store);
 
-    await expect(fs.stat(staleRuntime)).rejects.toThrow();
-    await expect(fs.stat(stalePointer)).rejects.toThrow();
+    await expectPathMissing(staleRuntime);
+    await expectPathMissing(stalePointer);
     await expectPathExists(freshRuntime);
     await expectPathExists(freshPointer);
   });
@@ -227,6 +238,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       testDir,
       "fresh-session.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
     );
+    const referencedPostCompactionPath = path.join(testDir, "fresh-session-compacted.jsonl");
     const store: Record<string, SessionEntry> = {
       fresh: {
         sessionId: "fresh-session",
@@ -243,7 +255,10 @@ describe("Integration: saveSessionStore with pruning", () => {
               sessionFile: referencedCheckpointPath,
               leafId: "leaf",
             },
-            postCompaction: { sessionId: "fresh-session" },
+            postCompaction: {
+              sessionId: "fresh-session",
+              sessionFile: referencedPostCompactionPath,
+            },
           },
         ],
       },
@@ -260,6 +275,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
     await fs.writeFile(referencedTranscript, "referenced", "utf-8");
     await fs.writeFile(referencedCheckpointPath, "referenced checkpoint", "utf-8");
+    await fs.writeFile(referencedPostCompactionPath, "referenced post-compaction", "utf-8");
     await fs.writeFile(oldOrphanTranscript, "orphan transcript", "utf-8");
     await fs.writeFile(freshOrphanTranscript, "fresh orphan", "utf-8");
     await fs.writeFile(orphanRuntime, "orphan runtime", "utf-8");
@@ -268,6 +284,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     for (const file of [
       referencedTranscript,
       referencedCheckpointPath,
+      referencedPostCompactionPath,
       oldOrphanTranscript,
       orphanRuntime,
       orphanPointer,
@@ -282,11 +299,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       opts: { store: storePath, dryRun: true, enforce: true },
       targets: [{ agentId: "main", storePath }],
     });
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 4,
-      }),
-    );
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(4);
     await expectPathExists(oldOrphanTranscript);
     await expectPathExists(orphanRuntime);
     await expectPathExists(orphanPointer);
@@ -298,18 +311,97 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(applied.appliedSummaries[0]?.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 4,
-      }),
-    );
-    await expect(fs.stat(oldOrphanTranscript)).rejects.toThrow();
-    await expect(fs.stat(orphanRuntime)).rejects.toThrow();
-    await expect(fs.stat(orphanPointer)).rejects.toThrow();
-    await expect(fs.stat(orphanCheckpoint)).rejects.toThrow();
+    expect(applied.appliedSummaries[0]?.unreferencedArtifacts.removedFiles).toBe(4);
+    await expectPathMissing(oldOrphanTranscript);
+    await expectPathMissing(orphanRuntime);
+    await expectPathMissing(orphanPointer);
+    await expectPathMissing(orphanCheckpoint);
     await expectPathExists(referencedTranscript);
     await expectPathExists(referencedCheckpointPath);
+    await expectPathExists(referencedPostCompactionPath);
     await expectPathExists(freshOrphanTranscript);
+  });
+
+  it("sessions cleanup fix-missing prunes malformed stored session rows", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const validTranscript = path.join(testDir, "valid-present.jsonl");
+    const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+          "invalid-bad-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "../outside.jsonl",
+            updatedAt: now,
+          },
+          "invalid-missing-relative-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "missing.jsonl",
+            updatedAt: now,
+          },
+          "agent:main:metadata": {
+            sessionId: "agent:main:metadata",
+            updatedAt: now,
+            groupActivation: "always",
+          },
+          "legacy-present-invalid-id": {
+            sessionId: "agent:main:main",
+            sessionFile: "legacy-present.jsonl",
+            updatedAt: now,
+          },
+          "valid-present": { sessionId: "valid-present", updatedAt: now },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(validTranscript, "valid", "utf-8");
+    await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.missing).toBe(3);
+    expect(preview?.summary.beforeCount).toBe(6);
+    expect(preview?.summary.afterCount).toBe(3);
+    expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
+    expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
+    expect(preview?.missingKeys.has("agent:main:metadata")).toBe(false);
+    expect(preview?.missingKeys.has("legacy-present-invalid-id")).toBe(false);
+    const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(rawAfterDryRun).toHaveProperty("invalid-no-file");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(3);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(3);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(persisted)).toEqual([
+      "agent:main:metadata",
+      "legacy-present-invalid-id",
+      "valid-present",
+    ]);
+    expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
+    expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
+    expect(persisted["legacy-present-invalid-id"]?.sessionId).toBe("agent:main:main");
+    await expectPathExists(validTranscript);
+    await expectPathExists(legacyPresentTranscript);
   });
 
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
@@ -393,7 +485,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted).toHaveProperty("agent:main:main");
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
-    await expect(fs.stat(directTranscript)).rejects.toThrow();
+    await expectPathMissing(directTranscript);
     const files = await fs.readdir(testDir);
     const archivedDirectTranscripts = files.filter((name) =>
       name.startsWith("direct-session.jsonl.deleted."),
@@ -429,16 +521,12 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(dryRun.previewResults[0]?.summary.diskBudget).toEqual(
-      expect.objectContaining({
-        removedFiles: 1,
-      }),
-    );
-    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts).toEqual(
-      expect.objectContaining({
-        removedFiles: 0,
-      }),
-    );
+    const diskBudgetSummary = dryRun.previewResults[0]?.summary.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected disk budget cleanup summary");
+    }
+    expect(diskBudgetSummary.removedFiles).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(oldOrphanTranscript);
   });
 
@@ -476,15 +564,9 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(dryRun.previewResults[0]?.summary).toEqual(
-      expect.objectContaining({
-        pruned: 1,
-        capped: 1,
-        unreferencedArtifacts: expect.objectContaining({
-          removedFiles: 0,
-        }),
-      }),
-    );
+    expect(dryRun.previewResults[0]?.summary.pruned).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.capped).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(staleTranscript);
     await expectPathExists(cappedTranscript);
     await expectPathExists(freshTranscript);
@@ -521,7 +603,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await saveSessionStore(storePath, store);
 
-    await expect(fs.stat(oldArchived)).rejects.toThrow();
+    await expectPathMissing(oldArchived);
     await expectPathExists(recentArchived);
     await expectPathExists(bakArchived);
   });
@@ -555,7 +637,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     await saveSessionStore(storePath, store);
 
-    await expect(fs.stat(oldReset)).rejects.toThrow();
+    await expectPathMissing(oldReset);
     await expectPathExists(freshReset);
   });
 
@@ -724,6 +806,38 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded["session-74"]).toBeUndefined();
   });
 
+  it("explicit loadSessionStore maintenance preserves runtime-provided subagent sessions", async () => {
+    const now = Date.now();
+    const childKey = "agent:main:subagent:pending-delivery";
+    const store = Object.fromEntries(
+      Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
+    );
+    store[childKey] = {
+      ...makeEntry(now - 100 * DAY_MS),
+      spawnedBy: "agent:main:slack:direct:U1",
+    };
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
+
+    try {
+      const loaded = loadSessionStore(storePath, {
+        skipCache: true,
+        runMaintenance: true,
+        maintenanceConfig: {
+          ...ENFORCED_MAINTENANCE_OVERRIDE,
+          maxEntries: 50,
+          pruneAfterMs: 365 * DAY_MS,
+        },
+      });
+
+      expect(Object.keys(loaded)).toHaveLength(50);
+      expect(loaded).toHaveProperty(childKey);
+      expect(loaded["session-74"]).toBeUndefined();
+    } finally {
+      unregister();
+    }
+  });
+
   it("persists quota suspension TTL transitions through writer maintenance", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -867,7 +981,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath);
     expect(loaded.oldest).toBeUndefined();
     expect(loaded).toHaveProperty("newest");
-    await expect(fs.stat(oldestTranscript)).rejects.toThrow();
+    await expectPathMissing(oldestTranscript);
     await expectPathExists(newestTranscript);
     const files = await fs.readdir(testDir);
     const archivedOldestTranscripts = files.filter((name) =>
@@ -932,7 +1046,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const loaded = loadSessionStore(storePath);
     expect(Object.keys(loaded).length).toBe(1);
     expect(loaded).toHaveProperty("recent");
-    await expect(fs.stat(path.join(testDir, `${oldSessionId}.jsonl`))).rejects.toThrow();
+    await expectPathMissing(path.join(testDir, `${oldSessionId}.jsonl`));
     await expectPathExists(path.join(testDir, `${newSessionId}.jsonl`));
   });
 

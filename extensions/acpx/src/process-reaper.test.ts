@@ -1,7 +1,9 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
+  isOpenClawLeaseAwareAcpxProcessCommand,
   isOpenClawOwnedAcpxProcessCommand,
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessInfo,
@@ -13,6 +15,12 @@ const CODEX_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_WRAPPER_COMMAND} ${OPENCLAW_AC
 const CLAUDE_WRAPPER_COMMAND = `node ${WRAPPER_ROOT}/claude-agent-acp-wrapper.mjs`;
 const PLUGIN_DEPS_CODEX_COMMAND =
   "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js";
+const LOCAL_NODE_MODULES_CODEX_COMMAND = `node ${path.resolve(
+  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+)}`;
+const LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND = path.resolve(
+  "node_modules/@zed-industries/codex-acp-linux-x64/bin/codex-acp",
+);
 
 function cleanupDeps(processes: AcpxProcessInfo[]) {
   const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
@@ -26,6 +34,20 @@ function cleanupDeps(processes: AcpxProcessInfo[]) {
       sleep: vi.fn(async () => {}),
     },
   };
+}
+
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
 }
 
 describe("process reaper", () => {
@@ -50,11 +72,37 @@ describe("process reaper", () => {
     ).toBe(false);
   });
 
+  it("only treats generated wrappers as launch-lease aware", () => {
+    expect(
+      isOpenClawLeaseAwareAcpxProcessCommand({
+        command: CODEX_WRAPPER_COMMAND,
+        wrapperRoot: WRAPPER_ROOT,
+      }),
+    ).toBe(true);
+    expect(
+      isOpenClawLeaseAwareAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND }),
+    ).toBe(false);
+    expect(isOpenClawLeaseAwareAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(
+      false,
+    );
+  });
+
   it("recognizes OpenClaw plugin-runtime-deps ACP adapter children", () => {
     expect(isOpenClawOwnedAcpxProcessCommand({ command: PLUGIN_DEPS_CODEX_COMMAND })).toBe(true);
     expect(isOpenClawOwnedAcpxProcessCommand({ command: "npx @zed-industries/codex-acp" })).toBe(
       false,
     );
+  });
+
+  it("recognizes plugin-local ACP adapter package paths without trusting arbitrary installs", () => {
+    expect(isOpenClawOwnedAcpxProcessCommand({ command: LOCAL_NODE_MODULES_CODEX_COMMAND })).toBe(
+      true,
+    );
+    expect(
+      isOpenClawOwnedAcpxProcessCommand({
+        command: "node /tmp/other-project/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+      }),
+    ).toBe(false);
   });
 
   it("kills an owned recorded process tree children first", async () => {
@@ -135,7 +183,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("skips recorded pid cleanup when process listing is unavailable", async () => {
@@ -160,7 +208,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "unverified-root",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
@@ -178,7 +226,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
@@ -202,7 +250,7 @@ describe("process reaper", () => {
       terminatedPids: [],
       skippedReason: "not-openclaw-owned",
     });
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("skips non-owned recorded process trees", async () => {
@@ -216,7 +264,7 @@ describe("process reaper", () => {
     });
 
     expect(result.skippedReason).toBe("not-openclaw-owned");
-    expect(killed).toEqual([]);
+    expect(killed).toStrictEqual([]);
   });
 
   it("reaps stale OpenClaw-owned wrapper and adapter orphans on startup", async () => {
@@ -237,9 +285,35 @@ describe("process reaper", () => {
 
     expect(result.skippedReason).toBeUndefined();
     expect(result.inspectedPids).toEqual([400, 401, 402, 403, 404, 405]);
-    expect(killed.filter((entry) => entry.signal === "SIGTERM").map((entry) => entry.pid)).toEqual([
-      402, 401, 400, 404, 403, 405,
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([402, 401, 400, 404, 403, 405]);
+  });
+
+  it("reaps plugin-local Codex ACP adapter orphans when the generated wrapper is already gone", async () => {
+    const { deps, killed } = cleanupDeps([
+      { pid: 500, ppid: 1, command: LOCAL_NODE_MODULES_CODEX_COMMAND },
+      { pid: 501, ppid: 500, command: LOCAL_NODE_MODULES_CODEX_PLATFORM_COMMAND },
     ]);
+
+    const result = await reapStaleOpenClawOwnedAcpxOrphans({
+      wrapperRoot: WRAPPER_ROOT,
+      deps,
+    });
+
+    expect(result.skippedReason).toBeUndefined();
+    expect(result.inspectedPids).toEqual([500, 501]);
+    expect(
+      collectMatching(
+        killed,
+        (entry) => entry.signal === "SIGTERM",
+        (entry) => entry.pid,
+      ),
+    ).toEqual([501, 500]);
   });
 
   it("keeps startup scans quiet when process listing is unavailable", async () => {

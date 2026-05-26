@@ -7,13 +7,46 @@ import {
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import {
+  getDirectAgentForCdp,
+  withManagedProxyForCdpUrl,
+  withNoProxyForCdpUrl,
+} from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 
 export { isLoopbackHost };
+
+/**
+ * Detects whether a raw URL string contains an explicitly written port.
+ *
+ * WHATWG `URL` normalizes default ports (e.g. `:80` for http, `:443` for
+ * https) to an empty `.port` string, making it impossible to distinguish
+ * "user wrote :80" from "user omitted the port". This helper inspects the
+ * raw string to preserve that intent.
+ *
+ * Handles IPv6 bracket notation and userinfo (user:pass@host) correctly.
+ */
+function hasRawExplicitPort(raw: string): boolean {
+  // Strip scheme (e.g. "http://") and take only the authority portion
+  // (everything before the first /, ?, or #).
+  const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
+
+  // Strip userinfo (user:pass@); the colon there is not a port separator.
+  const hostPort = authority.includes("@")
+    ? authority.slice(authority.lastIndexOf("@") + 1)
+    : authority;
+
+  // IPv6: [::1]:9222 has a port after the closing bracket.
+  if (hostPort.startsWith("[")) {
+    return /^\[[^\]]+\]:\d+$/.test(hostPort);
+  }
+
+  // IPv4 / hostname: host:port
+  return /:\d+$/.test(hostPort);
+}
 
 export function parseBrowserHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
@@ -40,10 +73,41 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
     throw new Error(`${label} has invalid port: ${parsed.port}`);
   }
 
+  const normalized = parsed.toString().replace(/\/$/, "");
+  const hasExplicitPort = hasRawExplicitPort(trimmed);
+
+  // When the user explicitly wrote a default port (e.g. :80 for http),
+  // WHATWG normalization drops it from the URL string. Rebuild a
+  // port-preserving normalized form so callers don't need raw-string hacks.
+  // Note: the URL .port setter silently discards protocol-default ports,
+  // so we must inject the port via string surgery on the normalized form.
+  let normalizedWithPort: string;
+  if (hasExplicitPort && !parsed.port) {
+    const proto = parsed.protocol + "//";
+    const rest = normalized.slice(proto.length);
+    // Skip userinfo (user:pass@) if present
+    const atIdx = rest.indexOf("@");
+    const hostStart = atIdx >= 0 ? atIdx + 1 : 0;
+    const hostPart = rest.slice(hostStart);
+    // Find the end of the host: IPv6 brackets, a path slash, or a port colon.
+    const hostLen = hostPart.startsWith("[")
+      ? hostPart.indexOf("]") + 1
+      : (() => {
+          const idx = hostPart.search(/[:/]/);
+          return idx < 0 ? hostPart.length : idx;
+        })();
+    const insertAt = hostStart + hostLen;
+    normalizedWithPort = proto + rest.slice(0, insertAt) + ":" + port + rest.slice(insertAt);
+  } else {
+    normalizedWithPort = normalized;
+  }
+
   return {
     parsed,
     port,
-    normalized: parsed.toString().replace(/\/$/, ""),
+    hasExplicitPort,
+    normalized,
+    normalizedWithPort,
   };
 }
 
@@ -185,6 +249,20 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
     // ignore
   }
   return mergedHeaders;
+}
+
+function stripUrlCredentials(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) {
+      return url;
+    }
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 export function appendCdpPath(cdpUrl: string, path: string): string {
@@ -350,21 +428,24 @@ export async function fetchCdpChecked(
   };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await withNoProxyForCdpUrl(url, async () => {
-      const parsedUrl = new URL(url);
-      const policy = isLoopbackHost(parsedUrl.hostname)
-        ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
-        : (ssrfPolicy ?? { allowPrivateNetwork: true });
-      const guarded = await fetchWithSsrFGuard({
-        url,
-        init: { ...init, headers },
-        signal: ctrl.signal,
-        policy,
-        auditContext: "browser-cdp",
-      });
-      guardedRelease = guarded.release;
-      return guarded.response;
-    });
+    const fetchUrl = stripUrlCredentials(url);
+    const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
+      withNoProxyForCdpUrl(url, async () => {
+        const parsedUrl = new URL(fetchUrl);
+        const policy = isLoopbackHost(parsedUrl.hostname)
+          ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
+          : (ssrfPolicy ?? { allowPrivateNetwork: true });
+        const guarded = await fetchWithSsrFGuard({
+          url: fetchUrl,
+          init: { ...init, headers },
+          signal: ctrl.signal,
+          policy,
+          auditContext: "browser-cdp",
+        });
+        guardedRelease = guarded.release;
+        return guarded.response;
+      }),
+    );
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -402,11 +483,16 @@ export function openCdpWebSocket(
       ? Math.max(1, Math.floor(opts.handshakeTimeoutMs))
       : CDP_WS_HANDSHAKE_TIMEOUT_MS;
   const agent = getDirectAgentForCdp(wsUrl);
-  return new WebSocket(wsUrl, {
-    handshakeTimeout: handshakeTimeoutMs,
-    ...(Object.keys(headers).length ? { headers } : {}),
-    ...(agent ? { agent } : {}),
-  });
+  const bypassUrl = stripUrlCredentials(wsUrl);
+  return withManagedProxyForCdpUrl(
+    bypassUrl,
+    () =>
+      new WebSocket(wsUrl, {
+        handshakeTimeout: handshakeTimeoutMs,
+        ...(Object.keys(headers).length ? { headers } : {}),
+        ...(agent ? { agent } : {}),
+      }),
+  );
 }
 
 type CdpSocketOptions = {

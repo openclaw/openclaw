@@ -37,6 +37,38 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(input)).toBe(expected);
   });
 
+  test("formatForLog walks cause chain so the underlying error is not hidden (openclaw-4a8)", () => {
+    const root = Object.assign(new Error('"Method not found": nes/close (-32601)'), {
+      name: "RequestError",
+    });
+    const wrapped = new Error("Agent does not support session/close (oneshot:abc)", {
+      cause: root,
+    });
+    const top = Object.assign(new Error("ACP turn failed before completion.", { cause: wrapped }), {
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+    });
+
+    const out = formatForLog(top);
+
+    expect(out).toMatch(/AcpRuntimeError/);
+    expect(out).toMatch(/ACP_TURN_FAILED/);
+    expect(out).toMatch(/Agent does not support session\/close/);
+    expect(out).toMatch(/Method not found/);
+    expect(out).toMatch(/nes\/close/);
+    expect(out).toMatch(/-32601/);
+  });
+
+  test("formatForLog caps cause-chain depth so a self-referential cause cannot loop", () => {
+    const e: Error & { cause?: unknown } = new Error("loop");
+    e.cause = e;
+
+    const out = formatForLog(e);
+
+    expect(out).toMatch(/loop/);
+    expect(out.length).toBeLessThan(2000);
+  });
+
   test("formatForLog redacts obvious secrets", () => {
     const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
     const out = formatForLog({ token });
@@ -57,31 +89,26 @@ describe("gateway ws log helpers", () => {
       },
     });
 
-    expect(summary).toMatchObject({
-      agent: "main",
-      run: "12345678…9abc",
-      session: "main",
-      stream: "assistant",
-      aseq: 2,
-      media: 2,
-    });
+    expect(summary.agent).toBe("main");
+    expect(summary.run).toBe("12345678…9abc");
+    expect(summary.session).toBe("main");
+    expect(summary.stream).toBe("assistant");
+    expect(summary.aseq).toBe(2);
+    expect(summary.media).toBe(2);
     expect(summary.text).toBeTypeOf("string");
     expect(summary.text).not.toContain("\n");
   });
 
   test("summarizeAgentEventForWsLog includes tool metadata", () => {
-    expect(
-      summarizeAgentEventForWsLog({
-        runId: "run-1",
-        stream: "tool",
-        data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
-      }),
-    ).toMatchObject({
-      run: "run-1",
+    const summary = summarizeAgentEventForWsLog({
+      runId: "run-1",
       stream: "tool",
-      tool: "start:fetch",
-      call: "12345678…9abc",
+      data: { phase: "start", name: "fetch", toolCallId: "12345678-1234-1234-1234-123456789abc" },
     });
+    expect(summary.run).toBe("run-1");
+    expect(summary.stream).toBe("tool");
+    expect(summary.tool).toBe("start:fetch");
+    expect(summary.call).toBe("12345678…9abc");
   });
 
   test("summarizeAgentEventForWsLog includes lifecycle errors with compact previews", () => {
@@ -96,13 +123,11 @@ describe("gateway ws log helpers", () => {
       },
     });
 
-    expect(summary).toMatchObject({
-      agent: "main",
-      session: "thread-1",
-      stream: "lifecycle",
-      phase: "abort",
-      aborted: true,
-    });
+    expect(summary.agent).toBe("main");
+    expect(summary.session).toBe("thread-1");
+    expect(summary.stream).toBe("lifecycle");
+    expect(summary.phase).toBe("abort");
+    expect(summary.aborted).toBe(true);
     expect(summary.error).toBeTypeOf("string");
     expect((summary.error as string).length).toBeLessThanOrEqual(120);
   });

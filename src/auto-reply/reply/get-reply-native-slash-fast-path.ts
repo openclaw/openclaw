@@ -1,10 +1,16 @@
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
+import {
+  resolveThinkingDefaultWithRuntimeCatalog,
+  type ModelAliasIndex,
+} from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
 import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -27,7 +33,7 @@ function loadStatusCommandRuntime() {
 }
 
 function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
-  if (ctx.CommandSource !== "native") {
+  if (!isNativeCommandTurn(resolveCommandTurnContext(ctx))) {
     return undefined;
   }
   const commandText = stripStructuralPrefixes(
@@ -40,6 +46,19 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
   const commandName = resolveNativeSlashCommandName(ctx);
   return Boolean(commandName && commandName !== "new" && commandName !== "reset");
+}
+
+async function resolveNativeSlashDefaultThinkingLevel(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<ThinkLevel> {
+  return resolveThinkingDefaultWithRuntimeCatalog({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+  });
 }
 
 export async function maybeResolveNativeSlashCommandFastReply(params: {
@@ -84,6 +103,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
+    let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
+    const resolveDefaultThinkingLevel = async () => {
+      resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+      });
+      return resolvedDefaultThinkingLevel;
+    };
+    const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -98,11 +127,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         provider: params.provider,
         model: params.model,
         workspaceDir: params.workspaceDir,
-        resolvedThinkLevel: undefined,
+        resolvedThinkLevel,
         resolvedVerboseLevel: "off",
         resolvedReasoningLevel: "off",
         resolvedElevatedLevel: "off",
-        resolveDefaultThinkingLevel: async () => undefined,
+        resolveDefaultThinkingLevel,
         isGroup: sessionState.isGroup,
         defaultGroupActivation: () => "always",
         mediaDecisions: params.ctx.MediaUnderstandingDecisions,

@@ -148,7 +148,11 @@ describe("renderSkills", () => {
     expect(showModal).toHaveBeenCalledTimes(1);
     expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
 
-    container.querySelector<HTMLButtonElement>(".md-preview-dialog__header .btn")?.click();
+    const closeButton = container.querySelector<HTMLButtonElement>(
+      ".md-preview-dialog__header .btn",
+    );
+    expect(closeButton).toBeInstanceOf(HTMLButtonElement);
+    closeButton!.click();
 
     expect(onDetailClose).toHaveBeenCalledTimes(1);
 
@@ -173,15 +177,18 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    let text = normalizeText(container);
-    expect(text).toContain("GitHub");
-    expect(text).toContain("GitHub integration for OpenClaw");
-    expect(text).toContain("v1.2.3");
-
-    container.querySelector<HTMLElement>(".list-item")?.click();
-    container
-      .querySelector<HTMLButtonElement>(".list-item .btn.btn--sm")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const resultItem = container.querySelector<HTMLElement>(".list-item");
+    const installButton = container.querySelector<HTMLButtonElement>(".list-item .btn.btn--sm");
+    expect(resultItem).toBeInstanceOf(HTMLElement);
+    expect(installButton).toBeInstanceOf(HTMLButtonElement);
+    expect(resultItem?.querySelector(".list-title")?.textContent?.trim()).toBe("GitHub");
+    expect(resultItem?.querySelector(".list-sub")?.textContent?.trim()).toBe(
+      "GitHub integration for OpenClaw",
+    );
+    expect(resultItem?.querySelector(".list-meta .muted")?.textContent?.trim()).toBe("v1.2.3");
+    expect(installButton?.textContent?.trim()).toBe("Install");
+    resultItem!.click();
+    installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
     expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
@@ -226,17 +233,18 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    text = normalizeText(container);
-    expect(text).toContain("rate limited");
-    expect(text).toContain("Installed github");
-    expect(text).toContain("By OpenClaw (@openclaw)");
-    expect(text).toContain("Latest: v1.2.3");
-    expect(text).toContain("Platforms: macos, linux");
-    expect(text).toContain("Added search support");
+    expect(
+      Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
+    ).toEqual(["rate limited", "Installed github"]);
+    expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+    );
 
-    container
-      .querySelector<HTMLButtonElement>(".md-preview-dialog__body .btn.primary")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const detailInstallButton = container.querySelector<HTMLButtonElement>(
+      ".md-preview-dialog__body .btn.primary",
+    );
+    expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
+    detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");

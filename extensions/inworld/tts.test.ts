@@ -29,7 +29,8 @@ function queueGuardedResponse(response: Response): { release: ReturnType<typeof 
 }
 
 function lastGuardRequest(): GuardRequest {
-  const call = fetchWithSsrFGuardMock.mock.calls.at(-1);
+  const calls = fetchWithSsrFGuardMock.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("fetchWithSsrFGuard was not called");
   }
@@ -180,7 +181,7 @@ describe("listInworldVoices", () => {
     queueGuardedResponse(new Response(JSON.stringify({}), { status: 200 }));
 
     const voices = await listInworldVoices({ apiKey: "test-key" });
-    expect(voices).toEqual([]);
+    expect(voices).toStrictEqual([]);
   });
 
   it("passes language filter as query parameter", async () => {
@@ -266,8 +267,11 @@ describe("inworldTTS", () => {
     expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
     expect(request.auditContext).toBe("inworld-tts");
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
-    expect(request.init?.method).toBe("POST");
-    const headers = new Headers(request.init?.headers);
+    if (!request.init) {
+      throw new Error("expected Inworld TTS request init");
+    }
+    expect(request.init.method).toBe("POST");
+    const headers = new Headers(request.init.headers);
     expect(headers.get("authorization")).toBe("Basic test-key");
     expect(headers.get("content-type")).toBe("application/json");
     expect(JSON.parse(readRequestBody(request))).toEqual({
@@ -332,7 +336,9 @@ describe("inworldTTS", () => {
   it("releases the guarded dispatcher after failure", async () => {
     const { release } = queueGuardedResponse(new Response("fail", { status: 500 }));
 
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow();
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
+      "Inworld TTS API error (500): fail",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

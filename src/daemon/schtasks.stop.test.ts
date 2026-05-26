@@ -129,7 +129,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
-      for (let i = 0; i < 20; i += 1) {
+      for (let i = 0; i < 19; i += 1) {
         inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
       }
       inspectPortUsage
@@ -140,7 +140,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
       if (process.platform !== "win32") {
         expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-        expect(killProcessTree).toHaveBeenNthCalledWith(2, expect.any(Number), { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenNthCalledWith(2, 5252, { graceMs: 300 });
       } else {
         expect(killProcessTree).not.toHaveBeenCalled();
       }
@@ -183,7 +183,14 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
-      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+        ["/Run", "/TN", "OpenClaw Gateway"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+      ]);
     });
   });
 

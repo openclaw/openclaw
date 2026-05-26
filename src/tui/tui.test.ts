@@ -5,6 +5,7 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  canSubmitTuiChatMessage,
   createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -15,10 +16,14 @@ import {
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
+  resolveTuiCtrlCAction,
+  resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
+  scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -71,14 +76,73 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.map((command) => command.name)).toEqual(
-      expect.arrayContaining(["context", "commands"]),
-    );
+    const names = commands.map((command) => command.name);
+    expect(names).toContain("context");
+    expect(names).toContain("commands");
   });
 
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
     expect(commands.map((command) => command.name)).toContain("auth");
+  });
+});
+
+describe("canSubmitTuiChatMessage", () => {
+  it("allows local queued submit while a run is finishing", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activityStatus: "finishing context",
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not allow gateway submit while a run is finishing", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activityStatus: "finishing context",
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks submits with pending optimistic state", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activityStatus: "finishing context",
+        activeChatRunId: "run-active",
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isTuiBusyActivityStatus", () => {
+  it("treats finishing context as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+});
+
+describe("resolveTuiShutdownHardExitMs", () => {
+  it("keeps gateway shutdown bounded by the hard-exit timer", () => {
+    expect(resolveTuiShutdownHardExitMs({ localMode: false })).toBe(2000);
+  });
+
+  it("adds local run shutdown grace before forcing embedded shutdown", () => {
+    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
+    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "3456";
+    try {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(5456);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
+      } else {
+        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
+      }
+    }
   });
 });
 
@@ -264,6 +328,36 @@ describe("resolveCtrlCAction", () => {
   });
 });
 
+describe("resolveTuiCtrlCAction", () => {
+  it("exits immediately after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("forces exit when shutdown is already in progress", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: false,
+        now: 2000,
+        lastCtrlCAt: 1000,
+        exitRequested: true,
+      }),
+    ).toEqual({
+      action: "force-exit",
+      nextLastCtrlCAt: 1000,
+    });
+  });
+});
+
 describe("TUI shutdown safety", () => {
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
@@ -280,6 +374,7 @@ describe("TUI shutdown safety", () => {
     });
 
     expect(drainInput).toHaveBeenCalledOnce();
+    expect(drainInput).toHaveBeenCalledWith(500, 100);
     expect(stop).toHaveBeenCalledOnce();
     expect(calls).toEqual(["drain", "stop"]);
   });
@@ -380,6 +475,26 @@ describe("TUI shutdown safety", () => {
     deferredFinish.setFinish(finish);
     expect(finish).toHaveBeenCalledTimes(1);
   });
+
+  it("schedules a process-exit guard after standalone TUI return", () => {
+    let callback: (() => void) | undefined;
+    const unref = vi.fn();
+    const setTimeoutFn = vi.fn((fn: () => void, ms: number) => {
+      callback = fn;
+      expect(ms).toBe(2000);
+      return { unref };
+    });
+    const exit = vi.fn();
+    const writeStderr = vi.fn();
+
+    scheduleProcessExitAfterTuiReturn({ setTimeoutFn, exit, writeStderr });
+
+    expect(setTimeoutFn).toHaveBeenCalledOnce();
+    expect(unref).toHaveBeenCalledOnce();
+    callback?.();
+    expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
+    expect(exit).toHaveBeenCalledWith(0);
+  });
 });
 
 describe("resolveCodexCliBin", () => {
@@ -460,13 +575,13 @@ describe("resolveLocalAuthSpawnOptions", () => {
         command: "/usr/local/bin/codex",
         platform: "linux",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       resolveLocalAuthSpawnOptions({
         command: "C:\\tools\\codex.exe",
         platform: "win32",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 

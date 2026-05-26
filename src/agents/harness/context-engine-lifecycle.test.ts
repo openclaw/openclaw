@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -64,11 +64,8 @@ describe("harness context engine lifecycle", () => {
       modelId: "gpt-test",
     });
 
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [visibleUser, visibleAssistant],
-      }),
-    );
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
   });
 
   it("keeps hidden runtime-context custom messages out of afterTurn hooks", async () => {
@@ -103,12 +100,17 @@ describe("harness context engine lifecycle", () => {
       warn: () => {},
     });
 
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [beforePromptUser, beforePromptAssistant, turnUser, turnAssistant],
-        prePromptMessageCount: 2,
-      }),
-    );
+    const afterTurnCalls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const afterTurnParams = afterTurnCalls[0]?.[0] as
+      | { messages?: AgentMessage[]; prePromptMessageCount?: number }
+      | undefined;
+    expect(afterTurnParams?.messages).toEqual([
+      beforePromptUser,
+      beforePromptAssistant,
+      turnUser,
+      turnAssistant,
+    ]);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(2);
   });
 
   it("keeps hidden runtime-context custom messages out of ingestBatch fallbacks", async () => {
@@ -143,10 +145,9 @@ describe("harness context engine lifecycle", () => {
       warn: () => {},
     });
 
-    expect(ingestBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [turnUser, turnAssistant],
-      }),
-    );
+    const ingestBatchCalls = (ingestBatch as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls;
+    const ingestBatchParams = ingestBatchCalls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
+    expect(ingestBatchParams?.messages).toEqual([turnUser, turnAssistant]);
   });
 });

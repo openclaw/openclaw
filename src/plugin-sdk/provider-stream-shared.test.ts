@@ -1,55 +1,67 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
-  buildCopilotDynamicHeaders,
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
-  createHtmlEntityToolCallArgumentDecodingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
+  createPlainTextToolCallCompatWrapper,
   defaultToolStreamExtraParams,
-  decodeHtmlEntitiesInObject,
-  hasCopilotVisionInput,
   isOpenAICompatibleThinkingEnabled,
-  stripTrailingAssistantPrefillMessages,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
-type FakeWrappedStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
+type StreamEvent = { type: string } & Record<string, unknown>;
 
-function createFakeStream(params: {
-  events: unknown[];
-  resultMessage: unknown;
-}): FakeWrappedStream {
-  return {
-    async result() {
-      return params.resultMessage;
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
-    },
-  };
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
 }
 
-describe("decodeHtmlEntitiesInObject", () => {
-  it("recursively decodes string values", () => {
-    expect(
-      decodeHtmlEntitiesInObject({
-        command: "cd ~/dev &amp;&amp; echo &quot;ok&quot;",
-        args: ["&lt;input&gt;", "&#x27;quoted&#x27;"],
-      }),
-    ).toEqual({
-      command: 'cd ~/dev && echo "ok"',
-      args: ["<input>", "'quoted'"],
-    });
+function createEventStream(events: unknown[]): ReturnType<StreamFn> {
+  const output = createAssistantMessageEventStream();
+  const stream = output as unknown as { push(event: unknown): void; end(): void };
+  queueMicrotask(() => {
+    for (const event of events) {
+      stream.push(event);
+    }
+    stream.end();
   });
-});
+  return output as ReturnType<StreamFn>;
+}
+
+function createControlledPlainTextToolCallCompatStream() {
+  const source = createAssistantMessageEventStream();
+  const baseStream: StreamFn = () => source as ReturnType<StreamFn>;
+  const wrapped = createPlainTextToolCallCompatWrapper(baseStream);
+  const stream = wrapped(
+    { provider: "test", api: "openai-completions", id: "test-model" } as never,
+    {
+      messages: [],
+      tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+    } as never,
+    {},
+  );
+  return { source, stream };
+}
+
+async function resolveStream(stream: ReturnType<StreamFn>) {
+  return stream instanceof Promise ? await stream : stream;
+}
+
+async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promise<StreamEvent> {
+  const result = await Promise.race([
+    iterator.next(),
+    new Promise<"timed out">((resolve) => setTimeout(() => resolve("timed out"), 50)),
+  ]);
+  if (result === "timed out") {
+    throw new Error(`timed out waiting for ${label}`);
+  }
+  expect(result.done).toBe(false);
+  return result.value as StreamEvent;
+}
 
 describe("defaultToolStreamExtraParams", () => {
   it("defaults tool_stream on when absent", () => {
@@ -137,126 +149,6 @@ describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
   });
 });
 
-describe("buildCopilotDynamicHeaders", () => {
-  it("matches Copilot IDE-style request headers without the legacy Openai-Intent", () => {
-    expect(
-      buildCopilotDynamicHeaders({
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
-        hasImages: false,
-      }),
-    ).toMatchObject({
-      "Copilot-Integration-Id": "vscode-chat",
-      "Editor-Plugin-Version": "copilot-chat/0.35.0",
-      "Openai-Organization": "github-copilot",
-      "x-initiator": "user",
-    });
-    expect(
-      buildCopilotDynamicHeaders({
-        messages: [{ role: "user", content: "hi", timestamp: 1 }],
-        hasImages: false,
-      }),
-    ).not.toHaveProperty("Openai-Intent");
-  });
-
-  it("marks tool-result follow-up turns as agent initiated and vision-capable", () => {
-    expect(
-      buildCopilotDynamicHeaders({
-        messages: [
-          { role: "user", content: "hi", timestamp: 1 },
-          {
-            role: "toolResult",
-            content: [{ type: "image", data: "abc", mimeType: "image/png" }],
-            timestamp: 2,
-            toolCallId: "call_1",
-            toolName: "view_image",
-            isError: false,
-          },
-        ],
-        hasImages: true,
-      }),
-    ).toMatchObject({
-      "Copilot-Vision-Request": "true",
-      "x-initiator": "agent",
-    });
-  });
-
-  it("detects nested tool-result image blocks in user-shaped provider payloads", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            content: [{ type: "image", source: { data: "abc", media_type: "image/png" } }],
-          },
-        ],
-        timestamp: 1,
-      },
-    ] as unknown as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
-
-    expect(hasCopilotVisionInput(messages)).toBe(true);
-    expect(buildCopilotDynamicHeaders({ messages, hasImages: true })).toMatchObject({
-      "Copilot-Vision-Request": "true",
-      "x-initiator": "agent",
-    });
-  });
-});
-
-describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
-  it("decodes tool call arguments in final and streaming messages", async () => {
-    const resultMessage = {
-      content: [
-        {
-          type: "toolCall",
-          arguments: { command: "echo &quot;result&quot; &amp;&amp; true" },
-        },
-      ],
-    };
-    const streamEvent = {
-      partial: {
-        content: [
-          {
-            type: "toolCall",
-            arguments: { path: "&lt;stream&gt;", nested: { quote: "&#39;x&#39;" } },
-          },
-        ],
-      },
-    };
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({ events: [streamEvent], resultMessage }) as never;
-
-    const stream = createHtmlEntityToolCallArgumentDecodingWrapper(baseStreamFn)(
-      {} as never,
-      {} as never,
-      {},
-    ) as FakeWrappedStream;
-
-    await expect(stream.result()).resolves.toEqual({
-      content: [
-        {
-          type: "toolCall",
-          arguments: { command: 'echo "result" && true' },
-        },
-      ],
-    });
-
-    const iterator = stream[Symbol.asyncIterator]();
-    await expect(iterator.next()).resolves.toEqual({
-      done: false,
-      value: {
-        partial: {
-          content: [
-            {
-              type: "toolCall",
-              arguments: { path: "<stream>", nested: { quote: "'x'" } },
-            },
-          ],
-        },
-      },
-    });
-  });
-});
-
 describe("createPayloadPatchStreamWrapper", () => {
   it("passes stream call options to payload patches", () => {
     let captured: Record<string, unknown> = {};
@@ -301,19 +193,166 @@ describe("createPayloadPatchStreamWrapper", () => {
   });
 });
 
-describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
-  it("exposes unconditional assistant prefill stripping for proxy reasoning wrappers", () => {
-    const payload = {
-      messages: [
-        { role: "user", content: "Return JSON." },
-        { role: "assistant", content: "{" },
-      ],
-    };
+describe("createPlainTextToolCallCompatWrapper", () => {
+  it("promotes standalone text tool calls into tool-call stream events", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_start", content: "" },
+        { type: "text_delta", delta: '[tool:read] {"path":"/tmp/file.txt"}' },
+        { type: "text_end" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: '[tool:read] {"path":"/tmp/file.txt"}',
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
 
-    expect(stripTrailingAssistantPrefillMessages(payload)).toBe(1);
-    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
   });
 
+  it("passes through bracketed text when no configured tool names match", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", delta: "[note] keep streaming" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: "[note] keep streaming",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "text_delta",
+      "done",
+    ]);
+  });
+
+  it("converts standalone plain-text tool calls for result consumers", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const resultPromise = (await resolveStream(stream)).result();
+    const rawToolText = '[tool:read] {"path":"src/index.ts"}';
+
+    source.push({ type: "start", partial: { content: [] } } as never);
+    source.push({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: rawToolText,
+    } as never);
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: rawToolText }],
+        stopReason: "stop",
+      },
+    } as never);
+    source.end();
+
+    const message = requireRecord(await resultPromise, "result message");
+    expect(message.stopReason).toBe("toolUse");
+    expect(requireRecord((message.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "src/index.ts" },
+    });
+  });
+
+  it("keeps CR-separated bracketed tool calls buffered for conversion", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+
+    try {
+      source.push({ type: "start", partial: { content: [] } } as never);
+      expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+      source.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]',
+      } as never);
+      source.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]' }],
+          stopReason: "stop",
+        },
+      } as never);
+
+      const event = await nextEvent(iterator, "converted CR tool call");
+      expect(event.type).toBe("toolcall_start");
+    } finally {
+      source.end();
+      await iterator.return?.();
+    }
+  });
+
+  it("does not buffer normal final prose until done", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+
+    try {
+      source.push({ type: "start", partial: { content: [] } } as never);
+      expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+      source.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "final answer starts here",
+      } as never);
+
+      const event = await nextEvent(iterator, "normal final prose");
+      expect(event).toMatchObject({ type: "text_delta", delta: "final answer starts here" });
+    } finally {
+      source.push({ type: "done", reason: "stop", message: {} } as never);
+      source.end();
+      await iterator.return?.();
+    }
+  });
+});
+
+describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
   it("removes trailing assistant text turns when Anthropic thinking is enabled", () => {
     const payload = {
       thinking: { type: "enabled", budget_tokens: 1024 },

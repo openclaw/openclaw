@@ -1,11 +1,17 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { completeSimple, type Api, type Context, type Model } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
+import {
+  completeSimpleWithTimeout,
+  type CompleteSimpleContent,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  logLiveProgress,
+} from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
@@ -28,54 +34,25 @@ type TargetModelRef = {
 };
 
 function parseTargetModelRefs(raw: string | undefined): TargetModelRef[] {
-  return (raw ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((ref) => {
-      const [provider, ...rest] = ref.split("/");
-      const modelId = rest.join("/").trim();
-      if (!provider?.trim() || !modelId) {
-        throw new Error(
-          `Invalid OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS entry: ${JSON.stringify(ref)}`,
-        );
-      }
-      return { ref, provider: provider.trim(), modelId };
-    });
-}
-
-function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
-}
-
-async function completeSimpleWithTimeout<TApi extends Api>(
-  model: Model<TApi>,
-  context: Parameters<typeof completeSimple<TApi>>[1],
-  options: Parameters<typeof completeSimple<TApi>>[2],
-  timeoutMs: number,
-): Promise<Awaited<ReturnType<typeof completeSimple<TApi>>>> {
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-  abortTimer.unref?.();
-  try {
-    return await Promise.race([
-      completeSimple(model, context, {
-        ...options,
-        signal: controller.signal,
-      }),
-      new Promise<never>((_, reject) => {
-        const hardTimer = setTimeout(() => {
-          reject(new Error(`model call timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        hardTimer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(abortTimer);
+  const refs: TargetModelRef[] = [];
+  for (const item of (raw ?? "").split(",")) {
+    const ref = item.trim();
+    if (!ref) {
+      continue;
+    }
+    const [provider, ...rest] = ref.split("/");
+    const modelId = rest.join("/").trim();
+    if (!provider?.trim() || !modelId) {
+      throw new Error(
+        `Invalid OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS entry: ${JSON.stringify(ref)}`,
+      );
+    }
+    refs.push({ ref, provider: provider.trim(), modelId });
   }
+  return refs;
 }
+
+const logProgress = logLiveProgress;
 
 function isOpenAIResponsesFamily(api: string): boolean {
   return (
@@ -83,6 +60,31 @@ function isOpenAIResponsesFamily(api: string): boolean {
     api === "openai-codex-responses" ||
     api === "azure-openai-responses"
   );
+}
+
+function createNoopTools() {
+  return [
+    {
+      name: "noop",
+      description: "Return ok.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+    },
+  ];
+}
+
+function replayValidationTools() {
+  return createNoopTools();
+}
+
+function disableResponsesReplayToolChoice(payload: unknown, model: Model<Api>): unknown {
+  if (!isOpenAIResponsesFamily(model.api) || !payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const next = payload as { tool_choice?: unknown };
+  // Replay probes include historical tool calls to validate transcript repair,
+  // but they should not force a fresh noop tool call during the live request.
+  next.tool_choice = "none";
+  return next;
 }
 
 function buildReplayMessages(model: Model<Api>): AgentMessage[] {
@@ -171,7 +173,23 @@ function assistantToolCallIds(message: AgentMessage): string[] {
   if (message.role !== "assistant") {
     return [];
   }
-  return message.content.filter((block) => block.type === "toolCall").map((block) => block.id);
+  const ids: string[] = [];
+  for (const block of message.content) {
+    if (block.type === "toolCall") {
+      ids.push(block.id);
+    }
+  }
+  return ids;
+}
+
+function responseText(content: CompleteSimpleContent): string {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      parts.push(block.text.trim());
+    }
+  }
+  return parts.join(" ").trim();
 }
 
 function isKnownLiveBlocker(errorMessage: string): boolean {
@@ -260,27 +278,18 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: sanitized as never,
-            tools: [
-              {
-                name: "noop",
-                description: "Return ok.",
-                parameters: Type.Object({}, { additionalProperties: false }),
-              },
-            ],
+            tools: replayValidationTools(),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
             reasoning: "low",
             maxTokens: 96,
+            onPayload: disableResponsesReplayToolChoice,
           },
           120_000,
         );
 
-        const text = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .join(" ")
-          .trim();
+        const text = responseText(response.content);
         const errorMessage =
           typeof (response as { errorMessage?: unknown }).errorMessage === "string"
             ? ((response as { errorMessage?: string }).errorMessage ?? "")
@@ -345,27 +354,18 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: transformed as never,
-            tools: [
-              {
-                name: "noop",
-                description: "Return ok.",
-                parameters: Type.Object({}, { additionalProperties: false }),
-              },
-            ],
+            tools: replayValidationTools(),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
             reasoning: "low",
             maxTokens: 96,
+            onPayload: disableResponsesReplayToolChoice,
           },
           120_000,
         );
 
-        const text = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .join(" ")
-          .trim();
+        const text = responseText(response.content);
         const errorMessage =
           typeof (response as { errorMessage?: unknown }).errorMessage === "string"
             ? ((response as { errorMessage?: string }).errorMessage ?? "")

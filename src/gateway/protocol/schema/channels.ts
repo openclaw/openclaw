@@ -55,6 +55,13 @@ const TalkBrainSchema = Type.Union([
   Type.Literal("none"),
 ]);
 
+const TalkAgentControlModeSchema = Type.Union([
+  Type.Literal("status"),
+  Type.Literal("steer"),
+  Type.Literal("cancel"),
+  Type.Literal("followup"),
+]);
+
 const TalkEventTypeSchema = Type.Union([
   Type.Literal("session.started"),
   Type.Literal("session.ready"),
@@ -163,6 +170,10 @@ export const TalkClientCreateParamsSchema = Type.Object(
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
+    vadThreshold: Type.Optional(Type.Number()),
+    silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    reasoningEffort: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
@@ -189,6 +200,45 @@ export const TalkClientToolCallResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkClientSteerParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    text: NonEmptyString,
+    mode: Type.Optional(TalkAgentControlModeSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkAgentControlResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    mode: TalkAgentControlModeSchema,
+    sessionKey: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    active: Type.Boolean(),
+    queued: Type.Optional(Type.Boolean()),
+    aborted: Type.Optional(Type.Boolean()),
+    target: Type.Optional(Type.Union([Type.Literal("embedded_run"), Type.Literal("reply_run")])),
+    reason: Type.Optional(Type.String()),
+    message: Type.String(),
+    speak: Type.Boolean(),
+    show: Type.Boolean(),
+    suppress: Type.Boolean(),
+    providerResult: Type.Optional(
+      Type.Object(
+        {
+          status: Type.Literal("cancelled"),
+          message: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    enqueuedAtMs: Type.Optional(Type.Number()),
+    deliveredAtMs: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
 export const TalkSessionJoinParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -200,9 +250,14 @@ export const TalkSessionJoinParamsSchema = Type.Object(
 export const TalkSessionCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
+    spawnedBy: Type.Optional(NonEmptyString),
     provider: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
+    vadThreshold: Type.Optional(Type.Number()),
+    silenceDurationMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    prefixPaddingMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    reasoningEffort: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
@@ -251,6 +306,25 @@ export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
     sessionId: NonEmptyString,
     callId: NonEmptyString,
     result: Type.Unknown(),
+    options: Type.Optional(
+      Type.Object(
+        {
+          suppressResponse: Type.Optional(Type.Boolean()),
+          willContinue: Type.Optional(Type.Boolean()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionSteerParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
+    text: NonEmptyString,
+    mode: Type.Optional(TalkAgentControlModeSchema),
   },
   { additionalProperties: false },
 );
@@ -485,6 +559,7 @@ const TalkRealtimeConfigSchema = Type.Object(
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
+    instructions: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),
@@ -506,6 +581,8 @@ const TalkConfigSchema = Type.Object(
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     realtime: Type.Optional(TalkRealtimeConfigSchema),
     resolved: Type.Optional(ResolvedTalkConfigSchema),
+    consultThinkingLevel: Type.Optional(Type.String()),
+    consultFastMode: Type.Optional(Type.Boolean()),
     speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -557,6 +634,7 @@ export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    channel: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

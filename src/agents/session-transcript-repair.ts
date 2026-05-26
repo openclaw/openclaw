@@ -1,5 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
+  hasNonEmptyString as hasNonEmptyStringField,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
@@ -56,10 +57,6 @@ function hasToolCallInput(block: RawToolCallBlock): boolean {
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
   return hasInput || hasArguments;
-}
-
-function hasNonEmptyStringField(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasToolCallId(block: RawToolCallBlock): boolean {
@@ -456,6 +453,13 @@ function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions
   return options?.erroredAssistantResultPolicy === "drop";
 }
 
+function assistantHasToolCalls(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  return extractToolCallsFromAssistant(message).length > 0;
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
@@ -538,7 +542,11 @@ export function repairToolUseResultPairing(
 
       const nextRole = (next as { role?: unknown }).role;
       if (nextRole === "assistant") {
-        break;
+        if (assistantHasToolCalls(next)) {
+          break;
+        }
+        remainder.push(next);
+        continue;
       }
 
       if (nextRole === "toolResult") {

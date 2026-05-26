@@ -1,4 +1,4 @@
-import { SettingsManager } from "@mariozechner/pi-coding-agent";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -61,5 +61,10 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
+  // Disable the pi-coding-agent auto-retry. OpenClaw has its own comprehensive
+  // retry layer (failover rotation, auth profile rotation, empty-error retry,
+  // thinking-level fallback) in run.ts. Having both layers active creates a
+  // double-retry that can replay failed tool calls in an unbounded loop (#73781).
+  settingsManager.setRetryEnabled(false);
   return settingsManager;
 }

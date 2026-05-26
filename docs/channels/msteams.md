@@ -146,14 +146,14 @@ Disable with:
 **DM access**
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` should use stable AAD object IDs.
+- `channels.msteams.allowFrom` should use stable AAD object IDs or static sender access groups such as `accessGroup:core-team`.
 - Do not rely on UPN/display-name matching for allowlists - they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
-- `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- `channels.msteams.groupAllowFrom` controls which senders or static sender access groups can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
@@ -164,7 +164,7 @@ Example:
   channels: {
     msteams: {
       groupPolicy: "allowlist",
-      groupAllowFrom: ["user@org.com"],
+      groupAllowFrom: ["00000000-0000-0000-0000-000000000000", "accessGroup:core-team"],
     },
   },
 }
@@ -700,7 +700,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `toolsBySender` keys should use explicit prefixes:
-  `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+  `channel:`, `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
 - `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
 - `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
@@ -867,9 +867,9 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 
 ## Presentation cards
 
-Send semantic presentation payloads to Teams users or conversations using the `message` tool or CLI. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.
+Send semantic presentation payloads to Teams users or conversations using the `message` tool, CLI, or normal reply delivery. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.
 
-The `presentation` parameter accepts semantic blocks. When `presentation` is provided, the message text is optional.
+The `presentation` parameter accepts semantic blocks. When `presentation` is provided, the message text is optional. Buttons render as Adaptive Card submit or URL actions. Select menus are not native in the Teams renderer yet, so OpenClaw downgrades them to readable text before delivery.
 
 **Agent tool:**
 

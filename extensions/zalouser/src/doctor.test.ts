@@ -12,8 +12,8 @@ function getZaloUserCompatibilityNormalizer(): NonNullable<
 }
 
 describe("zalouser doctor", () => {
-  it("warns when mutable group names rely on disabled name matching", () => {
-    expect(
+  it("warns when mutable group names rely on disabled name matching", async () => {
+    const warnings = await Promise.resolve(
       zalouserDoctor.collectMutableAllowlistWarnings?.({
         cfg: {
           channels: {
@@ -26,13 +26,19 @@ describe("zalouser doctor", () => {
             },
           },
         } as never,
-      }),
-    ).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("mutable allowlist entry across zalouser"),
-        expect.stringContaining("channels.zalouser.groups: group:trusted"),
-      ]),
+      }) ?? [],
     );
+
+    expect(
+      warnings.some((warning: string) =>
+        warning.includes("mutable allowlist entry across zalouser"),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((warning: string) =>
+        warning.includes("channels.zalouser.groups: group:trusted"),
+      ),
+    ).toBe(true);
   });
 
   it("normalizes legacy group allow aliases to enabled", () => {
@@ -73,11 +79,9 @@ describe("zalouser doctor", () => {
     ).toEqual({
       enabled: false,
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (true).",
-        "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (false).",
-      ]),
-    );
+    expect(result.changes).toEqual([
+      "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (true).",
+      "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (false).",
+    ]);
   });
 });

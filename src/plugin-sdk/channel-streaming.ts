@@ -3,16 +3,15 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
-  ChannelDeliveryStreamingConfig,
-  ChannelPreviewStreamingConfig,
   ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
-  SlackChannelStreamingConfig,
   StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { asBoolean } from "../utils/boolean.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -47,8 +46,11 @@ function asTextChunkMode(value: unknown): TextChunkMode | undefined {
   return value === "length" || value === "newline" ? value : undefined;
 }
 
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
+function asStringNumberArray(value: unknown): Array<string | number> | undefined {
+  return Array.isArray(value) &&
+    value.every((entry) => typeof entry === "string" || typeof entry === "number")
+    ? value
+    : undefined;
 }
 
 function asInteger(value: unknown): number | undefined {
@@ -93,30 +95,32 @@ function asCommandTextMode(value: unknown): ChannelStreamingCommandTextMode | un
 }
 
 export const DEFAULT_PROGRESS_DRAFT_LABELS = [
-  "Thinking...",
-  "Shelling...",
-  "Scuttling...",
-  "Clawing...",
-  "Pinching...",
-  "Molting...",
-  "Bubbling...",
-  "Tiding...",
-  "Reefing...",
-  "Cracking...",
-  "Sifting...",
-  "Brining...",
-  "Nautiling...",
-  "Krilling...",
-  "Barnacling...",
-  "Lobstering...",
-  "Tidepooling...",
-  "Pearling...",
-  "Snapping...",
-  "Surfacing...",
+  "Working",
+  "Shelling",
+  "Scuttling",
+  "Clawing",
+  "Pinching",
+  "Molting",
+  "Bubbling",
+  "Tiding",
+  "Reefing",
+  "Cracking",
+  "Sifting",
+  "Brining",
+  "Nautiling",
+  "Krilling",
+  "Barnacling",
+  "Lobstering",
+  "Tidepooling",
+  "Pearling",
+  "Snapping",
+  "Surfacing",
 ] as const;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
-const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 72;
+const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
+const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
+const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
 
 const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
   "message",
@@ -131,6 +135,63 @@ const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
 export function isChannelProgressDraftWorkToolName(name: string | null | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(name);
   return Boolean(normalized && !NON_WORK_PROGRESS_TOOL_NAMES.has(normalized));
+}
+
+function stripTrailingEllipsis(text: string): string {
+  return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
+}
+
+export function isPotentialTruncatedFinal(finalText: string): boolean {
+  const trimmedFinal = finalText.trimEnd();
+  const untruncatedFinal = stripTrailingEllipsis(trimmedFinal);
+  return (
+    untruncatedFinal.length >= MIN_TRUNCATED_FINAL_PREFIX_CHARS && untruncatedFinal !== trimmedFinal
+  );
+}
+
+export function selectLongerFinalText(params: {
+  finalText: string;
+  candidateTexts: readonly (string | undefined)[];
+}): string | undefined {
+  const finalText = params.finalText.trimEnd();
+  if (!isPotentialTruncatedFinal(finalText)) {
+    return undefined;
+  }
+  const untruncatedFinal = stripTrailingEllipsis(finalText);
+  for (const candidate of params.candidateTexts) {
+    const candidateText = candidate?.trimEnd();
+    if (
+      !candidateText ||
+      candidateText.length <= finalText.length ||
+      !candidateText.startsWith(untruncatedFinal)
+    ) {
+      continue;
+    }
+    const continuation = candidateText.slice(untruncatedFinal.length).trimStart();
+    if (
+      continuation.length >= MIN_TRUNCATED_FINAL_CONTINUATION_CHARS &&
+      /^[\p{L}\p{N}]/u.test(continuation)
+    ) {
+      return candidateText;
+    }
+  }
+  return undefined;
+}
+
+export async function resolveTranscriptBackedChannelFinalText(params: {
+  finalText: string;
+  resolveCandidateText: () => Promise<string | undefined>;
+}): Promise<string> {
+  if (!isPotentialTruncatedFinal(params.finalText)) {
+    return params.finalText;
+  }
+  const candidateText = await params.resolveCandidateText();
+  return (
+    selectLongerFinalText({
+      finalText: params.finalText,
+      candidateTexts: [candidateText],
+    }) ?? params.finalText
+  );
 }
 
 export type ChannelProgressLineOptions = {
@@ -152,6 +213,7 @@ export type ChannelProgressDraftLineInput =
     }
   | {
       event: "item";
+      itemId?: string;
       itemKind?: string;
       title?: string;
       name?: string;
@@ -198,6 +260,7 @@ export type ChannelProgressDraftLineInput =
 export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
 export type ChannelProgressDraftLine = {
+  id?: string;
   kind: ChannelProgressDraftLineKind;
   text: string;
   label: string;
@@ -238,7 +301,13 @@ function buildNamedProgressLine(
   });
   const display = resolveToolDisplay({ name: normalizedName });
   const prefix = `${display.emoji} ${display.label}`;
-  const detail = text.startsWith(`${prefix}: `) ? text.slice(prefix.length + 2).trim() : undefined;
+  const compactCommandPrefix =
+    (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
+      ? text.slice(display.emoji.length + 1).trim()
+      : undefined;
+  const detail = text.startsWith(`${prefix}: `)
+    ? text.slice(prefix.length + 2).trim()
+    : compactCommandPrefix;
   return {
     kind,
     text,
@@ -368,6 +437,7 @@ export function buildChannelProgressDraftLine(
       const text = compactStrings([meta, input.title]).at(0);
       return text
         ? {
+            ...(input.itemId ? { id: input.itemId } : {}),
             kind: input.event,
             text,
             label: input.title?.trim() || input.itemKind?.trim() || "Update",
@@ -575,6 +645,23 @@ export function resolveChannelStreamingPreviewCommandText(
   );
 }
 
+export function resolveChannelStreamingPreviewNativeToolProgress(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = false,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  const preview = asObjectRecord(config?.preview);
+  return asBoolean(preview?.nativeToolProgress) ?? defaultValue;
+}
+
+export function resolveChannelStreamingPreviewNativeToolProgressAllowFrom(
+  entry: StreamingCompatEntry | null | undefined,
+): Array<string | number> | undefined {
+  const config = getChannelStreamingConfigObject(entry);
+  const preview = asObjectRecord(config?.preview);
+  return asStringNumberArray(preview?.nativeToolProgressAllowFrom);
+}
+
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
   entry: StreamingCompatEntry | null | undefined,
   options?: {
@@ -634,13 +721,11 @@ export function resolveChannelProgressDraftConfig(
 }
 
 function normalizeProgressLabels(labels: unknown): string[] {
-  if (!Array.isArray(labels)) {
+  const normalized = normalizeTrimmedStringList(labels);
+  if (normalized.length === 0) {
     return [...DEFAULT_PROGRESS_DRAFT_LABELS];
   }
-  const normalized = labels
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter((entry) => entry.length > 0);
-  return normalized.length > 0 ? normalized : [...DEFAULT_PROGRESS_DRAFT_LABELS];
+  return normalized;
 }
 
 function hashProgressSeed(seed: string): number {
@@ -682,6 +767,14 @@ export function resolveChannelProgressDraftMaxLines(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
+export function resolveChannelProgressDraftMaxLineChars(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
+): number {
+  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
+  return configured && configured > 0 ? configured : defaultValue;
+}
+
 export function resolveChannelProgressDraftRender(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue: ChannelProgressDraftRenderMode = "text",
@@ -718,6 +811,15 @@ function removeUnbalancedInlineBackticks(value: string): string {
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
 }
 
+function compactPlainProgressLine(line: string, maxChars: number): string {
+  const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
+  const boundary = head.search(/\s+\S*$/u);
+  if (boundary > Math.floor(maxChars * 0.6)) {
+    return `${head.slice(0, boundary).trimEnd()}…`;
+  }
+  return `${head}…`;
+}
+
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
   const normalized = line.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -731,21 +833,36 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     return "…";
   }
 
+  const compactWithPrefix = (prefix: string, detail: string): string | undefined => {
+    const prefixChars = Array.from(prefix).length;
+    const detailLimit = maxChars - prefixChars;
+    if (detailLimit < 8) {
+      return undefined;
+    }
+    return removeUnbalancedInlineBackticks(
+      `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
+    );
+  };
+
   const splitIndex = normalized.indexOf(": ");
   if (splitIndex > 0) {
     const prefix = normalized.slice(0, splitIndex + 2);
-    const prefixChars = Array.from(prefix).length;
-    const detailLimit = maxChars - prefixChars;
-    if (detailLimit >= 8) {
-      return removeUnbalancedInlineBackticks(
-        `${prefix}${compactProgressLineDetail(normalized.slice(splitIndex + 2), detailLimit)}`,
-      );
+    const compact = compactWithPrefix(prefix, normalized.slice(splitIndex + 2));
+    if (compact) {
+      return compact;
     }
   }
 
-  return removeUnbalancedInlineBackticks(
-    `${sliceCodePoints(normalized, 0, maxChars - 1).trimEnd()}…`,
-  );
+  const compactCommandPrefixMatch = normalized.match(/^🛠️\s+/u);
+  if (compactCommandPrefixMatch) {
+    const prefix = compactCommandPrefixMatch[0];
+    const compact = compactWithPrefix(prefix, normalized.slice(prefix.length));
+    if (compact) {
+      return compact;
+    }
+  }
+
+  return removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
@@ -757,7 +874,9 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const label = line.label.trim();
   const detail = line.detail?.trim();
   if (detail) {
-    if (line.kind !== "patch" && label) {
+    const compactCommandLine =
+      line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
+    if (line.kind !== "patch" && label && !compactCommandLine) {
       return `${prefix}${label}: ${detail}`;
     }
     return `${prefix}${detail}`;
@@ -776,6 +895,44 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   return `${prefix}${label}`.trim();
 }
 
+export function normalizeChannelProgressDraftLineIdentity(
+  line: string | ChannelProgressDraftLine | undefined,
+): string {
+  const text = typeof line === "string" ? line : line?.text;
+  return text?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  line: TLine,
+  params: { maxLines: number },
+): TLine[] {
+  const normalized = normalizeChannelProgressDraftLineIdentity(line);
+  if (!normalized) {
+    return lines;
+  }
+  const maxLines = Math.max(1, params.maxLines);
+  const lineId = typeof line === "object" ? line.id?.trim() : undefined;
+  if (lineId) {
+    const existingIndex = lines.findIndex(
+      (entry) => typeof entry === "object" && entry.id?.trim() === lineId,
+    );
+    if (existingIndex >= 0) {
+      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
+        return lines;
+      }
+      const next = [...lines];
+      next[existingIndex] = line;
+      return next.slice(-maxLines);
+    }
+  }
+  const previous = normalizeChannelProgressDraftLineIdentity(lines.at(-1));
+  if (previous === normalized) {
+    return lines;
+  }
+  return [...lines, line].slice(-maxLines);
+}
+
 export function formatChannelProgressDraftText(params: {
   entry?: StreamingCompatEntry | null;
   lines: Array<string | ChannelProgressDraftLine>;
@@ -784,16 +941,18 @@ export function formatChannelProgressDraftText(params: {
   formatLine?: (line: string) => string;
   bullet?: string;
 }): string {
-  const label = resolveChannelProgressDraftLabel({
+  const rawLabel = resolveChannelProgressDraftLabel({
     entry: params.entry,
     seed: params.seed,
     random: params.random,
   });
+  const resolvedLabel = rawLabel;
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
+  const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
-  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = label
-    ? [{ draftLabel: label }, ...params.lines]
+  const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = resolvedLabel
+    ? [{ draftLabel: resolvedLabel }, ...params.lines]
     : params.lines;
   const lines = rawLines
     .map((line) => {
@@ -803,14 +962,21 @@ export function formatChannelProgressDraftText(params: {
         : typeof line === "string"
           ? line
           : getProgressDraftLineText(line);
-      const text = compactChannelProgressDraftLine(rawText, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS);
+      const text = compactChannelProgressDraftLine(rawText, maxLineChars);
       return text ? { text, isLabelLine } : undefined;
     })
     .filter((line): line is { text: string; isLabelLine: boolean } => Boolean(line))
     .slice(-maxLines)
     .map(({ text, isLabelLine }) => {
       const formatted = isLabelLine ? text : formatLine(text);
-      return !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted;
+      return {
+        text: !isLabelLine && shouldPrefixProgressLine(text) ? `${bullet} ${formatted}` : formatted,
+        isLabelLine,
+      };
     });
-  return lines.filter((line): line is string => Boolean(line)).join("\n");
+  const renderedLines = lines.map((line) => line.text).filter((line) => Boolean(line));
+  if (renderedLines.length > 1 && lines[0]?.isLabelLine) {
+    return `${renderedLines[0]}\n\n${renderedLines.slice(1).join("\n")}`;
+  }
+  return renderedLines.join("\n");
 }

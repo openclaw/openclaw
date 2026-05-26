@@ -64,7 +64,7 @@
   align-items: center;
   gap: 6px;
   font-weight: 600;
-  font-size: 14px;
+  font-size: var(--control-ui-text-md);
   line-height: 1.2;
   min-width: 0;
 }
@@ -157,12 +157,12 @@
 }
 
 .chat-tool-card__status-text {
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   margin-top: 10px;
 }
 
 .chat-tool-card__detail {
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   color: var(--muted);
   margin-top: 6px;
 }
@@ -548,14 +548,16 @@
 
 .chat-tool-msg-summary {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
   box-sizing: border-box;
   padding: 8px 11px;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  color: var(--text);
   user-select: none;
   list-style: none;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
@@ -590,6 +592,7 @@
 .chat-tool-msg-summary::before {
   content: "▸";
   font-size: 10px;
+  margin-top: 3px;
   flex-shrink: 0;
   transition: transform 150ms ease;
 }
@@ -627,6 +630,7 @@
   justify-content: center;
   width: 14px;
   height: 14px;
+  margin-top: 2px;
   color: var(--accent);
   opacity: 0.75;
   flex-shrink: 0;
@@ -645,28 +649,26 @@
 .chat-tool-msg-summary__label {
   font-weight: 600;
   color: var(--text);
-  flex-shrink: 0;
-}
-
-.chat-tool-msg-summary__names {
-  font-family: var(--mono);
-  font-size: 11px;
-  opacity: 0.85;
-  flex: 1 1 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
+.chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview {
   font-family: var(--mono);
-  font-size: 11px;
-  opacity: 0.85;
-  flex: 1 1 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--control-ui-text-xs);
+  color: color-mix(in srgb, var(--text) 76%, var(--muted) 24%);
+  flex: 1 1 18rem;
+  max-width: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
   min-width: 0;
 }
 
