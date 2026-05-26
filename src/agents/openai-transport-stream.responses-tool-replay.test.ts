@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Context, Model, ToolResultMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIResponsesParams } from "./openai-transport-stream.js";
 
