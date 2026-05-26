@@ -49,6 +49,8 @@ function registerCanvas() {
   const services: Array<Parameters<OpenClawPluginApi["registerService"]>[0]> = [];
   const resolvers: Array<Parameters<OpenClawPluginApi["registerHostedMediaResolver"]>[0]> = [];
   const tools: Array<Parameters<OpenClawPluginApi["registerTool"]>[0]> = [];
+  const nodeInvokePolicies: Array<Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0]> =
+    [];
   const cliFeatures: Array<{
     registrar: Parameters<OpenClawPluginApi["registerNodeCliFeature"]>[0];
     opts: Parameters<OpenClawPluginApi["registerNodeCliFeature"]>[1];
@@ -63,10 +65,10 @@ function registerCanvas() {
       registerHostedMediaResolver: (resolver) => resolvers.push(resolver),
       registerTool: (tool) => tools.push(tool),
       registerNodeCliFeature: (registrar, opts) => cliFeatures.push({ registrar, opts }),
-      registerNodeInvokePolicy: vi.fn(),
+      registerNodeInvokePolicy: (policy) => nodeInvokePolicies.push(policy),
     }),
   );
-  return { routes, services, resolvers, tools, cliFeatures };
+  return { routes, services, resolvers, tools, nodeInvokePolicies, cliFeatures };
 }
 
 describe("Canvas plugin entry", () => {
@@ -133,5 +135,42 @@ describe("Canvas plugin entry", () => {
       workspaceDir: "/tmp/workspace",
     });
     expect(mocks.toolExecute).toHaveBeenCalledWith("tool-call", { action: "hide" });
+  });
+
+  it("registers safe Canvas node commands as defaults and eval as opt-in", async () => {
+    const { nodeInvokePolicies } = registerCanvas();
+
+    expect(nodeInvokePolicies).toHaveLength(2);
+    expect(nodeInvokePolicies[0]).toMatchObject({
+      commands: [
+        "canvas.present",
+        "canvas.hide",
+        "canvas.navigate",
+        "canvas.snapshot",
+        "canvas.a2ui.push",
+        "canvas.a2ui.pushJSONL",
+        "canvas.a2ui.reset",
+      ],
+      defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      foregroundRestrictedOnIos: true,
+    });
+    expect(nodeInvokePolicies[0]?.dangerous).toBeUndefined();
+    expect(nodeInvokePolicies[1]).toMatchObject({
+      commands: ["canvas.eval"],
+      dangerous: true,
+      foregroundRestrictedOnIos: true,
+    });
+    expect(nodeInvokePolicies[1]?.defaultPlatforms).toBeUndefined();
+
+    await expect(
+      nodeInvokePolicies[0]?.handle({
+        invokeNode: async () => ({ ok: true, payload: "safe" }),
+      } as never),
+    ).resolves.toEqual({ ok: true, payload: "safe" });
+    await expect(
+      nodeInvokePolicies[1]?.handle({
+        invokeNode: async () => ({ ok: true, payload: "eval" }),
+      } as never),
+    ).resolves.toEqual({ ok: true, payload: "eval" });
   });
 });

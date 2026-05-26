@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
-  DEFAULT_DANGEROUS_NODE_COMMANDS,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -25,8 +24,29 @@ describe("gateway/node-command-policy", () => {
       rootDir: "/extensions/canvas",
       pluginConfig: {},
       policy: {
-        commands: ["canvas.snapshot", "canvas.present"],
+        commands: [
+          "canvas.present",
+          "canvas.hide",
+          "canvas.navigate",
+          "canvas.snapshot",
+          "canvas.a2ui.push",
+          "canvas.a2ui.pushJSONL",
+          "canvas.a2ui.reset",
+        ],
         defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+        foregroundRestrictedOnIos: true,
+        handle: (ctx) => ctx.invokeNode(),
+      },
+    });
+    (registry.nodeInvokePolicies ??= []).push({
+      pluginId: "canvas",
+      pluginName: "Canvas",
+      source: "/extensions/canvas/index.ts",
+      rootDir: "/extensions/canvas",
+      pluginConfig: {},
+      policy: {
+        commands: ["canvas.eval"],
+        dangerous: true,
         foregroundRestrictedOnIos: true,
         handle: (ctx) => ctx.invokeNode(),
       },
@@ -85,8 +105,8 @@ describe("gateway/node-command-policy", () => {
 
   it("keeps canvas commands out of core defaults when the canvas plugin is not active", () => {
     const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
-      platform: "windows",
-      deviceFamily: "Windows",
+      platform: "macOS 26.5.0",
+      deviceFamily: "Mac",
     });
 
     expect(allowlist.has("canvas.snapshot")).toBe(false);
@@ -104,7 +124,9 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.present")).toBe(true);
   });
 
-  it("allows declared macOS canvas UI commands from platform defaults", () => {
+  it("allows declared macOS canvas UI commands from active canvas plugin defaults", () => {
+    installCanvasPluginDefaults();
+
     const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
       platform: "macOS 26.5.0",
       deviceFamily: "Mac",
@@ -140,13 +162,14 @@ describe("gateway/node-command-policy", () => {
   });
 
   it("keeps macOS canvas eval opt-in as a dangerous command", () => {
+    installCanvasPluginDefaults();
+
     const defaultAllowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
       platform: "macOS 26.5.0",
       deviceFamily: "Mac",
       commands: ["canvas.eval"],
     });
     expect(defaultAllowlist.has("canvas.eval")).toBe(false);
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("canvas.eval");
 
     const configuredAllowlist = resolveNodeCommandAllowlist(
       {
@@ -305,6 +328,7 @@ describe("gateway/node-command-policy", () => {
     installCanvasPluginDefaults();
 
     expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(true);
+    expect(isForegroundRestrictedPluginNodeCommand("canvas.eval")).toBe(true);
     expect(isForegroundRestrictedPluginNodeCommand("system.run")).toBe(false);
   });
 });

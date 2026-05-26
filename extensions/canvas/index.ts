@@ -6,16 +6,16 @@ import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
 import { CanvasToolSchema } from "./src/tool-schema.js";
 
-const CANVAS_NODE_COMMANDS = [
+const CANVAS_SAFE_NODE_COMMANDS = [
   "canvas.present",
   "canvas.hide",
   "canvas.navigate",
-  "canvas.eval",
   "canvas.snapshot",
   "canvas.a2ui.push",
   "canvas.a2ui.pushJSONL",
   "canvas.a2ui.reset",
 ];
+const CANVAS_EVAL_NODE_COMMAND = "canvas.eval";
 
 function createLazyCanvasTool(params: {
   config?: OpenClawConfig;
@@ -120,8 +120,14 @@ export default definePluginEntry({
       });
     }
     api.registerNodeInvokePolicy({
-      commands: CANVAS_NODE_COMMANDS,
+      commands: CANVAS_SAFE_NODE_COMMANDS,
       defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      foregroundRestrictedOnIos: true,
+      handle: (ctx) => ctx.invokeNode(),
+    });
+    api.registerNodeInvokePolicy({
+      commands: [CANVAS_EVAL_NODE_COMMAND],
+      dangerous: true,
       foregroundRestrictedOnIos: true,
       handle: (ctx) => ctx.invokeNode(),
     });
