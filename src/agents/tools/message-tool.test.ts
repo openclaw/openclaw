@@ -741,6 +741,14 @@ describe("message tool secret scoping", () => {
 
   it("resolves scoped channel SecretRefs even when constructed with a config snapshot", async () => {
     mockSendResult({ channel: "discord", to: "channel:123" });
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     const rawConfig = {
       channels: {
         discord: {
@@ -794,6 +802,15 @@ describe("message tool secret scoping", () => {
 
 describe("message tool delivery mode schema", () => {
   it("hides bestEffort when required durable delivery is not available", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
     const defaultTool = createMessageTool();
     const scopedTool = createMessageTool({
       config: {} as never,
@@ -903,6 +920,14 @@ describe("message tool agent routing", () => {
 
   it("forwards agentThreadId through createOpenClawTools to the message tool", async () => {
     mockSendResult({ channel: "slack", to: "channel:C123" });
+    const plugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
 
     const tool = createOpenClawTools({
       agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
