@@ -114,6 +114,21 @@ function renderSummaryTile(params: {
   `;
 }
 
+function renderUsageStat(params: {
+  label: string | TemplateResult;
+  value: string | TemplateResult;
+  detail?: string | TemplateResult | null;
+  tone?: OverviewTone;
+}) {
+  return html`
+    <div class="stat">
+      <div class="stat-label">${params.label}</div>
+      <div class=${`stat-value ${params.tone ?? ""}`}>${params.value}</div>
+      ${params.detail ? html`<div class="stat-detail">${params.detail}</div>` : nothing}
+    </div>
+  `;
+}
+
 function renderEmptyOperatorRow(
   title: string,
   description: string,
@@ -428,9 +443,14 @@ export function renderOverview(props: OverviewProps) {
     : [];
   const hasMultipleQuotaWindows = quotaCardWindows.length > 1;
   const primaryQuotaReset = primaryQuota ? formatQuotaReset(primaryQuota.resetAt) : null;
+  const secondaryQuotaStat = sameProviderSecondaryQuota ?? null;
+  const secondaryQuotaStatReset = secondaryQuotaStat
+    ? formatQuotaReset(secondaryQuotaStat.resetAt)
+    : null;
   const primaryQuotaLabel = primaryQuota
     ? quotaLimitLabel(primaryQuota)
     : t("overview.operator.quota");
+  const secondaryQuotaStatLabel = secondaryQuotaStat ? quotaLimitLabel(secondaryQuotaStat) : null;
   const secondaryQuotaHint = secondaryQuota
     ? `${quotaIdentity(secondaryQuota)} ${formatQuotaRemaining(secondaryQuota)}`
     : null;
@@ -457,6 +477,8 @@ export function renderOverview(props: OverviewProps) {
       : authProviders.length > 0
         ? t("overview.operator.usageQuotaNoWindows")
         : t("overview.operator.usageQuotaNotConfigured");
+  const showSecondaryQuotaStat =
+    Boolean(primaryQuota && secondaryQuotaStat && hasMultipleQuotaWindows) && totalCost === "$0.00";
   const logSummary = summarizeLogLines(props.overviewLogLines);
   const hasOperationalData =
     props.usageResult != null ||
@@ -891,56 +913,39 @@ export function renderOverview(props: OverviewProps) {
               <div class="card-title">${t("overview.operator.providerUsageTitle")}</div>
               <div class="card-sub">${t("overview.operator.providerUsageSubtitle")}</div>
               <div class="ov-usage-metrics">
-                <div class="stat">
-                  <div class="stat-label">${primaryQuotaLabel}</div>
-                  <div
-                    class="stat-value ${primaryQuota?.remaining != null &&
-                    primaryQuota.remaining <= 25
+                ${renderUsageStat({
+                  label: primaryQuotaLabel,
+                  value: primaryQuota ? `${primaryQuota.remaining}%` : t("common.na"),
+                  detail: primaryQuotaReset
+                    ? t("overview.operator.quotaResetShort", { time: primaryQuotaReset })
+                    : null,
+                  tone:
+                    primaryQuota?.remaining != null && primaryQuota.remaining <= 25
                       ? "warn"
-                      : "ok"}"
-                  >
-                    ${primaryQuota ? `${primaryQuota.remaining}%` : t("common.na")}
-                  </div>
-                </div>
-                <div class="stat">
-                  <div class="stat-label">${t("overview.cards.cost")}</div>
-                  <div class="stat-value">${totalCost}</div>
-                </div>
-                <div class="stat">
-                  <div class="stat-label">${t("overview.operator.messages")}</div>
-                  <div class="stat-value">${totalMessages}</div>
-                </div>
-                <div class="stat">
-                  <div class="stat-label">${t("overview.operator.tokens")}</div>
-                  <div class="stat-value">${totalTokens}</div>
-                </div>
-              </div>
-              ${hasMultipleQuotaWindows
-                ? html`<div class="ov-usage-windows">
-                    ${quotaCardWindows.map((entry) => {
-                      const reset = formatQuotaReset(entry.resetAt);
-                      return html`<div class="ov-usage-window">
-                        <div>
-                          <div class="ov-usage-window__label">
-                            ${[entry.displayName, entry.label].filter(Boolean).join(" · ")}
-                          </div>
-                          ${reset
-                            ? html`<div class="ov-usage-window__reset">
-                                ${t("overview.operator.quotaResetShort", { time: reset })}
-                              </div>`
-                            : nothing}
-                        </div>
-                        <strong
-                          class=${entry.remaining <= 25
-                            ? "ov-usage-window__remaining warn"
-                            : "ov-usage-window__remaining ok"}
-                        >
-                          ${formatQuotaRemaining(entry)}
-                        </strong>
-                      </div>`;
+                      : "ok",
+                })}
+                ${showSecondaryQuotaStat && secondaryQuotaStat && secondaryQuotaStatLabel
+                  ? renderUsageStat({
+                      label: secondaryQuotaStatLabel,
+                      value: `${secondaryQuotaStat.remaining}%`,
+                      detail: secondaryQuotaStatReset
+                        ? t("overview.operator.quotaResetShort", { time: secondaryQuotaStatReset })
+                        : null,
+                      tone: secondaryQuotaStat.remaining <= 25 ? "warn" : "ok",
+                    })
+                  : renderUsageStat({
+                      label: t("overview.cards.cost"),
+                      value: totalCost,
                     })}
-                  </div>`
-                : nothing}
+                ${renderUsageStat({
+                  label: t("overview.operator.messages"),
+                  value: totalMessages,
+                })}
+                ${renderUsageStat({
+                  label: t("overview.operator.tokens"),
+                  value: totalTokens,
+                })}
+              </div>
               ${quotaStatusNote
                 ? html`<div class="ov-usage-note">${quotaStatusNote}</div>`
                 : nothing}
