@@ -1865,6 +1865,11 @@ export async function runAgentTurnWithFallback(params: {
       const runLane = CommandLane.Main;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
+      const userTurnTranscriptRecorder =
+        params.followupRun.userTurnTranscriptRecorder ?? params.opts?.userTurnTranscriptRecorder;
+      const notifyUserMessagePersisted = () => {
+        queuedUserMessagePersistedAcrossFallback = true;
+      };
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2044,6 +2049,9 @@ export async function runAgentTurnWithFallback(params: {
                     config: runtimeConfig,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
+                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                    userTurnTranscriptRecorder,
+                    onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     inputProvenance: params.followupRun.run.inputProvenance,
@@ -2166,6 +2174,7 @@ export async function runAgentTurnWithFallback(params: {
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
+                    userTurnTranscriptRecorder,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
@@ -2174,9 +2183,7 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    onUserMessagePersisted: () => {
-                      queuedUserMessagePersistedAcrossFallback = true;
-                    },
+                    onUserMessagePersisted: notifyUserMessagePersisted,
                     suppressTranscriptOnlyAssistantPersistence:
                       params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
                     suppressAssistantErrorPersistence:
