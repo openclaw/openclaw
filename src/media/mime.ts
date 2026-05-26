@@ -52,6 +52,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
+  "application/x-subrip": ".srt",
   "text/html": ".html",
   "text/xml": ".xml",
   "text/css": ".css",
