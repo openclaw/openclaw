@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
+const jsonSchemaThenKeyword = "then";
+
 function expectValidationFailure(
   params: Parameters<typeof validateJsonSchemaValue>[0],
 ): Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }> {
@@ -688,7 +690,7 @@ describe("schema validator", () => {
             },
             required: ["kind"],
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -722,7 +724,7 @@ describe("schema validator", () => {
           if: {
             $ref: "#/$defs/ApiKind",
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -756,7 +758,7 @@ describe("schema validator", () => {
           if: {
             $ref: "#/properties/kind",
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -795,7 +797,7 @@ describe("schema validator", () => {
             },
             required: ["kind"],
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -834,7 +836,7 @@ describe("schema validator", () => {
             },
             $ref: "#/$defs/ApiKind",
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -878,7 +880,7 @@ describe("schema validator", () => {
             },
             $ref: "#/$defs/MatchKind",
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -912,7 +914,7 @@ describe("schema validator", () => {
             },
             required: ["kind"],
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -947,7 +949,7 @@ describe("schema validator", () => {
             },
             required: ["kind"],
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               endpoint: {
                 type: "string",
@@ -980,7 +982,7 @@ describe("schema validator", () => {
               required: ["mode"],
             },
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               mode: {
                 type: "string",
@@ -1032,7 +1034,7 @@ describe("schema validator", () => {
             },
             required: ["kind"],
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               settings: {
                 type: "object",
@@ -1106,7 +1108,7 @@ describe("schema validator", () => {
             },
             required: ["kind"],
           },
-          then: {
+          [jsonSchemaThenKeyword]: {
             properties: {
               flag: {
                 type: "boolean",
