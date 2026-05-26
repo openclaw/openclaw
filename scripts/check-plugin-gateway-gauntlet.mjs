@@ -453,12 +453,47 @@ export function runMeasuredCommandLive(params) {
     let spawnError = null;
     let timedOut = false;
     let settled = false;
+    let forceKillTimeout = null;
     const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
+    const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
+    const useProcessGroup =
+      process.platform !== "win32" &&
+      params.killProcessGroup !== false &&
+      spawnOptions.detached !== false;
     const child = spawn(command, args, {
       cwd: params.cwd,
       env: params.env,
-      ...(mode === "none" ? (params.spawnOptions ?? {}) : {}),
+      ...spawnOptions,
+      ...(useProcessGroup ? { detached: true } : {}),
     });
+    const killMeasuredProcess = (signal = "SIGTERM") => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {}
+      }
+      child.kill(signal);
+    };
+    const parentSignalHandlers = new Map();
+    const removeParentSignalHandlers = () => {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+    };
+    const parentSignals =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const signal of parentSignals) {
+      const handler = () => {
+        killMeasuredProcess(signal);
+        removeParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.set(signal, handler);
+      process.once(signal, handler);
+    }
     const appendCapturedOutput = (streamName, chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
@@ -513,7 +548,11 @@ export function runMeasuredCommandLive(params) {
               code: "ETIMEDOUT",
               message: `Command timed out after ${params.timeoutMs}ms`,
             };
-            child.kill();
+            killMeasuredProcess();
+            forceKillTimeout = setTimeout(() => {
+              killMeasuredProcess("SIGKILL");
+            }, timeoutKillGraceMs);
+            forceKillTimeout.unref?.();
           }, params.timeoutMs)
         : null;
     timeout?.unref?.();
@@ -525,6 +564,13 @@ export function runMeasuredCommandLive(params) {
       if (timeout) {
         clearTimeout(timeout);
       }
+      if (timedOut) {
+        killMeasuredProcess("SIGKILL");
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      removeParentSignalHandlers();
       const wallMs = performance.now() - started;
       const finalStatus = status ?? (signal || spawnError ? 1 : 0);
       const finalStderr = [

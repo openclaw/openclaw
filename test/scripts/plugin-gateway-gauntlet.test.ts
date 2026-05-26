@@ -366,6 +366,26 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
   });
 
+  it("cleans parent signal handlers after live measured commands settle", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const before = process.listenerCount("SIGTERM");
+
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", ""],
+      label: "live-signal-cleanup",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(0);
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+  });
+
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
     const row = await runMeasuredCommandLive({
@@ -385,6 +405,40 @@ describe("plugin gateway gauntlet helpers", () => {
     const log = await fs.readFile(row.logPath, "utf8");
     expect(log).toContain("x".repeat(12));
     expect(log).toContain("[stdout truncated after 12 bytes]");
+  });
+
+  it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const markerPath = path.join(repoRoot, "timeout-marker.txt");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          "const marker = process.argv[1];",
+          "fs.writeFileSync(marker, 'start\\n');",
+          "process.on('SIGTERM', () => fs.appendFileSync(marker, 'term\\n'));",
+          "setInterval(() => fs.appendFileSync(marker, 'tick\\n'), 50);",
+        ].join(""),
+        markerPath,
+      ],
+      label: "live-timeout",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeoutKillGraceMs: 100,
+    });
+
+    expect(row.status).toBe(1);
+    expect(row.timedOut).toBe(true);
+    expect(row.spawnError?.code).toBe("ETIMEDOUT");
+    expect(row.wallMs).toBeLessThan(5_000);
+    const afterReturn = await fs.readFile(markerPath, "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 
   it("cleans the isolated run root after a successful dry run", async () => {
