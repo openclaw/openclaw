@@ -184,34 +184,59 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
-// Per-message token pressure is a pure function of the message object's bytes.
-// Messages on the embedded-runner precheck path are append-only and are not
-// mutated in place once added to `activeSession.messages`, so memoize by object
-// identity. WeakMap entries are garbage-collected together with the message,
-// so the cache is bounded by the live transcript and cannot leak.
-const messageTokenPressureCache = new WeakMap<object, number>();
-
-function memoizedMessageTokenPressure(message: AgentMessage): number {
-  if (message !== null && typeof message === "object") {
-    const key = message as unknown as object;
-    const cached = messageTokenPressureCache.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const computed = estimateMessageTokenPressure(message);
-    messageTokenPressureCache.set(key, computed);
-    return computed;
-  }
-  return estimateMessageTokenPressure(message);
-}
-
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
 }): number {
   const historyTokens = params.messages.reduce(
-    (sum, message) => sum + memoizedMessageTokenPressure(message),
+    (sum, message) => sum + estimateMessageTokenPressure(message),
+    0,
+  );
+  const systemTokens =
+    typeof params.systemPrompt === "string" && params.systemPrompt.trim().length > 0
+      ? MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.systemPrompt)
+      : 0;
+  const promptTokens =
+    MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.prompt);
+  return Math.max(0, Math.ceil((historyTokens + systemTokens + promptTokens) * SAFETY_MARGIN));
+}
+
+// Internal append-only variant for the embedded-runner precheck path only.
+//
+// Memoizes per-message token pressure by message object identity using a
+// process-local WeakMap. Safe ONLY when callers treat the message objects as
+// immutable for the cache lifetime — the embedded-runner appends new message
+// identities to `activeSession.messages` and does not in-place mutate prior
+// entries between prompt submissions, so identity is a stable key on that path.
+//
+// This helper is intentionally NOT exported through `src/plugin-sdk/*`. The
+// public `estimateLlmBoundaryTokenPressure` and `shouldPreemptivelyCompactBeforePrompt`
+// helpers continue to recompute fresh per call so plugin SDK callers that
+// reuse and mutate message objects keep their fresh-estimate semantics.
+const appendOnlyMessageTokenPressureCache = new WeakMap<object, number>();
+
+function appendOnlyMemoizedMessageTokenPressure(message: AgentMessage): number {
+  if (message !== null && typeof message === "object") {
+    const key = message as unknown as object;
+    const cached = appendOnlyMessageTokenPressureCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const computed = estimateMessageTokenPressure(message);
+    appendOnlyMessageTokenPressureCache.set(key, computed);
+    return computed;
+  }
+  return estimateMessageTokenPressure(message);
+}
+
+export function estimateAppendOnlyLlmBoundaryTokenPressure(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+}): number {
+  const historyTokens = params.messages.reduce(
+    (sum, message) => sum + appendOnlyMemoizedMessageTokenPressure(message),
     0,
   );
   const systemTokens =

@@ -412,6 +412,7 @@ import {
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
+  estimateAppendOnlyLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -3816,6 +3817,22 @@ export async function runEmbeddedAttempt(
                 contextTokenBudget,
                 reserveTokens,
                 toolResultMaxChars: promptToolResultMaxChars,
+                // messagesForCurrentPrompt is activeSession.messages (append-only
+                // between prompt submissions) optionally followed by a freshly
+                // built runtime-context message. The append-only WeakMap caches
+                // the stable activeSession entries by object identity; the new
+                // per-turn runtime-context message is a cache miss that recomputes
+                // once and is gc-eligible after this turn. The public helper
+                // stays fresh by default; this internal cached estimator is not
+                // re-exported through the plugin SDK.
+                llmBoundaryTokenPressure: {
+                  estimatedPromptTokens: estimateAppendOnlyLlmBoundaryTokenPressure({
+                    messages: messagesForCurrentPrompt,
+                    systemPrompt: systemPromptForHook,
+                    prompt: promptForModel,
+                  }),
+                  source: "transcript_estimate",
+                },
               });
           if (preemptiveCompaction) {
             contextBudgetStatus = buildPrePromptContextBudgetStatus({

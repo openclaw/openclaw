@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
+let estimateAppendOnlyLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateAppendOnlyLlmBoundaryTokenPressure;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
 let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
@@ -15,6 +19,7 @@ beforeAll(async () => {
   vi.resetModules();
   ({
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+    estimateAppendOnlyLlmBoundaryTokenPressure,
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
     estimatePrePromptTokens,
@@ -446,8 +451,8 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
   });
 
-  describe("per-message identity cache", () => {
-    it("returns the same boundary estimate on repeat scans of the same messages", () => {
+  describe("public estimator freshness", () => {
+    it("returns the same boundary estimate on repeat scans of the same unchanged messages", () => {
       const messages: AgentMessage[] = [
         makeAssistantHistory("alpha bravo charlie ".repeat(8)),
         makeToolResultMessage("result one ".repeat(6), "result two ".repeat(4)),
@@ -466,11 +471,13 @@ describe("preemptive-compaction", () => {
       expect(second).toBe(first);
     });
 
-    it("memoizes per message identity so post-call content mutation does not alter the estimate", () => {
-      // Demonstrates the cache: after the first scan, a later in-place mutation of
-      // a content block must NOT shift the boundary estimate, because the message
-      // identity is unchanged and the cache short-circuits the re-scan.
-      // (Production messages are append-only; this guards the cache invariant.)
+    it("re-reads content after in-place mutation so SDK callers see fresh estimates", () => {
+      // estimateLlmBoundaryTokenPressure is re-exported through
+      // src/plugin-sdk/agent-harness-runtime.ts. Plugin SDK callers may reuse
+      // and mutate AgentMessage objects across calls, so the public helper must
+      // always recount from current content. The append-only WeakMap cache lives
+      // on the internal estimateAppendOnlyLlmBoundaryTokenPressure helper, which
+      // is not part of the SDK surface.
       const messages: AgentMessage[] = [
         makeAssistantHistory("baseline content ".repeat(10)),
         makeToolResultMessage("baseline tool result ".repeat(8)),
@@ -489,44 +496,33 @@ describe("preemptive-compaction", () => {
         systemPrompt: "sys",
         prompt: "ping",
       });
-      expect(afterMutation).toBe(baseline);
+      expect(afterMutation).toBeGreaterThan(baseline);
     });
 
-    it("re-counts when a brand-new message identity is appended", () => {
-      const transcript: AgentMessage[] = [makeAssistantHistory("seed message ".repeat(6))];
-      const before = estimateLlmBoundaryTokenPressure({
-        messages: transcript,
+    it("shouldPreemptivelyCompactBeforePrompt recomputes pressure on mutated content by default", () => {
+      const messages: AgentMessage[] = [makeAssistantHistory("seed ".repeat(20))];
+      const before = shouldPreemptivelyCompactBeforePrompt({
+        messages,
         systemPrompt: "sys",
         prompt: "ping",
+        contextTokenBudget: 8_000,
+        reserveTokens: 256,
       });
-      const onlyNew = makeAssistantHistory("freshly appended ".repeat(6));
-      const onlyNewTokens = estimateLlmBoundaryTokenPressure({
-        messages: [onlyNew],
-        systemPrompt: "",
-        prompt: "",
-      });
-      const baseline = estimateLlmBoundaryTokenPressure({
-        messages: [],
+      const assistantContent = (
+        messages[0] as unknown as { content: { type: string; text: string }[] }
+      ).content;
+      assistantContent[0].text = `${assistantContent[0].text} ${"Y".repeat(20_000)}`;
+      const after = shouldPreemptivelyCompactBeforePrompt({
+        messages,
         systemPrompt: "sys",
         prompt: "ping",
+        contextTokenBudget: 8_000,
+        reserveTokens: 256,
       });
-      const after = estimateLlmBoundaryTokenPressure({
-        messages: [...transcript, onlyNew],
-        systemPrompt: "sys",
-        prompt: "ping",
-      });
-      expect(after).toBeGreaterThan(before);
-      // The non-history overhead (system + prompt + SAFETY_MARGIN) is shared,
-      // so the delta lands within a SAFETY_MARGIN-bounded window of the
-      // standalone per-message estimate. Tight upper-bound check guards the
-      // cache from accidentally double-counting on append.
-      expect(after - before).toBeLessThanOrEqual(onlyNewTokens + baseline);
+      expect(after.estimatedPromptTokens).toBeGreaterThan(before.estimatedPromptTokens);
     });
 
-    it("does not double-count when the same message identity appears twice", () => {
-      // An accidental dedup-failure (e.g. cache returning 0 on second hit) is
-      // structurally impossible here because the WeakMap value is the per-
-      // message cost, not a "seen" flag. Test makes that contract explicit.
+    it("recounts duplicate message identities so repeated entries add their bytes", () => {
       const shared = makeAssistantHistory("shared content ".repeat(20));
       const standalone = estimateLlmBoundaryTokenPressure({
         messages: [shared],
@@ -543,48 +539,104 @@ describe("preemptive-compaction", () => {
         systemPrompt: "sys",
         prompt: "ping",
       });
-      // Each copy contributes once. With shared system + prompt + safety margin
-      // amortized once, `doubled - standalone` ≈ `standalone - empty` within
-      // Math.ceil rounding.
       expect(doubled - standalone).toBeGreaterThanOrEqual(standalone - empty - 1);
       expect(doubled - standalone).toBeLessThanOrEqual(standalone - empty + 1);
     });
+  });
 
-    it("preserves precheck route decisions across repeat calls", () => {
-      const messages = [makeAssistantHistory("alpha ".repeat(120))];
-      const first = shouldPreemptivelyCompactBeforePrompt({
+  describe("internal append-only cached estimator", () => {
+    it("matches the fresh public helper on a single scan", () => {
+      const messages: AgentMessage[] = [
+        makeAssistantHistory("identical content ".repeat(8)),
+        makeToolResultMessage("identical tool result ".repeat(6)),
+      ];
+      const fresh = estimateLlmBoundaryTokenPressure({
         messages,
         systemPrompt: "sys",
         prompt: "ping",
-        contextTokenBudget: 4_000,
-        reserveTokens: 256,
       });
-      const second = shouldPreemptivelyCompactBeforePrompt({
+      const cached = estimateAppendOnlyLlmBoundaryTokenPressure({
         messages,
         systemPrompt: "sys",
         prompt: "ping",
-        contextTokenBudget: 4_000,
-        reserveTokens: 256,
       });
-      expect(second.route).toBe(first.route);
-      expect(second.estimatedPromptTokens).toBe(first.estimatedPromptTokens);
-      expect(second.overflowTokens).toBe(first.overflowTokens);
+      expect(cached).toBe(fresh);
+    });
+
+    it("reflects a new message identity appended after a prior scan", () => {
+      const transcript: AgentMessage[] = [makeAssistantHistory("seed message ".repeat(6))];
+      const before = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: transcript,
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const onlyNew = makeAssistantHistory("freshly appended ".repeat(6));
+      const onlyNewTokens = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: [onlyNew],
+        systemPrompt: "",
+        prompt: "",
+      });
+      const baseline = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: [],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const after = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: [...transcript, onlyNew],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      expect(after).toBeGreaterThan(before);
+      expect(after - before).toBeLessThanOrEqual(onlyNewTokens + baseline);
+    });
+
+    it("does not double-count when the same message identity appears twice", () => {
+      const shared = makeAssistantHistory("shared content ".repeat(20));
+      const standalone = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: [shared],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const doubled = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: [shared, shared],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const empty = estimateAppendOnlyLlmBoundaryTokenPressure({
+        messages: [],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      expect(doubled - standalone).toBeGreaterThanOrEqual(standalone - empty - 1);
+      expect(doubled - standalone).toBeLessThanOrEqual(standalone - empty + 1);
     });
 
     it("counts assistant tool-call argument bytes identically on repeat scans", () => {
       const heavyArgs = { payload: "X".repeat(20_000) };
       const messages = [makeAssistantToolCall(heavyArgs)];
-      const cold = estimateLlmBoundaryTokenPressure({
+      const cold = estimateAppendOnlyLlmBoundaryTokenPressure({
         messages,
         systemPrompt: "",
         prompt: "",
       });
-      const warm = estimateLlmBoundaryTokenPressure({
+      const warm = estimateAppendOnlyLlmBoundaryTokenPressure({
         messages,
         systemPrompt: "",
         prompt: "",
       });
       expect(warm).toBe(cold);
+    });
+
+    it("is not re-exported through the plugin SDK surface", () => {
+      // The append-only cached estimator must stay an internal embedded-runner
+      // helper. Reading the SDK file directly guards against an accidental
+      // future re-export through src/plugin-sdk/agent-harness-runtime.ts.
+      const sdkPath = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../../plugin-sdk/agent-harness-runtime.ts",
+      );
+      const sdk = readFileSync(sdkPath, "utf8");
+      expect(sdk).not.toContain("estimateAppendOnlyLlmBoundaryTokenPressure");
     });
   });
 });
