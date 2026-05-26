@@ -56,6 +56,7 @@ import {
   saveConfig,
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
+  updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
@@ -1163,7 +1164,7 @@ export function renderApp(state: AppViewState) {
     formValue: state.configForm,
     originalValue: state.configFormOriginal,
     onRawChange: (next: string) => {
-      state.configRaw = next;
+      updateConfigRawValue(state, next);
     },
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>

@@ -11,6 +11,7 @@ import {
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
+  updateConfigRawValue,
   type ConfigState,
 } from "./config.ts";
 
@@ -197,6 +198,54 @@ describe("applyConfigSnapshot", () => {
 
     expect(state.configFormMode).toBe("raw");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
+  });
+
+  it("does not clobber raw edits while dirty", () => {
+    const state = createState();
+    state.configFormMode = "raw";
+    applyConfigSnapshot(state, {
+      hash: "hash-original",
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
+    });
+
+    updateConfigRawValue(state, '{\n  "gateway": { "mode": "remote" }\n}\n');
+    applyConfigSnapshot(state, {
+      hash: "hash-refreshed",
+      config: { gateway: { mode: "external" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "external" }\n}\n',
+    });
+
+    expect(state.configSnapshot?.hash).toBe("hash-refreshed");
+    expect(state.configDraftBaseHash).toBe("hash-original");
+    expect(state.configRaw).toBe('{\n  "gateway": { "mode": "remote" }\n}\n');
+  });
+});
+
+describe("updateConfigRawValue", () => {
+  it("tracks raw edits as pending changes", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-original",
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: '{\n  "gateway": { "mode": "local" }\n}\n',
+    });
+
+    updateConfigRawValue(state, '{\n  "gateway": { "mode": "remote" }\n}\n');
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configDraftBaseHash).toBe("hash-original");
+
+    updateConfigRawValue(state, '{\n  "gateway": { "mode": "local" }\n}\n');
+
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configDraftBaseHash).toBe("hash-original");
   });
 });
 

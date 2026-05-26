@@ -123,11 +123,11 @@ export function applyConfigSnapshot(
       : editableConfig
         ? serializeConfigForm(editableConfig)
         : state.configRaw;
-  if (!preservePendingChanges || state.configFormMode === "raw") {
+  if (!preservePendingChanges) {
     state.configRaw = rawFromSnapshot;
-  } else if (state.configForm) {
+  } else if (state.configFormMode !== "raw" && state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
-  } else {
+  } else if (state.configFormMode !== "raw") {
     state.configRaw = rawFromSnapshot;
   }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
@@ -388,6 +388,16 @@ export function updateConfigFormValue(
     }
     syncEnabledPluginAllowlist(state, draft, path, value);
   });
+}
+
+export function updateConfigRawValue(state: ConfigState, value: string) {
+  state.configRaw = value;
+  state.configFormDirty = value !== state.configRawOriginal;
+  if (state.configFormDirty) {
+    state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+  } else {
+    state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+  }
 }
 
 export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {
