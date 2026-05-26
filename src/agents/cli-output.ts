@@ -30,15 +30,6 @@ export type CliStreamingDelta = {
   thinkingDelta?: string;
   /** Accumulated thinking text so far; set whenever `thinkingDelta` is present. */
   thinkingText?: string;
-  /**
-   * When true, the emitter is signalling that `text` is a full replacement
-   * — the live-chat merger should use `text` even when it is a strict
-   * prefix of its previousText (which the default "rollback" branch would
-   * otherwise treat as stale and ignore). Used by the rolling-timer
-   * terminal-cleanup path where the new text is shorter than what's
-   * already been shown.
-   */
-  replacement?: boolean;
 };
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -676,18 +667,18 @@ export function createCliJsonlStreamingParser(params: {
   };
 
   // For terminal paths (result, finish) where no follow-up text delta is
-  // coming: emit a replacement delta so the live-chat merger replaces the
-  // stale `_ Ns ..._` tick that was last sent. The new `text` is a strict
-  // prefix of the previously emitted text (timer suffix stripped) — the
-  // merger's default rollback branch would keep the longer previousText,
-  // leaving the timer visible. Set `replacement: true` to bypass that
-  // branch and force the merger to honour the shorter text.
+  // coming: re-emit the full assistant text with the `_ Ns ..._` tick
+  // stripped, so the last-sent timer line disappears. We emit full `text`
+  // with an empty `delta`; the assistant-stream bridge forwards full text
+  // (it does not append deltas), so the live-chat merger replaces by `text`
+  // and the shorter, timer-free text wins. No bespoke replacement signal is
+  // needed — this rides the existing full-text replace contract.
   const emitTickReplacementIfPainted = (): void => {
     if (toolTickStart < 0) {
       return;
     }
     stripToolTick();
-    params.onAssistantDelta({ text: assistantText, delta: "", replacement: true });
+    params.onAssistantDelta({ text: assistantText, delta: "" });
   };
 
   const trackClaudeToolUse = createClaudeToolUseTracker({

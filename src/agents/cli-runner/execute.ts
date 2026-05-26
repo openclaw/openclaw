@@ -499,7 +499,7 @@ export async function executePreparedCliRun(
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText, replacement }) => {
+            onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText }) => {
               if (thinkingDelta !== undefined && thinkingText !== undefined) {
                 emitAgentEvent({
                   runId: params.runId,
@@ -520,11 +520,6 @@ export async function executePreparedCliRun(
                     delta,
                     context.backendResolved.textTransforms?.output,
                   ),
-                  // Forward the replacement signal so live-chat's merger
-                  // honours intentionally-shorter assistant text (e.g.
-                  // rolling-timer terminal cleanup) instead of treating
-                  // it as a stale partial-chunk rollback.
-                  ...(replacement ? { replacement: true } : {}),
                 },
               });
             },
@@ -594,7 +589,7 @@ export async function executePreparedCliRun(
               backend,
               providerId: context.backendResolved.id,
               shouldInjectToolInlineMarkers: shouldInjectToolInlineMarkersHeadless,
-              onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText, replacement }) => {
+              onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText }) => {
                 if (thinkingDelta !== undefined && thinkingText !== undefined) {
                   emitAgentEvent({
                     runId: params.runId,
@@ -615,8 +610,6 @@ export async function executePreparedCliRun(
                       delta,
                       context.backendResolved.textTransforms?.output,
                     ),
-                    // See live-session branch above for replacement semantics.
-                    ...(replacement ? { replacement: true } : {}),
                   },
                 });
               },
