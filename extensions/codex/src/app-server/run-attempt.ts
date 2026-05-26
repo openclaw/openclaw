@@ -3676,8 +3676,8 @@ export async function runCodexAppServerAttempt(
     cancel: () => runAbortController.abort("cancelled"),
     abort: () => runAbortController.abort("aborted"),
   };
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+  setActiveEmbeddedRun(activeSessionId, handle, contextSessionKey);
   void mirrorPromptAtTurnStartBestEffort({
     params: activeRunAttemptParams,
     agentId: sessionAgentId,
@@ -3983,7 +3983,7 @@ export async function runCodexAppServerAttempt(
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueue?.cancel();
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+    clearActiveEmbeddedRun(activeSessionId, handle, contextSessionKey);
   }
 }
 
