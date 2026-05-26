@@ -129,8 +129,11 @@ function buildXiaomiKeyMismatchMessage(params: {
 }): string | undefined {
   const normalized = params.actualKey.trim().toLowerCase();
   const expectedPrefix = params.expectedKind === "payg" ? "sk-" : "tp-";
-  const oppositeKind = params.expectedKind === "payg" ? "token-plan" : "payg";
+  const kindLabel = params.expectedKind === "payg" ? "pay-as-you-go" : "Token Plan";
 
+  if (normalized.startsWith(expectedPrefix)) {
+    return undefined;
+  }
   if (params.expectedKind === "payg" && normalized.startsWith("tp-")) {
     return (
       "This looks like a Xiaomi MiMo Token Plan key (tp-...). " +
@@ -144,13 +147,10 @@ function buildXiaomiKeyMismatchMessage(params: {
       `Re-run onboarding with --auth-choice xiaomi-api-key or pass ${PAYG_FLAG_NAME}.`
     );
   }
-  if (!normalized.startsWith(expectedPrefix)) {
-    return (
-      `Xiaomi MiMo ${oppositeKind === "payg" ? "pay-as-you-go" : "Token Plan"} keys ` +
-      `must start with "${expectedPrefix}". The entered key does not match the expected format.`
-    );
-  }
-  return undefined;
+  return (
+    `Xiaomi MiMo ${kindLabel} keys must start with "${expectedPrefix}". ` +
+    "The entered key does not match the expected format."
+  );
 }
 
 function assertCompatibleXiaomiKey(params: {

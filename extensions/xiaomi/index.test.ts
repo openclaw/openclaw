@@ -368,7 +368,11 @@ describe("xiaomi provider plugin", () => {
         }),
         toApiKeyCredential: vi.fn(),
       } as never),
-    ).rejects.toThrow("This looks like a Xiaomi MiMo Token Plan key");
+    ).rejects.toThrow(
+      "This looks like a Xiaomi MiMo Token Plan key (tp-...). " +
+        "Re-run onboarding with one of: --auth-choice xiaomi-token-plan-cn, " +
+        "--auth-choice xiaomi-token-plan-sgp, or --auth-choice xiaomi-token-plan-ams.",
+    );
   });
 
   it("rejects pay-as-you-go keys on Token Plan auth choices", async () => {
@@ -391,7 +395,10 @@ describe("xiaomi provider plugin", () => {
         }),
         toApiKeyCredential: vi.fn(),
       } as never),
-    ).rejects.toThrow("This looks like a Xiaomi MiMo pay-as-you-go key");
+    ).rejects.toThrow(
+      "This looks like a Xiaomi MiMo pay-as-you-go key (sk-...). " +
+        `Re-run onboarding with --auth-choice xiaomi-api-key or pass --xiaomi-api-key.`,
+    );
   });
 
   it("rejects keys that do not start with sk- on the pay-as-you-go auth choice", async () => {
@@ -414,7 +421,9 @@ describe("xiaomi provider plugin", () => {
         }),
         toApiKeyCredential: vi.fn(),
       } as never),
-    ).rejects.toThrow('must start with "sk-"');
+    ).rejects.toThrow(
+      'Xiaomi MiMo pay-as-you-go keys must start with "sk-". The entered key does not match the expected format.',
+    );
   });
 
   it("rejects keys that do not start with tp- on Token Plan auth choices", async () => {
@@ -437,7 +446,9 @@ describe("xiaomi provider plugin", () => {
         }),
         toApiKeyCredential: vi.fn(),
       } as never),
-    ).rejects.toThrow('must start with "tp-"');
+    ).rejects.toThrow(
+      'Xiaomi MiMo Token Plan keys must start with "tp-". The entered key does not match the expected format.',
+    );
   });
 
   it("owns OpenAI-compatible replay policy", async () => {
