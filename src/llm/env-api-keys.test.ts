@@ -60,4 +60,20 @@ describe("getEnvApiKey", () => {
 
     expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
   });
+
+  it("does not cache missing Google Vertex ADC credentials", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-vertex-adc-"));
+    tempDirs.push(dir);
+    const credentialsPath = join(dir, "application_default_credentials.json");
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    setEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    setEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+
+    vi.resetModules();
+    const { getEnvApiKey } = await import("./env-api-keys.js");
+
+    expect(getEnvApiKey("google-vertex")).toBeUndefined();
+    await writeFile(credentialsPath, "{}", "utf-8");
+    expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
+  });
 });

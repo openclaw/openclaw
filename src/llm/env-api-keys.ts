@@ -101,7 +101,7 @@ function getEnvValue(key: string): string | undefined {
   return getProcessEnv()?.[key] || getProcEnv(key);
 }
 
-let cachedVertexAdcCredentialsExists: boolean | null = null;
+let cachedVertexAdcCredentialsExists: true | null = null;
 
 function hasVertexAdcCredentials(): boolean {
   if (cachedVertexAdcCredentialsExists === null) {
@@ -122,15 +122,17 @@ function hasVertexAdcCredentials(): boolean {
     // Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
     const gacPath = getEnvValue("GOOGLE_APPLICATION_CREDENTIALS");
     if (gacPath) {
-      cachedVertexAdcCredentialsExists = nodeExistsSync(gacPath);
+      cachedVertexAdcCredentialsExists = nodeExistsSync(gacPath) ? true : null;
     } else {
       // Fall back to default ADC path (lazy evaluation)
       cachedVertexAdcCredentialsExists = nodeExistsSync(
         nodeJoin(nodeHomedir(), ".config", "gcloud", "application_default_credentials.json"),
-      );
+      )
+        ? true
+        : null;
     }
   }
-  return cachedVertexAdcCredentialsExists;
+  return cachedVertexAdcCredentialsExists === true;
 }
 
 function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
