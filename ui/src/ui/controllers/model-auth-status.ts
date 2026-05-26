@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelAuthStatusResult } from "../types.ts";
 
 const FALLBACK: ModelAuthStatusResult = { ts: 0, providers: [] };
+const EMPTY_USAGE_RETRY_DELAY_MS = 750;
 
 export type ModelAuthStatusState = {
   client: GatewayBrowserClient | null;
@@ -10,6 +11,26 @@ export type ModelAuthStatusState = {
   modelAuthStatusResult: ModelAuthStatusResult | null;
   modelAuthStatusError: string | null;
 };
+
+function hasUsageWindow(result: ModelAuthStatusResult): boolean {
+  return result.providers.some((provider) => (provider.usage?.windows.length ?? 0) > 0);
+}
+
+function shouldRetryEmptyUsage(result: ModelAuthStatusResult): boolean {
+  if (hasUsageWindow(result)) {
+    return false;
+  }
+  return result.providers.some((provider) =>
+    provider.profiles.some((profile) => profile.type === "oauth" || profile.type === "token"),
+  );
+}
+
+async function waitForEmptyUsageRetry(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
 
 /**
  * Fetch the current auth-status snapshot. Rethrows transport errors so the
@@ -31,7 +52,7 @@ export async function loadModelAuthStatus(
 
 export async function loadModelAuthStatusState(
   state: ModelAuthStatusState,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; emptyUsageRetryDelayMs?: number },
 ): Promise<void> {
   if (!state.client || !state.connected) {
     return;
@@ -42,7 +63,17 @@ export async function loadModelAuthStatusState(
   state.modelAuthStatusLoading = true;
   state.modelAuthStatusError = null;
   try {
-    state.modelAuthStatusResult = await loadModelAuthStatus(state.client, opts);
+    const first = await loadModelAuthStatus(state.client, opts);
+    if (shouldRetryEmptyUsage(first)) {
+      await waitForEmptyUsageRetry(opts?.emptyUsageRetryDelayMs ?? EMPTY_USAGE_RETRY_DELAY_MS);
+      try {
+        state.modelAuthStatusResult = await loadModelAuthStatus(state.client, { refresh: true });
+      } catch {
+        state.modelAuthStatusResult = first;
+      }
+    } else {
+      state.modelAuthStatusResult = first;
+    }
   } catch (err) {
     state.modelAuthStatusError = err instanceof Error ? err.message : String(err);
     state.modelAuthStatusResult = FALLBACK;

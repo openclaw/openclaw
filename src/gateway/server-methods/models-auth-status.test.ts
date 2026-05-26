@@ -364,6 +364,46 @@ describe("models.authStatus", () => {
     expect(result.providers[0].usage).toBeUndefined();
   });
 
+  it("preserves previous quota windows when a refresh returns an empty usage snapshot", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
+    mocks.loadProviderUsageSummary
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai-codex",
+            displayName: "Codex",
+            plan: "pro",
+            windows: [{ label: "5h", usedPercent: 8, resetAt: 1_700_000_000_000 }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai-codex",
+            displayName: "Codex",
+            windows: [],
+          },
+        ],
+      });
+
+    const first = createOptions();
+    await handler(first);
+    const [, firstPayload] = firstRespondCall(first) ?? [];
+    expect((firstPayload as ModelAuthStatusResult).providers[0]?.usage?.windows).toHaveLength(1);
+
+    const second = createOptions({ refresh: true });
+    await handler(second);
+    const [, secondPayload] = firstRespondCall(second) ?? [];
+    const result = secondPayload as ModelAuthStatusResult;
+    expect(result.providers[0]?.usage).toEqual({
+      plan: "pro",
+      windows: [{ label: "5h", usedPercent: 8, resetAt: 1_700_000_000_000 }],
+    });
+  });
+
   it("does not leak secret-looking fields from upstream profile data", async () => {
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,

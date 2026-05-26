@@ -85,6 +85,37 @@ export type ModelAuthLogoutResult = {
 const CACHE_TTL_MS = 60_000;
 let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
 
+function preserveCachedUsageWindows(
+  next: ModelAuthStatusResult,
+  previous: ModelAuthStatusResult | null,
+): ModelAuthStatusResult {
+  if (!previous) {
+    return next;
+  }
+  const previousByProvider = new Map(
+    previous.providers.map((provider) => [provider.provider, provider]),
+  );
+  let changed = false;
+  const providers = next.providers.map((provider) => {
+    if ((provider.usage?.windows.length ?? 0) > 0) {
+      return provider;
+    }
+    const previousProvider = previousByProvider.get(provider.provider);
+    if ((previousProvider?.usage?.windows.length ?? 0) === 0) {
+      return provider;
+    }
+    changed = true;
+    return {
+      ...provider,
+      usage: {
+        windows: previousProvider?.usage?.windows ?? [],
+        plan: provider.usage?.plan ?? previousProvider?.usage?.plan,
+      },
+    };
+  });
+  return changed ? { ...next, providers } : next;
+}
+
 /**
  * Invalidate the in-memory cache. Reserved for future gateway-side auth
  * mutation handlers (login, logout, token rotation) so the next read returns
@@ -465,7 +496,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const providers = authHealth.providers.map((prov) =>
         mapProvider(prov, usageByProvider, configured.expectsOAuth),
       );
-      const result: ModelAuthStatusResult = { ts: now, providers };
+      const result = preserveCachedUsageWindows({ ts: now, providers }, cached?.result ?? null);
       cached = { ts: now, result };
       respond(true, result, undefined);
     } catch (err) {
