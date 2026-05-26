@@ -14,7 +14,7 @@ import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
 import { receiveBrokerInboundEvent } from "./runtime.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
-const INBOUND_PATH = "/api/v1/channel-broker/inbound";
+const INBOUND_PATH = "/channel-broker/inbound";
 const SIGNATURE_HEADER = "x-openclaw-broker-signature";
 const TIMESTAMP_HEADER = "x-openclaw-broker-timestamp";
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;

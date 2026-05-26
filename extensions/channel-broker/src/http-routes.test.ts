@@ -202,7 +202,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(registerHttpRoute).toHaveBeenCalledWith(
       expect.objectContaining({
-        path: "/api/v1/channel-broker/inbound",
+        path: "/channel-broker/inbound",
         auth: "plugin",
         match: "exact",
         handler: expect.any(Function),
