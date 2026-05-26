@@ -36,7 +36,7 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
-    userMessageForPersistence?: PersistedUserTurnMessage;
+    preparedUserTurnMessage?: PersistedUserTurnMessage;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
@@ -54,7 +54,7 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
-  let pendingUserMessageForPersistence = opts?.userMessageForPersistence;
+  let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   const beforeMessageWrite = (event: {
     message: import("@earendil-works/pi-agent-core").AgentMessage;
   }) => {
@@ -108,13 +108,13 @@ export function guardSessionManager(
     sessionKey: opts?.sessionKey,
     transformMessageForPersistence: (message) => {
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
-      const prepared = pendingUserMessageForPersistence;
+      const prepared = pendingPreparedUserTurnMessage;
       const merged = mergePreparedUserTurnMessageForRuntime({
         runtimeMessage: withProvenance,
         ...(prepared ? { preparedMessage: prepared } : {}),
       });
       if (merged !== withProvenance) {
-        pendingUserMessageForPersistence = undefined;
+        pendingPreparedUserTurnMessage = undefined;
       }
       return merged;
     },

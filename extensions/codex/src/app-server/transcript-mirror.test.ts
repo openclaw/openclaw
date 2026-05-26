@@ -66,14 +66,16 @@ describe("buildCodexUserPromptMessage", () => {
     const message = buildCodexUserPromptMessage({
       prompt: "[Mon 2026-05-25 19:14 GMT+1] What is in this image?",
       messageChannel: "webchat",
-      userMessageForPersistence: {
-        role: "user",
-        content: "What is in this image?",
-        timestamp: 1779732875151,
-        MediaPath: "/tmp/image.png",
-        MediaPaths: ["/tmp/image.png"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
+      userTurnTranscriptRecorder: {
+        message: {
+          role: "user",
+          content: "What is in this image?",
+          timestamp: 1779732875151,
+          MediaPath: "/tmp/image.png",
+          MediaPaths: ["/tmp/image.png"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png"],
+        },
       },
     } as Parameters<typeof buildCodexUserPromptMessage>[0]);
 

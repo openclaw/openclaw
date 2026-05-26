@@ -34,7 +34,7 @@ import {
 } from "../../routing/session-key.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
-  buildPersistedUserTurnMessage,
+  createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
@@ -1158,13 +1158,28 @@ export async function runPreparedReply(
           mediaOnlyText: "[User sent media without caption]",
         }
       : undefined);
-  const userMessageForPersistence = userTurnInput
-    ? buildPersistedUserTurnMessage(userTurnInput)
-    : undefined;
+  const userTurnTranscriptRecorder =
+    opts?.userTurnTranscriptRecorder ??
+    (userTurnInput
+      ? createUserTurnTranscriptRecorder({
+          input: userTurnInput,
+          target: () => ({
+            sessionId: preparedSessionState.sessionId,
+            sessionKey: sessionKey ?? preparedSessionState.sessionId,
+            sessionEntry: preparedSessionState.sessionEntry,
+            ...(sessionStore ? { sessionStore } : {}),
+            ...(storePath ? { storePath } : {}),
+            agentId,
+            cwd: workspaceDir,
+            config: cfg,
+          }),
+          errorContext: "reply user turn transcript",
+        })
+      : undefined);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
-    ...(userMessageForPersistence ? { userMessageForPersistence } : {}),
+    ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),

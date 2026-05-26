@@ -693,6 +693,8 @@ export function createFollowupRunner(params: {
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
+            const userTurnTranscriptRecorder =
+              effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
             const notifyUserMessagePersisted = () => {
               queuedUserMessagePersistedAcrossFallback = true;
             };
@@ -726,11 +728,11 @@ export function createFollowupRunner(params: {
                     config: runtimeConfig,
                     prompt: queued.prompt,
                     transcriptPrompt: queued.transcriptPrompt,
-                    userTurnTranscript: effectiveQueued.userMessageForPersistence
-                      ? { message: effectiveQueued.userMessageForPersistence }
+                    userTurnTranscript: userTurnTranscriptRecorder?.message
+                      ? { message: userTurnTranscriptRecorder.message }
                       : { text: effectiveQueued.transcriptPrompt ?? effectiveQueued.prompt },
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    userTurnTranscriptRecorder: opts?.userTurnTranscriptRecorder,
+                    userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundContext: queued.currentInboundContext,
@@ -822,8 +824,7 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
-                userMessageForPersistence: effectiveQueued.userMessageForPersistence,
-                userTurnTranscriptRecorder: opts?.userTurnTranscriptRecorder,
+                userTurnTranscriptRecorder,
                 currentInboundEventKind: queued.currentInboundEventKind,
                 currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,

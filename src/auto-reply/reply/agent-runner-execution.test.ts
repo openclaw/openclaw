@@ -3,6 +3,10 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -271,6 +275,14 @@ function createFollowupRun(): FollowupRun {
       blockReplyBreak: "message_end",
     },
   } as unknown as FollowupRun;
+}
+
+function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
+  return createUserTurnTranscriptRecorder({
+    message,
+    target: { transcriptPath: "/tmp/session.jsonl" },
+    updateMode: "none",
+  });
 }
 
 function createMockReplyOperation(): {
@@ -1783,7 +1795,7 @@ describe("runAgentTurnWithFallback", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
-    followupRun.userMessageForPersistence = {
+    const preparedUserTurnMessage = {
       role: "user",
       content: "describe this",
       MediaPath: "/tmp/image.png",
@@ -1791,6 +1803,7 @@ describe("runAgentTurnWithFallback", () => {
       MediaType: "image/png",
       MediaTypes: ["image/png"],
     } as never;
+    followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder(preparedUserTurnMessage);
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       sessionFile: "/tmp/session.jsonl",
@@ -1813,7 +1826,7 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       agentId: "agent",
       sessionId: "session",
-      userTurnTranscript: { message: followupRun.userMessageForPersistence },
+      userTurnTranscript: { message: preparedUserTurnMessage },
       suppressNextUserMessagePersistence: false,
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");

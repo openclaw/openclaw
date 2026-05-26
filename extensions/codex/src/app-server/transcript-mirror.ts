@@ -46,7 +46,7 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   const sourceChannel = normalizeOptionalString(
     params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
   );
-  const preparedUserMessage = params.userMessageForPersistence;
+  const preparedUserMessage = params.userTurnTranscriptRecorder?.message;
   if (preparedUserMessage) {
     return {
       role: "user",

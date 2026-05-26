@@ -5,6 +5,10 @@ import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-ru
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -58,6 +62,14 @@ function joinPromptSections(...sections: Array<string | undefined>): string {
     }
   }
   return promptSections.join("\n\n");
+}
+
+function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
+  return createUserTurnTranscriptRecorder({
+    message,
+    target: { transcriptPath: "/tmp/session.jsonl" },
+    updateMode: "none",
+  });
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -548,7 +560,7 @@ function createQueuedRun(
 
 describe("createFollowupRunner reply-lane admission", () => {
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
-    const userMessageForPersistence = {
+    const preparedUserTurnMessage = {
       role: "user",
       content: "describe this",
       MediaPath: "/tmp/image.png",
@@ -567,7 +579,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     await runner(
       createQueuedRun({
-        userMessageForPersistence,
+        userTurnTranscriptRecorder: createTestUserTurnRecorder(preparedUserTurnMessage),
         run: {
           provider: "anthropic",
           model: "claude",
@@ -577,7 +589,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
-    expect(call.userMessageForPersistence).toBe(userMessageForPersistence);
+    expect(call.userTurnTranscriptRecorder?.message).toBe(preparedUserTurnMessage);
   });
 
   it("runs queued followups with the session id returned by admission", async () => {
@@ -874,7 +886,7 @@ describe("createFollowupRunner runtime config", () => {
         },
       },
     };
-    const userMessageForPersistence = {
+    const preparedUserTurnMessage = {
       role: "user",
       content: "describe this",
       MediaPath: "/tmp/image.png",
@@ -894,7 +906,7 @@ describe("createFollowupRunner runtime config", () => {
 
     await runner(
       createQueuedRun({
-        userMessageForPersistence,
+        userTurnTranscriptRecorder: createTestUserTurnRecorder(preparedUserTurnMessage),
         run: {
           config: runtimeConfig,
           provider: "anthropic",
@@ -905,7 +917,7 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
-    expect(mediaCall.userTurnTranscript).toEqual({ message: userMessageForPersistence });
+    expect(mediaCall.userTurnTranscript).toEqual({ message: preparedUserTurnMessage });
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {

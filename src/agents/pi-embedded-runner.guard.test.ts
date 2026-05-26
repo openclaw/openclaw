@@ -98,7 +98,7 @@ describe("guardSessionManager integration", () => {
 
   it("applies prepared user persistence fields to the next real user message", () => {
     const sm = guardSessionManager(SessionManager.inMemory(), {
-      userMessageForPersistence: {
+      preparedUserTurnMessage: {
         role: "user",
         content: "What is in this image?",
         MediaPath: "/tmp/a.png",
@@ -135,7 +135,7 @@ describe("guardSessionManager integration", () => {
 
   it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
     const sm = guardSessionManager(SessionManager.inMemory(), {
-      userMessageForPersistence: {
+      preparedUserTurnMessage: {
         role: "user",
         content: "visible prompt",
         MediaPath: "/tmp/a.png",
