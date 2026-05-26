@@ -1,0 +1,94 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Context, Model, Usage } from "../../llm/types.js";
+import { streamProxy } from "./proxy.js";
+
+const usage: Usage = {
+  input: 1,
+  output: 2,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 3,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+const model: Model = {
+  id: "test-model",
+  provider: "test",
+  api: "openai-responses",
+  maxTokens: 1024,
+};
+
+const context: Context = {
+  messages: [{ role: "user", content: "hello" }],
+};
+
+function responseFromText(text: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+        controller.close();
+      },
+    }),
+    { status: 200 },
+  );
+}
+
+describe("streamProxy", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("flushes a final SSE frame without a trailing newline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromText(
+          `data: ${JSON.stringify({
+            type: "done",
+            reason: "stop",
+            usage,
+          })}`,
+        ),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("done");
+    await expect(stream.result()).resolves.toMatchObject({
+      role: "assistant",
+      stopReason: "stop",
+      usage,
+    });
+  });
+
+  it("returns an error result when EOF arrives without a terminal event", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromText(`data: ${JSON.stringify({ type: "start" })}`)),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy stream ended before terminal event",
+    });
+  });
+});
