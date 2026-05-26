@@ -60,33 +60,34 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
-  it("sends explicit chat media-only payloads through send-attachment auto transport", async () => {
+  it("attaches a media receipt after attachment resolution", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi
-      .fn()
-      .mockResolvedValueOnce({ messageId: "p:0/media-guid", transferGuid: "transfer-1" });
 
     const result = await sendMessageIMessage("chat_guid:chat-1", "", {
       config: IMESSAGE_TEST_CFG,
       client,
       mediaUrl: "/tmp/image.png",
       resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
-      runCliJson,
     });
 
-    expect(result.messageId).toBe("p:0/media-guid");
+    expect(result.messageId).toBe("12345");
     expect(result.sentText).toBe("");
     expect(result.echoText).toBe("<media:image>");
-    expect(result.receipt.primaryPlatformMessageId).toBe("p:0/media-guid");
-    expect(result.receipt.platformMessageIds).toEqual(["p:0/media-guid"]);
-    expect(client.request).not.toHaveBeenCalled();
-    expect(runCliJson.mock.calls).toEqual([
-      [["send-attachment", "--chat", "chat-1", "--file", "/tmp/image.png", "--transport", "auto"]],
-    ]);
+    expect(result.receipt.primaryPlatformMessageId).toBe("12345");
+    expect(result.receipt.platformMessageIds).toEqual(["12345"]);
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_guid: "chat-1",
+        file: "/tmp/image.png",
+        text: "",
+      }),
+      expect.any(Object),
+    );
     expect(result.receipt.raw).toEqual([
       {
         channel: "imessage",
-        messageId: "p:0/media-guid",
+        messageId: "12345",
         conversationId: "chat-1",
         meta: { targetKind: "chat_guid" },
       },
@@ -94,74 +95,17 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts).toEqual([
       {
         index: 0,
-        platformMessageId: "p:0/media-guid",
+        platformMessageId: "12345",
         kind: "media",
         raw: {
           channel: "imessage",
-          messageId: "p:0/media-guid",
+          messageId: "12345",
           conversationId: "chat-1",
           meta: { targetKind: "chat_guid" },
         },
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
-  });
-
-  it("resolves chat_id media-only payloads before using send-attachment", async () => {
-    const client = createClient({ message_id: 12345 });
-    const runCliJson = vi
-      .fn()
-      .mockResolvedValueOnce({ guid: "any;+;group-guid" })
-      .mockResolvedValueOnce({ messageId: "p:0/media-guid" });
-
-    const result = await sendMessageIMessage("chat_id:42", "", {
-      config: IMESSAGE_TEST_CFG,
-      client,
-      mediaUrl: "/tmp/image.png",
-      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
-      runCliJson,
-    });
-
-    expect(result.messageId).toBe("p:0/media-guid");
-    expect(client.request).not.toHaveBeenCalled();
-    expect(runCliJson.mock.calls).toEqual([
-      [["group", "--chat-id", "42"]],
-      [
-        [
-          "send-attachment",
-          "--chat",
-          "any;+;group-guid",
-          "--file",
-          "/tmp/image.png",
-          "--transport",
-          "auto",
-        ],
-      ],
-    ]);
-  });
-
-  it("keeps DM handle media sends on the existing rpc send path", async () => {
-    const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn();
-
-    await sendMessageIMessage("+15551234567", "", {
-      config: IMESSAGE_TEST_CFG,
-      client,
-      mediaUrl: "/tmp/image.png",
-      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
-      runCliJson,
-    });
-
-    expect(runCliJson).not.toHaveBeenCalled();
-    expect(client.request).toHaveBeenCalledWith(
-      "send",
-      expect.objectContaining({
-        to: "+15551234567",
-        file: "/tmp/image.png",
-        text: "",
-      }),
-      expect.any(Object),
-    );
   });
 
   it("preserves literal media placeholder text when no attachment is sent", async () => {
