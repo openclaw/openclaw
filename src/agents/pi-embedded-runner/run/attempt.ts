@@ -78,8 +78,10 @@ import {
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT,
   buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
+  hasReachedBootstrapPersistLimit,
   isWorkspaceBootstrapPending,
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
@@ -4700,14 +4702,26 @@ export async function runEmbeddedAttempt(
               compactionOccurredThisAttempt,
             })
           ) {
-            try {
-              activeSessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
-                timestamp: Date.now(),
-                runId: params.runId,
-                sessionId: params.sessionId,
-              });
-            } catch (entryErr) {
-              log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
+            // Doomloop circuit breaker (#63998): if a session has already
+            // persisted the bootstrap-context marker many times over recent
+            // restarts the gateway is almost certainly crash-restart-looping
+            // (transcript reload → context overflow → crash → restart → append).
+            // Skip the marker so the file stops growing on every cycle.
+            const reachedLimit = await hasReachedBootstrapPersistLimit(params.sessionFile);
+            if (reachedLimit) {
+              log.warn(
+                `bootstrap-context append skipped — circuit breaker tripped (>=${FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT} recent entries, likely transcript reload loop) sessionId=${params.sessionId}`,
+              );
+            } else {
+              try {
+                activeSessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+                  timestamp: Date.now(),
+                  runId: params.runId,
+                  sessionId: params.sessionId,
+                });
+              } catch (entryErr) {
+                log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
+              }
             }
           }
 

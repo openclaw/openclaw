@@ -30,6 +30,15 @@ type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
+// Doomloop circuit breaker (#63998): if a single session has already persisted
+// this many bootstrap-context:full entries in its recent tail, every following
+// attempt to append another one is a strong signal that the gateway is in a
+// crash-restart loop appending the bootstrap header on every reload. We stop
+// adding to the file so the transcript size stops growing, the load no longer
+// blows past the context cap, and the session can be recovered manually. The
+// limit is intentionally generous compared to the issue report (1,635 entries
+// observed) while still trimming the death-spiral.
+export const FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT = 10;
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
 const seenBootstrapWarnings = new Set<string>();
 const bootstrapWarningOrder: string[] = [];
@@ -135,6 +144,75 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
   } catch {
     return false;
   }
+}
+
+export async function countRecentCompletedBootstrapTurns(
+  sessionFile: string,
+  limit: number = FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT,
+): Promise<number> {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return 0;
+  }
+  try {
+    const stat = await fs.lstat(sessionFile);
+    if (stat.isSymbolicLink()) {
+      return 0;
+    }
+    const fh = await fs.open(sessionFile, "r");
+    try {
+      const bytesToRead = Math.min(stat.size, CONTINUATION_SCAN_MAX_TAIL_BYTES);
+      if (bytesToRead <= 0) {
+        return 0;
+      }
+      const start = stat.size - bytesToRead;
+      const buffer = Buffer.allocUnsafe(bytesToRead);
+      const { bytesRead } = await fh.read(buffer, 0, bytesToRead, start);
+      let text = buffer.toString("utf-8", 0, bytesRead);
+      if (start > 0) {
+        const firstNewline = text.indexOf("\n");
+        if (firstNewline === -1) {
+          return 0;
+        }
+        text = text.slice(firstNewline + 1);
+      }
+      const records = text
+        .split(/\r?\n/u)
+        .filter((line) => line.trim().length > 0)
+        .slice(-CONTINUATION_SCAN_MAX_RECORDS);
+      let count = 0;
+      for (let i = records.length - 1; i >= 0 && count < limit; i--) {
+        const line = records[i];
+        if (!line) {
+          continue;
+        }
+        let entry: unknown;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const record = entry as { type?: string; customType?: string } | null | undefined;
+        if (
+          record?.type === "custom" &&
+          record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
+        ) {
+          count++;
+        }
+      }
+      return count;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return 0;
+  }
+}
+
+export async function hasReachedBootstrapPersistLimit(
+  sessionFile: string,
+  limit: number = FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT,
+): Promise<boolean> {
+  return (await countRecentCompletedBootstrapTurns(sessionFile, limit)) >= limit;
 }
 
 export function makeBootstrapWarn(params: {
