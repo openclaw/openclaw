@@ -210,8 +210,9 @@ enum TalkModeGatewayConfigParser {
         let defaultVoiceId = Self.firstString(activeConfig, keys: ["voiceId", "voice"])
         let defaultOutputFormat = Self.firstString(activeConfig, keys: ["outputFormat"])
         let realtime = talk?["realtime"]?.dictionaryValue
-        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
         let realtimeProviders = realtime?["providers"]?.dictionaryValue
+        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
+            ?? Self.singleRealtimeProviderId(realtimeProviders)
         let realtimeProviderConfig = Self.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
@@ -272,6 +273,12 @@ enum TalkModeGatewayConfigParser {
             return .realtimeClient
         }
         return .native
+    }
+
+    private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider?.isEmpty == false ? provider : nil
     }
 
     private static func realtimeProviderConfig(

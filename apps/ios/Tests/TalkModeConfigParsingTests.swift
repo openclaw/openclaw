@@ -48,6 +48,46 @@ import Testing
         #expect(parsed.realtimeVoiceId == "marin")
     }
 
+    @Test func infersRealtimeProviderWhenProviderMapHasSingleEntry() {
+        let config: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                    "providers": [
+                        "openai": [
+                            "model": "gpt-realtime-2",
+                        ],
+                    ],
+                ],
+            ],
+        ]
+
+        let parsed = TalkModeGatewayConfigParser.parse(
+            config: config,
+            defaultProvider: "elevenlabs",
+            defaultModelIdFallback: "eleven_v3",
+            defaultRealtimeModelIdFallback: "gpt-realtime-2",
+            defaultSilenceTimeoutMs: 900)
+
+        #expect(parsed.executionMode == .realtimeClient)
+        #expect(parsed.realtimeProvider == "openai")
+        #expect(parsed.realtimeModelId == "gpt-realtime-2")
+    }
+
+    @Test func formatsGenericRealtimeVoiceModeWithoutNativeProviderFallback() {
+        let descriptor = TalkVoiceModeDescriptorBuilder.build(
+            providerId: "realtime",
+            providerLabel: "Realtime Voice",
+            modelId: "gpt-realtime-2",
+            voiceId: nil,
+            transport: "webrtc",
+            isRealtime: true)
+
+        #expect(descriptor.title == "Realtime Voice")
+        #expect(descriptor.subtitle == "Native WebRTC • gpt-realtime-2")
+    }
+
     @Test func defaultsOpenAIRealtimeModelWhenProviderOmitsModel() {
         let config: [String: Any] = [
             "talk": [

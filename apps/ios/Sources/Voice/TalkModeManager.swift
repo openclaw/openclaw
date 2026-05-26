@@ -1543,6 +1543,7 @@ final class TalkModeManager: NSObject {
         TalkSystemSpeechSynthesizer.shared.stop()
         self.cancelIncrementalSpeech()
         self.isSpeaking = false
+        self.restoreConfiguredVoiceModeDescriptor()
     }
 
     private func shouldInterrupt(with transcript: String) -> Bool {
@@ -2360,6 +2361,8 @@ extension TalkModeManager {
             "Google"
         case "system":
             "iOS System Voice"
+        case "realtime":
+            "Realtime Voice"
         case let provider where !provider.isEmpty:
             provider
         default:
@@ -2524,7 +2527,7 @@ extension TalkModeManager {
             self.gatewayTalkRealtimeProviderLabel = realtimeProvider.map { Self.displayName(forProvider: $0) }
             self.gatewayTalkRealtimeModelId = realtimeModelId
             self.gatewayTalkRealtimeVoiceId = realtimeVoiceId
-            let voiceModeProvider = usesRealtimeConfig ? (realtimeProvider ?? activeProvider) : activeProvider
+            let voiceModeProvider = usesRealtimeConfig ? (realtimeProvider ?? "realtime") : activeProvider
             let voiceModeLabel = usesRealtimeConfig
                 ? Self.displayName(forProvider: voiceModeProvider)
                 : Self.displayName(forProvider: activeProvider)
