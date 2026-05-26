@@ -1323,7 +1323,7 @@ export async function runCodexAppServerAttempt(
       `codex app-server pre-dynamic startup timings runId=${params.runId} sessionId=${params.sessionId} totalMs=${preDynamicSummary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(preDynamicSummary)}`,
       {
         runId: params.runId,
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         totalMs: preDynamicSummary.totalMs,
         stages: preDynamicSummary.stages,
         hasStartupBinding: Boolean(startupBinding?.threadId),
@@ -1375,7 +1375,7 @@ export async function runCodexAppServerAttempt(
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
-      sessionId: params.sessionId,
+      sessionId: activeSessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
@@ -1486,7 +1486,7 @@ export async function runCodexAppServerAttempt(
       return true;
     } catch (compactErr) {
       embeddedAgentLog.warn("codex app-server context-engine forced compaction failed", {
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         sessionKey: contextSessionKey,
         engineId: activeContextEngine.info.id,
         error: formatErrorMessage(compactErr),
@@ -1588,7 +1588,7 @@ export async function runCodexAppServerAttempt(
         })
       : { project: true, reason: "per-turn-projection" };
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
-      sessionId: params.sessionId,
+      sessionId: activeSessionId,
       sessionKey: contextSessionKey,
       engineId: activeContextEngine.info.id,
       mode: contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
@@ -1619,7 +1619,7 @@ export async function runCodexAppServerAttempt(
         level: "info",
         message: "codex app-server reused matching context-engine thread-bootstrap binding",
         runId: params.runId,
-        sessionId: params.sessionId,
+        sessionId: activeSessionId,
         sessionKey: contextSessionKey,
         threadId: decisionStartupBinding?.threadId,
         bindingMode: resolveCodexNativeThreadBindingMode(decisionStartupBinding),
@@ -1732,8 +1732,13 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
     resetCodexPromptInputs();
+    startupBinding = await readCodexAppServerBinding(activeSessionFile, {
+      authProfileStore: params.authProfileStore,
+      agentDir,
+      config: params.config,
+    });
     try {
-      await applyActiveContextEngineProjection(undefined);
+      await applyActiveContextEngineProjection(startupBinding);
     } catch (assembleErr) {
       embeddedAgentLog.warn(
         "context engine assemble failed after forced compaction; using Codex baseline prompt",
@@ -3444,30 +3449,6 @@ export async function runCodexAppServerAttempt(
           extra: { error: formatErrorMessage(turnStartError), sessionFile: preRetrySessionFile },
         });
         await clearCodexAppServerBinding(preRetrySessionFile);
-        if (activeSessionFile !== preRetrySessionFile) {
-          const successorBinding = await readCodexAppServerBinding(activeSessionFile);
-          if (successorBinding?.threadId) {
-            emitCodexNativeThreadLifecycleDiagnostic({
-              action: "rotated",
-              reason: CodexNativeThreadLifecycleReason.AppServerRejectedThread,
-              level: "warn",
-              message: "codex app-server context-engine overflow retry cleared successor binding",
-              runId: params.runId,
-              sessionId: activeSessionId,
-              sessionKey: contextSessionKey,
-              threadId: successorBinding.threadId,
-              bindingMode: resolveCodexNativeThreadBindingMode(successorBinding),
-              contextEngineId: successorBinding.contextEngine?.engineId,
-              contextEnginePolicyFingerprint: successorBinding.contextEngine?.policyFingerprint,
-              projectionMode: successorBinding.contextEngine?.projection?.mode,
-              projectionEpoch: successorBinding.contextEngine?.projection?.epoch,
-              projectionFingerprint: successorBinding.contextEngine?.projection?.fingerprint,
-              ...buildNativeThreadPromptDiagnostics(),
-              extra: { error: formatErrorMessage(turnStartError), sessionFile: activeSessionFile },
-            });
-          }
-          await clearCodexAppServerBinding(activeSessionFile);
-        }
         thread = await restartContextEngineCodexThread();
         emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",

@@ -1248,7 +1248,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const harness = createStartedThreadHarness(async (method, requestParams) => {
       const request = requireRecord(requestParams, `${method} params`);
       if (method === "thread/resume") {
-        return threadStartResult("thread-old");
+        const threadId = typeof request.threadId === "string" ? request.threadId : "thread-old";
+        return threadStartResult(threadId);
       }
       if (method === "turn/start" && request.threadId === "thread-old") {
         throw new Error("Codex ran out of room in the model's context window");
@@ -1256,7 +1257,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       if (method === "thread/start") {
         return threadStartResult("thread-fresh");
       }
-      if (method === "turn/start" && request.threadId === "thread-fresh") {
+      if (
+        method === "turn/start" &&
+        (request.threadId === "thread-fresh" || request.threadId === "thread-successor")
+      ) {
         return turnStartResult("turn-fresh");
       }
       return undefined;
@@ -1271,14 +1275,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(harness.requests.map((request) => request.method)).toEqual([
         "thread/resume",
         "turn/start",
-        "thread/start",
+        "thread/resume",
         "turn/start",
       ]),
     );
     await harness.notify({
       method: "turn/completed",
       params: {
-        threadId: "thread-fresh",
+        threadId: "thread-successor",
         turnId: "turn-fresh",
         turn: {
           id: "turn-fresh",
@@ -1317,10 +1321,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
     expect(retryAssembleMessageTexts).toEqual(["successor compacted context"]);
     const retryInputText = getRequestInputTextAt(harness, -1);
-    expect(retryInputText).toContain("successor compacted context");
+    expect(retryInputText).toBe("hello");
     expect(retryInputText).not.toContain("pre-compaction context");
     const savedBinding = await readCodexAppServerBinding(successorFile);
-    expect(savedBinding?.threadId).toBe("thread-fresh");
+    expect(savedBinding?.threadId).toBe("thread-successor");
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
     expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after");
     expect(lifecycleDiagnostics.events).toContainEqual(
@@ -1335,13 +1339,14 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(lifecycleDiagnostics.events).toContainEqual(
       expect.objectContaining({
         type: "codex.native_thread.lifecycle",
-        action: "rotated",
-        reason: "app-server-rejected-thread",
+        action: "reused",
+        reason: "thread-bootstrap-semantic-reuse",
         threadId: "thread-successor",
         sessionId: "session-1-compacted",
         bindingMode: "thread_bootstrap",
         contextEngineId: "lossless-claw",
         projectionEpoch: "epoch-after",
+        semanticReuse: true,
       }),
     );
   });
