@@ -290,12 +290,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
-    const queuedAfter = question ? undefined : this.findPendingSessionRunPromise(opts.sessionKey);
-    if (!question) {
-      if (!queuedAfter) {
-        this.abortSessionRuns(opts.sessionKey);
-      }
-    }
+    const queuedAfter = question ? undefined : this.findQueuedSessionRunPromise(opts.sessionKey);
     const controller = new AbortController();
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
@@ -485,21 +480,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }));
   }
 
-  private abortSessionRuns(sessionKey: string) {
-    for (const run of this.runs.values()) {
-      if (run.sessionKey === sessionKey && !run.isBtw && !run.lifecycleEnded && !run.finishing) {
-        run.controller.abort();
-      }
-    }
-  }
-
-  private findPendingSessionRunPromise(sessionKey: string): Promise<void> | undefined {
+  private findQueuedSessionRunPromise(sessionKey: string): Promise<void> | undefined {
+    let queuedAfter: Promise<void> | undefined;
     for (const [runId, run] of this.runs) {
-      if (run.sessionKey === sessionKey && !run.isBtw && (run.finishing || run.lifecycleEnded)) {
-        return this.runPromises.get(runId);
+      if (run.sessionKey === sessionKey && !run.isBtw) {
+        queuedAfter = this.runPromises.get(runId) ?? queuedAfter;
       }
     }
-    return undefined;
+    return queuedAfter;
   }
 
   private nextSeq() {

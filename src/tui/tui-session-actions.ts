@@ -405,7 +405,7 @@ export function createSessionActions(context: SessionActionContext) {
       return;
     }
     const runId =
-      opts.local === true && state.activeChatRunId && state.pendingChatRunId
+      state.activeChatRunId && state.pendingChatRunId
         ? state.pendingChatRunId
         : (state.activeChatRunId ?? state.pendingChatRunId ?? null);
     if (!runId) {

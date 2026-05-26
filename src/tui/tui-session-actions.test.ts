@@ -463,6 +463,32 @@ describe("tui session actions", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
+  it("aborts the queued pending run after a gateway active turn accepts the next send", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: "run-active",
+      pendingChatRunId: "run-queued",
+      activityStatus: "waiting",
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      opts: { local: false },
+      state,
+      setActivityStatus,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-queued",
+    });
+    expect(state.pendingChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
   it("remembers the selected session after history loads", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

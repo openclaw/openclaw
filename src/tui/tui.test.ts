@@ -88,33 +88,22 @@ describe("tui slash commands", () => {
 });
 
 describe("canSubmitTuiChatMessage", () => {
-  it("allows local queued submit while a run is finishing", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: true,
-        activityStatus: "finishing context",
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(true);
-  });
-
-  it("allows gateway submit while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: false,
-        activityStatus: "streaming",
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(true);
+  it("allows submit when no run registration is pending", () => {
+    expect(canSubmitTuiChatMessage({})).toBe(true);
   });
 
   it("blocks submits with pending optimistic state", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: true,
-        activityStatus: "finishing context",
-        activeChatRunId: "run-active",
         pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks submits with a pending chat run id", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
       }),
     ).toBe(false);
   });
