@@ -665,7 +665,10 @@ function resolveAssistantAvatarOverride(config: unknown): string | null {
   return normalizeOptionalString((assistant as { avatar?: unknown }).avatar) ?? null;
 }
 
-function buildAssistantAvatarRoute(basePathValue: string | null | undefined, agentId: string) {
+function buildAssistantAvatarRoute(
+  basePathValue: string | null | undefined,
+  agentId: string,
+) {
   const basePath = normalizeBasePath(basePathValue ?? "");
   const encoded = encodeURIComponent(agentId);
   return basePath ? `${basePath}/avatar/${encoded}` : `/avatar/${encoded}`;
@@ -954,7 +957,10 @@ export function renderApp(state: AppViewState) {
   const configAssistantAvatarUrl =
     localAssistantAvatarOverride ??
     (configAssistantAvatarStatus === "local" && state.assistantAgentId
-      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
+      ? buildAssistantAvatarRoute(
+          state.basePath,
+          state.assistantAgentId,
+        )
       : (state.chatAvatarUrl ??
         (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
   const configValue =

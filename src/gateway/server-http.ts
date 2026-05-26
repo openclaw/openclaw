@@ -775,6 +775,7 @@ export function createGatewayHttpServer(opts: {
               rateLimiter,
               resolveAvatar: (agentId) =>
                 resolveAgentAvatar(configSnapshot, agentId, { includeUiOverride: true }),
+              allowQueryToken: true,
             });
           },
         });
