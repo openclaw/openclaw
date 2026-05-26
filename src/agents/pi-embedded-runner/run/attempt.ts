@@ -1019,36 +1019,26 @@ function installRuntimeContextMessageForPrompt(params: {
   session: AgentSession;
   message?: RuntimeContextCustomMessage;
 }): () => void {
-  if (!params.message) {
+  const { message, session } = params;
+  if (!message) {
     return () => undefined;
   }
   const install = () => {
-    if (!params.session.messages.includes(params.message)) {
-      params.session.agent.state.messages = [...params.session.messages, params.message];
+    if (!session.messages.includes(message)) {
+      session.agent.state.messages = [...session.messages, message];
     }
   };
   install();
-  const agentWithContinue = params.session.agent as typeof params.session.agent & {
-    continue?: (...args: unknown[]) => unknown;
+  const agent = session.agent;
+  const originalContinue = agent.continue;
+  agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
+    // Pi overflow recovery can rebuild state from the persisted branch before retrying.
+    install();
+    return originalContinue.call(this);
   };
-  const originalContinue = agentWithContinue.continue;
-  if (originalContinue) {
-    agentWithContinue.continue = function continueWithRuntimeContext(
-      this: typeof params.session.agent,
-      ...args: unknown[]
-    ): unknown {
-      // Pi overflow recovery can rebuild state from the persisted branch before retrying.
-      install();
-      return originalContinue.apply(this, args);
-    };
-  }
   return () => {
-    if (originalContinue) {
-      agentWithContinue.continue = originalContinue;
-    }
-    params.session.agent.state.messages = params.session.messages.filter(
-      (message) => message !== params.message,
-    );
+    agent.continue = originalContinue;
+    session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
   };
 }
 
