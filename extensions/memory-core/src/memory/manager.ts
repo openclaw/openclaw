@@ -738,14 +738,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
-    await this.ensureProviderInitialized();
     if (this.syncing) {
       if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
         return this.enqueueTargetedSessionSync(params.sessionFiles);
       }
       return this.syncing;
     }
-    this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+    this.syncing = (async () => {
+      await this.ensureProviderInitialized();
+      await this.runSyncWithReadonlyRecovery(params);
+    })().finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
@@ -1025,7 +1027,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     this.closed = true;
-    const pendingSync = this.syncing;
     const pendingProviderInit = this.providerInitPromise;
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
@@ -1048,26 +1049,44 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe = null;
     }
     const closeErrors = new Map<EmbeddingProvider, unknown>();
-    const closeCurrentProvider = async () => {
+    // A sync may swap to a fallback provider before close resumes, so retain
+    // every provider reference observed during shutdown and close them after sync settles.
+    const providersToClose = new Set<EmbeddingProvider>();
+    const rememberCurrentProvider = () => {
       const provider = this.provider;
       if (!provider) {
         return;
       }
-      try {
-        await provider.close?.();
-        closeErrors.delete(provider);
-        if (this.provider === provider) {
-          this.provider = null;
+      providersToClose.add(provider);
+    };
+    const closeTrackedProviders = async () => {
+      rememberCurrentProvider();
+      for (const provider of providersToClose) {
+        try {
+          await provider.close?.();
+          closeErrors.delete(provider);
+          providersToClose.delete(provider);
+          if (this.provider === provider) {
+            this.provider = null;
+          }
+        } catch (err) {
+          closeErrors.set(provider, err);
         }
-      } catch (err) {
-        closeErrors.set(provider, err);
       }
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
-    await closeCurrentProvider();
-    try {
+    const awaitCurrentSync = async () => {
+      const pendingSync = this.syncing;
+      if (!pendingSync) {
+        return;
+      }
       await awaitPendingManagerWork({ pendingSync });
-      await closeCurrentProvider();
+    };
+    await awaitPendingManagerWork({ pendingProviderInit });
+    rememberCurrentProvider();
+    try {
+      await awaitCurrentSync();
+      await closeTrackedProviders();
+      await closeTrackedProviders();
     } finally {
       closeMemoryDatabase(this.db);
       if (INDEX_CACHE.get(this.cacheKey) === this) {
