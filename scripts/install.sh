@@ -2717,6 +2717,10 @@ install_openclaw() {
 # Run doctor for migrations (safe, non-interactive)
 run_doctor() {
     ui_info "Running doctor to migrate settings"
+    if [[ "${OPENCLAW_INSTALL_SKIP_DOCTOR:-0}" == "1" ]]; then
+        ui_info "Skipping doctor (OPENCLAW_INSTALL_SKIP_DOCTOR=1)"
+        return 0
+    fi
     local claw="${OPENCLAW_BIN:-}"
     if [[ -z "$claw" ]]; then
         claw="$(resolve_openclaw_bin || true)"
@@ -2726,7 +2730,12 @@ run_doctor() {
         warn_openclaw_not_found
         return 0
     fi
-    run_quiet_step "Running doctor" "$claw" doctor --non-interactive || true
+    if command -v timeout >/dev/null 2>&1; then
+        run_quiet_step "Running doctor" timeout "${OPENCLAW_INSTALL_DOCTOR_TIMEOUT:-120}" "$claw" doctor --non-interactive || \
+            ui_warn "Doctor did not complete within timeout; continuing"
+    else
+        run_quiet_step "Running doctor" "$claw" doctor --non-interactive || true
+    fi
     ui_success "Doctor complete"
 }
 
