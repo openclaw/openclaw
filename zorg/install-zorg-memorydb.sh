@@ -18,7 +18,23 @@ OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH="${OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AU
 ZORG_INSTALL_MODE="${ZORG_INSTALL_MODE:-first-run}"
 ZORG_PATCH_EXISTING_DOCKER_CONFIG="${ZORG_PATCH_EXISTING_DOCKER_CONFIG:-0}"
 
-OPENCLAW_EFFECTIVE_HOME="${OPENCLAW_HOME:-$HOME}"
+default_openclaw_home() {
+  if [[ -n "${OPENCLAW_HOME:-}" ]]; then
+    printf '%s\n' "$OPENCLAW_HOME"
+    return 0
+  fi
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" && "${SUDO_USER:-}" != "root" ]]; then
+    local sudo_home
+    sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | awk -F: '{print $6}')"
+    if [[ -n "$sudo_home" && -d "$sudo_home" ]]; then
+      printf '%s\n' "$sudo_home"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$HOME"
+}
+
+OPENCLAW_EFFECTIVE_HOME="$(default_openclaw_home)"
 if [[ "$OPENCLAW_EFFECTIVE_HOME" == "~" ]]; then
   OPENCLAW_EFFECTIVE_HOME="$HOME"
 elif [[ "$OPENCLAW_EFFECTIVE_HOME" == ~/* ]]; then
@@ -42,6 +58,17 @@ sudo_if_needed() {
     sudo -n "$@"
   else
     return 127
+  fi
+}
+
+maybe_chown_sudo_workspace() {
+  if [[ "$(id -u)" -ne 0 || -z "${SUDO_USER:-}" || "${SUDO_USER:-}" == "root" ]]; then
+    return 0
+  fi
+  local sudo_home
+  sudo_home="$(getent passwd "$SUDO_USER" 2>/dev/null | awk -F: '{print $6}')"
+  if [[ -n "$sudo_home" && "$OPENCLAW_WORKSPACE" == "$sudo_home"/.openclaw/workspace* ]]; then
+    chown -R "$SUDO_USER:$SUDO_USER" "$OPENCLAW_WORKSPACE" 2>/dev/null || true
   fi
 }
 
@@ -474,6 +501,7 @@ main() {
   install_agent_readable_markdown
   import_markdown_rules
   prepare_lan_chat
+  maybe_chown_sudo_workspace
   install_lan_chat_service
   log "Zorg MemoryDB and LAN command chat bootstrap complete."
 }
