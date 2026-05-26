@@ -4331,7 +4331,7 @@ function isCodexAppServerMirroredTranscriptMessage(message: AgentMessage): boole
   if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
     return true;
   }
-  const meta = record.__openclaw;
+  const meta = record["__openclaw"];
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     return false;
   }
