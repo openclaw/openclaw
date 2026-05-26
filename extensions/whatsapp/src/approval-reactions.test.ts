@@ -1,11 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  appendWhatsAppApprovalReactionHintForOutboundMessage,
   buildWhatsAppApprovalReactionHint,
   clearWhatsAppApprovalReactionTargetsForTest,
-  extractWhatsAppApprovalPromptBinding,
   maybeResolveWhatsAppApprovalReaction,
-  registerWhatsAppApprovalReactionTargetForOutboundMessage,
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
@@ -33,30 +30,6 @@ describe("WhatsApp approval reactions", () => {
     expect(buildWhatsAppApprovalReactionHint(["allow-once", "deny"])).toBe(
       "React with:\n\n👍 Allow Once\n👎 Deny",
     );
-  });
-
-  it("appends thumbs-only reaction choices to outbound approval prompts", () => {
-    expect(
-      appendWhatsAppApprovalReactionHintForOutboundMessage(
-        "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
-      ),
-    ).toBe(
-      "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
-    );
-  });
-
-  it("does not duplicate reaction choices on native approval prompts", () => {
-    const prompt = [
-      "Plugin approval required",
-      "Reply with: /approve plugin:abc allow-once|allow-always|deny",
-      "",
-      "React with:",
-      "",
-      "👍 Allow Once",
-      "👎 Deny",
-    ].join("\n");
-
-    expect(appendWhatsAppApprovalReactionHintForOutboundMessage(prompt)).toBe(prompt);
   });
 
   it("exposes allow-always as a reaction choice when allowed", () => {
@@ -112,53 +85,6 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "exec-1",
       decision: "deny",
     });
-  });
-
-  it("extracts approval bindings from explicit outbound prompts", async () => {
-    expect(
-      extractWhatsAppApprovalPromptBinding(
-        [
-          "Plugin approval required",
-          "ID: plugin:abc",
-          "Reply with: /approve plugin:abc allow-once|allow-always|deny",
-        ].join("\n"),
-      ),
-    ).toEqual({
-      approvalId: "plugin:abc",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    });
-
-    expect(
-      registerWhatsAppApprovalReactionTargetForOutboundMessage({
-        accountId: "default",
-        remoteJid: "15551230000@s.whatsapp.net",
-        messageId: "prompt-message",
-        text: "Reply with: /approve exec-1 allow-once|deny",
-      }),
-    ).toBe(true);
-
-    await expect(
-      resolveWhatsAppApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        remoteJid: "15551230000@s.whatsapp.net",
-        messageId: "prompt-message",
-        reactionKey: "👎",
-      }),
-    ).resolves.toEqual({
-      approvalId: "exec-1",
-      decision: "deny",
-    });
-
-    for (const reactionKey of ["1️⃣", "2️⃣", "3️⃣", "1", "2", "3"]) {
-      await expect(
-        resolveWhatsAppApprovalReactionTargetWithPersistence({
-          accountId: "default",
-          remoteJid: "15551230000@s.whatsapp.net",
-          messageId: "prompt-message",
-          reactionKey,
-        }),
-      ).resolves.toBeNull();
-    }
   });
 
   it("authorizes group reactions using the participant, not the group chat", async () => {

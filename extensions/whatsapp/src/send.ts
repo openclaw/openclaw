@@ -14,10 +14,6 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
-import {
-  appendWhatsAppApprovalReactionHintForOutboundMessage,
-  registerWhatsAppApprovalReactionTargetForOutboundMessage,
-} from "./approval-reactions.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
@@ -228,10 +224,9 @@ export async function sendMessageWhatsApp(
             accountId,
           }
         : undefined;
-    const outboundText = text ? appendWhatsAppApprovalReactionHintForOutboundMessage(text) : text;
     const result = sendOptions
-      ? await active.sendMessage(to, outboundText, mediaBuffer, mediaType, sendOptions)
-      : await active.sendMessage(to, outboundText, mediaBuffer, mediaType);
+      ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
+      : await active.sendMessage(to, text, mediaBuffer, mediaType);
     if (visibleTextAfterVoice) {
       if (sendOptions) {
         await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions);
@@ -241,14 +236,6 @@ export async function sendMessageWhatsApp(
     }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
-    if (messageId && messageId !== "unknown" && outboundText) {
-      registerWhatsAppApprovalReactionTargetForOutboundMessage({
-        accountId: resolvedAccountId,
-        remoteJid: sentRemoteJid,
-        messageId,
-        text: outboundText,
-      });
-    }
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
       `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,

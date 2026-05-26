@@ -99,87 +99,6 @@ export function buildWhatsAppApprovalReactionHint(
   return buildApprovalReactionHint({ allowedDecisions });
 }
 
-function insertWhatsAppApprovalReactionHintNearHeader(params: {
-  text: string;
-  hint: string;
-}): string {
-  const lines = params.text.split(/\r?\n/);
-  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
-  if (idLineIndex >= 0) {
-    const before = lines.slice(0, idLineIndex + 1).join("\n");
-    const after = lines
-      .slice(idLineIndex + 1)
-      .join("\n")
-      .replace(/^\n+/, "");
-    return after ? `${before}\n\n${params.hint}\n\n${after}` : `${before}\n\n${params.hint}`;
-  }
-  return `${params.hint}\n\n${params.text}`;
-}
-
-export function addWhatsAppApprovalReactionHintToText(params: {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  if (/(^|\n)React with:\s*(\n|$)/i.test(params.text)) {
-    return params.text;
-  }
-  const hint = buildWhatsAppApprovalReactionHint(params.allowedDecisions);
-  return hint
-    ? insertWhatsAppApprovalReactionHintNearHeader({ text: params.text, hint })
-    : params.text;
-}
-
-export function appendWhatsAppApprovalReactionHintForOutboundMessage(text: string): string {
-  if (/(^|\n)React with:\s*(\n|$)/i.test(text)) {
-    return text;
-  }
-  const binding = extractWhatsAppApprovalPromptBinding(text);
-  if (!binding) {
-    return text;
-  }
-  return addWhatsAppApprovalReactionHintToText({
-    text,
-    allowedDecisions: binding.allowedDecisions,
-  });
-}
-
-function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "always") {
-    return "allow-always";
-  }
-  if (normalized === "allow-once" || normalized === "allow-always" || normalized === "deny") {
-    return normalized;
-  }
-  return null;
-}
-
-export function extractWhatsAppApprovalPromptBinding(text: string): {
-  approvalId: string;
-  allowedDecisions: ExecApprovalReplyDecision[];
-} | null {
-  const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  let approvalId = "";
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i);
-    if (!match) {
-      continue;
-    }
-    if (approvalId && match[1] !== approvalId) {
-      continue;
-    }
-    approvalId ||= match[1];
-    const decisions = match[2].split(/[\s|,]+/);
-    for (const decisionText of decisions) {
-      const decision = normalizeApprovalDecision(decisionText);
-      if (decision && !allowedDecisions.includes(decision)) {
-        allowedDecisions.push(decision);
-      }
-    }
-  }
-  return approvalId && allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
-}
-
 export function registerWhatsAppApprovalReactionTarget(params: {
   accountId: string;
   remoteJid: string;
@@ -203,29 +122,6 @@ export function registerWhatsAppApprovalReactionTarget(params: {
   };
   whatsappApprovalReactionTargets.register(key, target, { ttlMs: params.ttlMs });
   return target;
-}
-
-export function registerWhatsAppApprovalReactionTargetForOutboundMessage(params: {
-  accountId: string;
-  remoteJid: string;
-  messageId: string;
-  text: string;
-  ttlMs?: number;
-}): boolean {
-  const binding = extractWhatsAppApprovalPromptBinding(params.text);
-  if (!binding) {
-    return false;
-  }
-  return Boolean(
-    registerWhatsAppApprovalReactionTarget({
-      accountId: params.accountId,
-      remoteJid: params.remoteJid,
-      messageId: params.messageId,
-      approvalId: binding.approvalId,
-      allowedDecisions: binding.allowedDecisions,
-      ttlMs: params.ttlMs,
-    }),
-  );
 }
 
 export function unregisterWhatsAppApprovalReactionTarget(params: {
