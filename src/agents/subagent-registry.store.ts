@@ -43,7 +43,9 @@ function cloneSubagentRunRecord(entry: SubagentRunRecord): SubagentRunRecord {
   return structuredClone(entry);
 }
 
-function cloneSubagentRunMap(runs: Map<string, SubagentRunRecord>): Map<string, SubagentRunRecord> {
+function cloneSubagentRunMap(
+  runs: ReadonlyMap<string, SubagentRunRecord>,
+): Map<string, SubagentRunRecord> {
   return new Map([...runs].map(([runId, entry]) => [runId, cloneSubagentRunRecord(entry)]));
 }
 
@@ -78,7 +80,18 @@ export function resolveSubagentRegistryPath(): string {
   return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
-export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
+export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord>;
+export function loadSubagentRegistryFromDisk(options: {
+  clone: false;
+}): ReadonlyMap<string, SubagentRunRecord>;
+export function loadSubagentRegistryFromDisk(options?: {
+  clone?: boolean;
+}): Map<string, SubagentRunRecord> | ReadonlyMap<string, SubagentRunRecord> {
+  const snapshot = loadSubagentRegistrySnapshotForRead();
+  return options?.clone === false ? snapshot : cloneSubagentRunMap(snapshot);
+}
+
+function loadSubagentRegistrySnapshotForRead(): ReadonlyMap<string, SubagentRunRecord> {
   const pathname = resolveSubagentRegistryPath();
   const signature = statRegistryFileSignature(pathname);
   if (signature === null) {
@@ -89,7 +102,7 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   if (cached?.signature === signature) {
     registryReadCache.delete(pathname);
     registryReadCache.set(pathname, cached);
-    return cloneSubagentRunMap(cached.runs);
+    return cached.runs;
   }
   const raw = loadJsonFile(pathname);
   if (!raw || typeof raw !== "object") {
