@@ -718,6 +718,41 @@ describe("schema validator", () => {
       },
       expectedValue: ["mode", 1],
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.tuple-items",
+        schema: {
+          type: "array",
+          items: [
+            { type: "string", default: "mode" },
+            { type: "number", default: 1 },
+          ],
+          minItems: 2,
+          additionalItems: false,
+        },
+        value: [],
+        applyDefaults: true,
+      },
+      expectedValue: ["mode", 1],
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.prefix-items",
+        schema: {
+          type: "array",
+          prefixItems: [
+            { type: "string", default: "mode" },
+            { type: "number", default: 1 },
+          ],
+          minItems: 2,
+        },
+        value: [],
+        applyDefaults: true,
+      },
+      expectedValue: ["mode", 1],
+    });
   });
 
   it("applies defaults for untyped object schemas", () => {

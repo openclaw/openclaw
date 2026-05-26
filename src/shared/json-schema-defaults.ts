@@ -1067,23 +1067,47 @@ function applySchemaDefaults(
   }
 
   if (
-    (schemaTypeIncludes(schema, "array") || schema.items !== undefined) &&
+    (schemaTypeIncludes(schema, "array") ||
+      schema.items !== undefined ||
+      schema.prefixItems !== undefined) &&
     Array.isArray(nextValue)
   ) {
-    if (Array.isArray(schema.items)) {
-      const tupleSchemas = schema.items as unknown[];
-      return nextValue.map((item, index) => {
-        const itemSchema = tupleSchemas[index];
-        return itemSchema === undefined
-          ? item
-          : applySchemaDefaults(
-              itemSchema as JsonSchemaValue,
-              item,
-              root,
-              resolvingRefs,
-              currentResourceRoot,
-            );
-      });
+    const tupleSchemas = Array.isArray(schema.prefixItems)
+      ? schema.prefixItems
+      : Array.isArray(schema.items)
+        ? schema.items
+        : null;
+    if (tupleSchemas) {
+      const result = nextValue.slice();
+      for (const [index, itemSchema] of tupleSchemas.entries()) {
+        const defaultedValue = applySchemaDefaults(
+          itemSchema as JsonSchemaValue,
+          result[index],
+          root,
+          resolvingRefs,
+          currentResourceRoot,
+        );
+        if (defaultedValue !== undefined) {
+          result[index] = defaultedValue;
+        }
+      }
+      const restSchema = isRecord(schema.items)
+        ? schema.items
+        : isRecord(schema.additionalItems)
+          ? schema.additionalItems
+          : null;
+      if (restSchema) {
+        for (let index = tupleSchemas.length; index < result.length; index++) {
+          result[index] = applySchemaDefaults(
+            restSchema as JsonSchemaValue,
+            result[index],
+            root,
+            resolvingRefs,
+            currentResourceRoot,
+          );
+        }
+      }
+      return result;
     }
     if (!isRecord(schema.items)) {
       return nextValue;
