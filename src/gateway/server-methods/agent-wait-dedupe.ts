@@ -7,7 +7,7 @@ import {
 import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
+import { asRecord, asOptionalRecord } from "../../shared/record-coerce.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
