@@ -1,4 +1,4 @@
-import { InvalidArgumentError, type Command } from "commander";
+import type { Command } from "commander";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 
 export function collectOption(value: string, previous: string[] = []): string[] {
@@ -28,14 +28,6 @@ export function parsePositiveIntOrUndefined(value: unknown): number | undefined 
 
 export function parseStrictPositiveIntOrUndefined(value: unknown): number | undefined {
   return parseStrictPositiveInteger(value);
-}
-
-export function parsePositiveIntegerOption(value: string): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    throw new InvalidArgumentError("Expected a positive integer.");
-  }
-  return parsed;
 }
 
 export function resolveActionArgs(actionCommand?: Command): string[] {

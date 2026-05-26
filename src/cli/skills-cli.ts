@@ -21,7 +21,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
-import { parsePositiveIntegerOption } from "./program/helpers.js";
+import { parsePositiveIntegerOption } from "./positive-integer-option.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {

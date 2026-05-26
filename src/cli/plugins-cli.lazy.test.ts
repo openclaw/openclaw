@@ -72,6 +72,31 @@ describe("plugins cli lazy runtime boundary", () => {
     expect(searchLoaded).toBe(false);
   });
 
+  it("parses valid plugins search limits for the search action", async () => {
+    const runPluginsSearchCommand = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./plugins-search-command.js", () => ({
+      runPluginsSearchCommand,
+    }));
+
+    const { registerPluginsCli } = await import("./plugins-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerPluginsCli(program);
+
+    await program.parseAsync(["plugins", "search", "calendar", "--limit", "+10", "--json"], {
+      from: "user",
+    });
+
+    expect(runPluginsSearchCommand).toHaveBeenCalledWith(
+      ["calendar"],
+      expect.objectContaining({ json: true, limit: 10 }),
+    );
+  });
+
   it("loads the plugins runtime for runtime-backed actions", async () => {
     const runPluginsRegistryCommand = vi.fn().mockResolvedValue(undefined);
     const runtimeLoaded = vi.fn();

@@ -3,7 +3,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
-import { parsePositiveIntegerOption } from "./program/helpers.js";
+import { parsePositiveIntegerOption } from "./positive-integer-option.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginUpdateOptions = {

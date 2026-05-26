@@ -277,11 +277,11 @@ describe("skills cli commands", () => {
       },
     ]);
 
-    await runCommand(["skills", "search", "calendar"]);
+    await runCommand(["skills", "search", "calendar", "--limit", "+10"]);
 
     expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
       query: "calendar",
-      limit: undefined,
+      limit: 10,
     });
     expect(
       runtimeLogs.some((line) => line.includes("calendar v1.2.3  Calendar")),
