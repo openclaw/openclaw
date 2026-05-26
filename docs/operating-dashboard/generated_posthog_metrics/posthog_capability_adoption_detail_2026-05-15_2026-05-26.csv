@@ -1,0 +1,183 @@
+date,category,cohort,detail,users,events,share
+2026-05-15,attachment,all,附件上传,221,854,1.0
+2026-05-15,attachment,new,附件上传,180,679,1.0
+2026-05-15,attachment,existing,附件上传,41,175,1.0
+2026-05-15,automation,all,定时任务,12,1085,1.0
+2026-05-15,automation,new,定时任务,1,1,1.0
+2026-05-15,automation,existing,定时任务,11,1084,1.0
+2026-05-15,connector,all,Google Workspace,24,54,1.0
+2026-05-15,connector,new,Google Workspace,17,41,1.0
+2026-05-15,connector,existing,Google Workspace,7,13,1.0
+2026-05-15,im,all,Discord,3,4,0.04838709677419355
+2026-05-15,im,new,Discord,1,2,0.045454545454545456
+2026-05-15,im,existing,Discord,2,2,0.05
+2026-05-15,im,all,Lark,1,3,0.016129032258064516
+2026-05-15,im,existing,Lark,1,3,0.025
+2026-05-15,im,all,Slack,4,8,0.06451612903225806
+2026-05-15,im,new,Slack,1,1,0.045454545454545456
+2026-05-15,im,existing,Slack,3,7,0.075
+2026-05-15,im,all,Telegram,60,133,0.967741935483871
+2026-05-15,im,new,Telegram,20,48,0.9090909090909091
+2026-05-15,im,existing,Telegram,40,85,1.0
+2026-05-16,attachment,all,附件上传,260,1137,1.0
+2026-05-16,attachment,new,附件上传,206,891,1.0
+2026-05-16,attachment,existing,附件上传,54,246,1.0
+2026-05-16,automation,all,定时任务,10,1342,1.0
+2026-05-16,automation,existing,定时任务,10,1342,1.0
+2026-05-16,connector,all,Google Workspace,29,74,1.0
+2026-05-16,connector,new,Google Workspace,15,33,1.0
+2026-05-16,connector,existing,Google Workspace,14,41,1.0
+2026-05-16,im,all,Discord,3,3,0.058823529411764705
+2026-05-16,im,new,Discord,1,1,0.0625
+2026-05-16,im,existing,Discord,2,2,0.05714285714285714
+2026-05-16,im,all,Slack,4,4,0.0784313725490196
+2026-05-16,im,new,Slack,1,1,0.0625
+2026-05-16,im,existing,Slack,3,3,0.08571428571428572
+2026-05-16,im,all,Telegram,47,115,0.9215686274509803
+2026-05-16,im,new,Telegram,14,51,0.875
+2026-05-16,im,existing,Telegram,33,64,0.9428571428571428
+2026-05-17,attachment,all,附件上传,252,1175,1.0
+2026-05-17,attachment,new,附件上传,205,837,1.0
+2026-05-17,attachment,existing,附件上传,47,338,1.0
+2026-05-17,automation,all,定时任务,6,26,1.0
+2026-05-17,automation,new,定时任务,2,2,1.0
+2026-05-17,automation,existing,定时任务,4,24,1.0
+2026-05-17,connector,all,Google Workspace,23,101,1.0
+2026-05-17,connector,new,Google Workspace,16,42,1.0
+2026-05-17,connector,existing,Google Workspace,7,59,1.0
+2026-05-17,im,all,Slack,3,7,0.06521739130434782
+2026-05-17,im,new,Slack,1,4,0.058823529411764705
+2026-05-17,im,existing,Slack,2,3,0.06896551724137931
+2026-05-17,im,all,Telegram,44,107,0.9565217391304348
+2026-05-17,im,new,Telegram,17,39,1.0
+2026-05-17,im,existing,Telegram,27,68,0.9310344827586207
+2026-05-18,attachment,all,附件上传,256,1137,1.0
+2026-05-18,attachment,new,附件上传,198,774,1.0
+2026-05-18,attachment,existing,附件上传,58,363,1.0
+2026-05-18,automation,all,定时任务,11,315,1.0
+2026-05-18,automation,new,定时任务,1,3,1.0
+2026-05-18,automation,existing,定时任务,10,312,1.0
+2026-05-18,connector,all,Google Workspace,22,55,1.0
+2026-05-18,connector,new,Google Workspace,8,17,1.0
+2026-05-18,connector,existing,Google Workspace,14,38,1.0
+2026-05-18,im,all,Discord,2,16,0.03571428571428571
+2026-05-18,im,new,Discord,1,6,0.08333333333333333
+2026-05-18,im,existing,Discord,1,10,0.022727272727272728
+2026-05-18,im,all,Lark,2,9,0.03571428571428571
+2026-05-18,im,new,Lark,1,6,0.08333333333333333
+2026-05-18,im,existing,Lark,1,3,0.022727272727272728
+2026-05-18,im,all,Slack,8,21,0.14285714285714285
+2026-05-18,im,new,Slack,2,10,0.16666666666666666
+2026-05-18,im,existing,Slack,6,11,0.13636363636363635
+2026-05-18,im,all,Telegram,53,161,0.9464285714285714
+2026-05-18,im,new,Telegram,11,41,0.9166666666666666
+2026-05-18,im,existing,Telegram,42,120,0.9545454545454546
+2026-05-19,attachment,all,附件上传,212,967,1.0
+2026-05-19,attachment,new,附件上传,158,658,1.0
+2026-05-19,attachment,existing,附件上传,54,309,1.0
+2026-05-19,automation,all,定时任务,9,469,1.0
+2026-05-19,automation,existing,定时任务,9,469,1.0
+2026-05-19,connector,all,Google Workspace,29,79,1.0
+2026-05-19,connector,new,Google Workspace,14,34,1.0
+2026-05-19,connector,existing,Google Workspace,15,45,1.0
+2026-05-19,im,all,Discord,3,12,0.06382978723404255
+2026-05-19,im,existing,Discord,3,12,0.08823529411764706
+2026-05-19,im,all,Lark,2,5,0.0425531914893617
+2026-05-19,im,new,Lark,1,1,0.07692307692307693
+2026-05-19,im,existing,Lark,1,4,0.029411764705882353
+2026-05-19,im,all,Slack,7,25,0.14893617021276595
+2026-05-19,im,existing,Slack,7,25,0.20588235294117646
+2026-05-19,im,all,Telegram,43,97,0.9148936170212766
+2026-05-19,im,new,Telegram,12,29,0.9230769230769231
+2026-05-19,im,existing,Telegram,31,68,0.9117647058823529
+2026-05-20,attachment,all,附件上传,117,680,1.0
+2026-05-20,attachment,new,附件上传,70,447,1.0
+2026-05-20,attachment,existing,附件上传,47,233,1.0
+2026-05-20,automation,all,定时任务,5,106,1.0
+2026-05-20,automation,new,定时任务,1,1,1.0
+2026-05-20,automation,existing,定时任务,4,105,1.0
+2026-05-20,connector,all,Google Workspace,24,81,1.0
+2026-05-20,connector,new,Google Workspace,8,15,1.0
+2026-05-20,connector,existing,Google Workspace,16,66,1.0
+2026-05-20,im,all,Discord,1,14,0.030303030303030304
+2026-05-20,im,existing,Discord,1,14,0.04
+2026-05-20,im,all,Slack,5,36,0.15151515151515152
+2026-05-20,im,existing,Slack,5,36,0.2
+2026-05-20,im,all,Telegram,33,104,1.0
+2026-05-20,im,new,Telegram,8,30,1.0
+2026-05-20,im,existing,Telegram,25,74,1.0
+2026-05-21,attachment,all,附件上传,104,464,1.0
+2026-05-21,attachment,new,附件上传,65,276,1.0
+2026-05-21,attachment,existing,附件上传,39,188,1.0
+2026-05-21,automation,all,定时任务,2,4,1.0
+2026-05-21,automation,new,定时任务,1,2,1.0
+2026-05-21,automation,existing,定时任务,1,2,1.0
+2026-05-21,connector,all,Google Workspace,10,51,1.0
+2026-05-21,connector,new,Google Workspace,3,19,1.0
+2026-05-21,connector,existing,Google Workspace,7,32,1.0
+2026-05-21,im,all,Discord,1,3,0.024390243902439025
+2026-05-21,im,existing,Discord,1,3,0.030303030303030304
+2026-05-21,im,all,Slack,3,16,0.07317073170731707
+2026-05-21,im,new,Slack,1,1,0.125
+2026-05-21,im,existing,Slack,2,15,0.06060606060606061
+2026-05-21,im,all,Telegram,40,120,0.975609756097561
+2026-05-21,im,new,Telegram,7,20,0.875
+2026-05-21,im,existing,Telegram,33,100,1.0
+2026-05-22,attachment,all,附件上传,97,433,1.0
+2026-05-22,attachment,new,附件上传,65,299,1.0
+2026-05-22,attachment,existing,附件上传,32,134,1.0
+2026-05-22,automation,all,定时任务,3,4,1.0
+2026-05-22,automation,existing,定时任务,3,4,1.0
+2026-05-22,connector,all,Google Workspace,16,49,1.0
+2026-05-22,connector,new,Google Workspace,3,7,1.0
+2026-05-22,connector,existing,Google Workspace,13,42,1.0
+2026-05-22,im,all,Discord,2,4,0.03773584905660377
+2026-05-22,im,existing,Discord,2,4,0.05128205128205128
+2026-05-22,im,all,Lark,1,3,0.018867924528301886
+2026-05-22,im,existing,Lark,1,3,0.02564102564102564
+2026-05-22,im,all,Slack,5,15,0.09433962264150944
+2026-05-22,im,existing,Slack,5,15,0.1282051282051282
+2026-05-22,im,all,Telegram,53,129,1.0
+2026-05-22,im,new,Telegram,14,42,1.0
+2026-05-22,im,existing,Telegram,39,87,1.0
+2026-05-23,attachment,all,附件上传,137,635,1.0
+2026-05-23,attachment,new,附件上传,106,473,1.0
+2026-05-23,attachment,existing,附件上传,31,162,1.0
+2026-05-23,automation,all,定时任务,2,6,1.0
+2026-05-23,automation,new,定时任务,1,1,1.0
+2026-05-23,automation,existing,定时任务,1,5,1.0
+2026-05-23,connector,all,Google Workspace,7,23,1.0
+2026-05-23,connector,new,Google Workspace,1,9,1.0
+2026-05-23,connector,existing,Google Workspace,6,14,1.0
+2026-05-23,im,all,Slack,3,13,0.07317073170731707
+2026-05-23,im,existing,Slack,3,13,0.10714285714285714
+2026-05-23,im,all,Telegram,41,133,1.0
+2026-05-23,im,new,Telegram,13,41,1.0
+2026-05-23,im,existing,Telegram,28,92,1.0
+2026-05-24,attachment,all,附件上传,110,607,1.0
+2026-05-24,attachment,new,附件上传,81,492,1.0
+2026-05-24,attachment,existing,附件上传,29,115,1.0
+2026-05-24,connector,all,Google Workspace,7,8,1.0
+2026-05-24,connector,existing,Google Workspace,7,8,1.0
+2026-05-24,im,all,Discord,1,2,0.020833333333333332
+2026-05-24,im,existing,Discord,1,2,0.038461538461538464
+2026-05-24,im,all,Slack,3,5,0.0625
+2026-05-24,im,existing,Slack,3,5,0.11538461538461539
+2026-05-24,im,all,Telegram,47,142,0.9791666666666666
+2026-05-24,im,new,Telegram,22,87,1.0
+2026-05-24,im,existing,Telegram,25,55,0.9615384615384616
+2026-05-25,attachment,all,附件上传,127,528,1.0
+2026-05-25,attachment,new,附件上传,84,341,1.0
+2026-05-25,attachment,existing,附件上传,43,187,1.0
+2026-05-25,connector,all,Google Workspace,12,83,1.0
+2026-05-25,connector,new,Google Workspace,4,12,1.0
+2026-05-25,connector,existing,Google Workspace,8,71,1.0
+2026-05-25,im,all,Discord,3,67,0.06818181818181818
+2026-05-25,im,existing,Discord,3,67,0.10344827586206896
+2026-05-25,im,all,Lark,2,24,0.045454545454545456
+2026-05-25,im,existing,Lark,2,24,0.06896551724137931
+2026-05-25,im,all,Slack,6,76,0.13636363636363635
+2026-05-25,im,existing,Slack,6,76,0.20689655172413793
+2026-05-25,im,all,Telegram,42,158,0.9545454545454546
+2026-05-25,im,new,Telegram,15,38,1.0
+2026-05-25,im,existing,Telegram,27,120,0.9310344827586207

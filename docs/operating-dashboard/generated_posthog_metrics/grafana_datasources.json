@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1,
+    "uid": "bffw5sh9ucmpsa",
+    "orgId": 1,
+    "name": "Amazon Managed Prometheus",
+    "type": "prometheus",
+    "typeName": "Prometheus",
+    "typeLogoUrl": "public/app/plugins/datasource/prometheus/img/prometheus_logo.svg",
+    "access": "proxy",
+    "url": "https://aps-workspaces.ap-southeast-1.amazonaws.com/workspaces/ws-7a123bd5-e52e-40d8-9e40-b71fb257c0f6",
+    "user": "",
+    "database": "",
+    "basicAuth": false,
+    "isDefault": true,
+    "jsonData": {
+      "httpMethod": "POST",
+      "sigV4Auth": true,
+      "sigV4AuthType": "ec2_iam_role",
+      "sigV4Region": "ap-southeast-1"
+    },
+    "readOnly": false
+  },
+  {
+    "id": 2,
+    "uid": "cffwd51kcjf9cb",
+    "orgId": 1,
+    "name": "CloudWatch",
+    "type": "cloudwatch",
+    "typeName": "CloudWatch",
+    "typeLogoUrl": "public/app/plugins/datasource/cloudwatch/img/amazon-web-services.png",
+    "access": "proxy",
+    "url": "",
+    "user": "",
+    "database": "",
+    "basicAuth": false,
+    "isDefault": false,
+    "jsonData": {
+      "authType": "ec2_iam_role",
+      "defaultRegion": "ap-southeast-1"
+    },
+    "readOnly": false
+  }
+]

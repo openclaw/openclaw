@@ -1,0 +1,9 @@
+﻿date,checkout_flows_first_seen,has_started,has_session_created,has_returned,has_verified,has_fulfilled,session_created_to_verified_flow_rate,session_created_to_fulfilled_flow_rate,has_start_failed,has_verify_failed,has_fulfillment_failed,subscription_flows,credit_pack_flows,unknown_order_type_flows,amount_usd_event
+2026-05-15,93,65,89,1,40,40,0.4494,0.4494,0,1,1,73,16,4,640.0
+2026-05-16,68,55,68,0,35,38,0.5147,0.5588,0,0,0,60,8,0,410.0
+2026-05-17,51,31,50,0,24,25,0.48,0.5,1,0,0,42,8,1,730.0
+2026-05-18,64,50,58,0,23,27,0.3966,0.4655,6,0,0,51,7,6,890.0
+2026-05-19,545,426,542,0,90,95,0.1661,0.1753,5,0,0,533,9,3,870.0
+2026-05-20,498,394,480,0,182,187,0.3792,0.3896,18,0,0,473,7,18,1010.0
+2026-05-21,399,325,395,0,165,168,0.4177,0.4253,7,0,0,388,7,4,620.0
+2026-05-22,790,615,777,0,465,480,0.5985,0.6178,13,0,0,756,21,13,970.0

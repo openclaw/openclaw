@@ -1,0 +1,12 @@
+date,unsubscribed_users,unsubscribed_dau,unsubscribed_mau,unsubscribed_inactive_7d,unsubscribed_d1_cohort,unsubscribed_d1_retained,unsubscribed_return_users,unsubscribed_return_7d_active,freetrial_users,freetrial_dau,freetrial_mau,freetrial_inactive_7d,freetrial_d1_cohort,freetrial_d1_retained,freetrial_return_users,freetrial_return_7d_active,paid_users,paid_dau,paid_mau,paid_inactive_7d,paid_d1_cohort,paid_d1_retained,paid_return_users,paid_return_7d_active,past_due_users,past_due_dau,past_due_mau,past_due_inactive_7d,past_due_d1_cohort,past_due_d1_retained,past_due_return_users,past_due_return_7d_active,canceled_subscription_users,canceled_subscription_dau,canceled_subscription_mau,canceled_subscription_inactive_7d,canceled_subscription_d1_cohort,canceled_subscription_d1_retained,canceled_subscription_return_users,canceled_subscription_return_7d_active
+2026-05-15,8417,657,6917,4429,490,67,0,0,0,0,0,0,0,0,0,0,37,1,33,27,1,0,0,0,104,15,104,0,12,3,0,0,127,13,123,68,7,1,0,0
+2026-05-16,8741,478,7215,4993,330,46,5,0,0,0,0,0,0,0,0,0,38,1,34,27,0,0,0,0,121,20,121,3,14,3,0,0,135,8,131,82,6,3,0,0
+2026-05-17,9045,423,7455,5544,308,40,5,3,0,0,0,0,0,0,0,0,39,1,34,27,1,1,0,0,138,24,138,9,13,1,2,0,140,8,135,87,5,1,0,0
+2026-05-18,9376,486,7663,6154,334,49,12,6,0,0,0,0,0,0,0,0,42,5,37,29,3,1,0,0,144,9,144,31,6,4,0,0,146,7,141,96,3,0,1,0
+2026-05-19,9639,420,7820,6659,264,27,15,,0,0,0,0,0,0,0,,44,5,39,32,1,0,1,,159,22,159,55,16,4,0,,149,3,144,104,2,0,0,
+2026-05-20,9668,164,7728,7093,34,2,14,,0,0,0,0,0,0,0,,44,1,38,35,0,0,0,,233,80,233,67,69,17,4,,160,11,154,112,11,2,0,
+2026-05-21,9686,114,7563,7564,22,4,13,,0,0,0,0,0,0,0,,46,3,34,34,2,0,1,,306,91,306,89,70,10,1,,173,16,164,113,12,0,2,
+2026-05-22,9710,112,7581,8044,28,1,10,,0,0,0,0,0,0,0,,46,2,33,34,0,0,0,,437,148,437,100,129,27,1,,183,11,174,126,8,5,0,
+2026-05-23,9723,74,7592,8370,19,0,9,,64,64,64,0,64,20,0,,59,14,46,34,14,1,0,,605,197,605,114,163,15,3,,195,16,186,131,10,1,0,
+2026-05-24,9730,51,7587,8672,12,1,12,,206,162,206,0,139,22,1,,59,1,46,34,0,0,0,,610,29,610,132,5,0,1,,211,17,201,139,14,1,1,
+2026-05-25,9755,76,7575,9018,28,,7,,305,127,305,1,96,,1,,60,2,47,37,1,,0,,610,15,610,136,0,,0,,224,17,213,144,13,,2,

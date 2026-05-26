@@ -1,0 +1,556 @@
+{
+  "meta": {
+    "type": "db",
+    "canSave": false,
+    "canEdit": false,
+    "canAdmin": false,
+    "canStar": true,
+    "canDelete": false,
+    "slug": "ai-gateway",
+    "url": "/d/ai-gateway-overview/ai-gateway",
+    "expires": "0001-01-01T00:00:00Z",
+    "created": "2026-03-13T12:21:21Z",
+    "updated": "2026-05-25T12:25:52Z",
+    "updatedBy": "Anonymous",
+    "createdBy": "Anonymous",
+    "version": 21,
+    "hasAcl": false,
+    "isFolder": false,
+    "folderId": 15,
+    "folderUid": "server",
+    "folderTitle": "Server",
+    "folderUrl": "/dashboards/f/server/server",
+    "provisioned": false,
+    "provisionedExternalId": "",
+    "annotationsPermissions": {
+      "dashboard": {
+        "canAdd": true,
+        "canEdit": true,
+        "canDelete": true
+      },
+      "organization": {
+        "canAdd": false,
+        "canEdit": false,
+        "canDelete": false
+      }
+    }
+  },
+  "dashboard": {
+    "description": "AI Gateway proxy metrics: request rate, latency, TTFB, token consumption, errors by provider/model",
+    "id": 1,
+    "panels": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "fillOpacity": 20,
+              "lineInterpolation": "smooth"
+            },
+            "unit": "reqps"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "id": 1,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum(rate(gateway_proxy_requests_total{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m]))",
+            "legendFormat": "Total",
+            "refId": "A"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum by(provider)(rate(gateway_proxy_requests_total{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m]))",
+            "legendFormat": "{{ provider }}",
+            "refId": "B"
+          }
+        ],
+        "title": "Request Rate",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 50
+                },
+                {
+                  "color": "red",
+                  "value": 100
+                }
+              ]
+            }
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 12,
+          "y": 0
+        },
+        "id": 2,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum(gateway_proxy_active_requests{namespace=~\"$namespace\", provider=~\"$provider\"})",
+            "legendFormat": "Active",
+            "refId": "A"
+          }
+        ],
+        "title": "Active Requests",
+        "type": "gauge"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "max": 1,
+            "min": 0,
+            "thresholds": {
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.01
+                },
+                {
+                  "color": "red",
+                  "value": 0.05
+                }
+              ]
+            },
+            "unit": "percentunit"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 18,
+          "y": 0
+        },
+        "id": 3,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum(rate(gateway_proxy_errors_total{namespace=~\"$namespace\", provider=~\"$provider\"}[5m])) / sum(rate(gateway_proxy_requests_total{namespace=~\"$namespace\", provider=~\"$provider\"}[5m]))",
+            "legendFormat": "Error Rate",
+            "refId": "A"
+          }
+        ],
+        "title": "Error Rate",
+        "type": "gauge"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "fillOpacity": 10,
+              "lineInterpolation": "smooth"
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        },
+        "id": 4,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "histogram_quantile(0.50, sum by(le)(rate(gateway_proxy_request_duration_seconds_bucket{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m])))",
+            "legendFormat": "P50",
+            "refId": "A"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "histogram_quantile(0.95, sum by(le)(rate(gateway_proxy_request_duration_seconds_bucket{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m])))",
+            "legendFormat": "P95",
+            "refId": "B"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "histogram_quantile(0.99, sum by(le)(rate(gateway_proxy_request_duration_seconds_bucket{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m])))",
+            "legendFormat": "P99",
+            "refId": "C"
+          }
+        ],
+        "title": "Request Latency (P50 / P95 / P99)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "fillOpacity": 10,
+              "lineInterpolation": "smooth"
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        },
+        "id": 5,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "histogram_quantile(0.50, sum by(le)(rate(gateway_proxy_ttfb_seconds_bucket{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m])))",
+            "legendFormat": "P50",
+            "refId": "A"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "histogram_quantile(0.95, sum by(le)(rate(gateway_proxy_ttfb_seconds_bucket{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m])))",
+            "legendFormat": "P95",
+            "refId": "B"
+          }
+        ],
+        "title": "TTFB (P50 / P95)",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "bars",
+              "fillOpacity": 80,
+              "stacking": {
+                "mode": "normal"
+              }
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        },
+        "id": 6,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum by(provider, direction)(rate(gateway_proxy_tokens_total{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m]))",
+            "legendFormat": "{{ provider }} / {{ direction }}",
+            "refId": "A"
+          }
+        ],
+        "title": "Token Consumption Rate",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 12,
+          "y": 16
+        },
+        "id": 7,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum by(provider)(rate(gateway_proxy_requests_total{namespace=~\"$namespace\", provider=~\"$provider\"}[5m]))",
+            "legendFormat": "{{ provider }}",
+            "refId": "A"
+          }
+        ],
+        "title": "Requests by Provider",
+        "type": "piechart"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 6,
+          "x": 18,
+          "y": 16
+        },
+        "id": 8,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum by(model)(rate(gateway_proxy_requests_total{namespace=~\"$namespace\", provider=~\"$provider\", model=~\"$model\"}[5m]))",
+            "format": "table",
+            "instant": true,
+            "legendFormat": "{{ model }}",
+            "refId": "A"
+          }
+        ],
+        "title": "Requests by Model",
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {
+                "Time": true
+              },
+              "renameByName": {
+                "Value": "Req/s",
+                "model": "Model"
+              }
+            }
+          },
+          {
+            "id": "sortBy",
+            "options": {
+              "fields": {},
+              "sort": [
+                {
+                  "desc": true,
+                  "field": "Req/s"
+                }
+              ]
+            }
+          }
+        ],
+        "type": "table"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "fillOpacity": 20,
+              "lineInterpolation": "smooth"
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 24
+        },
+        "id": 9,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum by(error_type)(rate(gateway_proxy_errors_total{namespace=~\"$namespace\", provider=~\"$provider\"}[5m]))",
+            "legendFormat": "{{ error_type }}",
+            "refId": "A"
+          }
+        ],
+        "title": "Errors by Type",
+        "type": "timeseries"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "fillOpacity": 20,
+              "lineInterpolation": "smooth"
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 24
+        },
+        "id": 10,
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${datasource}"
+            },
+            "expr": "sum by(provider)(rate(gateway_proxy_errors_total{namespace=~\"$namespace\", provider=~\"$provider\"}[5m]))",
+            "legendFormat": "{{ provider }}",
+            "refId": "A"
+          }
+        ],
+        "title": "Errors by Provider",
+        "type": "timeseries"
+      }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 39,
+    "tags": [
+      "prometheus"
+    ],
+    "templating": {
+      "list": [
+        {
+          "current": {},
+          "hide": 0,
+          "name": "datasource",
+          "query": "prometheus",
+          "type": "datasource"
+        },
+        {
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "includeAll": true,
+          "multi": true,
+          "name": "namespace",
+          "query": "label_values(gateway_proxy_requests_total, namespace)",
+          "refresh": 2,
+          "type": "query"
+        },
+        {
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "includeAll": true,
+          "multi": true,
+          "name": "provider",
+          "query": "label_values(gateway_proxy_requests_total{namespace=~\"$namespace\"}, provider)",
+          "refresh": 2,
+          "type": "query"
+        },
+        {
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "datasource": {
+            "uid": "${datasource}"
+          },
+          "includeAll": true,
+          "multi": true,
+          "name": "model",
+          "query": "label_values(gateway_proxy_requests_total{namespace=~\"$namespace\", provider=~\"$provider\"}, model)",
+          "refresh": 2,
+          "type": "query"
+        }
+      ]
+    },
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timezone": "browser",
+    "title": "AI Gateway",
+    "uid": "ai-gateway-overview",
+    "version": 21
+  }
+}

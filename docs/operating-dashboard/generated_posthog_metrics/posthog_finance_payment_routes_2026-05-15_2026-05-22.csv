@@ -1,0 +1,10 @@
+﻿route,calls,success,fail,p95_ms,success_rate
+/api/subscription,289992,258577,31415,109.0,0.8917
+/api/subscription/sync,160380,160307,73,343.0,0.9995
+/api/stripe/webhook,2818,2814,4,169.1500000000001,0.9986
+/api/subscription/checkout,2545,2527,18,982.7999999999997,0.9929
+/api/subscription/invoices,1288,1281,7,781.549999999999,0.9946
+/api/subscription/checkout/verify,1075,1058,17,979.0999999999997,0.9842
+/api/subscription/cancel,106,103,3,1100.5,0.9717
+/api/subscription/reactivate,3,1,2,776.9999999999999,0.3333
+/api/subscription/billing-portal,3,2,1,408.0,0.6667

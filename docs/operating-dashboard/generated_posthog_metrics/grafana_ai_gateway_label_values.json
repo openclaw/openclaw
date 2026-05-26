@@ -1,0 +1,59 @@
+{
+  "/label/__name__/values": [
+    "gateway_proxy_active_requests",
+    "gateway_proxy_cache_hit_tokens_created",
+    "gateway_proxy_cache_hit_tokens_total",
+    "gateway_proxy_credits_consumed_created",
+    "gateway_proxy_credits_consumed_total",
+    "gateway_proxy_errors_created",
+    "gateway_proxy_errors_total",
+    "gateway_proxy_request_duration_seconds_bucket",
+    "gateway_proxy_request_duration_seconds_count",
+    "gateway_proxy_request_duration_seconds_created",
+    "gateway_proxy_request_duration_seconds_sum",
+    "gateway_proxy_requests_created",
+    "gateway_proxy_requests_total",
+    "gateway_proxy_tokens_created",
+    "gateway_proxy_tokens_total",
+    "gateway_proxy_tool_use_created",
+    "gateway_proxy_tool_use_total",
+    "gateway_proxy_ttfb_seconds_bucket",
+    "gateway_proxy_ttfb_seconds_count",
+    "gateway_proxy_ttfb_seconds_created",
+    "gateway_proxy_ttfb_seconds_sum"
+  ],
+  "/label/namespace/values": [
+    "agent-server-prod",
+    "agent-server-test",
+    "ai-gateway-prod",
+    "ai-gateway-test",
+    "im-server-prod",
+    "im-server-test",
+    "maxgent-server-prod",
+    "maxgent-server-test",
+    "realtime-layer-prod",
+    "realtime-layer-test"
+  ],
+  "/label/provider/values": [
+    "anthropic",
+    "deepseek",
+    "fal",
+    "fal-queue",
+    "fal-run",
+    "openai-codex",
+    "v1"
+  ],
+  "/label/model/values": [
+    "claude-opus-4-5-20251101",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "unknown"
+  ],
+  "/label/error_type/values": [
+    "stream_abort",
+    "timeout",
+    "upstream_error"
+  ]
+}

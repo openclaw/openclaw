@@ -1,0 +1,37 @@
+panel,ref_id,series,latest,mean,max,points
+Request Rate,A,"sum(rate(gateway_proxy_requests_total{namespace=~"".*"", provider=~"".*"", model=~"".*""}[5m]))",0.0,0.041148318440203044,0.19298245614035087,121
+Request Rate,B,provider=anthropic,0.0,0.026243290523066676,0.14035087719298245,121
+Request Rate,B,provider=deepseek,0.0,0.01267217508762952,0.05263157894736842,121
+Request Rate,B,provider=fal-queue,0.0,0.0,0.0,121
+Request Rate,B,provider=fal-run,0.0,0.0022328528295069254,0.017543859649122806,121
+Request Rate,B,provider=openai-codex,0.0,0.0,0.0,121
+Request Rate,B,provider=openrouter,0.0,0.0,0.0,121
+Active Requests,A,"sum(gateway_proxy_active_requests{namespace=~"".*"", provider=~"".*""})",4.0,4.2727272727272725,9.0,121
+Error Rate,A,"sum(rate(gateway_proxy_errors_total{namespace=~"".*"", provider=~"".*""}[5m])) / sum(rate(gateway_proxy_requests_total{namespace=~"".*"", provider=~"".*""}[5m]))",0.0,0.0,0.0,94
+Request Latency (P50 / P95 / P99),A,"histogram_quantile(0.50, sum by(le)(rate(gateway_proxy_request_duration_seconds_bucket{namespace=~"".*"", provider=~"".*"", model=~"".*""}[5m])))",1.375,1.3362233779466257,3.75,94
+Request Latency (P50 / P95 / P99),B,"histogram_quantile(0.95, sum by(le)(rate(gateway_proxy_request_duration_seconds_bucket{namespace=~"".*"", provider=~"".*"", model=~"".*""}[5m])))",2.3874999999999997,8.322640260891589,26.4,94
+Request Latency (P50 / P95 / P99),C,"histogram_quantile(0.99, sum by(le)(rate(gateway_proxy_request_duration_seconds_bucket{namespace=~"".*"", provider=~"".*"", model=~"".*""}[5m])))",2.4775,11.10708124366768,29.28,94
+TTFB (P50 / P95),A,"histogram_quantile(0.50, sum by(le)(rate(gateway_proxy_ttfb_seconds_bucket{namespace=~"".*"", provider=~"".*"", model=~"".*""}[5m])))",1.375,1.2634642673511804,2.0,94
+TTFB (P50 / P95),B,"histogram_quantile(0.95, sum by(le)(rate(gateway_proxy_ttfb_seconds_bucket{namespace=~"".*"", provider=~"".*"", model=~"".*""}[5m])))",2.3874999999999997,8.261689779635258,26.4,94
+Token Consumption Rate,A,"direction=input, provider=anthropic",0.0,5.880701711246064,75.80701754385964,121
+Token Consumption Rate,A,"direction=input, provider=deepseek",0.0,3.30073980359746,9.480701754385963,121
+Token Consumption Rate,A,"direction=output, provider=anthropic",0.0,6.4170502848858355,26.540350877192978,121
+Token Consumption Rate,A,"direction=output, provider=deepseek",0.0,2.8383061641501595,11.473684210526315,121
+Requests by Provider,A,provider=anthropic,0.0,0.026243290523066676,0.14035087719298245,121
+Requests by Provider,A,provider=deepseek,0.0,0.01267217508762952,0.05263157894736842,121
+Requests by Provider,A,provider=fal-queue,0.0,0.0,0.0,121
+Requests by Provider,A,provider=fal-run,0.0,0.0022328528295069254,0.017543859649122806,121
+Requests by Provider,A,provider=openai-codex,0.0,0.0,0.0,121
+Requests by Provider,A,provider=openrouter,0.0,0.0,0.0,121
+Requests by Model,A,model=claude-4.6-sonnet-20260217,0.0,0.0,0.0,2
+Requests by Model,A,model=claude-opus-4-5-20251101,0.0,0.0030158060077257807,0.024561403508771926,121
+Requests by Model,A,model=claude-sonnet-4-5-20250929,0.0,0.022966501479238222,0.14035087719298245,121
+Requests by Model,A,model=deepseek-v4-flash,0.0,0.01267217508762952,0.05263157894736842,121
+Requests by Model,A,model=deepseek-v4-pro,0.0,0.0002609830361026533,0.003508771929824561,121
+Requests by Model,A,model=unknown,0.0,0.0022328528295069254,0.017543859649122806,121
+Errors by Type,A,error_type=stream_abort,0.0,0.0,0.0,121
+Errors by Type,A,error_type=timeout,0.0,0.0,0.0,121
+Errors by Type,A,error_type=upstream_error,0.0,0.0,0.0,121
+Errors by Provider,A,provider=anthropic,0.0,0.0,0.0,121
+Errors by Provider,A,provider=deepseek,0.0,0.0,0.0,121
+Errors by Provider,A,provider=openai-codex,0.0,0.0,0.0,121

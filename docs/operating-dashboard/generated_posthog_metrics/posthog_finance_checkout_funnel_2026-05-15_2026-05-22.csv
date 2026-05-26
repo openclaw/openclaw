@@ -1,0 +1,9 @@
+﻿date,pricing_opened,pricing_opened_users,checkout_started,checkout_started_users,checkout_session_created,checkout_session_created_users,checkout_returned,checkout_returned_users,checkout_verified,checkout_verified_users,checkout_fulfilled,checkout_fulfilled_users,fulfilled_subscription,fulfilled_credit_pack,fulfilled_amount_usd_event,pricing_to_started_same_day_user_ratio,started_to_session_created_same_day_user_ratio,session_created_to_verified_same_day_user_ratio,verified_to_fulfilled_same_day_user_ratio,checkout_start_failed,checkout_verify_failed,checkout_fulfillment_failed
+2026-05-15,363,205,65,53,89,72,45,40,72,38,39,38,36,3,30.0,0.2585,1.3585,0.5278,1.0,0,0,1
+2026-05-16,244,162,55,49,119,63,35,31,79,38,62,39,38,24,4610.0,0.3025,1.2857,0.6032,1.0263,0,0,0
+2026-05-17,200,135,31,27,62,40,26,17,54,20,37,20,21,16,2055.0,0.2,1.4815,0.5,1.0,1,0,0
+2026-05-18,246,148,50,36,58,45,29,24,48,22,27,26,25,2,210.0,0.2432,1.25,0.4889,1.1818,6,0,0
+2026-05-19,1331,555,426,309,543,394,164,120,165,75,95,79,94,1,200.0,0.5568,1.2751,0.1904,1.0533,5,2,0
+2026-05-20,1025,384,394,246,480,309,219,147,344,129,187,131,186,1,100.0,0.6406,1.2561,0.4175,1.0155,18,6,1
+2026-05-21,787,313,325,197,398,254,205,122,310,111,168,114,166,2,60.0,0.6294,1.2893,0.437,1.027,7,2,0
+2026-05-22,1160,549,615,429,778,571,421,314,827,388,480,399,478,2,40.0,0.7814,1.331,0.6795,1.0284,13,2,0
