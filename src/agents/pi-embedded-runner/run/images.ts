@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
@@ -435,6 +436,10 @@ export async function loadImageFromRef(
 ): Promise<ImageContent | null> {
   try {
     let targetPath = ref.resolved;
+
+    if (!options?.sandbox) {
+      targetPath = await resolveMediaReferenceLocalPath(targetPath);
+    }
 
     // Resolve paths relative to sandbox or workspace as needed
     if (options?.sandbox) {

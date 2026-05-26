@@ -854,7 +854,7 @@ export function createImageTool(options?: {
         // shared image registry here, so fail gracefully instead of attempting to
         // `fs.readFile("image:0")` and producing a noisy ENOENT.
         const refInfo = classifyMediaReferenceSource(normalizedRef);
-        const { isDataUrl, isFileUrl, isHttpUrl } = refInfo;
+        const { isDataUrl, isFileUrl, isHttpUrl, isMediaStoreUrl } = refInfo;
         if (refInfo.hasUnsupportedScheme) {
           return {
             content: [
@@ -888,6 +888,7 @@ export function createImageTool(options?: {
             !isDataUrl &&
             !isFileUrl &&
             !isHttpUrl &&
+            !isMediaStoreUrl &&
             !refInfo.looksLikeWindowsDrivePath &&
             !isAbsolute(normalizedRef) &&
             options?.workspaceDir
