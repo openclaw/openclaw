@@ -155,6 +155,9 @@ export class ClaudeAppServerEventProjector {
       case "item/completed":
         this.handleItemLifecycle(notif.method, p);
         return null;
+      case "item/updated":
+        this.handleItemUpdated(p);
+        return null;
       case "item/agentMessage/delta":
         this.handleAgentMessageDelta(p);
         return null;
@@ -250,6 +253,31 @@ export class ClaudeAppServerEventProjector {
       return;
     }
     // Other non-tool items (reasoning, SDK lifecycle): suppressed.
+  }
+
+  private handleItemUpdated(p: Record<string, unknown>): void {
+    const item = p.item as Record<string, unknown> | undefined;
+    if (!item) {
+      return;
+    }
+    if (!isToolItem(item)) {
+      return;
+    }
+    // The server emits item/updated for tool calls once the input JSON
+    // streamed in by Anthropic is parsed (between item/started — where
+    // args were still null — and item/completed). Refresh the
+    // accumulator's args + re-emit stream:"tool" with phase:"update" so
+    // channel renderers can replace the bare "🛠️ <tool>" line with
+    // "🛠️ <tool> <command>". Matches codex's per-tool command rendering.
+    const itemId = typeof item.id === "string" ? item.id : undefined;
+    if (itemId) {
+      const existing = this.acc.toolCalls.get(itemId);
+      const updatedArgs = item.arguments ?? item.input;
+      if (existing) {
+        this.acc.toolCalls.set(itemId, { ...existing, args: updatedArgs });
+      }
+    }
+    emitToolEvent(this.params, "update", item);
   }
 
   private recordToolStart(item: Record<string, unknown>): void {
@@ -400,7 +428,7 @@ export function extractItemName(item: Record<string, unknown>): string | undefin
 
 export function emitToolEvent(
   params: EmbeddedRunAttemptParams,
-  phase: "start" | "result",
+  phase: "start" | "update" | "result",
   item: Record<string, unknown>,
 ): void {
   const toolName = extractItemName(item);
@@ -420,7 +448,7 @@ export function emitToolEvent(
     data.itemId = itemId;
     data.toolCallId = itemId;
   }
-  if (phase === "start" && args) {
+  if ((phase === "start" || phase === "update") && args) {
     data.args = args;
   }
   if (phase === "result") {
