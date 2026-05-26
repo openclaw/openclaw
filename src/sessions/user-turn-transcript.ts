@@ -74,6 +74,46 @@ export type UserTurnTranscriptPersistenceTarget = Omit<
   "input" | "message" | "updateMode"
 >;
 
+export type UserTurnTranscriptPersistResult = {
+  sessionFile: string;
+  sessionEntry: SessionEntry | undefined;
+  messageId: string;
+  message: PersistedUserTurnMessage;
+};
+
+export type UserTurnTranscriptTargetResolver =
+  | UserTurnTranscriptPersistenceTarget
+  | (() =>
+      | UserTurnTranscriptPersistenceTarget
+      | undefined
+      | Promise<UserTurnTranscriptPersistenceTarget | undefined>);
+
+export type UserTurnTranscriptRecorder = {
+  readonly message: PersistedUserTurnMessage | undefined;
+  markRuntimePersistencePending: (pending: Promise<void>) => void;
+  markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;
+  markBlocked: () => void;
+  hasPersisted: () => boolean;
+  isBlocked: () => boolean;
+  hasRuntimePersistencePending: () => boolean;
+  waitForRuntimePersistence: () => Promise<void>;
+  persistApproved: (params?: {
+    updateMode?: UserTurnTranscriptUpdateMode;
+  }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistFallback: (params?: {
+    updateMode?: UserTurnTranscriptUpdateMode;
+  }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+};
+
+export type CreateUserTurnTranscriptRecorderParams = {
+  input?: UserTurnInput;
+  message?: PersistedUserTurnMessage;
+  target: UserTurnTranscriptTargetResolver;
+  updateMode?: UserTurnTranscriptUpdateMode;
+  errorContext?: string;
+  onPersistenceError?: (error: unknown) => void;
+};
+
 type InlineUserTurnTranscriptSource =
   | {
       message: PersistedUserTurnMessage;
@@ -397,15 +437,9 @@ export async function appendInlineUserTurnTranscriptMessage(
   });
 }
 
-export async function persistUserTurnTranscript(params: PersistUserTurnTranscriptParams): Promise<
-  | {
-      sessionFile: string;
-      sessionEntry: SessionEntry | undefined;
-      messageId: string;
-      message: PersistedUserTurnMessage;
-    }
-  | undefined
-> {
+export async function persistUserTurnTranscript(
+  params: PersistUserTurnTranscriptParams,
+): Promise<UserTurnTranscriptPersistResult | undefined> {
   const message = resolvePersistedUserTurnMessage(params);
   if (!message) {
     return undefined;
@@ -484,4 +518,124 @@ export async function tryPersistInlineUserTurnTranscript(
     );
     return undefined;
   }
+}
+
+async function resolveUserTurnTranscriptTarget(
+  target: UserTurnTranscriptTargetResolver,
+): Promise<UserTurnTranscriptPersistenceTarget | undefined> {
+  return typeof target === "function" ? await target() : target;
+}
+
+export function createUserTurnTranscriptRecorder(
+  params: CreateUserTurnTranscriptRecorderParams,
+): UserTurnTranscriptRecorder {
+  const message = resolvePersistedUserTurnMessage(params);
+  let blocked = false;
+  let persisted = false;
+  let persistedResult: UserTurnTranscriptPersistResult | undefined;
+  let runtimePersistencePromise: Promise<void> | undefined;
+  let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
+
+  const handlePersistenceError = (error: unknown) => {
+    if (params.onPersistenceError) {
+      params.onPersistenceError(error);
+      return;
+    }
+    logVerbose(
+      `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
+    );
+  };
+
+  const waitForRuntimePersistence = async () => {
+    if (!runtimePersistencePromise) {
+      return;
+    }
+    try {
+      await runtimePersistencePromise;
+    } catch (error) {
+      handlePersistenceError(error);
+    }
+  };
+
+  const persistPrepared = async (options: {
+    waitForRuntime: boolean;
+    skipWhenBlocked: boolean;
+    updateMode?: UserTurnTranscriptUpdateMode;
+  }): Promise<UserTurnTranscriptPersistResult | undefined> => {
+    if (persisted) {
+      return persistedResult;
+    }
+    if (options.skipWhenBlocked && blocked) {
+      return undefined;
+    }
+    if (!message) {
+      return undefined;
+    }
+    if (options.waitForRuntime) {
+      await waitForRuntimePersistence();
+      if (persisted) {
+        return persistedResult;
+      }
+    }
+    if (selfPersistencePromise) {
+      return await selfPersistencePromise;
+    }
+    selfPersistencePromise = (async () => {
+      const target = await resolveUserTurnTranscriptTarget(params.target);
+      if (!target) {
+        return undefined;
+      }
+      const result = await persistUserTurnTranscript({
+        ...target,
+        message,
+        updateMode: options.updateMode ?? params.updateMode ?? "inline",
+      });
+      if (result) {
+        persisted = true;
+        persistedResult = result;
+      }
+      return result;
+    })();
+    try {
+      return await selfPersistencePromise;
+    } catch (error) {
+      handlePersistenceError(error);
+      throw error;
+    }
+  };
+
+  return {
+    message,
+    markRuntimePersistencePending: (pending) => {
+      runtimePersistencePromise = pending;
+    },
+    markRuntimePersisted: (persistedMessage) => {
+      persisted = true;
+      if (persistedMessage && persistedResult) {
+        persistedResult = {
+          ...persistedResult,
+          message: persistedMessage,
+        };
+      }
+    },
+    markBlocked: () => {
+      blocked = true;
+    },
+    hasPersisted: () => persisted,
+    isBlocked: () => blocked,
+    hasRuntimePersistencePending: () => runtimePersistencePromise !== undefined,
+    waitForRuntimePersistence,
+    persistApproved: async (options) =>
+      await persistPrepared({
+        waitForRuntime: false,
+        skipWhenBlocked: true,
+        updateMode: options?.updateMode,
+      }),
+    persistFallback: async (options) =>
+      await persistPrepared({
+        waitForRuntime: true,
+        skipWhenBlocked: true,
+        updateMode: options?.updateMode,
+      }),
+  };
 }

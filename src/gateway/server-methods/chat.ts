@@ -52,8 +52,9 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
-  persistInlineUserTurnTranscript,
+  createUserTurnTranscriptRecorder,
   type UserTurnInput,
+  type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
@@ -2698,56 +2699,48 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
-      let userTranscriptUpdatePromise: Promise<void> | null = null;
-      let runtimeUserTranscriptPersistencePromise: Promise<void> | null = null;
       let agentRunStarted = false;
-      let agentUserMessagePersisted = false;
-      let beforeAgentRunBlocked = false;
-      const persistGatewayUserTurnTranscript = async () => {
-        const runtimePersistence = runtimeUserTranscriptPersistencePromise;
-        if (runtimePersistence) {
-          await runtimePersistence.catch((error) => {
-            context.logGateway.warn(
-              `runtime user transcript persistence failed before fallback: ${formatForLog(error)}`,
-            );
-          });
-          if (agentUserMessagePersisted) {
-            return;
-          }
-        }
-        if (userTranscriptUpdatePromise) {
-          await userTranscriptUpdatePromise;
-          return;
-        }
-        userTranscriptUpdatePromise = (async () => {
-          await measureDiagnosticsTimelineSpan(
-            "gateway.chat_send.persist_user_transcript",
-            async () => {
+      const userTurnRecorderPromise: Promise<UserTurnTranscriptRecorder> =
+        userTurnInputPromise.then((input) =>
+          createUserTurnTranscriptRecorder({
+            input,
+            target: () => {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
               if (!resolvedSessionId) {
-                return;
+                return undefined;
               }
-              const userTurnInput = await userTurnInputPromise;
-              await persistInlineUserTurnTranscript({
+              return {
                 sessionId: resolvedSessionId,
                 sessionKey,
                 sessionEntry: latestEntry ?? entry,
                 storePath: latestStorePath,
                 agentId,
                 config: cfg,
-                input: userTurnInput,
-              });
+              };
             },
-            {
-              phase: "agent-turn",
-              config: cfg,
-              attributes: chatSendTraceAttributes,
+            errorContext: "gateway chat user turn transcript",
+            onPersistenceError: (error) => {
+              context.logGateway.warn(
+                `gateway user transcript persistence failed: ${formatForLog(error)}`,
+              );
             },
-          );
-        })();
-        await userTranscriptUpdatePromise;
+          }),
+        );
+      const persistGatewayUserTurnTranscript = async () => {
+        const userTurnRecorder = await userTurnRecorderPromise;
+        await measureDiagnosticsTimelineSpan(
+          "gateway.chat_send.persist_user_transcript",
+          async () => {
+            await userTurnRecorder.persistFallback();
+          },
+          {
+            phase: "agent-turn",
+            config: cfg,
+            attributes: chatSendTraceAttributes,
+          },
+        );
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
@@ -2847,7 +2840,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
         deliver: async (payload, info) => {
           if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
-            beforeAgentRunBlocked = true;
+            const userTurnRecorder = await userTurnRecorderPromise;
+            userTurnRecorder.markBlocked();
           }
           switch (info.kind) {
             case "block":
@@ -2906,11 +2900,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                 }
               },
-              onUserMessagePersisted: () => {
-                agentUserMessagePersisted = true;
+              onUserMessagePersisted: (message) => {
+                return userTurnRecorderPromise.then((userTurnRecorder) => {
+                  userTurnRecorder.markRuntimePersisted(message);
+                });
               },
               onUserMessagePersistencePending: (pending) => {
-                runtimeUserTranscriptPersistencePromise = pending;
+                void userTurnRecorderPromise.then((userTurnRecorder) => {
+                  userTurnRecorder.markRuntimePersistencePending(pending);
+                });
               },
               onModelSelected: (modelSelection) => {
                 updateChatRunProvider(context.chatAbortControllers, {
@@ -2924,7 +2922,10 @@ export const chatHandlers: GatewayRequestHandlers = {
               },
             },
           });
-          beforeAgentRunBlocked = dispatchResult.beforeAgentRunBlocked === true;
+          if (dispatchResult.beforeAgentRunBlocked === true) {
+            const userTurnRecorder = await userTurnRecorderPromise;
+            userTurnRecorder.markBlocked();
+          }
           return dispatchResult;
         },
         {
@@ -2947,20 +2948,21 @@ export const chatHandlers: GatewayRequestHandlers = {
                   .map((payload) => payload.text?.trim())
                   .filter((text): text is string => Boolean(text))
                   .join(" | ") || undefined;
+              const userTurnRecorder = await userTurnRecorderPromise;
               if (
                 agentRunStarted &&
                 returnedAgentErrorPayloads.length > 0 &&
-                !agentUserMessagePersisted &&
-                !beforeAgentRunBlocked
+                !userTurnRecorder.hasPersisted() &&
+                !userTurnRecorder.isBlocked()
               ) {
                 await persistGatewayUserTurnTranscript();
               }
               if (
                 agentRunStarted &&
                 returnedAgentErrorPayloads.length === 0 &&
-                !agentUserMessagePersisted &&
-                !beforeAgentRunBlocked &&
-                runtimeUserTranscriptPersistencePromise
+                !userTurnRecorder.hasPersisted() &&
+                !userTurnRecorder.isBlocked() &&
+                userTurnRecorder.hasRuntimePersistencePending()
               ) {
                 await persistGatewayUserTurnTranscript();
               }
@@ -3507,8 +3509,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err) => {
+          const userTurnRecorder = await userTurnRecorderPromise;
           const emitAfterError =
-            agentUserMessagePersisted || beforeAgentRunBlocked
+            userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()
               : persistGatewayUserTurnTranscript();
           await emitAfterError.catch((transcriptErr) => {
