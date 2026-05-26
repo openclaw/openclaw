@@ -784,9 +784,9 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("rejects unsafe custom session ids on add and update", async () => {
+  test("accepts opaque custom session ids on add and update", async () => {
     const { prevSkipCron } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-bad-session-target-",
+      tempPrefix: "openclaw-gw-cron-opaque-session-target-",
       cronEnabled: false,
     });
 
@@ -794,18 +794,20 @@ describe("gateway server cron", () => {
 
     try {
       const addRes = await directCronReq(cronState, "cron.add", {
-        name: "bad custom session",
+        name: "dingtalk group session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "session:../../outside",
+        sessionTarget: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "hello" },
       });
-      expect(addRes.ok).toBe(false);
-      expect(addRes.error?.message).toContain("invalid cron sessionTarget session id");
+      expect(addRes.ok).toBe(true);
+      expectRecordFields(addRes.payload, {
+        sessionTarget: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
+      });
 
       const validRes = await directCronReq(cronState, "cron.add", {
-        name: "good custom session",
+        name: "custom session to patch",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "session:project-alpha:ops",
@@ -822,8 +824,8 @@ describe("gateway server cron", () => {
           sessionTarget: "session:..\\outside",
         },
       });
-      expect(updateRes.ok).toBe(false);
-      expect(updateRes.error?.message).toContain("invalid cron sessionTarget session id");
+      expect(updateRes.ok).toBe(true);
+      expectRecordFields(updateRes.payload, { sessionTarget: "session:..\\outside" });
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
@@ -1136,20 +1138,21 @@ describe("gateway server cron", () => {
     }
   }, 45_000);
 
-  test("fails closed for persisted unsafe custom session ids", async () => {
+  test("runs persisted opaque custom session ids with native separators", async () => {
     const now = Date.now();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
     const { prevSkipCron } = await setupCronTestRun({
-      tempPrefix: "openclaw-gw-cron-persisted-bad-session-target-",
+      tempPrefix: "openclaw-gw-cron-persisted-opaque-session-target-",
       cronEnabled: false,
       jobs: [
         {
-          id: "bad-custom-session-job",
-          name: "bad custom session job",
+          id: "opaque-custom-session-job",
+          name: "opaque custom session job",
           enabled: true,
           createdAtMs: now,
           updatedAtMs: now,
           schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "session:../../outside",
+          sessionTarget,
           wakeMode: "now",
           payload: { kind: "agentTurn", message: "hello" },
           state: {},
@@ -1162,13 +1165,21 @@ describe("gateway server cron", () => {
     await connectOk(ws);
 
     try {
+      const finished = waitForCronEvent(
+        ws,
+        (payload) =>
+          payload?.jobId === "opaque-custom-session-job" && payload?.action === "finished",
+      );
       const runRes = await rpcReq(ws, "cron.run", {
-        id: "bad-custom-session-job",
+        id: "opaque-custom-session-job",
         mode: "force",
       });
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, ran: false, reason: "invalid-spec" });
-      expect(cronIsolatedRun).not.toHaveBeenCalled();
+      expectEnqueuedRunPayload(runRes.payload);
+      await finished;
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      const call = cronIsolatedRun.mock.calls.at(0)?.[0] as { sessionKey?: unknown } | undefined;
+      expect(call?.sessionKey).toBe("agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==");
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
