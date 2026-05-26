@@ -373,15 +373,22 @@ export function buildCliArgs(params: {
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
+  // System-prompt flags are normally skipped on resume because resolveSystemPromptUsage
+  // returns null on `systemPromptWhen: "first"` backends for resumed sessions, so the
+  // prompt is already pruned upstream. For `systemPromptWhen: "always"` backends
+  // (e.g. claude-cli for #80374) the prompt has been intentionally preserved by
+  // resolveSystemPromptUsage and must still reach the CLI on resume — otherwise
+  // re-injection silently drops at the arg builder.
+  const emitSystemPromptOnResume = params.backend.systemPromptWhen === "always";
   if (
-    !params.useResume &&
+    (!params.useResume || emitSystemPromptOnResume) &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    !params.useResume &&
+    (!params.useResume || emitSystemPromptOnResume) &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -393,7 +400,11 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (
+    (!params.useResume || emitSystemPromptOnResume) &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

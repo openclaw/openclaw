@@ -179,6 +179,80 @@ describe("buildCliArgs", () => {
     ).toEqual(["-p", "--append-system-prompt-file", "/tmp/openclaw/system-prompt.md"]);
   });
 
+  it("re-emits --append-system-prompt-file on resumed claude-cli sessions when systemPromptWhen='always' (#80374)", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptFileArg: "--append-system-prompt-file",
+          systemPromptWhen: "always",
+        },
+        baseArgs: ["-p", "--resume", "session-123"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "Stable prefix",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: true,
+      }),
+    ).toEqual([
+      "-p",
+      "--resume",
+      "session-123",
+      "--append-system-prompt-file",
+      "/tmp/openclaw/system-prompt.md",
+    ]);
+  });
+
+  it("still drops --append-system-prompt-file on resumed sessions for systemPromptWhen='first' backends", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptFileArg: "--append-system-prompt-file",
+          systemPromptWhen: "first",
+        },
+        baseArgs: ["-p", "--resume", "session-123"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "Stable prefix",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: true,
+      }),
+    ).toEqual(["-p", "--resume", "session-123"]);
+  });
+
+  it("re-emits Codex model_instructions_file on resume when systemPromptWhen='always'", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "codex",
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+          systemPromptWhen: "always",
+        },
+        baseArgs: ["exec", "--json"],
+        modelId: "gpt-5.4",
+        systemPrompt: "Stable prefix",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: true,
+      }),
+    ).toEqual(["exec", "--json", "-c", 'model_instructions_file="/tmp/openclaw/system-prompt.md"']);
+  });
+
+  it("re-emits --append-system-prompt on resume when systemPromptWhen='always' and only the inline arg is configured", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+          systemPromptWhen: "always",
+        },
+        baseArgs: ["-p", "--resume", "session-123"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "Stable prefix",
+        useResume: true,
+      }),
+    ).toEqual(["-p", "--resume", "session-123", "--append-system-prompt", "Stable prefix"]);
+  });
+
   it("replaces prompt placeholders before falling back to a trailing positional prompt", () => {
     expect(
       buildCliArgs({

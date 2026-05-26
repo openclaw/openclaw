@@ -281,13 +281,19 @@ export async function executePreparedCliRun(
     isNewSession: isNew,
     systemPrompt: context.systemPrompt,
   });
-  const systemPromptFile =
-    !useResume && systemPromptArg
-      ? await writeCliSystemPromptFile({
-          backend,
-          systemPrompt: systemPromptArg,
-        })
-      : undefined;
+  // Write the system-prompt tempfile whenever resolveSystemPromptUsage decided
+  // a prompt should be propagated. On `systemPromptWhen: "always"` backends
+  // (e.g. claude-cli after PR #81199 / issue #80374) that includes resumed
+  // sessions — buildCliArgs and buildClaudeLiveArgs still need the file path
+  // to pass `--append-system-prompt-file` to the resumed process. Restricting
+  // creation to `!useResume` here would silently drop the file even when the
+  // arg builders expect it.
+  const systemPromptFile = systemPromptArg
+    ? await writeCliSystemPromptFile({
+        backend,
+        systemPrompt: systemPromptArg,
+      })
+    : undefined;
 
   const basePrompt = cliSessionIdToUse
     ? params.prompt

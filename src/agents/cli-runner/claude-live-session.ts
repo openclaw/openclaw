@@ -177,11 +177,18 @@ export function buildClaudeLiveArgs(params: {
   systemPrompt: string;
   useResume: boolean;
 }): string[] {
+  // On `systemPromptWhen: "always"` backends (e.g. claude-cli for #80374)
+  // the harness intentionally keeps the system-prompt args on resume so the
+  // live stdio session re-injects SOUL/IDENTITY/USER. Stripping them here
+  // would silently undo the work done upstream by resolveSystemPromptUsage
+  // and buildCliArgs.
+  const stripSystemPrompt =
+    params.useResume && params.backend.systemPromptWhen !== "always";
   return appendArg(
     upsertArgValue(
       upsertArgValue(
         upsertArgValue(
-          stripLiveProcessArgs(params.args, params.backend, params.useResume),
+          stripLiveProcessArgs(params.args, params.backend, stripSystemPrompt),
           "--input-format",
           "stream-json",
         ),

@@ -1467,6 +1467,46 @@ describe("runCliAgent spawn path", () => {
     expect(args).not.toContain("current prompt");
   });
 
+  it("preserves --append-system-prompt-file on resumed live sessions when systemPromptWhen='always' (#80374)", () => {
+    const backend: PreparedCliRunContext["preparedBackend"]["backend"] = {
+      command: "claude",
+      args: ["-p", "--output-format", "stream-json"],
+      output: "jsonl",
+      input: "stdin",
+      sessionArg: "--session-id",
+      systemPromptArg: "--append-system-prompt",
+      systemPromptFileArg: "--append-system-prompt-file",
+      systemPromptWhen: "always",
+    };
+
+    const args = buildClaudeLiveArgs({
+      args: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--resume",
+        "claude-session",
+        "--session-id",
+        "openclaw-session",
+        "--append-system-prompt-file",
+        "/tmp/system-prompt.md",
+      ],
+      backend,
+      systemPrompt: "current prompt",
+      useResume: true,
+    });
+
+    expect(args).toContain("--resume");
+    expect(args).toContain("claude-session");
+    // --session-id is still stripped because it is the OpenClaw stub; live
+    // session correlates by Claude's own resume id, not the OpenClaw one.
+    expect(args).not.toContain("--session-id");
+    expect(args).not.toContain("openclaw-session");
+    // System-prompt args MUST survive because systemPromptWhen='always'.
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain("/tmp/system-prompt.md");
+  });
+
   it("adds Claude stream-json output format when building live session argv", () => {
     const backend: PreparedCliRunContext["preparedBackend"]["backend"] = {
       command: "claude",
