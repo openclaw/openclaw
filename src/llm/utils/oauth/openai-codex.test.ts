@@ -28,7 +28,14 @@ describe("OpenAI Codex OAuth token responses", () => {
     expect(url.searchParams.get("originator")).toBe("openclaw-test");
     const redirectUri = url.searchParams.get("redirect_uri");
     expect(redirectUri).toBeTruthy();
+    expect(flow.redirectUri).toBe(redirectUri);
     expect(testing.callbackHost).toBe(new URL(redirectUri ?? "").hostname);
+  });
+
+  it("builds callback redirect URIs from the configured loopback host", () => {
+    expect(testing.resolveRedirectUri("127.0.0.1")).toBe(
+      "http://127.0.0.1:1455/auth/callback",
+    );
   });
 
   it("rejects non-loopback callback bind hosts", () => {

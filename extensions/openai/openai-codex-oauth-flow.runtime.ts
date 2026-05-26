@@ -18,9 +18,12 @@ import { generatePKCE } from "./openai-codex-pkce.runtime.js";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
-const REDIRECT_URI = "http://localhost:1455/auth/callback";
+const CALLBACK_PORT = 1455;
+const CALLBACK_PATH = "/auth/callback";
+const DEFAULT_CALLBACK_HOST = "localhost";
 const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_HOST = resolveCallbackHost();
+const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const SCOPE = "openid profile email offline_access";
 
@@ -53,13 +56,20 @@ function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
 }
 
 function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
-  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || new URL(REDIRECT_URI).hostname;
+  const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
   if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
     throw new Error(
       "OpenAI Codex OAuth callback host must be localhost, 127.0.0.1, or ::1",
     );
   }
   return host;
+}
+
+function resolveRedirectUri(host: string = CALLBACK_HOST): string {
+  const hostForUrl = host === "::1" ? "[::1]" : host;
+  const url = new URL(`http://${hostForUrl}:${CALLBACK_PORT}`);
+  url.pathname = CALLBACK_PATH;
+  return url.toString();
 }
 
 function createState(randomBytes: typeof import("node:crypto").randomBytes): string {
@@ -222,7 +232,7 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 
 async function createAuthorizationFlow(
   originator: string = "openclaw",
-): Promise<{ verifier: string; state: string; url: string }> {
+): Promise<{ verifier: string; redirectUri: string; state: string; url: string }> {
   const [{ verifier, challenge }, runtime] = await Promise.all([
     generatePKCE(),
     loadNodeOAuthRuntime(),
@@ -232,7 +242,8 @@ async function createAuthorizationFlow(
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", CLIENT_ID);
-  url.searchParams.set("redirect_uri", REDIRECT_URI);
+  const redirectUri = REDIRECT_URI;
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("scope", SCOPE);
   url.searchParams.set("code_challenge", challenge);
   url.searchParams.set("code_challenge_method", "S256");
@@ -241,7 +252,7 @@ async function createAuthorizationFlow(
   url.searchParams.set("codex_cli_simplified_flow", "true");
   url.searchParams.set("originator", originator);
 
-  return { verifier, state, url: url.toString() };
+  return { verifier, redirectUri, state, url: url.toString() };
 }
 
 type OAuthServerInfo = {
@@ -299,7 +310,7 @@ async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 
   return new Promise((resolve) => {
     server
-      .listen(1455, CALLBACK_HOST, () => {
+      .listen(CALLBACK_PORT, CALLBACK_HOST, () => {
         resolve({
           close: () => server.close(),
           cancelWait: () => {
@@ -348,7 +359,7 @@ export async function loginOpenAICodex(options: {
   onManualCodeInput?: () => Promise<string>;
   originator?: string;
 }): Promise<OAuthCredentials> {
-  const { verifier, state, url } = await createAuthorizationFlow(options.originator);
+  const { verifier, redirectUri, state, url } = await createAuthorizationFlow(options.originator);
   const server = await startLocalOAuthServer(state);
 
   options.onAuth({ url, instructions: "A browser window should open. Complete login to finish." });
@@ -431,7 +442,7 @@ export async function loginOpenAICodex(options: {
       throw new Error("Missing authorization code");
     }
 
-    const tokenResult = await exchangeAuthorizationCode(code, verifier);
+    const tokenResult = await exchangeAuthorizationCode(code, verifier, redirectUri);
     if (tokenResult.type !== "success") {
       throw new Error(tokenResult.message);
     }
@@ -503,4 +514,5 @@ export const testing = {
   exchangeAuthorizationCode,
   refreshAccessToken,
   resolveCallbackHost,
+  resolveRedirectUri,
 };
