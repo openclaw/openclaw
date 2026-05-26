@@ -1,25 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AnyAgentTool, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MeetingNotesStore } from "./src/store.js";
+import { TranscriptsStore } from "../../transcripts/store.js";
+import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getMeetingNotesSourceProviderMock } = vi.hoisted(() => ({
-  getMeetingNotesSourceProviderMock: vi.fn(),
+const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
+  getTranscriptSourceProviderMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/meeting-notes", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-notes")>();
+vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../transcripts/provider-registry.js")>();
   return {
     ...actual,
-    getMeetingNotesSourceProvider: getMeetingNotesSourceProviderMock,
+    getTranscriptSourceProvider: getTranscriptSourceProviderMock,
   };
 });
 
 async function makeStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-"));
 }
 
 function currentDateDir(): string {
@@ -27,44 +26,34 @@ function currentDateDir(): string {
 }
 
 async function createHarness(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
-  const providers: unknown[] = [];
-  const tools: AnyAgentTool[] = [];
-  const services: OpenClawPluginService[] = [];
-  const cliRegistrars: Array<{
-    registrar: unknown;
-    opts: unknown;
-  }> = [];
-  const api = createTestPluginApi({
-    pluginConfig,
-    runtime: {
-      state: {
-        resolveStateDir: () => stateDir,
-      },
-    } as never,
-    registerMeetingNotesSourceProvider: (provider) => providers.push(provider),
-    registerTool: (tool) => tools.push(tool as AnyAgentTool),
-    registerService: (service) => services.push(service),
-    registerCli: (registrar, opts) => cliRegistrars.push({ registrar, opts }),
-  });
-  const { default: meetingNotesPlugin } = await import("./index.js");
-  meetingNotesPlugin.register(api);
-  return { cliRegistrars, providers, services, tool: tools[0] };
+  const config = { transcripts: { enabled: true, ...pluginConfig } };
+  const logger = { warn: vi.fn() };
+  return {
+    logger,
+    service: createTranscriptsAutoStartService({ config, stateDir, logger }),
+    tool: createTranscriptsTool({ config, stateDir, logger }),
+  };
 }
 
-describe("meeting-notes plugin", () => {
+describe("transcripts tool", () => {
   beforeEach(() => {
-    getMeetingNotesSourceProviderMock.mockReset();
+    getTranscriptSourceProviderMock.mockReset();
   });
 
-  it("registers the manual transcript source and tool", async () => {
+  it("creates the core transcripts tool", async () => {
     const stateDir = await makeStateDir();
-    const { cliRegistrars, providers, tool } = await createHarness(stateDir);
+    const { tool } = await createHarness(stateDir);
 
-    expect(providers).toHaveLength(1);
-    expect(tool?.name).toBe("meeting_notes");
-    expect(cliRegistrars[0]?.opts).toMatchObject({
-      descriptors: [{ name: "meeting-notes", hasSubcommands: true }],
-    });
+    expect(tool.name).toBe("transcripts");
+  });
+
+  it("requires explicit enablement before execution", async () => {
+    const stateDir = await makeStateDir();
+    const { tool } = await createHarness(stateDir, { enabled: false });
+
+    await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
+      "transcripts are disabled",
+    );
   });
 
   it("imports a speaker transcript and writes summary artifacts", async () => {
@@ -93,19 +82,19 @@ describe("meeting-notes plugin", () => {
     });
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "design-review", "summary.md"),
+        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.md"),
         "utf8",
       ),
     ).resolves.toContain("Sam: Action item: add Slack import later.");
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "design-review", "summary.json"),
+        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.json"),
         "utf8",
       ),
     ).resolves.toContain('"Alex: We decided to ship Discord first."');
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "design-review", "transcript.jsonl"),
+        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "transcript.jsonl"),
         "utf8",
       ),
     ).resolves.toContain("Alex");
@@ -130,7 +119,7 @@ describe("meeting-notes plugin", () => {
     );
 
     const summary = await fs.readFile(
-      path.join(stateDir, "meeting-notes", currentDateDir(), "long-meeting", "summary.md"),
+      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "summary.md"),
       "utf8",
     );
     expect(summary).toContain("Decision: ship the final plan.");
@@ -138,7 +127,7 @@ describe("meeting-notes plugin", () => {
     expect(summary).toContain("## Transcript");
     expect(summary).toContain("Sam: Decision: ship the final plan.");
     const transcript = await fs.readFile(
-      path.join(stateDir, "meeting-notes", currentDateDir(), "long-meeting", "transcript.jsonl"),
+      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "transcript.jsonl"),
       "utf8",
     );
     expect(transcript).toContain("Action item: write the first draft.");
@@ -147,7 +136,7 @@ describe("meeting-notes plugin", () => {
 
   it("requires date-qualified selectors for repeated stored session ids", async () => {
     const stateDir = await makeStateDir();
-    const store = new MeetingNotesStore(path.join(stateDir, "meeting-notes"));
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
     await store.writeSession({
       sessionId: "standup",
       title: "Tuesday standup",
@@ -162,7 +151,7 @@ describe("meeting-notes plugin", () => {
     });
 
     await expect(store.readSession("standup")).rejects.toThrow(
-      "multiple meeting notes sessions match standup",
+      "multiple transcripts sessions match standup",
     );
     await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
       title: "Tuesday standup",
@@ -178,7 +167,7 @@ describe("meeting-notes plugin", () => {
       return { ok: true, session: request.session };
     });
     const stop = vi.fn(async () => ({ ok: true }));
-    getMeetingNotesSourceProviderMock.mockReturnValue({
+    getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -220,7 +209,7 @@ describe("meeting-notes plugin", () => {
     });
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "summary.md"),
+        path.join(stateDir, "transcripts", currentDateDir(), "standup", "summary.md"),
         "utf8",
       ),
     ).resolves.toContain("date-qualified selectors");
@@ -235,7 +224,7 @@ describe("meeting-notes plugin", () => {
       return { ok: true, session: request.session };
     });
     const stop = vi.fn(async () => ({ ok: false, error: "Discord voice manager is unavailable" }));
-    getMeetingNotesSourceProviderMock.mockReturnValue({
+    getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -272,13 +261,13 @@ describe("meeting-notes plugin", () => {
     });
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "summary.md"),
+        path.join(stateDir, "transcripts", currentDateDir(), "standup", "summary.md"),
         "utf8",
       ),
     ).resolves.toContain("publish the notes");
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "metadata.json"),
+        path.join(stateDir, "transcripts", currentDateDir(), "standup", "metadata.json"),
         "utf8",
       ),
     ).resolves.toContain("providerStopError");
@@ -286,7 +275,7 @@ describe("meeting-notes plugin", () => {
 
   it("does not stop a current active session when summarizing an older dated duplicate", async () => {
     const stateDir = await makeStateDir();
-    const store = new MeetingNotesStore(path.join(stateDir, "meeting-notes"));
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
     const olderSession = {
       sessionId: "standup",
       title: "Older standup",
@@ -300,7 +289,7 @@ describe("meeting-notes plugin", () => {
     });
     const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
     const stop = vi.fn(async () => ({ ok: true }));
-    getMeetingNotesSourceProviderMock.mockReturnValue({
+    getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
@@ -333,7 +322,7 @@ describe("meeting-notes plugin", () => {
     expect(stop).not.toHaveBeenCalled();
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", "2026-05-21", "standup", "summary.md"),
+        path.join(stateDir, "transcripts", "2026-05-21", "standup", "summary.md"),
         "utf8",
       ),
     ).resolves.toContain("preserve historical dated notes");
@@ -357,13 +346,13 @@ describe("meeting-notes plugin", () => {
   it("auto-starts configured live meeting sources", async () => {
     const stateDir = await makeStateDir();
     const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
-    getMeetingNotesSourceProviderMock.mockReturnValue({
+    getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
     });
-    const { services } = await createHarness(stateDir, {
+    const { service } = await createHarness(stateDir, {
       autoStart: [
         {
           providerId: "discord-voice",
@@ -374,22 +363,20 @@ describe("meeting-notes plugin", () => {
         },
       ],
     });
-    expect(services).toHaveLength(1);
 
-    await services[0]?.start({
-      config: {},
-      logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      stateDir,
-    });
+    service.start();
     for (let i = 0; i < 20 && start.mock.calls.length === 0; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    expect(getMeetingNotesSourceProviderMock).toHaveBeenCalledWith("discord-voice", {});
+    expect(getTranscriptSourceProviderMock).toHaveBeenCalledWith(
+      "discord-voice",
+      expect.objectContaining({ transcripts: expect.any(Object) }),
+    );
     expect(start).toHaveBeenCalledOnce();
     const request = start.mock.calls[0]?.[0];
     if (!request) {
-      throw new Error("Expected meeting notes source start request");
+      throw new Error("Expected transcripts source start request");
     }
     expect(request.session).toMatchObject({
       sessionId: "standup",
@@ -403,7 +390,7 @@ describe("meeting-notes plugin", () => {
     expect(request.startupWaitMs).toBe(30_000);
     await expect(
       fs.readFile(
-        path.join(stateDir, "meeting-notes", currentDateDir(), "standup", "metadata.json"),
+        path.join(stateDir, "transcripts", currentDateDir(), "standup", "metadata.json"),
         "utf8",
       ),
     ).resolves.toContain("Standup");
@@ -422,14 +409,14 @@ describe("meeting-notes plugin", () => {
           );
         }),
     );
-    getMeetingNotesSourceProviderMock.mockReturnValue({
+    getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
       stop,
     });
-    const { services } = await createHarness(stateDir, {
+    const { service, logger } = await createHarness(stateDir, {
       autoStart: [
         {
           providerId: "discord-voice",
@@ -439,20 +426,14 @@ describe("meeting-notes plugin", () => {
         },
       ],
     });
-    const logger = { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() };
-    const service = services[0];
-    if (!service?.stop) {
-      throw new Error("Expected meeting notes service with stop hook");
-    }
-
-    await service.start({ config: {}, logger, stateDir });
+    service.start();
     await vi.waitFor(() => {
       expect(start).toHaveBeenCalledOnce();
     });
     const request = start.mock.calls[0]?.[0];
     expect(request.abortSignal?.aborted).toBe(false);
 
-    await service.stop({ config: {}, logger, stateDir });
+    await service.stop();
 
     expect(request.abortSignal?.aborted).toBe(true);
     expect(stop).not.toHaveBeenCalled();

@@ -1,18 +1,17 @@
 ---
-summary: "CLI reference for `openclaw meeting-notes` (list, show, and locate stored meeting notes)"
+summary: "CLI reference for `openclaw transcripts` (list, show, and locate stored transcripts)"
 read_when:
-  - You want to read stored meeting note summaries from the terminal
-  - You need the path to a meeting notes markdown summary
-  - You are debugging the meeting-notes plugin storage layout
-title: "Meeting Notes CLI"
+  - You want to read stored transcript summaries from the terminal
+  - You need the path to a transcripts markdown summary
+  - You are debugging the core transcripts storage layout
+title: "Transcripts CLI"
 ---
 
-# `openclaw meeting-notes`
+# `openclaw transcripts`
 
-Inspect meeting notes written by the external `meeting-notes` plugin. This CLI
-is read-only and is available when that plugin is installed or loaded from
-source. Capture, import, and summarization are owned by the `meeting_notes`
-agent tool and by configured auto-start sources.
+Inspect transcripts written by OpenClaw's core `transcripts` tool. This CLI is
+read-only; capture, import, and summarization are owned by the agent tool and
+configured auto-start sources.
 
 Use the CLI when you want to find yesterday's notes, open the Markdown file in
 an editor, feed a transcript to another tool, or debug where a session landed on
@@ -21,7 +20,7 @@ disk. It does not start or stop capture.
 Artifacts live under the OpenClaw state directory:
 
 ```text
-$OPENCLAW_STATE_DIR/meeting-notes/YYYY-MM-DD/<session>/
+$OPENCLAW_STATE_DIR/transcripts/YYYY-MM-DD/<session>/
   metadata.json
   transcript.jsonl
   summary.json
@@ -35,17 +34,17 @@ session directory is a safe filesystem segment derived from the session id.
 ## Commands
 
 ```bash
-openclaw meeting-notes list
-openclaw meeting-notes show <session>
-openclaw meeting-notes show YYYY-MM-DD/<session>
-openclaw meeting-notes path <session>
-openclaw meeting-notes path YYYY-MM-DD/<session>
-openclaw meeting-notes path <session> --dir
-openclaw meeting-notes path <session> --metadata
-openclaw meeting-notes path <session> --transcript
-openclaw meeting-notes list --json
-openclaw meeting-notes show <session> --json
-openclaw meeting-notes path <session> --json
+openclaw transcripts list
+openclaw transcripts show <session>
+openclaw transcripts show YYYY-MM-DD/<session>
+openclaw transcripts path <session>
+openclaw transcripts path YYYY-MM-DD/<session>
+openclaw transcripts path <session> --dir
+openclaw transcripts path <session> --metadata
+openclaw transcripts path <session> --transcript
+openclaw transcripts list --json
+openclaw transcripts show <session> --json
+openclaw transcripts path <session> --json
 ```
 
 - `list`: list stored sessions, date-qualified selector, start time, title, and `summary.md` path.
@@ -57,7 +56,7 @@ openclaw meeting-notes path <session> --json
 - `--json`: print machine-readable output.
 
 When a human session id repeats across days, use the date-qualified selector
-from `list`, for example `openclaw meeting-notes show 2026-05-22/standup`.
+from `list`, for example `openclaw transcripts show 2026-05-22/standup`.
 Default session ids include a timestamp and random suffix; configure fixed
 session ids only when they are unique within the day.
 
@@ -66,7 +65,7 @@ session ids only when they are unique within the day.
 `list` prints one session per line:
 
 ```text
-2026-05-22/standup  2026-05-22T09:00:00.000Z  Weekly standup  /Users/alex/.openclaw/meeting-notes/2026-05-22/standup/summary.md
+2026-05-22/standup  2026-05-22T09:00:00.000Z  Weekly standup  /Users/alex/.openclaw/transcripts/2026-05-22/standup/summary.md
 ```
 
 The output is tab-separated. The columns are selector, start time, title, and
@@ -91,13 +90,13 @@ and whether that file exists.
 
 ## Many meetings per day
 
-Meeting Notes groups sessions by date, then by session id. Ten meetings on one
+Transcripts groups sessions by date, then by session id. Ten meetings on one
 day become ten sibling folders:
 
 ```text
-~/.openclaw/meeting-notes/2026-05-22/
-  meeting-2026-05-22T09-00-00-000Z-a1b2c3d4/
-  meeting-2026-05-22T10-30-00-000Z-b2c3d4e5/
+~/.openclaw/transcripts/2026-05-22/
+  transcript-2026-05-22T09-00-00-000Z-a1b2c3d4/
+  transcript-2026-05-22T10-30-00-000Z-b2c3d4e5/
   standup/
 ```
 
@@ -112,7 +111,41 @@ write `summary.md` immediately after import. A session can still appear in
 or metadata was written before any utterances arrived.
 
 Use `path <session> --transcript` to inspect the append-only transcript, and use
-the `meeting_notes` tool action `summarize` to regenerate the Markdown summary.
+the `transcripts` tool action `summarize` to regenerate the Markdown summary.
 
-See [Meeting Notes](/plugins/meeting-notes) for configuration, auto-start, and
-source-provider details.
+## Configuration
+
+Transcript capture is opt-in because live sources can join and record meeting
+audio. Enable the tool with top-level `transcripts.enabled`:
+
+```json
+{
+  "transcripts": {
+    "enabled": true,
+    "maxUtterances": 2000
+  }
+}
+```
+
+Configure auto-start sources with `transcripts.autoStart` in `openclaw.json`.
+Each entry is enabled by being present; omit an entry to disable that source.
+
+```json
+{
+  "transcripts": {
+    "enabled": true,
+    "autoStart": [
+      {
+        "providerId": "discord-voice",
+        "guildId": "1234567890",
+        "channelId": "2345678901"
+      },
+      {
+        "providerId": "slack-huddle",
+        "accountId": "workspace",
+        "channelId": "C123"
+      }
+    ]
+  }
+}
+```

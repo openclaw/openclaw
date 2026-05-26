@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMeetingNotesCli } from "./cli.js";
+import { registerTranscriptsCli } from "./register.transcripts.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function makeStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-cli-"));
+  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-cli-"));
 }
 
 async function writeSession(
@@ -16,7 +16,7 @@ async function writeSession(
   sessionId: string,
   date = "2026-05-22",
 ): Promise<string> {
-  const sessionDir = path.join(stateDir, "meeting-notes", date, sessionId);
+  const sessionDir = path.join(stateDir, "transcripts", date, sessionId);
   await fs.mkdir(sessionDir, { recursive: true });
   await fs.writeFile(
     path.join(sessionDir, "metadata.json"),
@@ -39,7 +39,7 @@ async function writeSession(
   return sessionDir;
 }
 
-async function runMeetingNotesCli(args: string[]): Promise<string> {
+async function runTranscriptsCli(args: string[]): Promise<string> {
   let output = "";
   const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
@@ -50,15 +50,15 @@ async function runMeetingNotesCli(args: string[]): Promise<string> {
   try {
     const program = new Command();
     program.name("openclaw");
-    registerMeetingNotesCli(program);
-    await program.parseAsync(["meeting-notes", ...args], { from: "user" });
+    registerTranscriptsCli(program);
+    await program.parseAsync(["transcripts", ...args], { from: "user" });
     return output;
   } finally {
     writeSpy.mockRestore();
   }
 }
 
-describe("meeting-notes CLI", () => {
+describe("transcripts CLI", () => {
   let stateDir = "";
 
   beforeEach(async () => {
@@ -76,15 +76,15 @@ describe("meeting-notes CLI", () => {
 
   it("registers a kebab-case command", () => {
     const program = new Command();
-    registerMeetingNotesCli(program);
+    registerTranscriptsCli(program);
 
-    expect(program.commands.map((command) => command.name())).toContain("meeting-notes");
+    expect(program.commands.map((command) => command.name())).toContain("transcripts");
   });
 
-  it("lists stored meeting note sessions", async () => {
+  it("lists stored transcript sessions", async () => {
     const sessionDir = await writeSession(stateDir, "design-review");
 
-    const output = await runMeetingNotesCli(["list"]);
+    const output = await runTranscriptsCli(["list"]);
 
     expect(output).toContain("2026-05-22/design-review");
     expect(output).toContain("Design review");
@@ -94,7 +94,7 @@ describe("meeting-notes CLI", () => {
   it("prints summary markdown for a session", async () => {
     await writeSession(stateDir, "design-review");
 
-    const output = await runMeetingNotesCli(["show", "design-review"]);
+    const output = await runTranscriptsCli(["show", "design-review"]);
 
     expect(output).toContain("# Design review");
     expect(output).toContain("Ship CLI");
@@ -102,12 +102,12 @@ describe("meeting-notes CLI", () => {
 
   it("ignores unrelated corrupt metadata while reading a valid session", async () => {
     await writeSession(stateDir, "design-review");
-    const corruptDir = path.join(stateDir, "meeting-notes", "corrupt");
+    const corruptDir = path.join(stateDir, "transcripts", "corrupt");
     await fs.mkdir(corruptDir, { recursive: true });
     await fs.writeFile(path.join(corruptDir, "metadata.json"), "{nope");
 
-    const listOutput = await runMeetingNotesCli(["list"]);
-    const showOutput = await runMeetingNotesCli(["show", "design-review"]);
+    const listOutput = await runTranscriptsCli(["list"]);
+    const showOutput = await runTranscriptsCli(["show", "design-review"]);
 
     expect(listOutput).toContain("design-review");
     expect(listOutput).not.toContain("corrupt");
@@ -118,10 +118,10 @@ describe("meeting-notes CLI", () => {
     const olderSessionDir = await writeSession(stateDir, "standup", "2026-05-21");
     await writeSession(stateDir, "standup", "2026-05-22");
 
-    await expect(runMeetingNotesCli(["path", "standup"])).rejects.toThrow(
-      "multiple meeting notes sessions match standup",
+    await expect(runTranscriptsCli(["path", "standup"])).rejects.toThrow(
+      "multiple transcripts sessions match standup",
     );
-    const output = await runMeetingNotesCli(["path", "2026-05-21/standup"]);
+    const output = await runTranscriptsCli(["path", "2026-05-21/standup"]);
 
     expect(output.trim()).toBe(path.join(olderSessionDir, "summary.md"));
   });
@@ -129,7 +129,7 @@ describe("meeting-notes CLI", () => {
   it("prints the summary path by default", async () => {
     const sessionDir = await writeSession(stateDir, "design-review");
 
-    const output = await runMeetingNotesCli(["path", "design-review"]);
+    const output = await runTranscriptsCli(["path", "design-review"]);
 
     expect(output.trim()).toBe(path.join(sessionDir, "summary.md"));
   });

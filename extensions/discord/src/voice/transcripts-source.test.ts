@@ -1,26 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DiscordVoiceManager } from "./manager.js";
 import {
-  discordVoiceMeetingNotesSourceProvider,
-  setDiscordMeetingNotesVoiceManager,
-} from "./meeting-notes-source.js";
+  discordVoiceTranscriptsSourceProvider,
+  setDiscordTranscriptsVoiceManager,
+} from "./transcripts-source.js";
 
-describe("discordVoiceMeetingNotesSourceProvider", () => {
+describe("discordVoiceTranscriptsSourceProvider", () => {
   afterEach(() => {
-    setDiscordMeetingNotesVoiceManager({ accountId: "primary", manager: null });
-    setDiscordMeetingNotesVoiceManager({ accountId: "delayed", manager: null });
+    setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: null });
+    setDiscordTranscriptsVoiceManager({ accountId: "delayed", manager: null });
     vi.useRealTimers();
   });
 
-  it("starts Discord voice in meeting-notes mode", async () => {
+  it("starts Discord voice in transcripts mode", async () => {
     const join = vi.fn(async () => ({ ok: true, message: "joined" }));
-    setDiscordMeetingNotesVoiceManager({
+    setDiscordTranscriptsVoiceManager({
       accountId: "primary",
       manager: { join } as unknown as DiscordVoiceManager,
     });
 
     const onUtterance = vi.fn();
-    const result = await discordVoiceMeetingNotesSourceProvider.start?.({
+    const result = await discordVoiceTranscriptsSourceProvider.start?.({
       session: {
         sessionId: "notes-1",
         startedAt: new Date().toISOString(),
@@ -38,7 +38,7 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
     expect(join).toHaveBeenCalledWith(
       { guildId: "g1", channelId: "c1" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -50,7 +50,7 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
     vi.useFakeTimers();
     const join = vi.fn(async () => ({ ok: true, message: "joined" }));
     const onUtterance = vi.fn();
-    const resultPromise = discordVoiceMeetingNotesSourceProvider.start?.({
+    const resultPromise = discordVoiceTranscriptsSourceProvider.start?.({
       session: {
         sessionId: "notes-2",
         startedAt: new Date().toISOString(),
@@ -68,7 +68,7 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(join).not.toHaveBeenCalled();
 
-    setDiscordMeetingNotesVoiceManager({
+    setDiscordTranscriptsVoiceManager({
       accountId: "delayed",
       manager: { join } as unknown as DiscordVoiceManager,
     });
@@ -78,7 +78,7 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
   });
 
   it("fails promptly without an explicit startup wait", async () => {
-    const result = await discordVoiceMeetingNotesSourceProvider.start?.({
+    const result = await discordVoiceTranscriptsSourceProvider.start?.({
       session: {
         sessionId: "notes-3",
         startedAt: new Date().toISOString(),
@@ -98,14 +98,14 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
     });
   });
 
-  it("stops Discord meeting notes without owning promoted voice sessions", async () => {
+  it("stops Discord transcripts without owning promoted voice sessions", async () => {
     const leave = vi.fn(async () => ({ ok: true, message: "stopped notes" }));
-    setDiscordMeetingNotesVoiceManager({
+    setDiscordTranscriptsVoiceManager({
       accountId: "primary",
       manager: { leave } as unknown as DiscordVoiceManager,
     });
 
-    const result = await discordVoiceMeetingNotesSourceProvider.stop?.({
+    const result = await discordVoiceTranscriptsSourceProvider.stop?.({
       sessionId: "notes-1",
       source: {
         providerId: "discord-voice",
@@ -122,7 +122,7 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
         channelId: "c1",
       },
       {
-        meetingNotesSessionId: "notes-1",
+        transcriptsSessionId: "notes-1",
       },
     );
   });
