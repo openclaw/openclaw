@@ -121,14 +121,16 @@ function toBundledChannelEntry(
 
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
   const entries = new Map<string, BundledChannelCatalogEntry>();
-  for (const entry of readOfficialCatalogFileSync()
+  const officialEntries = readOfficialCatalogFileSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
-    entries.set(entry.id, entry);
-  }
-  for (const entry of readBundledExtensionCatalogEntriesSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
+  const catalogEntries =
+    officialEntries.length > 0
+      ? officialEntries
+      : readBundledExtensionCatalogEntriesSync()
+          .map((entry) => toBundledChannelEntry(entry))
+          .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
+  for (const entry of catalogEntries) {
     entries.set(entry.id, entry);
   }
   return Array.from(entries.values()).toSorted(

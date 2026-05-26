@@ -63,6 +63,11 @@ describe("scanStatusJsonFast", () => {
 
     await scanStatusJsonFast({}, {} as never);
 
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
+      createStatusMemorySearchConfig(),
+      process.env,
+      { includeChannelTargets: false },
+    );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
