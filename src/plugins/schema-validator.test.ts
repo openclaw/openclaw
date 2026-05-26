@@ -314,6 +314,18 @@ describe("schema validator", () => {
         },
       ],
       [
+        "schema-validator.test.invalid-dynamic-ref-type",
+        {
+          $dynamicRef: 123,
+        },
+      ],
+      [
+        "schema-validator.test.invalid-dynamic-ref",
+        {
+          $dynamicRef: "#/$defs/Missing",
+        },
+      ],
+      [
         "schema-validator.test.invalid-anchor-ref",
         {
           $defs: {
@@ -498,6 +510,37 @@ describe("schema validator", () => {
         value: "ok",
       },
       expectedValue: "ok",
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.dynamic-ref",
+        schema: {
+          $defs: {
+            Value: {
+              $dynamicAnchor: "value",
+              type: "string",
+            },
+          },
+          $dynamicRef: "#value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+
+    expectValidationFailure({
+      cacheKey: "schema-validator.test.dynamic-ref",
+      schema: {
+        $defs: {
+          Value: {
+            $dynamicAnchor: "value",
+            type: "string",
+          },
+        },
+        $dynamicRef: "#value",
+      },
+      value: 1,
     });
   });
 

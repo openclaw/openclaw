@@ -312,6 +312,14 @@ describe("session MCP runtime", () => {
       },
       {
         $schema: "https://json-schema.org/draft/2020-12/schema",
+        $dynamicRef: 123,
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $dynamicRef: "#/$defs/Missing",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
         $defs: {
           Other: {
             $id: "other",
@@ -409,6 +417,19 @@ describe("session MCP runtime", () => {
     });
     expect(emptyIdRefValidator("ok").valid).toBe(true);
     expect(emptyIdRefValidator(1).valid).toBe(false);
+
+    const dynamicRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $dynamicAnchor: "value",
+          type: "string",
+        },
+      },
+      $dynamicRef: "#value",
+    });
+    expect(dynamicRefValidator("ok").valid).toBe(true);
+    expect(dynamicRefValidator(1).valid).toBe(false);
   });
 
   it("accepts draft-2020-12 local refs into schema arrays", () => {

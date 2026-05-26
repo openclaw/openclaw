@@ -44,7 +44,10 @@ const jsonSchemaTypes = new Set([
   "string",
 ]);
 const schemaStringKeywords = new Set([
+  "$anchor",
   "$comment",
+  "$dynamicAnchor",
+  "$dynamicRef",
   "$id",
   "$schema",
   "$ref",
@@ -166,6 +169,9 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
   const normalizedSchema = normalizeAdditionalPropertiesSchema(expandJsonSchemaTypeArray(schema));
   return Object.fromEntries(
     Object.entries(normalizedSchema).map(([key, value]) => {
+      if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
+        return ["$ref", value];
+      }
       if (schemaMapKeywords.has(key)) {
         return [key, normalizeSchemaMap(value)];
       }
@@ -580,6 +586,13 @@ function findJsonSchemaNodeError(
   if (typeof schema.$ref === "string") {
     if (!resolveSchemaRef(root, currentResourceRoot, schema.$ref, currentResourceBaseId).found) {
       return `${path}.$ref: unresolved ref`;
+    }
+  }
+  if (typeof schema.$dynamicRef === "string") {
+    if (
+      !resolveSchemaRef(root, currentResourceRoot, schema.$dynamicRef, currentResourceBaseId).found
+    ) {
+      return `${path}.$dynamicRef: unresolved ref`;
     }
   }
   for (const key of schemaMapKeywords) {
