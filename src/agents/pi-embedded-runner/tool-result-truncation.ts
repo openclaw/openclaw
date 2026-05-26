@@ -44,12 +44,6 @@ const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
 /**
- * Backwards-compatible alias for older call sites/tests. This is the
- * low-context default, not the auto cap for large models.
- */
-export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-
-/**
  * Minimum characters to keep when truncating.
  * We always keep at least the first portion so the model understands
  * what was in the content.
