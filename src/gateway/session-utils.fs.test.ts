@@ -1912,6 +1912,36 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("after oversized");
   });
 
+  test("readRecentSessionMessagesAsync preserves text blocks from oversized multimodal lines", async () => {
+    const sessionId = "test-oversized-multimodal-text";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const hugeImage = "A".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Please summarize this chart" },
+            { type: "image", mimeType: "image/png", data: hugeImage },
+          ],
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    expect(out).toHaveLength(1);
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("Please summarize this chart");
+    expect(serialized).toContain("[image omitted: too large]");
+    expect(serialized).not.toContain(hugeImage);
+    expect(serialized).not.toContain("[chat.history omitted: message too large]");
+  });
+
   test("readRecentSessionMessagesAsync keeps oversized active-tree leaves", async () => {
     const sessionId = "test-oversized-tree-tail";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

@@ -268,6 +268,8 @@ async function readRecentTranscriptTailLinesAsync(
 const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
+const TRANSCRIPT_OVERSIZED_IMAGE_PLACEHOLDER = "[image omitted: too large]";
+const TRANSCRIPT_OVERSIZED_TEXT_BLOCK_MAX_CHARS = 8 * 1024;
 
 function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
@@ -296,20 +298,87 @@ function extractJsonNullableStringFieldPrefix(
   return extractJsonStringFieldPrefix(prefix, field);
 }
 
+function extractOversizedTranscriptTextBlocks(line: string): Array<Record<string, unknown>> {
+  const textBlocks: Array<Record<string, unknown>> = [];
+  const contentKey = '"content"';
+  const contentIndex = line.indexOf(contentKey);
+  if (contentIndex < 0) {
+    return textBlocks;
+  }
+  let searchIndex = contentIndex + contentKey.length;
+  while (true) {
+    const typeIndex = line.indexOf('"type":"text"', searchIndex);
+    if (typeIndex < 0) {
+      break;
+    }
+    const textKeyIndex = line.indexOf('"text":"', typeIndex);
+    if (textKeyIndex < 0) {
+      break;
+    }
+    const textStart = textKeyIndex + '"text":"'.length;
+    let i = textStart;
+    let escaped = false;
+    while (i < line.length) {
+      const ch = line[i];
+      if (escaped) {
+        escaped = false;
+        i += 1;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        i += 1;
+        continue;
+      }
+      if (ch === '"') {
+        break;
+      }
+      i += 1;
+    }
+    if (i >= line.length) {
+      break;
+    }
+    const encoded = line.slice(textStart, i);
+    try {
+      const decoded = JSON.parse(`"${encoded}"`) as unknown;
+      const text = normalizeTailEntryString(decoded);
+      if (text) {
+        const clipped =
+          text.length > TRANSCRIPT_OVERSIZED_TEXT_BLOCK_MAX_CHARS
+            ? `${text.slice(0, TRANSCRIPT_OVERSIZED_TEXT_BLOCK_MAX_CHARS)}…`
+            : text;
+        textBlocks.push({ type: "text", text: clipped });
+      }
+    } catch {
+      // Ignore malformed blocks and keep scanning.
+    }
+    searchIndex = i + 1;
+  }
+  return textBlocks;
+}
+
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const id = extractJsonStringFieldPrefix(prefix, "id");
   const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
   const type = extractJsonStringFieldPrefix(prefix, "type");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
+  const preservedTextBlocks = extractOversizedTranscriptTextBlocks(line);
+  const content = preservedTextBlocks.length
+    ? [...preservedTextBlocks, { type: "text", text: TRANSCRIPT_OVERSIZED_IMAGE_PLACEHOLDER }]
+    : [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }];
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
     ...(parentId !== undefined ? { parentId } : {}),
     message: {
       role,
-      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
-      __openclaw: { truncated: true, reason: "oversized" },
+      content,
+      __openclaw: {
+        truncated: true,
+        reason: "oversized",
+        preservedText: preservedTextBlocks.length > 0,
+      },
     },
   };
   return {
