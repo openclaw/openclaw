@@ -313,7 +313,7 @@ describe("dispatchOutbound", () => {
 
     await dispatchOutbound(inbound, { runtime, cfg: {}, account });
 
-    const turnRun = runtime.channel.turn.run as unknown as { mock: { calls: unknown[][] } };
+    const turnRun = runtime.channel.inbound.run as unknown as { mock: { calls: unknown[][] } };
     const runParams = turnRun.mock.calls[0]?.[0] as
       | {
           adapter: {
@@ -346,7 +346,7 @@ describe("dispatchOutbound", () => {
 
     await dispatchOutbound(inbound, { runtime, cfg: {}, account });
 
-    const turnRun = runtime.channel.turn.run as unknown as { mock: { calls: unknown[][] } };
+    const turnRun = runtime.channel.inbound.run as unknown as { mock: { calls: unknown[][] } };
     const runParams = turnRun.mock.calls[0]?.[0] as
       | {
           adapter: {

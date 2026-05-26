@@ -25,9 +25,9 @@ export async function resolveAnnounceTarget(params: {
     parseThreadSessionSuffix(params.displayKey).threadId;
 
   if (fallback) {
-    const normalized = normalizeChannelId(fallback.channel);
-    const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    const channelId = normalizeChannelId(fallback.channel) ?? fallback.channel;
+    const plugin = getChannelPlugin(channelId);
+    if (plugin?.meta?.preferSessionLookupForAnnounceTarget !== true) {
       return fallback;
     }
   }

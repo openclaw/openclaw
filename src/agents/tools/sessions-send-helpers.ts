@@ -30,7 +30,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   const normalizedChannel =
     normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);
   const channel = normalizedChannel ?? parsed.channel;
-  const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
+  const plugin = getChannelPlugin(channel);
   const genericTarget = parsed.kind === "channel" ? `channel:${parsed.id}` : `group:${parsed.id}`;
   const normalized =
     plugin?.messaging?.resolveSessionTarget?.({
@@ -40,7 +40,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     }) ?? plugin?.messaging?.normalizeTarget?.(genericTarget);
   return {
     channel,
-    to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
+    to: normalized ?? (normalizedChannel || plugin ? genericTarget : parsed.id),
     threadId: parsed.threadId,
   };
 }

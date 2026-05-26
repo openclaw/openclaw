@@ -184,6 +184,34 @@ const installRegistry = async () => {
           },
         },
       },
+      {
+        pluginId: "qqbot",
+        source: "test",
+        plugin: {
+          id: "qqbot",
+          meta: {
+            id: "qqbot",
+            label: "QQ Bot",
+            selectionLabel: "QQ Bot",
+            docsPath: "/channels/qqbot",
+            blurb: "QQ Bot test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group", "channel"] },
+          messaging: {
+            normalizeTarget: (raw: string) =>
+              raw.startsWith("qqbot:")
+                ? raw
+                : raw.startsWith("group:") || raw.startsWith("channel:") || raw.startsWith("c2c:")
+                  ? `qqbot:${raw}`
+                  : undefined,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
     ]),
   );
 };
@@ -468,6 +496,77 @@ describe("resolveAnnounceTarget", () => {
       accountId: "work",
       threadId: "thread-77",
     });
+  });
+
+  it("uses stored QQ Bot delivery context instead of key-derived announce fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+          deliveryContext: {
+            channel: "qqbot",
+            to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+            accountId: "qq-main",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+      displayKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+    });
+    expect(target).toEqual({
+      channel: "qqbot",
+      to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+      accountId: "qq-main",
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not special-case QQ Bot session lookup without plugin metadata opt-in", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qqbot",
+          source: "test",
+          plugin: {
+            id: "qqbot",
+            meta: {
+              id: "qqbot",
+              label: "QQ Bot",
+              selectionLabel: "QQ Bot",
+              docsPath: "/channels/qqbot",
+              blurb: "QQ Bot test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group", "channel"] },
+            messaging: {
+              normalizeTarget: (raw: string) =>
+                raw.startsWith("qqbot:")
+                  ? raw
+                  : raw.startsWith("group:") || raw.startsWith("channel:") || raw.startsWith("c2c:")
+                    ? `qqbot:${raw}`
+                    : undefined,
+            },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+      displayKey: "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+    });
+
+    expect(target).toEqual({
+      channel: "qqbot",
+      to: "qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {

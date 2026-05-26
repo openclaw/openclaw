@@ -45,7 +45,24 @@ vi.mock("../tools/update-plan-tool.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: () => null,
+  getChannelPlugin: (channel?: string | null) => {
+    const normalized = normalizeOptionalLowercaseString(channel);
+    if (normalized !== "qqbot") {
+      return null;
+    }
+    return {
+      id: "qqbot",
+      meta: { preferSessionLookupForAnnounceTarget: true },
+      messaging: {
+        normalizeTarget: (raw: string) =>
+          raw.startsWith("qqbot:")
+            ? raw
+            : raw.startsWith("group:") || raw.startsWith("channel:") || raw.startsWith("c2c:")
+              ? `qqbot:${raw}`
+              : undefined,
+      },
+    };
+  },
   normalizeChannelId: (channel?: string) => normalizeOptionalLowercaseString(channel),
   listChannelPlugins: () => [],
 }));

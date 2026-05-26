@@ -196,6 +196,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   setupWizard: qqbotSetupWizard,
   meta: {
     ...qqbotMeta,
+    preferSessionLookupForAnnounceTarget: true,
   },
   capabilities: {
     chatTypes: ["direct", "group"],

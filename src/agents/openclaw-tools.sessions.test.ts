@@ -127,6 +127,34 @@ function installMessagingTestRegistry() {
           },
         },
       },
+      {
+        pluginId: "qqbot",
+        source: "test",
+        plugin: {
+          id: "qqbot",
+          meta: {
+            id: "qqbot",
+            label: "QQ Bot",
+            selectionLabel: "QQ Bot",
+            docsPath: "/channels/qqbot",
+            blurb: "QQ Bot test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group", "channel"] },
+          messaging: {
+            normalizeTarget: (raw: string) =>
+              raw.startsWith("qqbot:")
+                ? raw
+                : raw.startsWith("group:") || raw.startsWith("channel:") || raw.startsWith("c2c:")
+                  ? `qqbot:${raw}`
+                  : undefined,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
     ]),
   );
 }
@@ -1738,6 +1766,13 @@ describe("sessions tools", () => {
           ],
         };
       }
+      if (request.method === "sessions.resolve") {
+        const params = request.params as { key?: string; sessionId?: string } | undefined;
+        if (params?.key === targetKey || params?.sessionId === targetKey) {
+          return { key: targetKey };
+        }
+        return {};
+      }
       if (request.method === "sessions.list") {
         return {
           sessions: [
@@ -1810,5 +1845,140 @@ describe("sessions tools", () => {
     expect(sendParams.accountId).toBe("work");
     expect(sendParams.message).toBe("announce now");
     expect(sendParams.threadId).toBe("99");
+  });
+
+  it("sessions_send announces QQ Bot groups through stored delivery context", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
+    const targetKey = "agent:main:qqbot:group:caac3e9d0d1c21018767ef4e6ed45cca";
+    let sendParams: {
+      to?: string;
+      channel?: string;
+      accountId?: string;
+      message?: string;
+    } = {};
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 4000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.resolve") {
+        const params = request.params as { key?: string; sessionId?: string } | undefined;
+        if (params?.key === targetKey || params?.sessionId === targetKey) {
+          return { key: targetKey };
+        }
+        return {};
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "qqbot",
+                to: "qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA",
+                accountId: "qq-main",
+              },
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | {
+              to?: string;
+              channel?: string;
+              accountId?: string;
+              message?: string;
+            }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          channel: params?.channel,
+          accountId: params?.accountId,
+          message: params?.message,
+        };
+        return { messageId: "m-qqbot-announce" };
+      }
+      return {};
+    });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "announce now", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-qqbot-announce", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("initial");
+    await vi.waitFor(
+      () => {
+        expect(countMatching(calls, (call) => call.method === "send")).toBe(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(calls.some((call) => call.method === "sessions.list")).toBe(true);
+    expect(sendParams.to).toBe("qqbot:group:CAAC3E9D0D1C21018767EF4E6ED45CCA");
+    expect(sendParams.channel).toBe("qqbot");
+    expect(sendParams.accountId).toBe("qq-main");
+    expect(sendParams.message).toBe("announce now");
   });
 });
