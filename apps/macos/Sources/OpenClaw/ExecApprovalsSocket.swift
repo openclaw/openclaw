@@ -60,9 +60,9 @@ struct ExecApprovalPromptRequest: Codable {
         self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         self.resolvedPath = try container.decodeIfPresent(String.self, forKey: .resolvedPath)
         self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
-        let decodedDecisions = try container.decodeIfPresent(
+        let decodedDecisions = (try? container.decodeIfPresent(
             [DecodedExecApprovalDecision].self,
-            forKey: .allowedDecisions) ?? []
+            forKey: .allowedDecisions)) ?? []
         self.allowedDecisions = decodedDecisions.compactMap(\.decision)
     }
 
@@ -297,7 +297,7 @@ final class ExecApprovalsPromptServer {
 
 enum ExecApprovalsPromptPresenter {
     @MainActor
-    static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision {
+    static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision? {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -316,11 +316,19 @@ enum ExecApprovalsPromptPresenter {
             alert.buttons[denyIndex].hasDestructiveAction = true
         }
 
-        let selectedIndex = alert.runModal().rawValue
+        return self.decision(forModalResponse: alert.runModal(), decisions: decisions)
+    }
+
+    static func decision(
+        forModalResponse response: NSApplication.ModalResponse,
+        decisions: [ExecApprovalDecision]) -> ExecApprovalDecision?
+    {
+        let selectedIndex = response.rawValue
             - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        return decisions.indices.contains(selectedIndex)
-            ? decisions[selectedIndex]
-            : .deny
+        if decisions.indices.contains(selectedIndex) {
+            return decisions[selectedIndex]
+        }
+        return decisions.contains(.deny) ? .deny : nil
     }
 
     static func allowedPromptDecisions(_ request: ExecApprovalPromptRequest) -> [ExecApprovalDecision] {
@@ -481,7 +489,7 @@ private enum ExecHostExecutor {
         case .allow:
             break
         case .requiresPrompt:
-            let decision = ExecApprovalsPromptPresenter.prompt(
+            guard let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
                     cwd: request.cwd,
@@ -493,6 +501,12 @@ private enum ExecHostExecutor {
                     sessionKey: request.sessionKey,
                     allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
                         forAsk: context.ask.rawValue)))
+            else {
+                return self.errorResponse(
+                    code: "UNAVAILABLE",
+                    message: "SYSTEM_RUN_DENIED: approval prompt closed without decision",
+                    reason: "approval-cancelled")
+            }
 
             let followupDecision: ExecApprovalDecision
             switch decision {
@@ -748,7 +762,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals.socket")
     private let socketPath: String
     private let token: String
-    private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision
+    private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
     private let onExec: @Sendable (ExecHostRequest) async -> ExecHostResponse
     private var socketFD: Int32 = -1
     private var acceptTask: Task<Void, Never>?
@@ -757,7 +771,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     init(
         socketPath: String,
         token: String,
-        onPrompt: @escaping @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision,
+        onPrompt: @escaping @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?,
         onExec: @escaping @Sendable (ExecHostRequest) async -> ExecHostResponse)
     {
         self.socketPath = socketPath
@@ -899,7 +913,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                     try self.sendApprovalResponse(handle: handle, id: request.id, decision: .deny)
                     return
                 }
-                let decision = await self.onPrompt(request.request)
+                guard let decision = await self.onPrompt(request.request) else { return }
                 try self.sendApprovalResponse(handle: handle, id: request.id, decision: decision)
                 return
             }
