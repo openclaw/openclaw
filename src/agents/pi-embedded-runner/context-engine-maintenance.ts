@@ -50,6 +50,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   config?: OpenClawConfig;
+  disposeContextEngineAfterMaintenance?: boolean;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -109,6 +110,18 @@ function normalizeSessionKey(sessionKey?: string): string | undefined {
 
 function resolveDeferredTurnMaintenanceLane(sessionKey: string): string {
   return `${TURN_MAINTENANCE_LANE_PREFIX}${sessionKey}`;
+}
+
+async function disposeDeferredMaintenanceContextEngine(
+  contextEngine: ContextEngine,
+): Promise<void> {
+  try {
+    await contextEngine.dispose?.();
+  } catch (err) {
+    log.warn("context engine dispose failed after deferred maintenance", {
+      errorMessage: formatErrorMessage(err),
+    });
+  }
 }
 
 export function createDeferredTurnMaintenanceAbortSignal(params?: {
@@ -386,6 +399,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   agentId?: string;
   runId: string;
   config?: OpenClawConfig;
+  disposeContextEngineAfterMaintenance?: boolean;
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -533,6 +547,9 @@ async function runDeferredTurnMaintenanceWorker(params: {
     log.warn(`deferred context engine maintenance failed: ${reason}`);
   } finally {
     shutdownAbort.dispose();
+    if (params.disposeContextEngineAfterMaintenance) {
+      await disposeDeferredMaintenanceContextEngine(params.contextEngine);
+    }
   }
 }
 
@@ -545,8 +562,15 @@ function scheduleDeferredTurnMaintenance(
   }
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
+    const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
     activeRun.rerunRequested = true;
     activeRun.latestParams = { ...params, sessionKey };
+    if (
+      supersededParams?.disposeContextEngineAfterMaintenance &&
+      supersededParams.contextEngine !== params.contextEngine
+    ) {
+      void disposeDeferredMaintenanceContextEngine(supersededParams.contextEngine);
+    }
     return activeRun.promise;
   }
 
@@ -593,6 +617,7 @@ function scheduleDeferredTurnMaintenance(
         agentId: params.agentId,
         config: params.config,
         runId: task.runId!,
+        disposeContextEngineAfterMaintenance: params.disposeContextEngineAfterMaintenance,
       }),
     );
   } catch (err) {
@@ -622,9 +647,13 @@ function scheduleDeferredTurnMaintenance(
       const shutdownTriggered = schedulerAbort.abortSignal?.aborted === true;
       const rerunParams =
         current.rerunRequested && !shutdownTriggered ? current.latestParams : undefined;
+      const discardedRerunParams =
+        current.rerunRequested && shutdownTriggered ? current.latestParams : undefined;
       activeDeferredTurnMaintenanceRuns.delete(sessionKey);
       if (rerunParams) {
         await scheduleDeferredTurnMaintenance(rerunParams);
+      } else if (discardedRerunParams?.disposeContextEngineAfterMaintenance) {
+        await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
       }
     });
   state = {
@@ -653,6 +682,7 @@ export async function runContextEngineMaintenance(params: {
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: OpenClawConfig;
+  disposeDeferredContextEngineAfterMaintenance?: boolean;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
     return undefined;
@@ -675,6 +705,7 @@ export async function runContextEngineMaintenance(params: {
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
         config: params.config,
+        disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
       });
       if (deferred) {
         params.onDeferredMaintenance?.(deferred);
