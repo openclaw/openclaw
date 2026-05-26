@@ -423,7 +423,7 @@ export function createSessionsListTool(opts?: {
           : {
               mode: visibility,
               restricted: true,
-              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope.`,
+              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.`,
             };
 
       return jsonResult({
