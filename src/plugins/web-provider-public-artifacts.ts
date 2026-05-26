@@ -31,6 +31,11 @@ function filterAllowlistedBundledPluginIds(
   config: PluginLoadOptions["config"] | undefined,
   pluginIds: readonly string[],
 ) {
+  // Deprecated shipped compat marker: old allowlist configs used this to keep
+  // bundled web provider discovery available while plugin IDs were tightened.
+  if (config?.plugins?.bundledDiscovery === "compat") {
+    return [...pluginIds];
+  }
   const allow = config?.plugins?.allow;
   if (!Array.isArray(allow) || allow.length === 0) {
     return [...pluginIds];
