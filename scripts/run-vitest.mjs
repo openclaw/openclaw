@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
@@ -13,6 +14,60 @@ import {
 const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS] Warning:"];
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
+const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
+const GLOB_PATTERN_CHARS_RE = /[*?[\]{}]/u;
+const VITEST_OPTIONS_WITH_VALUE = new Set([
+  "--attachmentsDir",
+  "--bail",
+  "--browser",
+  "--config",
+  "--configLoader",
+  "-c",
+  "--changed",
+  "--dir",
+  "--environment",
+  "--exclude",
+  "--execArgv",
+  "--hookTimeout",
+  "--inspect",
+  "--inspect-brk",
+  "--listTags",
+  "--maxConcurrency",
+  "--maxWorkers",
+  "--mergeReports",
+  "--mode",
+  "--outputFile",
+  "--pool",
+  "--project",
+  "--reporter",
+  "--reporters",
+  "--retry",
+  "--root",
+  "-r",
+  "--sequence.shuffle.seed",
+  "--shard",
+  "--silent",
+  "--slowTestThreshold",
+  "--tagsFilter",
+  "--teardownTimeout",
+  "--testNamePattern",
+  "-t",
+  "--testTimeout",
+  "--update",
+  "-u",
+  "--vmMemoryLimit",
+]);
+const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
+  "--browser.",
+  "--coverage.",
+  "--diff.",
+  "--expect.",
+  "--experimental.",
+  "--outputFile.",
+  "--retry.",
+  "--sequence.",
+  "--typecheck.",
+];
 const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
@@ -88,13 +143,103 @@ export function resolveDirectNodeVitestArgs(pnpmArgs) {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
 }
 
+function isExplicitVitestConfigArg(arg) {
+  return arg === "--config" || arg === "-c" || arg.startsWith("--config=");
+}
+
+function isAlternateVitestRootArg(arg) {
+  return (
+    arg === "--root" ||
+    arg === "-r" ||
+    arg === "--dir" ||
+    arg.startsWith("--root=") ||
+    arg.startsWith("--dir=")
+  );
+}
+
+function hasParsedVitestArg(argv, predicate) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      break;
+    }
+    if (optionConsumesNextArg(arg)) {
+      if (predicate(arg)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (predicate(arg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasExplicitVitestConfigArg(argv) {
-  return argv.some((arg) => arg === "--config" || arg === "-c" || arg.startsWith("--config="));
+  return hasParsedVitestArg(argv, isExplicitVitestConfigArg);
 }
 
 function toRepoRelativeArg(arg, cwd) {
   const normalized = path.isAbsolute(arg) ? path.relative(cwd, arg) : arg;
-  return normalized.replaceAll(path.sep, "/").replace(/^\.\//u, "");
+  return normalized.replaceAll(path.sep, "/").replaceAll("\\", "/").replace(/^\.\//u, "");
+}
+
+function optionConsumesNextArg(arg) {
+  if (arg.includes("=")) {
+    return false;
+  }
+  return (
+    VITEST_OPTIONS_WITH_VALUE.has(arg) ||
+    VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES.some((prefix) => arg.startsWith(prefix))
+  );
+}
+
+function isExplicitTestFileArg(arg) {
+  if (!EXPLICIT_TEST_FILE_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  return (
+    path.isAbsolute(arg) || arg.startsWith("./") || arg.startsWith("../") || /[/\\]/u.test(arg)
+  );
+}
+
+function collectExplicitTestFileArgs(argv) {
+  const files = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      break;
+    }
+    if (optionConsumesNextArg(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (isExplicitTestFileArg(arg)) {
+      files.push(arg);
+    }
+  }
+  return files;
+}
+
+function hasAlternateVitestRootArg(argv) {
+  return hasParsedVitestArg(argv, isAlternateVitestRootArg);
+}
+
+export function resolveMissingExplicitTestFiles(argv, cwd = process.cwd(), fsImpl = fs) {
+  if (hasExplicitVitestConfigArg(argv) || hasAlternateVitestRootArg(argv)) {
+    return [];
+  }
+  return collectExplicitTestFileArgs(argv)
+    .filter((arg) => {
+      const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+      return !fsImpl.existsSync(filePath);
+    })
+    .map((arg) => toRepoRelativeArg(arg, cwd));
 }
 
 export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
@@ -289,6 +434,15 @@ export function spawnWatchedVitestProcess({
 function main(argv = process.argv.slice(2), env = process.env) {
   if (argv.length === 0) {
     console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
+    process.exit(1);
+  }
+
+  const missingExplicitTestFiles = resolveMissingExplicitTestFiles(argv);
+  if (missingExplicitTestFiles.length > 0) {
+    console.error("[vitest] explicit test file(s) not found:");
+    for (const file of missingExplicitTestFiles) {
+      console.error(`  - ${file}`);
+    }
     process.exit(1);
   }
 

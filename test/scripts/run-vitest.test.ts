@@ -4,6 +4,7 @@ import {
   installVitestNoOutputWatchdog,
   resolveDirectNodeVitestArgs,
   resolveImplicitVitestArgs,
+  resolveMissingExplicitTestFiles,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -50,6 +51,139 @@ describe("scripts/run-vitest", () => {
       "ui/src/ui/controllers/chat.test.ts",
     ];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("reports missing explicit test files before Vitest can silently ignore them", () => {
+    const fsImpl = {
+      existsSync: (filePath: string) =>
+        filePath.replaceAll("\\", "/").endsWith("src/agents/bash-tools.test.ts"),
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["src/agents/bash-tools.test.ts", "test/agents/bash-tools.exec.background-abort.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["test/agents/bash-tools.exec.background-abort.test.ts"]);
+  });
+
+  it("does not treat option values, globs, or basename filters as explicit missing files", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        [
+          "-t",
+          "missing.test.ts",
+          "basename-filter.test.ts",
+          "src/**/*.test.ts",
+          "--exclude",
+          "ignored.test.ts",
+          "--bail",
+          "1",
+          "--mode",
+          "test",
+          "--mergeReports",
+          "reports.test.ts",
+          "--coverage.exclude",
+          "coverage.test.ts",
+        ],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+  });
+
+  it("skips missing-file preflight when Vitest controls path resolution", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--config", "test/vitest/vitest.gateway.config.ts", "server/health-state.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--root", "packages/example", "src/example.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["-r", "packages/example", "src/example.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(["--dir=src", "example.test.ts"], "/repo", fsImpl),
+    ).toEqual([]);
+  });
+
+  it("does not let option values impersonate config or root bypasses", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["-t", "--config", "src/agents/bash-tools.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["src/agents/bash-tools.test.ts"]);
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--exclude", "--root", "src/agents/bash-tools.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["src/agents/bash-tools.test.ts"]);
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--coverage.exclude", "--dir=src", "src/agents/bash-tools.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["src/agents/bash-tools.test.ts"]);
+  });
+
+  it("ignores config and root looking args after the Vitest passthrough separator", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["src/agents/bash-tools.test.ts", "--", "--config"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["src/agents/bash-tools.test.ts"]);
+  });
+
+  it("reports missing unit ui files before implicit config injection", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    const argv = ["ui/src/ui/controllers/chat.test.ts"];
+    expect(resolveMissingExplicitTestFiles(argv, "/repo", fsImpl)).toEqual([
+      "ui/src/ui/controllers/chat.test.ts",
+    ]);
+    expect(resolveImplicitVitestArgs(argv)).toEqual([
+      "--config",
+      "test/vitest/vitest.unit-ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+    ]);
   });
 
   it("keeps the run subcommand first when routing unit ui tests", () => {

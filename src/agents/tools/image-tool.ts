@@ -37,6 +37,7 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  resolveMediaToolInboundRoots,
   resolveMediaToolLocalRoots,
   resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
@@ -377,6 +378,9 @@ export function createImageTool(options?: {
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  agentChannel?: string | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
   /**
@@ -580,13 +584,20 @@ export function createImageTool(options?: {
                   : resolvedImage,
               };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
+        const channelId = options?.agentChannel ?? options?.currentChannelId;
+        const accountId = options?.agentAccountId;
+        const mediaRootOptions = {
+          workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+          cfg: options?.config,
+          channelId,
+          accountId,
+        };
         const mediaLocalRoots = resolveMediaToolLocalRoots(
           options?.workspaceDir,
-          {
-            workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-          },
+          mediaRootOptions,
           resolvedPath ? [resolvedPath] : undefined,
         );
+        const mediaInboundRoots = resolveMediaToolInboundRoots(mediaRootOptions);
 
         const media = isDataUrl
           ? decodeDataUrl(resolvedImage, { maxBytes })
@@ -599,6 +610,7 @@ export function createImageTool(options?: {
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots: mediaLocalRoots,
+                inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
               });
         if (media.kind !== "image") {

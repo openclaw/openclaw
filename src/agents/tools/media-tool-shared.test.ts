@@ -1,8 +1,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasGenerationToolAvailability,
+  resolveMediaToolInboundRoots,
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
@@ -53,6 +55,62 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
+  });
+
+  it("keeps inbound attachment roots separate from local roots", () => {
+    const stateDir = path.join("/tmp", "openclaw-media-tool-inbound-state");
+    const workspaceDir = path.join(stateDir, "workspace-agent");
+    const cfg = {
+      channels: {
+        imessage: {
+          attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+          accounts: {
+            work: {
+              attachmentRoots: ["/Users/work/Library/Messages/Attachments"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const localRoots = resolveMediaToolLocalRoots(workspaceDir, {
+      cfg,
+      channelId: "imessage",
+      accountId: "work",
+    });
+    const inboundRoots = resolveMediaToolInboundRoots({
+      cfg,
+      channelId: "imessage",
+      accountId: "work",
+    });
+
+    expect(localRoots.map(normalizeHostPath)).toContain(normalizeHostPath(workspaceDir));
+    expect(localRoots).not.toEqual(expect.arrayContaining(inboundRoots));
+    expect(inboundRoots).toEqual([
+      "/Users/work/Library/Messages/Attachments",
+      "/Users/*/Library/Messages/Attachments",
+    ]);
+  });
+
+  it("resolves default iMessage inbound roots and suppresses them for workspaceOnly", () => {
+    const cfg = { channels: { imessage: {} } } as OpenClawConfig;
+
+    expect(
+      resolveMediaToolInboundRoots({
+        cfg,
+        channelId: "imessage",
+      }),
+    ).toEqual(["/Users/*/Library/Messages/Attachments"]);
+    expect(
+      resolveMediaToolInboundRoots({
+        workspaceOnly: true,
+        cfg,
+        channelId: "imessage",
+      }),
+    ).toEqual([]);
+    expect(resolveMediaToolInboundRoots({ cfg, channelId: undefined })).toEqual([]);
   });
 });
 

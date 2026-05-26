@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
+import { isInboundPathAllowed } from "./inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveInboundMediaReference } from "./media-reference.js";
 
@@ -31,6 +32,7 @@ export function getDefaultLocalRoots(): readonly string[] {
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
+  options?: { inboundRoots?: readonly string[] },
 ): Promise<void> {
   if (localRoots === "any") {
     return;
@@ -45,6 +47,27 @@ export async function assertLocalMediaAllowed(
     throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
       cause: err,
     });
+  }
+  const inboundRoots = options?.inboundRoots ?? [];
+  const inboundPathAllowed = isInboundPathAllowed({
+    filePath: mediaPath,
+    roots: inboundRoots,
+  });
+  if (inboundPathAllowed || inboundRoots.length > 0) {
+    try {
+      const realMediaPath = await fs.realpath(mediaPath);
+      if (
+        isInboundPathAllowed({
+          filePath: realMediaPath,
+          roots: inboundRoots,
+        })
+      ) {
+        return;
+      }
+    } catch {
+      // Fall through to the normal local-root checks so missing/invalid paths keep
+      // their existing sanitized errors.
+    }
   }
   const roots = localRoots ?? getDefaultLocalRoots();
   let resolved: string;

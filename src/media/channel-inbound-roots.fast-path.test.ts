@@ -10,6 +10,7 @@ vi.mock("../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
 import {
   resolveChannelInboundAttachmentRoots,
+  resolveChannelInboundAttachmentRootsForChannel,
   resolveChannelRemoteInboundAttachmentRoots,
 } from "./channel-inbound-roots.js";
 
@@ -141,5 +142,37 @@ describe("channel inbound roots fast path", () => {
     expect(
       publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
     ).toHaveBeenCalledOnce();
+  });
+
+  it("resolves inbound attachment roots from explicit channel and account context", () => {
+    publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync.mockImplementation(
+      ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+        if (dirName === "explicitchat" && artifactBasename === "media-contract-api.js") {
+          return {
+            resolveInboundAttachmentRoots: ({ accountId }: { accountId?: string }) => [
+              `/explicit/${accountId ?? "default"}`,
+            ],
+          };
+        }
+        throw unableToResolve(dirName, artifactBasename);
+      },
+    );
+
+    expect(
+      resolveChannelInboundAttachmentRootsForChannel({
+        cfg,
+        channelId: "EXPLICITCHAT",
+        accountId: "personal",
+      }),
+    ).toEqual(["/explicit/personal"]);
+    expect(
+      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
+    ).toHaveBeenCalledOnce();
+    expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
+      {
+        dirName: "explicitchat",
+        artifactBasename: "media-contract-api.js",
+      },
+    );
   });
 });

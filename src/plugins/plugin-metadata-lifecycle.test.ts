@@ -32,7 +32,7 @@ function createSnapshot(): PluginMetadataSnapshot {
       plugins: [],
       diagnostics: [],
     },
-  } as PluginMetadataSnapshot;
+  } as unknown as PluginMetadataSnapshot;
 }
 
 describe("plugin metadata lifecycle caches", () => {

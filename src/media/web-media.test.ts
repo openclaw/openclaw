@@ -247,6 +247,25 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("threads inbound roots into local media access without widening local roots", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: [],
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+
+    const result = await loadWebMedia(tinyPngFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [],
+      inboundRoots: [await fs.realpath(fixtureRoot)],
+    });
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
   it("rejects host-read text files outside local roots", async () => {
     const secretFile = path.join(fixtureRoot, "secret.txt");
     await fs.writeFile(secretFile, "secret", "utf8");

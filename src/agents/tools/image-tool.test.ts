@@ -27,6 +27,9 @@ type MockOpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
+  agentChannel?: string | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
   modelHasVision?: boolean;
 };
 
@@ -161,6 +164,9 @@ vi.mock("../openclaw-tools.js", async () => {
               }
             : undefined,
         fsPolicy: options?.fsPolicy,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
       });
       return imageTool ? [imageTool] : [];
@@ -233,6 +239,42 @@ async function withTempWorkspacePng(
   } finally {
     await fs.rm(workspaceParent, { recursive: true, force: true });
   }
+}
+
+async function withTempInboundPng(
+  cb: (args: { rootDir: string; imagePath: string; wildcardRoot: string }) => Promise<void>,
+) {
+  const parentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-inbound-"));
+  try {
+    const rootDir = path.join(parentDir, "work", "Library", "Messages", "Attachments");
+    await fs.mkdir(rootDir, { recursive: true });
+    const imagePath = path.join(rootDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+    const realParentDir = await fs.realpath(parentDir);
+    const realRootDir = path.join(realParentDir, "work", "Library", "Messages", "Attachments");
+    await cb({
+      rootDir: realRootDir,
+      imagePath,
+      wildcardRoot: path.join(realParentDir, "*", "Library", "Messages", "Attachments"),
+    });
+  } finally {
+    await fs.rm(parentDir, { recursive: true, force: true });
+  }
+}
+
+function createImessageAttachmentConfig(rootDir: string): OpenClawConfig {
+  return {
+    ...createMinimaxImageConfig(),
+    channels: {
+      imessage: {
+        accounts: {
+          work: {
+            attachmentRoots: [rootDir],
+          },
+        },
+      },
+    },
+  };
 }
 
 function registerImageToolEnvReset(priorFetch: typeof global.fetch, keys: string[]) {
@@ -1387,6 +1429,127 @@ describe("image tool implicit imageModel config", () => {
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  it("allows configured iMessage account attachment roots only with matching channel context", async () => {
+    await withTempInboundPng(async ({ rootDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createImessageAttachmentConfig(rootDir);
+
+        const withoutContext = createRequiredImageTool({ config: cfg, agentDir });
+        await expect(
+          withoutContext.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        const withContext = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+        await expectImageToolExecOk(withContext, imagePath);
+
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("rejects account-specific iMessage attachment roots with mismatched context", async () => {
+    await withTempInboundPng(async ({ rootDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createImessageAttachmentConfig(rootDir);
+
+        const wrongAccount = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "personal",
+        });
+        await expect(
+          wrongAccount.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        const wrongChannel = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "slack",
+          agentAccountId: "work",
+        });
+        await expect(
+          wrongChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        expect(fetch).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  it("allows wildcard iMessage attachment roots through inbound-root matching", async () => {
+    await withTempInboundPng(async ({ wildcardRoot, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg: OpenClawConfig = {
+          ...createMinimaxImageConfig(),
+          channels: {
+            imessage: {
+              attachmentRoots: [wildcardRoot],
+            },
+          },
+        };
+
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+        });
+
+        await expectImageToolExecOk(tool, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("uses currentChannelId as the inbound channel fallback when agentChannel is absent", async () => {
+    await withTempInboundPng(async ({ rootDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createImessageAttachmentConfig(rootDir);
+
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          currentChannelId: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(tool, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("rejects matching iMessage attachment roots when workspaceOnly is enabled", async () => {
+    await withTempInboundPng(async ({ rootDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createImessageAttachmentConfig(rootDir);
+
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+          fsPolicy: { workspaceOnly: true },
+        });
+
+        await expect(tool.execute("t1", { prompt: "Describe.", image: imagePath })).rejects.toThrow(
+          /not under an allowed directory/i,
+        );
+        expect(fetch).not.toHaveBeenCalled();
+      });
     });
   });
 
