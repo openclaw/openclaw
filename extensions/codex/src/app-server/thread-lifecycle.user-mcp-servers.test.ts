@@ -466,7 +466,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
-  it("hashes user MCP comparison tokens in bindings and lifecycle diagnostics", async () => {
+  it("resumes threads with legacy raw user MCP comparison tokens and rewrites them hashed", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -486,14 +486,14 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       }),
     });
     const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-restarted");
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-existing");
       }
       throw new Error(`unexpected method: ${method}`);
     });
     const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
 
-    await startOrResumeThread({
+    const binding = await startOrResumeThread({
       client: { request } as never,
       params: createParams(sessionFile, workspaceDir, {
         mcp: {
@@ -514,6 +514,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     await waitForDiagnosticEventsDrained();
     lifecycleDiagnostics.unsubscribe();
 
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(binding.threadId).toBe("thread-existing");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(JSON.stringify(savedBinding)).not.toContain("alice@example.org");
@@ -521,17 +523,6 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const lifecycleEvent = lifecycleDiagnostics.events.find(
       (event) => event.reason === "mcp-config-mismatch",
     );
-    expect(lifecycleEvent).toEqual(
-      expect.objectContaining({
-        type: "codex.native_thread.lifecycle",
-        action: "rotated",
-        reason: "mcp-config-mismatch",
-        previousUserMcpServersFingerprint: expect.stringMatching(/^sha256:/),
-        userMcpServersFingerprint: expect.stringMatching(/^sha256:/),
-      }),
-    );
-    const serializedEvent = JSON.stringify(lifecycleEvent);
-    expect(serializedEvent).not.toContain("alice@example.org");
-    expect(serializedEvent).not.toContain("/opt/outlook-mcp");
+    expect(lifecycleEvent).toBeUndefined();
   });
 });

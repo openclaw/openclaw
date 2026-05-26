@@ -312,7 +312,14 @@ export async function startOrResumeThread(params: {
       rotatedContextEngineBinding = true;
     }
   }
-  if (binding?.threadId && binding.userMcpServersFingerprint !== userMcpServersFingerprint) {
+  if (
+    binding?.threadId &&
+    !areUserMcpServersFingerprintsCompatible(
+      binding.userMcpServersFingerprint,
+      userMcpServersConfigPatch,
+      userMcpServersFingerprint,
+    )
+  ) {
     emitLifecycleDiagnostic({
       action: "rotated",
       reason: CodexNativeThreadLifecycleReason.McpConfigMismatch,
@@ -327,7 +334,11 @@ export async function startOrResumeThread(params: {
   }
   if (
     binding?.threadId &&
-    binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
+    !areEnvironmentSelectionFingerprintsCompatible(
+      binding.environmentSelectionFingerprint,
+      params.environmentSelection,
+      environmentSelectionFingerprint,
+    )
   ) {
     emitLifecycleDiagnostic({
       action: "rotated",
@@ -1123,12 +1134,66 @@ function fingerprintEnvironmentSelection(
     : undefined;
 }
 
+function areUserMcpServersFingerprintsCompatible(
+  previous: string | undefined,
+  configPatch: JsonObject | undefined,
+  next: string | undefined,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !configPatch || !next) {
+    return false;
+  }
+  return (
+    previous === fingerprintLegacyStableJsonValue(configPatch) ||
+    isStoredJsonFingerprintPayloadCompatible(previous, configPatch)
+  );
+}
+
+function areEnvironmentSelectionFingerprintsCompatible(
+  previous: string | undefined,
+  environments: CodexTurnEnvironmentParams[] | undefined,
+  next: string | undefined,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !environments || !next) {
+    return false;
+  }
+  return (
+    previous === fingerprintLegacyStableJsonValue(environments) ||
+    isStoredJsonFingerprintPayloadCompatible(previous, environments)
+  );
+}
+
 function fingerprintStableJsonValue(namespace: string, value: JsonValue): string {
   const hash = createHash("sha256");
   hash.update(namespace);
   hash.update("\0");
-  hash.update(JSON.stringify(stabilizeJsonValue(value)));
+  hash.update(stableJsonFingerprintPayload(value));
   return `sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintLegacyStableJsonValue(value: JsonValue): string {
+  return `sha256:${createHash("sha256").update(stableJsonFingerprintPayload(value)).digest("hex")}`;
+}
+
+function isStoredJsonFingerprintPayloadCompatible(previous: string, value: JsonValue): boolean {
+  try {
+    const parsed = JSON.parse(previous) as unknown;
+    return (
+      isJsonConfigValue(parsed) &&
+      stableJsonFingerprintPayload(parsed) === stableJsonFingerprintPayload(value)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function stableJsonFingerprintPayload(value: JsonValue): string {
+  return JSON.stringify(stabilizeJsonValue(value));
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {

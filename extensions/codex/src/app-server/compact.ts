@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   embeddedAgentLog,
@@ -17,7 +18,7 @@ import {
   type CodexNativeThreadLifecycleDiagnostic,
   type CodexNativeThreadLifecycleDiagnosticInput,
 } from "./native-thread-diagnostics.js";
-import type { JsonObject } from "./protocol.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   clearCodexAppServerBinding,
@@ -101,20 +102,85 @@ export async function reconcileContextEngineCompactedCodexBinding({
   originalBinding?: CodexAppServerThreadBinding | null;
 }): Promise<{ invalidated: boolean; preserved: boolean; successorInvalidated: boolean }> {
   const rolledOver = compactedSessionFile !== params.sessionFile;
-  const originalBinding =
+  const originalBinding = sanitizePreservedCodexBinding(
     originalBindingSnapshot === null
       ? undefined
       : (originalBindingSnapshot ??
-        (await readCodexAppServerBinding(params.sessionFile, {
-          config: params.config,
-        })));
+          (await readCodexAppServerBinding(params.sessionFile, {
+            config: params.config,
+          }))),
+  );
+  let preInvalidatedSuccessorBinding = false;
+  if (rolledOver) {
+    const rawSuccessorBinding = await readCodexAppServerBinding(compactedSessionFile, {
+      config: params.config,
+    });
+    const successorBinding = sanitizePreservedCodexBinding(rawSuccessorBinding);
+    if (isPreservableContextEngineThreadBootstrapBinding(successorBinding)) {
+      const equivalentToOriginal = originalBinding?.threadId
+        ? areCodexBindingsEquivalentForCompactionPreservation(successorBinding, originalBinding)
+        : true;
+      if (!equivalentToOriginal && originalBinding) {
+        preInvalidatedSuccessorBinding = true;
+        emitCodexNativeThreadCompactionDiagnostic(params, {
+          action: "invalidated",
+          reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionInvalidatedBinding,
+          level: "info",
+          message:
+            "context-engine-owned Codex app-server compaction replaced original native thread binding with successor bootstrap binding",
+          sessionId: params.sessionId,
+          successorSessionId: compactedSessionId,
+          sessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          successorSessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          compactionRolledOver: true,
+          ...codexNativeBindingDiagnosticFields(originalBinding),
+          contextEngineId: originalBinding.contextEngine?.engineId ?? contextEngineId,
+          contextEnginePolicyFingerprint: originalBinding.contextEngine?.policyFingerprint,
+          contextEngineProjectionContributed: Boolean(originalBinding.contextEngine),
+        });
+        await clearCodexAppServerBinding(compactedSessionFile, { config: params.config });
+      } else {
+        if (bindingHasUnsanitizedPreservedComparisonFields(rawSuccessorBinding)) {
+          await writeCodexAppServerBinding(compactedSessionFile, successorBinding, {
+            config: params.config,
+          });
+        }
+        await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
+        emitCodexNativeThreadCompactionDiagnostic(params, {
+          action: "preserved",
+          reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionPreservedBinding,
+          level: "info",
+          message:
+            "context-engine-owned Codex app-server compaction preserved successor native thread-bootstrap binding",
+          sessionId: compactedSessionId,
+          previousSessionId: params.sessionId,
+          sessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          previousSessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          successorSessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          successorSessionId: compactedSessionId,
+          compactionRolledOver: true,
+          ...codexNativeBindingDiagnosticFields(successorBinding),
+          contextEngineId: successorBinding.contextEngine?.engineId ?? contextEngineId,
+          contextEnginePolicyFingerprint: successorBinding.contextEngine?.policyFingerprint,
+          contextEngineProjectionContributed: true,
+          semanticReuse: true,
+        });
+        return {
+          invalidated: false,
+          preserved: true,
+          successorInvalidated: false,
+        };
+      }
+    }
+  }
   if (isPreservableContextEngineThreadBootstrapBinding(originalBinding)) {
     let invalidated = false;
-    let successorInvalidated = false;
+    let successorInvalidated = preInvalidatedSuccessorBinding;
     if (rolledOver) {
-      const successorBinding = await readCodexAppServerBinding(compactedSessionFile, {
+      const rawSuccessorBinding = await readCodexAppServerBinding(compactedSessionFile, {
         config: params.config,
       });
+      const successorBinding = sanitizePreservedCodexBinding(rawSuccessorBinding);
       successorInvalidated =
         Boolean(successorBinding?.threadId) &&
         !areCodexBindingsEquivalentForCompactionPreservation(successorBinding, originalBinding);
@@ -141,9 +207,10 @@ export async function reconcileContextEngineCompactedCodexBinding({
       });
       await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
     } else {
-      const currentBinding = await readCodexAppServerBinding(params.sessionFile, {
+      const rawCurrentBinding = await readCodexAppServerBinding(params.sessionFile, {
         config: params.config,
       });
+      const currentBinding = sanitizePreservedCodexBinding(rawCurrentBinding);
       const currentBindingChanged =
         Boolean(currentBinding?.threadId) &&
         !areCodexBindingsEquivalentForCompactionPreservation(currentBinding, originalBinding);
@@ -166,7 +233,10 @@ export async function reconcileContextEngineCompactedCodexBinding({
           contextEngineProjectionContributed: Boolean(currentBinding.contextEngine),
         });
       }
-      if (!areCodexBindingsEquivalentForCompactionPreservation(currentBinding, originalBinding)) {
+      if (
+        !areCodexBindingsEquivalentForCompactionPreservation(currentBinding, originalBinding) ||
+        bindingHasUnsanitizedPreservedComparisonFields(rawCurrentBinding)
+      ) {
         await writeCodexAppServerBinding(params.sessionFile, originalBinding, {
           config: params.config,
         });
@@ -201,7 +271,7 @@ export async function reconcileContextEngineCompactedCodexBinding({
   }
 
   let invalidated = false;
-  let successorInvalidated = false;
+  let successorInvalidated = preInvalidatedSuccessorBinding;
   if (originalBinding?.threadId) {
     invalidated = true;
     emitCodexNativeThreadCompactionDiagnostic(params, {
@@ -223,9 +293,11 @@ export async function reconcileContextEngineCompactedCodexBinding({
   }
   await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
   if (rolledOver) {
-    const compactedBinding = await readCodexAppServerBinding(compactedSessionFile, {
-      config: params.config,
-    });
+    const compactedBinding = sanitizePreservedCodexBinding(
+      await readCodexAppServerBinding(compactedSessionFile, {
+        config: params.config,
+      }),
+    );
     if (compactedBinding?.threadId) {
       invalidated = true;
       successorInvalidated = true;
@@ -276,6 +348,126 @@ function areCodexBindingsEquivalentForCompactionPreservation(
     stableJson(left.pluginAppPolicyContext) === stableJson(right.pluginAppPolicyContext) &&
     stableJson(left.contextEngine) === stableJson(right.contextEngine)
   );
+}
+
+function sanitizePreservedCodexBinding(
+  binding: CodexAppServerThreadBinding | undefined,
+): CodexAppServerThreadBinding | undefined {
+  if (!binding) {
+    return undefined;
+  }
+  return {
+    ...binding,
+    userMcpServersFingerprint: sanitizePreservedComparisonFingerprint(
+      "userMcpServersFingerprint",
+      binding.userMcpServersFingerprint,
+    ),
+    environmentSelectionFingerprint: sanitizePreservedComparisonFingerprint(
+      "environmentSelectionFingerprint",
+      binding.environmentSelectionFingerprint,
+    ),
+  };
+}
+
+function bindingHasUnsanitizedPreservedComparisonFields(
+  binding: CodexAppServerThreadBinding | undefined,
+): boolean {
+  return Boolean(
+    binding &&
+    (isUnsanitizedPreservedComparisonFingerprint(binding.userMcpServersFingerprint) ||
+      isUnsanitizedPreservedComparisonFingerprint(binding.environmentSelectionFingerprint)),
+  );
+}
+
+function sanitizePreservedComparisonFingerprint(
+  key: "userMcpServersFingerprint" | "environmentSelectionFingerprint",
+  value: string | undefined,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (!isUnsanitizedPreservedComparisonFingerprint(value)) {
+    return value;
+  }
+  const parsed = parseStoredJsonValue(value);
+  if (parsed !== undefined) {
+    return fingerprintStableJsonValue(resolvePreservedComparisonFingerprintNamespace(key), parsed);
+  }
+  return fingerprintStoredComparisonString(key, value);
+}
+
+function isUnsanitizedPreservedComparisonFingerprint(value: string | undefined): boolean {
+  return Boolean(value && !/^sha256:[a-f0-9]{64}$/iu.test(value));
+}
+
+function parseStoredJsonValue(value: string): JsonValue | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isJsonValue(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fingerprintStableJsonValue(namespace: string, value: JsonValue): string {
+  const hash = createHash("sha256");
+  hash.update(namespace);
+  hash.update("\0");
+  hash.update(JSON.stringify(stabilizeJsonValue(value)));
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintStoredComparisonString(key: string, value: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:preserved-binding-fingerprint:v1");
+  hash.update("\0");
+  hash.update(key);
+  hash.update("\0");
+  hash.update(value);
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function resolvePreservedComparisonFingerprintNamespace(
+  key: "userMcpServersFingerprint" | "environmentSelectionFingerprint",
+): string {
+  return key === "userMcpServersFingerprint"
+    ? "openclaw:codex:user-mcp-servers:v1"
+    : "openclaw:codex:environment-selection:v1";
+}
+
+function stabilizeJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map(stabilizeJsonValue);
+  }
+  if (!isJsonObject(value)) {
+    return value;
+  }
+  const stable: JsonObject = {};
+  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    stable[key] = stabilizeJsonValue(child);
+  }
+  return stable;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  return isJsonObject(value) && Object.values(value).every(isJsonValue);
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function stableJson(value: unknown): string {

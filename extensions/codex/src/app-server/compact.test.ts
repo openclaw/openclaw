@@ -14,7 +14,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
-import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
+import {
+  maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl,
+  reconcileContextEngineCompactedCodexBinding,
+} from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 
@@ -402,6 +405,64 @@ describe("maybeCompactCodexAppServerSession", () => {
         sessionTokens: 789,
       }),
     );
+  });
+
+  it("hashes preserved thread-bootstrap comparison metadata during compaction reconciliation", async () => {
+    const sessionFile = path.join(tempDir, "thread-bootstrap-preserve.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-bootstrap",
+      cwd: tempDir,
+      userMcpServersFingerprint: JSON.stringify({
+        mcp_servers: {
+          notes: {
+            command: "node",
+            args: ["/workspace/notes-mcp/dist/index.js"],
+            env: { NOTES_USER: "alice@example.org" },
+          },
+        },
+      }),
+      environmentSelectionFingerprint: JSON.stringify([
+        { cwd: "/workspace/private-project", environmentId: "env-private" },
+      ]),
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-fingerprint",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "projection-fingerprint",
+        },
+      },
+    });
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+
+    const result = await reconcileContextEngineCompactedCodexBinding({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+      },
+      contextEngineId: "lossless-claw",
+      compactedSessionId: "session-1",
+      compactedSessionFile: sessionFile,
+      originalBinding,
+    });
+
+    expect(result).toEqual({
+      invalidated: false,
+      preserved: true,
+      successorInvalidated: false,
+    });
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(preservedBinding?.environmentSelectionFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    const serializedBinding = JSON.stringify(preservedBinding);
+    expect(serializedBinding).not.toContain("alice@example.org");
+    expect(serializedBinding).not.toContain("/workspace/notes-mcp");
+    expect(serializedBinding).not.toContain("/workspace/private-project");
   });
 
   it("does not impose an OpenClaw timeout after Codex accepts native compaction", async () => {

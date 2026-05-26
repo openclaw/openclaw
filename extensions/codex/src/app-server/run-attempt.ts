@@ -1801,15 +1801,14 @@ export async function runCodexAppServerAttempt(
   const rebuildPromptAfterContextEngineCompaction = async () => {
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
+    resetCodexPromptInputs();
     startupBinding = !nativeToolSurfaceEnabled
       ? undefined
-      : await readCodexAppServerBinding(activeSessionFile, { config: params.config });
-    resetCodexPromptInputs();
-    startupBinding = await readCodexAppServerBinding(activeSessionFile, {
-      authProfileStore: params.authProfileStore,
-      agentDir,
-      config: params.config,
-    });
+      : await readCodexAppServerBinding(activeSessionFile, {
+          authProfileStore: params.authProfileStore,
+          agentDir,
+          config: params.config,
+        });
     try {
       await applyActiveContextEngineProjection(startupBinding);
     } catch (assembleErr) {
@@ -1825,14 +1824,14 @@ export async function runCodexAppServerAttempt(
   };
   const rebuildPromptForFreshThreadAfterOptimisticSemanticReuse = async (
     nextThread: CodexAppServerThreadLifecycleBinding,
-  ) => {
+  ): Promise<boolean> => {
     if (
       !activeContextEngine ||
       nextThread.lifecycle.action !== "started" ||
       contextEngineProjectionDecision?.project !== false ||
       contextEngineProjectionDecision.reason !== "matching-thread-bootstrap-binding"
     ) {
-      return;
+      return false;
     }
     resetCodexPromptInputs();
     try {
@@ -1847,6 +1846,7 @@ export async function runCodexAppServerAttempt(
     }
     promptBuild = await buildPromptFromCurrentInputs();
     refreshCodexTurnPromptText();
+    return true;
   };
   const emitPendingContextEngineSemanticReuseDiagnostic = (
     nextThread: CodexAppServerThreadLifecycleBinding,
@@ -2341,7 +2341,35 @@ export async function runCodexAppServerAttempt(
     codexEnvironmentSelection = startupResult.environmentSelection;
     codexExecutionCwd = startupResult.executionCwd;
     codexSandboxPolicy = startupResult.sandboxPolicy;
-    await rebuildPromptForFreshThreadAfterOptimisticSemanticReuse(thread);
+    const rebuiltForFreshThread =
+      await rebuildPromptForFreshThreadAfterOptimisticSemanticReuse(thread);
+    if (rebuiltForFreshThread) {
+      try {
+        const providerBoundaryPrecheckFailure =
+          await maybeCompactContextEngineForProviderBoundaryPrecheck();
+        if (providerBoundaryPrecheckFailure) {
+          await unsubscribeCodexThreadBestEffort(client, {
+            threadId: thread.threadId,
+            timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+          });
+          await releaseSandboxExecEnvironment();
+          params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+          releaseSharedClientLease?.();
+          releaseSharedClientLease = undefined;
+          return providerBoundaryPrecheckFailure;
+        }
+      } catch (error) {
+        params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+        if (runAbortController.signal.aborted || isAbortLikeError(error)) {
+          await releaseSandboxExecEnvironment();
+          releaseSharedClientLease?.();
+          releaseSharedClientLease = undefined;
+          return buildPreStartAbortResult(error);
+        }
+        throw error;
+      }
+      systemPromptReport = buildCurrentSystemPromptReport();
+    }
     emitPendingContextEngineSemanticReuseDiagnostic(thread);
     startupClientForCleanup = undefined;
     emitCodexAppServerEvent(params, {
@@ -3624,7 +3652,15 @@ export async function runCodexAppServerAttempt(
           extra: { error: formatErrorMessage(turnStartError), sessionFile: preRetrySessionFile },
         });
         await clearCodexAppServerBinding(preRetrySessionFile);
+        if (activeSessionFile !== preRetrySessionFile) {
+          await clearCodexAppServerBinding(activeSessionFile);
+        }
         thread = await restartContextEngineCodexThread();
+        const rebuiltForFreshThread =
+          await rebuildPromptForFreshThreadAfterOptimisticSemanticReuse(thread);
+        if (rebuiltForFreshThread) {
+          systemPromptReport = buildCurrentSystemPromptReport();
+        }
         emitPendingContextEngineSemanticReuseDiagnostic(thread);
         emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",

@@ -2024,6 +2024,48 @@ describe("runCodexAppServerAttempt", () => {
     expect(JSON.stringify(lifecycleEvent)).not.toContain("/workspace");
   });
 
+  it("resumes Codex threads with legacy raw environment selection fingerprints", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "old-thread",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: JSON.stringify([]),
+      environmentSelectionFingerprint: JSON.stringify([
+        { cwd: "/workspace", environmentId: "env-existing" },
+      ]),
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/resume") {
+        return threadStartResult("old-thread");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      environmentSelection: [{ cwd: "/workspace", environmentId: "env-existing" }],
+    });
+    await flushDiagnosticEvents();
+    lifecycleDiagnostics.unsubscribe();
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(binding.threadId).toBe("old-thread");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.environmentSelectionFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(savedBinding?.environmentSelectionFingerprint).not.toContain("/workspace");
+    expect(
+      lifecycleDiagnostics.events.find(
+        (event) => event.reason === "environment-selection-mismatch",
+      ),
+    ).toBeUndefined();
+  });
+
   it("starts a no-MCP Codex thread when MCP config is evaluated empty", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
