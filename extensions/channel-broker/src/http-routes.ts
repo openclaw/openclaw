@@ -120,6 +120,36 @@ function isSelfOriginatedEvent(params: {
   return params.event.sender.id === nativeAccountId;
 }
 
+function hasExplicitSenderAllowance(params: {
+  account: ResolvedChannelBrokerAccount;
+  event: BrokerInboundEventV1;
+}): boolean {
+  const allowed = params.account.allowFrom.map((value) => String(value).trim()).filter(Boolean);
+  if (allowed.some((entry) => parseAccessGroupAllowFromEntry(entry) !== null)) {
+    return true;
+  }
+  const normalizedAllowed = new Set([
+    ...allowed.filter((entry) => entry !== "*"),
+    ...allowed
+      .filter((entry) => entry !== "*")
+      .map((entry) => normalizePlatformQualifiedAllowFrom(entry, params.account)),
+  ]);
+  const candidates = new Set([
+    params.event.sender.id,
+    params.event.sender.handle ?? "",
+    `${params.event.platform}:${params.event.sender.id}`,
+    params.event.message.nativeIds?.from ?? "",
+  ]);
+  return [...normalizedAllowed].some((entry) => candidates.has(entry));
+}
+
+function isWildcardOnlyBotSender(params: {
+  account: ResolvedChannelBrokerAccount;
+  event: BrokerInboundEventV1;
+}): boolean {
+  return params.event.sender.isBot === true && !hasExplicitSenderAllowance(params);
+}
+
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed || undefined;
@@ -235,6 +265,9 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
   event = accountScopedEvent.event;
   if (isSelfOriginatedEvent({ account, event })) {
     return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "self_sender" });
+  }
+  if (isWildcardOnlyBotSender({ account, event })) {
+    return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "bot_sender" });
   }
   if (!isSenderAllowed({ account, event })) {
     return sendJson(params.res, 403, { ok: false, error: "sender_not_allowed" });

@@ -1875,6 +1875,25 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it("drops bot-originated broker webhooks before wildcard sender allowlists", async () => {
+    const body = inboundBody("bot-main", {
+      sender: { id: "bot-main", handle: "acme-bot", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: ["*"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true, status: "ignored", reason: "bot_sender" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("fails closed when no inbound sender allowlist is configured", async () => {
     const body = inboundBody();
     const receiveInboundEvent = vi.fn();
