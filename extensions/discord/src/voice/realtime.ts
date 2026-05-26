@@ -1219,8 +1219,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.partialUserTranscript = "";
-    const meetingNotesTurn = this.peekPendingSpeakerTurn();
-    this.recordMeetingNotesUtterance(trimmed, meetingNotesTurn);
+    const transcriptsTurn = this.peekPendingSpeakerTurn();
+    this.recordTranscriptUtterance(trimmed, transcriptsTurn);
     const wakeNameResult = this.resolveWakeNameTranscript(trimmed);
     if (!wakeNameResult.allowed) {
       this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
@@ -1309,14 +1309,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     return { allowed: false, text };
   }
 
-  private recordMeetingNotesUtterance(text: string, turn: PendingSpeakerTurn | undefined): void {
-    const meetingNotes = this.params.entry.meetingNotes;
-    if (!meetingNotes || !turn) {
+  private recordTranscriptUtterance(text: string, turn: PendingSpeakerTurn | undefined): void {
+    const transcripts = this.params.entry.transcripts;
+    if (!transcripts || !turn) {
       return;
     }
     const context = turn.context;
     const utterance = {
-      sessionId: meetingNotes.sessionId,
+      sessionId: transcripts.sessionId,
       startedAt: new Date(turn.startedAt).toISOString(),
       final: true,
       speaker: {
@@ -1332,10 +1332,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       },
     };
     void Promise.resolve()
-      .then(() => meetingNotes.onUtterance(utterance))
+      .then(() => transcripts.onUtterance(utterance))
       .catch((error: unknown) => {
         logger.warn(
-          `discord voice: realtime meeting notes utterance failed: ${formatErrorMessage(error)}`,
+          `discord voice: realtime transcripts utterance failed: ${formatErrorMessage(error)}`,
         );
       });
   }

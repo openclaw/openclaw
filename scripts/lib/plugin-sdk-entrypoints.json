@@ -228,7 +228,7 @@
   "realtime-transcription",
   "realtime-bootstrap-context",
   "realtime-voice",
-  "meeting-notes",
+  "transcripts",
   "media-understanding",
   "media-understanding-runtime",
   "messaging-targets",

@@ -4,6 +4,7 @@ import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
@@ -496,6 +497,37 @@ export async function startGatewaySidecars(params: {
     pluginServices = null;
   }
   params.onPluginServices?.(pluginServices);
+
+  if (params.cfg.transcripts?.autoStart?.length) {
+    postReadySidecars.push(
+      schedulePostReadySidecarTask({
+        startupTrace: params.startupTrace,
+        name: "sidecars.transcripts-auto-start",
+        log: params.log,
+        run: async (_isStopped, signal) => {
+          const { createTranscriptsAutoStartService } =
+            await import("../agents/tools/transcripts-tool.js");
+          const service = createTranscriptsAutoStartService({
+            config: params.cfg,
+            stateDir: resolveStateDir(),
+            logger: params.log,
+          });
+          signal.addEventListener(
+            "abort",
+            () => {
+              void service
+                .stop()
+                .catch((err) =>
+                  params.log.warn(`transcripts autoStart stop failed: ${String(err)}`),
+                );
+            },
+            { once: true },
+          );
+          service.start();
+        },
+      }),
+    );
+  }
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
