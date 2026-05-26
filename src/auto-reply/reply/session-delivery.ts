@@ -62,7 +62,7 @@ function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boole
   );
 }
 
-function isDirectSessionKey(sessionKey?: string): boolean {
+export function isDirectSessionKey(sessionKey?: string): boolean {
   const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return false;

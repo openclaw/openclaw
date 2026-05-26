@@ -1,3 +1,5 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+const log = createSubsystemLogger("tasks/registry-store-sqlite");
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";

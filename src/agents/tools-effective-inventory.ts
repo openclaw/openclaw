@@ -7,9 +7,9 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import {
-  isDirectSessionKey,
   parseRawSessionConversationRef,
 } from "../sessions/session-key-utils.js";
+import { isDirectSessionKey } from "../auto-reply/reply/session-delivery.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
