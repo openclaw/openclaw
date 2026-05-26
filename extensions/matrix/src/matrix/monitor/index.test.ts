@@ -1107,10 +1107,6 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("preserves root bypassMentionInBoundThreads when account overrides only threadBindings.idleHours", async () => {
-    // Root enables the bypass; the "default" account only overrides idleHours.
-    // resolveMatrixAccountConfig shallow-merges threadBindings, so the account's
-    // { idleHours: 4 } replaces the whole root threadBindings object — the flag
-    // must be recovered from the root config via a fallback read.
     (hoisted.accountConfig as Record<string, unknown>).threadBindings = {
       bypassMentionInBoundThreads: true,
     };
