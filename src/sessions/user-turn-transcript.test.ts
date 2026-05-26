@@ -14,6 +14,7 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMediaFields,
   buildPersistedUserTurnMessage,
+  createUserTurnTranscriptRecorder,
   persistUserTurnTranscript,
   resolvePersistedUserTurnText,
   tryPersistInlineUserTurnTranscript,
@@ -510,6 +511,178 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           role: "user",
           content: "hello",
+        }),
+      ]);
+    });
+  });
+
+  describe("createUserTurnTranscriptRecorder", () => {
+    it("persists fallback user turns only once", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-fallback-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "hello from fallback",
+          timestamp: 123,
+          idempotencyKey: "chat-run-1:user",
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+
+      const [first, second] = await Promise.all([
+        recorder.persistFallback(),
+        recorder.persistFallback(),
+      ]);
+
+      expect(first?.messageId).toBeTruthy();
+      expect(second?.messageId).toBe(first?.messageId);
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from fallback",
+          idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
+
+    it("does not fallback-persist after runtime persistence is marked", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-runtime-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "runtime-owned turn",
+          timestamp: 123,
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+
+      recorder.markRuntimePersisted({
+        role: "user",
+        content: "runtime-owned turn",
+        timestamp: 123,
+      });
+
+      await expect(recorder.persistFallback()).resolves.toBeUndefined();
+      expect(fs.existsSync(transcriptPath)).toBe(false);
+    });
+
+    it("does not fallback-persist after before_agent_run blocks the turn", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-blocked-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "raw blocked prompt",
+          timestamp: 123,
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+
+      recorder.markBlocked();
+
+      await expect(recorder.persistFallback()).resolves.toBeUndefined();
+      expect(fs.existsSync(transcriptPath)).toBe(false);
+    });
+
+    it("waits for runtime persistence before deciding fallback ownership", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-pending-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      let releaseRuntimePersistence!: () => void;
+      const runtimePersistenceStarted = new Promise<void>((resolve) => {
+        releaseRuntimePersistence = resolve;
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "pending runtime turn",
+          timestamp: 123,
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+      recorder.markRuntimePersistencePending(
+        runtimePersistenceStarted.then(() => {
+          recorder.markRuntimePersisted({
+            role: "user",
+            content: "pending runtime turn",
+            timestamp: 123,
+          });
+        }),
+      );
+
+      let fallbackSettled = false;
+      const fallback = recorder.persistFallback().then((result) => {
+        fallbackSettled = true;
+        return result;
+      });
+
+      await Promise.resolve();
+      expect(fallbackSettled).toBe(false);
+
+      releaseRuntimePersistence();
+
+      await expect(fallback).resolves.toBeUndefined();
+      expect(fs.existsSync(transcriptPath)).toBe(false);
+    });
+
+    it("fallback-persists when pending runtime persistence fails", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-pending-failed-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const errors: unknown[] = [];
+      let rejectRuntimePersistence!: (error: unknown) => void;
+      const runtimePersistence = new Promise<void>((_, reject) => {
+        rejectRuntimePersistence = reject;
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "pending failed turn",
+          timestamp: 123,
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+        onPersistenceError: (error) => errors.push(error),
+      });
+      recorder.markRuntimePersistencePending(runtimePersistence);
+
+      const fallback = recorder.persistFallback();
+      rejectRuntimePersistence(new Error("runtime append failed"));
+      const persisted = await fallback;
+
+      expect(errors).toHaveLength(1);
+      expect(persisted?.message).toMatchObject({
+        role: "user",
+        content: "pending failed turn",
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "pending failed turn",
         }),
       ]);
     });
