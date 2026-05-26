@@ -11,6 +11,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -25,6 +26,7 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -46,6 +48,7 @@ import {
   normalizeThinkLevel,
   type ReasoningLevel,
   resolveSupportedThinkingLevel,
+  type ThinkingCatalogEntry,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
@@ -83,6 +86,7 @@ import {
   waitForReplyRunEndBySessionId,
   type ReplyOperation,
 } from "./reply-run-registry.js";
+import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -109,6 +113,25 @@ type InternalGetReplyOptions = GetReplyOptions & {
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+const preparedReplyTimingLog = createSubsystemLogger("auto-reply/pre-agent-timing");
+
+function hasResolvedThinkingCatalogEntry(params: {
+  catalog?: readonly ThinkingCatalogEntry[];
+  provider: string;
+  model: string;
+}): boolean {
+  const modelId = normalizeOptionalString(params.model);
+  if (!modelId) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const entry = params.catalog?.find(
+    (candidate) =>
+      normalizeProviderId(candidate.provider) === normalizedProvider && candidate.id === modelId,
+  );
+  return entry?.reasoning !== undefined;
+}
 
 export function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
@@ -446,12 +469,33 @@ export async function runPreparedReply(
     isHeartbeat,
     queueMode: perMessageQueueMode ?? "configured",
   };
-  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
-      config: cfg,
-      attributes: traceAttributes,
+  // Keep the expensive pre-agent profiler disabled in normal production turns;
+  // when enabled it isolates catalog/auth/skill startup without changing the
+  // reply execution path.
+  const preparedTiming = createReplyTimingTracker({ log: preparedReplyTimingLog, config: cfg });
+  const logPreparedTiming = (reason: string) =>
+    preparedTiming.logIfSlow({
+      message: `prepared reply pre-agent timings provider=${provider} model=${model} sessionId=${
+        sessionId ?? "unknown"
+      } sessionKey=${sessionKey ?? "unknown"} agentId=${agentId}`,
+      outcome: "milestone",
+      reason,
+      details: {
+        provider,
+        model,
+        sessionId,
+        sessionKey,
+        agentId,
+      },
     });
+  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    preparedTiming.measure(name, () =>
+      measureDiagnosticsTimelineSpan(name, run, {
+        phase: "agent-turn",
+        config: cfg,
+        attributes: traceAttributes,
+      }),
+    );
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,
     sessionEntry,
@@ -708,7 +752,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    const thinkingCatalog = maybeLevel
+      ? await traceRunPhase("reply.resolve_thinking_catalog_for_hint", () =>
+          modelState.resolveThinkingCatalog(),
+        )
+      : undefined;
     if (
       maybeLevel &&
       isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
@@ -789,17 +837,38 @@ export async function runPreparedReply(
     await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
   if (!resolvedThinkLevel) {
-    resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+    resolvedThinkLevel = await traceRunPhase("reply.resolve_default_thinking", () =>
+      modelState.resolveDefaultThinkingLevel(),
+    );
   }
-  const thinkingCatalog = await modelState.resolveThinkingCatalog();
-  if (
-    !isThinkingLevelSupported({
+  const allowedThinkingCatalog = modelState.allowedModelCatalog ?? [];
+  let thinkingCatalog = allowedThinkingCatalog.length > 0 ? allowedThinkingCatalog : undefined;
+  let thinkingLevelSupported = isThinkingLevelSupported({
+    provider,
+    model,
+    level: resolvedThinkLevel,
+    catalog: thinkingCatalog,
+  });
+  const shouldHydrateThinkingCatalog =
+    !thinkingLevelSupported ||
+    (resolvedThinkLevel !== "off" &&
+      !hasResolvedThinkingCatalogEntry({ catalog: thinkingCatalog, provider, model }));
+  if (shouldHydrateThinkingCatalog) {
+    // Hydrate the runtime model catalog only when the lightweight catalog cannot
+    // prove support or lacks reasoning metadata for the selected model. The full
+    // catalog load was a 14s+ reply-blocking cost for known Codex models that
+    // already publish authoritative thinking metadata.
+    thinkingCatalog = await traceRunPhase("reply.resolve_thinking_catalog", () =>
+      modelState.resolveThinkingCatalog(),
+    );
+    thinkingLevelSupported = isThinkingLevelSupported({
       provider,
       model,
       level: resolvedThinkLevel,
       catalog: thinkingCatalog,
-    })
-  ) {
+    });
+  }
+  if (!thinkingLevelSupported) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
@@ -1196,6 +1265,7 @@ export async function runPreparedReply(
         }
       : undefined;
 
+  logPreparedTiming("before_run_agent");
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
