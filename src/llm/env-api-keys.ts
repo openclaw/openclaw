@@ -10,11 +10,28 @@ const NODE_FS_SPECIFIER = "node:fs";
 const NODE_OS_SPECIFIER = "node:os";
 const NODE_PATH_SPECIFIER = "node:path";
 
+function loadNodeBuiltinModule(specifier: string): unknown | null {
+  const getBuiltinModule = (typeof process !== "undefined" ? process : undefined) as
+    | (NodeJS.Process & { getBuiltinModule?: (id: string) => unknown })
+    | undefined;
+  if (typeof getBuiltinModule?.getBuiltinModule === "function") {
+    return getBuiltinModule.getBuiltinModule(specifier);
+  }
+  if (typeof require === "function") {
+    return require(specifier) as unknown;
+  }
+  return null;
+}
+
 function loadNodeHelpersSync(): boolean {
   try {
-    existsSync ??= (require(NODE_FS_SPECIFIER) as typeof import("node:fs")).existsSync;
-    homedir ??= (require(NODE_OS_SPECIFIER) as typeof import("node:os")).homedir;
-    join ??= (require(NODE_PATH_SPECIFIER) as typeof import("node:path")).join;
+    existsSync ??= (loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs"))
+      ?.existsSync;
+    homedir ??= (loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os"))?.homedir;
+    join ??= (loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as typeof import("node:path"))?.join;
+    if (!existsSync || !homedir || !join) {
+      return false;
+    }
     return true;
   } catch {
     return false;
@@ -92,7 +109,6 @@ function hasVertexAdcCredentials(): boolean {
       const isNode =
         typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
       if (!isNode || !loadNodeHelpersSync()) {
-        cachedVertexAdcCredentialsExists = false;
         return false;
       }
     }
@@ -100,7 +116,6 @@ function hasVertexAdcCredentials(): boolean {
     const nodeHomedir = homedir;
     const nodeJoin = join;
     if (!nodeExistsSync || !nodeHomedir || !nodeJoin) {
-      cachedVertexAdcCredentialsExists = false;
       return false;
     }
 
