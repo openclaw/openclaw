@@ -240,6 +240,16 @@ function expectTextMessage(value: unknown, fields: { role: string; content: stri
   expect(message.timestamp).toBeTypeOf("number");
 }
 
+function readTranscriptMessages(sessionFile: string): unknown[] {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { message?: unknown })
+    .map((entry) => entry.message)
+    .filter(Boolean);
+}
+
 describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
@@ -874,13 +884,7 @@ describe("runCliAgent reliability", () => {
         }),
       );
 
-      const messages = fs
-        .readFileSync(sessionFile, "utf-8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { message?: unknown })
-        .map((entry) => entry.message)
-        .filter(Boolean);
+      const messages = readTranscriptMessages(sessionFile);
       expect(messages).toContainEqual(
         expect.objectContaining({
           role: "user",
@@ -943,13 +947,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(recorder.hasPersisted()).toBe(true);
 
-      const messages = fs
-        .readFileSync(sessionFile, "utf-8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { message?: unknown })
-        .map((entry) => entry.message)
-        .filter(Boolean);
+      const messages = readTranscriptMessages(sessionFile);
       expect(messages).toEqual([
         expect.objectContaining({
           role: "user",

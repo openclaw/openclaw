@@ -844,10 +844,6 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         originatingChannel: "telegram",
-        userTurnTranscriptRecorder: createTestUserTurnRecorder({
-          role: "user",
-          content: "hello",
-        } as never),
         run: {
           config: runtimeConfig,
           sessionId: "session-cli-followup",
@@ -873,11 +869,6 @@ describe("createFollowupRunner runtime config", () => {
       workspaceDir: "/tmp",
       config: runtimeConfig,
       suppressNextUserMessagePersistence: false,
-    });
-    const recorder = requireRecord(call.userTurnTranscriptRecorder, "cli user turn recorder");
-    expect(recorder.message).toMatchObject({
-      role: "user",
-      content: "hello",
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
   });

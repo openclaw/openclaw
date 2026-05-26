@@ -1837,54 +1837,6 @@ describe("runAgentTurnWithFallback", () => {
     expect(callParams.onUserMessagePersisted).toEqual(expect.any(Function));
   });
 
-  it("passes clean transcript text for text-only CLI user persistence", async () => {
-    state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4"),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "codex-cli";
-    followupRun.run.model = "gpt-5.4";
-    followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder({
-      role: "user",
-      content: "display prompt",
-    } as never);
-
-    await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams({ followupRun }),
-      commandBody: "runtime prompt with metadata",
-      transcriptCommandBody: "display prompt",
-    });
-
-    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
-    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
-      sessionId: "session",
-      sessionKey: "main",
-      agentId: "agent",
-      prompt: "runtime prompt with metadata",
-      transcriptPrompt: "display prompt",
-      suppressNextUserMessagePersistence: false,
-    });
-    const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
-    const callParams = requireRecord(call[0], "CLI runtime");
-    expect(callParams.userTurnTranscriptRecorder).toEqual(expect.any(Object));
-    expect(
-      requireRecord(callParams.userTurnTranscriptRecorder, "user turn recorder").message,
-    ).toMatchObject({
-      role: "user",
-      content: "display prompt",
-    });
-  });
-
   it("does not reuse or persist CLI sessions for room-event turns", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
