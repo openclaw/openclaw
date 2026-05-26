@@ -43,7 +43,11 @@ describe("release user journey assertions", () => {
       mkdirSync(installPath, { recursive: true });
       writeFileSync(installPathFile, installPath, "utf8");
 
-      const result = runAssertion(home, ["assert-plugin-uninstalled", pluginId, installPathFile]);
+      const result = runAssertion(home, [
+        "assert-plugin-uninstalled",
+        pluginId,
+        installPathFile,
+      ]);
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("managed plugin directory still present");

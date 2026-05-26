@@ -138,9 +138,7 @@ describe("install.sh", () => {
     expect(script).toContain(
       'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
     );
-    expect(script).toContain(
-      'run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm',
-    );
+    expect(script).toContain('run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm');
     expect(script).toContain("if ! node_is_at_least_required; then");
 
     const apkIndex = script.indexOf("if command -v apk &> /dev/null && is_alpine_linux; then");
@@ -210,9 +208,7 @@ describe("install.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
     expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
-    expect(result.stdout).toContain(
-      "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
-    );
+    expect(result.stdout).toContain("step:Installing nodejs-current|apk add --no-cache nodejs-current npm");
     expect(result.stdout).toContain("finish-linux-node");
   });
 
@@ -251,12 +247,8 @@ describe("install.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
-    expect(result.stdout).toContain(
-      "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
-    );
-    expect(result.stdout).toContain(
-      "error:Alpine apk repositories did not provide Node.js v22.19+",
-    );
+    expect(result.stdout).toContain("step:Installing nodejs-current|apk add --no-cache nodejs-current npm");
+    expect(result.stdout).toContain("error:Alpine apk repositories did not provide Node.js v22.19+");
     expect(result.stdout).toContain("Use Alpine 3.21+ or install Node.js 24 manually");
   });
 

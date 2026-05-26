@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  filterSparseMissingOxlintTargets,
+  shouldPrepareExtensionPackageBoundaryArtifacts,
+} from "../../scripts/run-oxlint.mjs";
+import {
   createOxlintShards,
   createWindowsExtensionShards,
   resolveWindowsExtensionChunkSize,
 } from "../../scripts/run-oxlint-shards.mjs";
-import {
-  filterSparseMissingOxlintTargets,
-  shouldPrepareExtensionPackageBoundaryArtifacts,
-} from "../../scripts/run-oxlint.mjs";
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
@@ -130,12 +130,10 @@ describe("run-oxlint", () => {
 
   it("keeps the default Windows oxlint extension chunk size for invalid overrides", () => {
     expect(resolveWindowsExtensionChunkSize({})).toBe(8);
-    expect(
-      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }),
-    ).toBe(8);
-    expect(
-      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }),
-    ).toBe(8);
+    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }))
+      .toBe(8);
+    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }))
+      .toBe(8);
   });
 
   it("filters tracked targets missing from sparse checkouts", () => {

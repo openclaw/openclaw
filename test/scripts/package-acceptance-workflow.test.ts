@@ -428,6 +428,11 @@ describe("package artifact reuse", () => {
     expect(pullHelper).toContain(
       'timeout --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
     );
+    expect(pullHelper).toContain("timeout --kill-after=1s 1s true >/dev/null 2>&1");
+    expect(pullHelper).toContain('timeout "${timeout_seconds}s" docker pull "$image"');
+    expect(pullHelper).toContain(
+      'timeout command not found; cannot bound Docker pull after ${timeout_seconds}s',
+    );
     expect(dockerE2ePlanAction.match(/bash scripts\/ci-docker-pull-retry\.sh/g)?.length).toBe(2);
     expect(dockerE2ePlanAction).not.toContain('docker pull "${OPENCLAW_DOCKER_E2E_');
   });
@@ -546,7 +551,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     );
-    expect(workflow).toContain("timeout --kill-after=30s 35m");
+    expect(workflow).toContain("timeout --foreground --kill-after=30s 35m");
     expect(workflow).toMatch(/suite_id: live-gateway-docker[\s\S]*?timeout_minutes: 40/u);
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
@@ -616,22 +621,22 @@ describe("package artifact reuse", () => {
     const stage = readFileSync("scripts/lib/live-docker-stage.sh", "utf8");
 
     expect(workflow).toContain(
-      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
+      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
     );
     expect(workflow).toContain(
       "command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1",
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
     );
     expect(scenarios).toContain("function liveDockerScriptCommand");
     expect(scenarios).toContain(
@@ -684,6 +689,16 @@ describe("package artifact reuse", () => {
         "openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT",
       );
     }
+    for (const script of [
+      readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8"),
+      readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8"),
+      readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8"),
+    ]) {
+      expect(script).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+      expect(script).toContain('if "$timeout_bin" --kill-after=1s 1s true');
+      expect(script).toContain('"$timeout_bin" --kill-after=30s "$timeout_value" "$@"');
+      expect(script).not.toContain('timeout --kill-after=30s "${OPENCLAW_LIVE_');
+    }
     expect(readFileSync("scripts/test-live-models-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_MODELS_DOCKER_RUN_TIMEOUT:-2100s",
     );
@@ -694,7 +709,10 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_CLI_BACKEND_DOCKER_RUN_TIMEOUT:-2700s",
     );
     expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
-      'timeout --kill-after=30s "${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:-180}s"',
+      'timeout_value="${OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS:-180}s"',
+    );
+    expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
+      'echo "timeout command not found; cannot bound live CLI backend setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s",
@@ -703,7 +721,10 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180",
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      'timeout --kill-after=30s "${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"',
+      'timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command npm install -g @anthropic-ai/claude-code",
@@ -718,7 +739,10 @@ describe("package artifact reuse", () => {
       "OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      'timeout --kill-after=30s "${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180}s"',
+      'timeout_value="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180}s"',
+    );
+    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
+      'echo "timeout command not found; cannot bound live Codex harness setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
@@ -1296,7 +1320,7 @@ describe("package artifact reuse", () => {
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
-      "timeout --kill-after=30s 8m pnpm test:live:cache",
+      "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });

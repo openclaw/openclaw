@@ -21,7 +21,9 @@ type CurrentAttemptAssistantWithError = NonNullable<
   EmbeddedRunAttemptResult["currentAttemptAssistant"]
 > & { errorMessage: string };
 
-function isCurrentAttemptAssistant(value: unknown): value is CurrentAttemptAssistantWithError {
+function isCurrentAttemptAssistant(
+  value: unknown,
+): value is CurrentAttemptAssistantWithError {
   return (
     typeof value === "object" &&
     value !== null &&

@@ -24,7 +24,7 @@ private final class StreamFailureBox: @unchecked Sendable {
     }
 }
 
-enum TalkGatewayPermissionState: Equatable, Sendable {
+enum TalkGatewayPermissionState: Equatable {
     case unknown
     case ready
     case missingScope(String)

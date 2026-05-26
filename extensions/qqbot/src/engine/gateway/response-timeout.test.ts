@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RESPONSE_TIMEOUT_MS, resolveResponseTimeoutMs } from "./response-timeout.js";
+import {
+  DEFAULT_RESPONSE_TIMEOUT_MS,
+  resolveResponseTimeoutMs,
+} from "./response-timeout.js";
 
 describe("resolveResponseTimeoutMs", () => {
   it("falls back to the historical 5-minute floor when no timeouts configured", () => {
@@ -9,17 +12,17 @@ describe("resolveResponseTimeoutMs", () => {
   });
 
   it("honors longer agents.defaults.timeoutSeconds", () => {
-    expect(resolveResponseTimeoutMs({ agents: { defaults: { timeoutSeconds: 900 } } })).toBe(
-      900_000,
-    );
+    expect(
+      resolveResponseTimeoutMs({ agents: { defaults: { timeoutSeconds: 900 } } }),
+    ).toBe(900_000);
   });
 
   it("ignores agents.defaults.timeoutSeconds shorter than the historical floor", () => {
     // Issue #85267: a configured 60s agent timeout must not undercut the
     // historical 5-minute watchdog floor for previously-working setups.
-    expect(resolveResponseTimeoutMs({ agents: { defaults: { timeoutSeconds: 60 } } })).toBe(
-      DEFAULT_RESPONSE_TIMEOUT_MS,
-    );
+    expect(
+      resolveResponseTimeoutMs({ agents: { defaults: { timeoutSeconds: 60 } } }),
+    ).toBe(DEFAULT_RESPONSE_TIMEOUT_MS);
   });
 
   it("honors models.providers.<id>.timeoutSeconds for slow local providers (#85267)", () => {

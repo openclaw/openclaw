@@ -160,8 +160,13 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "pnpm test"
+  "pnpm verify"
 ```
+
+Use `pnpm verify` when you need check plus full Vitest proof. It emits
+`CRABBOX_PHASE:check` and `CRABBOX_PHASE:test`, making Crabbox summaries show
+which stage failed. Use plain `pnpm test` only when check proof is already
+covered or intentionally skipped.
 
 Focused rerun:
 

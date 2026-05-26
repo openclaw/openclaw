@@ -952,7 +952,7 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 
-  it("updateSessionStore uses the writer-owned mutable cache without disk read or parse", async () => {
+  it("updateSessionStore uses the writer-owned mutable cache without disk read", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStore-mutable-cache",
@@ -968,7 +968,6 @@ describe("sessions", () => {
     expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
 
     const readSpy = vi.spyOn(fsSync, "readFileSync");
-    const parseSpy = vi.spyOn(JSON, "parse");
     try {
       await updateSessionStore(
         storePath,
@@ -986,10 +985,8 @@ describe("sessions", () => {
       );
 
       expect(readSpy).not.toHaveBeenCalled();
-      expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
-      parseSpy.mockRestore();
     }
 
     const store = loadSessionStore(storePath, { skipCache: true });

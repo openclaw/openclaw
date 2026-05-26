@@ -105,10 +105,7 @@ function rememberPluginInstallPath() {
   assert(record, `missing install record for ${pluginId}`);
   const installPath = resolveHomePath(record.installPath);
   assert(installPath, `install path missing for ${pluginId}`);
-  assert(
-    fs.existsSync(installPath),
-    `install path missing on disk for ${pluginId}: ${installPath}`,
-  );
+  assert(fs.existsSync(installPath), `install path missing on disk for ${pluginId}: ${installPath}`);
   if (expectedSourcePath && record.sourcePath) {
     assert(
       pathsEqual(record.sourcePath, expectedSourcePath),

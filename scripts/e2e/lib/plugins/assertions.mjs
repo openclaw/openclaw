@@ -420,18 +420,12 @@ function assertGitPlugin() {
   }
   assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
   fs.writeFileSync(scratchFile("plugins-git-install-path.txt"), installPath, "utf8");
-  fs.writeFileSync(
-    scratchFile("plugins-git-install-parent.txt"),
-    path.dirname(installPath),
-    "utf8",
-  );
+  fs.writeFileSync(scratchFile("plugins-git-install-parent.txt"), path.dirname(installPath), "utf8");
 }
 
 function assertGitPluginRemoved() {
   const installPath = fs.readFileSync(scratchFile("plugins-git-install-path.txt"), "utf8").trim();
-  const installParent = fs
-    .readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8")
-    .trim();
+  const installParent = fs.readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8").trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-git",
     listFile: scratchFile("plugins-git-uninstalled.json"),
@@ -603,10 +597,7 @@ function assertNpmPlugin() {
 }
 
 function assertNpmPluginUpdateUnchanged() {
-  assertUpdateOutput(
-    scratchFile("plugins-npm-update.log"),
-    "demo-plugin-npm is up to date (0.0.1).",
-  );
+  assertUpdateOutput(scratchFile("plugins-npm-update.log"), "demo-plugin-npm is up to date (0.0.1).");
   assertNpmPlugin();
 }
 
@@ -843,9 +834,7 @@ function assertClawHubInstalled() {
 
 function assertClawHubRemoved() {
   const pluginId = process.env.CLAWHUB_PLUGIN_ID;
-  const installPath = fs
-    .readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8")
-    .trim();
+  const installPath = fs.readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8").trim();
   const list = readJson(scratchFile("plugins-clawhub-uninstalled.json"));
   if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);

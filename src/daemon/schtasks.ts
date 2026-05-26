@@ -13,7 +13,7 @@ import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir } from "./paths.js";
+import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -47,18 +47,7 @@ function shouldFallbackToStartupEntry(params: { code: number; detail: string }):
 }
 
 export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
-  const override = env.OPENCLAW_TASK_SCRIPT?.trim();
-  if (override) {
-    return override;
-  }
-  const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
-  if (/[/\\]|\.\./.test(scriptName)) {
-    throw new Error(
-      `OPENCLAW_TASK_SCRIPT_NAME must be a file name only, not a path: ${scriptName}`,
-    );
-  }
-  const stateDir = resolveGatewayStateDir(env);
-  return path.join(stateDir, scriptName);
+  return resolveGatewayTaskScriptPath(env);
 }
 
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {

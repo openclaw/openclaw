@@ -116,17 +116,12 @@ describe("parseTtsDirectives provider-aware routing", () => {
   });
 
   it("routes to preferred provider aliases when no provider token is declared", () => {
-    const azure = makeProvider(
-      "azure-speech",
-      20,
-      ({ key, value }) => {
-        if (key === "speed") {
-          return { handled: true, overrides: { speed: Number(value) } };
-        }
-        return undefined;
-      },
-      { aliases: ["azure"] },
-    );
+    const azure = makeProvider("azure-speech", 20, ({ key, value }) => {
+      if (key === "speed") {
+        return { handled: true, overrides: { speed: Number(value) } };
+      }
+      return undefined;
+    }, { aliases: ["azure"] });
 
     const result = parseTtsDirectives("[[tts:speed=1.5]]", fullPolicy, {
       providers: [elevenlabs, azure],

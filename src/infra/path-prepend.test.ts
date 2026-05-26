@@ -120,33 +120,36 @@ describe("path prepend helpers", () => {
     it("removes prepended entries globally from the existing path", () => {
       // Normal case
       expect(
-        removePathPrepend(pathLine("/custom/bin", "/opt/bin", "/usr/bin", "/bin"), [
-          "/custom/bin",
-          "/opt/bin",
-        ]),
+        removePathPrepend(
+          pathLine("/custom/bin", "/opt/bin", "/usr/bin", "/bin"),
+          ["/custom/bin", "/opt/bin"]
+        )
       ).toBe(pathLine("/usr/bin", "/bin"));
 
       // Tampered case (entries exist later in the path)
       expect(
-        removePathPrepend(pathLine("/plugin/bin", "/custom/bin", "/opt/bin", "/usr/bin", "/bin"), [
-          "/custom/bin",
-          "/opt/bin",
-        ]),
+        removePathPrepend(
+          pathLine("/plugin/bin", "/custom/bin", "/opt/bin", "/usr/bin", "/bin"),
+          ["/custom/bin", "/opt/bin"]
+        )
       ).toBe(pathLine("/plugin/bin", "/usr/bin", "/bin"));
 
       // Duplicate case (natural path contains duplicate of prepended entry)
       // Since removePathPrepend now uses global filtering, it will remove all instances.
       expect(
-        removePathPrepend(pathLine("/custom/bin", "/opt/bin", "/usr/bin", "/custom/bin", "/bin"), [
-          "/custom/bin",
-          "/opt/bin",
-        ]),
+        removePathPrepend(
+          pathLine("/custom/bin", "/opt/bin", "/usr/bin", "/custom/bin", "/bin"),
+          ["/custom/bin", "/opt/bin"]
+        )
       ).toBe(pathLine("/usr/bin", "/bin"));
     });
 
     it("handles whitespace and blank entries safely", () => {
       expect(
-        removePathPrepend(pathLine(" /custom/bin ", " ", "/usr/bin"), ["  /custom/bin  ", ""]),
+        removePathPrepend(
+          pathLine(" /custom/bin ", " ", "/usr/bin"),
+          ["  /custom/bin  ", ""]
+        )
       ).toBe("/usr/bin");
     });
   });

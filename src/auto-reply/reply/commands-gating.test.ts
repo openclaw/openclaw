@@ -89,23 +89,17 @@ vi.mock("../../config/config.js", () => ({
     transform: (
       currentConfig: OpenClawConfig,
       context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
-    ) =>
-      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
-      | {
-          nextConfig: OpenClawConfig;
-          result?: unknown;
-        };
+    ) => Promise<{ nextConfig: OpenClawConfig; result?: unknown }> | {
+      nextConfig: OpenClawConfig;
+      result?: unknown;
+    };
   }) => {
     const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
     const previousHash = snapshot.hash ?? null;
     const currentConfig = structuredClone(
       snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
     );
-    const transformed = await params.transform(currentConfig, {
-      snapshot,
-      previousHash,
-      attempt: 0,
-    });
+    const transformed = await params.transform(currentConfig, { snapshot, previousHash, attempt: 0 });
     const afterWrite = params.afterWrite ?? { mode: "auto" };
     await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
     return {

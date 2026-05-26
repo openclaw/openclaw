@@ -11,11 +11,15 @@ describe("ci workflow guards", () => {
 
     for (const workflowPath of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
-      const fetchTimeouts = workflow.match(/timeout --signal=TERM[^\n]* 30s git -C "\$workdir"/g);
+      const fetchTimeouts = workflow.match(
+        /timeout --signal=TERM[^\n]* 30s git -C "\$workdir"/g,
+      );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
       expect(fetchTimeouts, workflowPath).toEqual(
-        fetchTimeouts?.map(() => 'timeout --signal=TERM --kill-after=10s 30s git -C "$workdir"'),
+        fetchTimeouts?.map(
+          () => 'timeout --signal=TERM --kill-after=10s 30s git -C "$workdir"',
+        ),
       );
     }
   });

@@ -132,7 +132,11 @@ function formatCapturedOutput(label, buffer) {
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutKillGraceMs = 2000, timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
+    const {
+      timeoutKillGraceMs = 2000,
+      timeoutMs = COMMAND_TIMEOUT_MS,
+      ...spawnOptions
+    } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
@@ -145,7 +149,10 @@ export function runCommand(command, args, options = {}) {
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
-      forceKillTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), timeoutKillGraceMs);
+      forceKillTimer = setTimeout(
+        () => signalProcessGroup(child, "SIGKILL"),
+        timeoutKillGraceMs,
+      );
       forceKillTimer.unref();
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {

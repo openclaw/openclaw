@@ -181,9 +181,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "1" })).toBe(
       true,
     );
-    expect(
-      resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" }),
-    ).toBe(false);
+    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" })).toBe(
+      false,
+    );
   });
 
   it("detects embedded fallback agent turns as non-gateway proof", () => {
@@ -796,11 +796,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-"));
     try {
       const logPath = join(dir, "command.log");
-      const result = await runCommand(process.execPath, ["-e", "process.stdout.write('ok')"], {
-        cwd: dir,
-        env: process.env,
-        logPath,
-      });
+      const result = await runCommand(
+        process.execPath,
+        ["-e", "process.stdout.write('ok')"],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+        },
+      );
 
       expect(result).toMatchObject({
         exitCode: 0,

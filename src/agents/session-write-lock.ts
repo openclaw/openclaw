@@ -657,7 +657,20 @@ export async function cleanStaleLockFiles(params: {
   );
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
-  const ownerProcessArgsReader = params.readOwnerProcessArgs ?? readProcessArgsSync;
+  const baseOwnerProcessArgsReader = params.readOwnerProcessArgs ?? readProcessArgsSync;
+  // Memoize per-invocation: many locks in the same sweep often share a pid (gateway, MCP),
+  // and resolving owner argv is the most expensive per-lock syscall (PowerShell on Windows
+  // is ~0.5–1s per pid) — pids do not recycle within a single sweep. (#86509)
+  const ownerArgsByPid = new Map<number, string[] | null>();
+  const ownerProcessArgsReader: SessionLockOwnerProcessArgsReader = (pid) => {
+    const cached = ownerArgsByPid.get(pid);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const args = baseOwnerProcessArgsReader(pid);
+    ownerArgsByPid.set(pid, args);
+    return args;
+  };
 
   let entries: fsSync.Dirent[] = [];
   try {
@@ -677,6 +690,11 @@ export async function cleanStaleLockFiles(params: {
     .toSorted((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of lockEntries) {
+    // Yield to the event loop between locks so concurrent timers/HTTP polling can run
+    // while this sweep does per-lock sync syscalls (isPidAlive, /proc reads, PowerShell). (#86509)
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
     const inspected = inspectLockPayloadForSession({

@@ -134,10 +134,7 @@ describe("registerPreActionHooks", () => {
       .command("create")
       .option("--json")
       .action(() => {});
-    program
-      .command("doctor")
-      .option("--lint")
-      .action(() => {});
+    program.command("doctor").option("--lint").action(() => {});
     program.command("completion").action(() => {});
     program.command("secrets").action(() => {});
     program

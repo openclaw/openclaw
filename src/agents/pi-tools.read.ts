@@ -239,10 +239,7 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/^\.\/+/, "");
+  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
   return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
 }
 

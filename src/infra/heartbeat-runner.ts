@@ -36,7 +36,10 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
-import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  listActiveReplyRunSessionKeys,
+  replyRunRegistry,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -148,6 +151,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     getQueueSize?: (lane?: string) => number;
     getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
     isReplyRunActive?: (sessionKey: string) => boolean;
+    listActiveReplyRunSessionKeys?: () => readonly string[];
     nowMs?: () => number;
   };
 
@@ -219,6 +223,17 @@ function hasAgentOptInBusyLaneWork(
   getSnapshots: () => readonly CommandLaneSnapshot[],
 ): boolean {
   return hasQueuedWorkInLaneSnapshots(getSnapshots(), (lane) => laneBelongsToAgent(lane, agentId));
+}
+
+function hasActiveReplyRunForAgent(
+  agentId: string,
+  listSessionKeys: () => readonly string[],
+): boolean {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  return listSessionKeys().some((sessionKey) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    return parsed ? normalizeAgentId(parsed.agentId) === normalizedAgentId : false;
+  });
 }
 
 function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefined {
@@ -1317,14 +1332,6 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
-  const skipRequestsInFlight = (): HeartbeatRunResult => {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-      durationMs: Date.now() - startedAt,
-    });
-    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
-  };
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
@@ -1351,6 +1358,21 @@ export async function runHeartbeatOnce(opts: {
       durationMs: Date.now() - startedAt,
     });
     return { status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY };
+  }
+
+  const shouldHonorActiveReplyRuns = opts.intent !== "immediate" && opts.intent !== "manual";
+  const listActiveReplyRuns =
+    opts.deps?.listActiveReplyRunSessionKeys ?? listActiveReplyRunSessionKeys;
+  // Scheduled heartbeats are background work, so defer them when any session on
+  // the same agent is already replying; immediate/manual wakes keep their
+  // existing semantics for explicit user/system actions.
+  if (shouldHonorActiveReplyRuns && hasActiveReplyRunForAgent(agentId, listActiveReplyRuns)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
@@ -1414,7 +1436,12 @@ export async function runHeartbeatOnce(opts: {
   // re-schedule this wake automatically.  See #14396 (closed without merge).
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
   if (getSize(sessionLaneKey) > 0) {
-    return skipRequestsInFlight();
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
   const previousUpdatedAt = entry?.updatedAt;
@@ -1547,15 +1574,20 @@ export async function runHeartbeatOnce(opts: {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    if (isReplyRunActive(isolatedSessionKey)) {
-      return skipRequestsInFlight();
-    }
     const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
+    if (isReplyRunActive(isolatedSessionKey)) {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+    }
     const removedSessionFiles = new Map<string, string | undefined>();
     let referencedSessionIds = new Set<string>();
     await updateSessionStore(isolatedStorePath, (store) => {

@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   createCliJsonlStreamingParser,

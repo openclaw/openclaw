@@ -42,7 +42,8 @@ import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
-  getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -86,8 +87,8 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolveCodexMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getSharedCodexAppServerClient>> | undefined;
-  const ready = getSharedCodexAppServerClient({
+  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
+  const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
@@ -101,6 +102,9 @@ export function prepareTargetCodexAppServer(
   return {
     async dispose() {
       await ready;
+      if (warmedClient) {
+        releaseLeasedSharedCodexAppServerClient(warmedClient);
+      }
       await clearSharedCodexAppServerClientIfCurrentAndWait(warmedClient, {
         exitTimeoutMs: 2_000,
         forceKillDelayMs: 250,

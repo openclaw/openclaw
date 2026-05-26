@@ -92,7 +92,9 @@ const REQUIRED_SPAN_NAMES = [
   "openclaw.context.assembled",
   "openclaw.message.delivery",
 ] as const;
-const REQUIRED_METRIC_NAMES = ["openclaw.harness.duration_ms"] as const;
+const REQUIRED_METRIC_NAMES = [
+  "openclaw.harness.duration_ms",
+] as const;
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
   "openclaw.chatId",
@@ -109,7 +111,10 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.call_id",
   "openclaw.tool_call_id",
 ]);
-const DISALLOWED_BODY_NEEDLES = ["OTEL-QA-SECRET", "OTEL-QA-OK"];
+const DISALLOWED_BODY_NEEDLES = [
+  "OTEL-QA-SECRET",
+  "OTEL-QA-OK",
+];
 const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
 
 function usage(): string {
@@ -769,13 +774,21 @@ service:
     containerName,
     ...(useHostNetwork
       ? ["--network", "host"]
-      : ["--add-host=host.docker.internal:host-gateway", "-p", `127.0.0.1:${collectorPort}:4318`]),
+      : [
+          "--add-host=host.docker.internal:host-gateway",
+          "-p",
+          `127.0.0.1:${collectorPort}:4318`,
+        ]),
     "-v",
     `${configPath}:/etc/otelcol/config.yaml:ro`,
     DEFAULT_DOCKER_COLLECTOR_IMAGE,
     "--config=/etc/otelcol/config.yaml",
   ];
-  const child = spawn("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(
+    "docker",
+    dockerArgs,
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
   child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
   child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
   child.on("error", (err) => {
@@ -910,6 +923,47 @@ function isLatestGenAiModelCallSpan(span: CapturedSpan): boolean {
   );
 }
 
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpReceiver>): boolean {
+  const spanNames = new Set(receiver.capturedSpans.map((span) => span.name));
+  const metricNames = new Set(receiver.capturedMetrics.map((metric) => metric.name));
+  return (
+    REQUIRED_SPAN_NAMES.every((name) => spanNames.has(name)) &&
+    receiver.capturedSpans.some(isLatestGenAiModelCallSpan) &&
+    REQUIRED_METRIC_NAMES.every((name) => metricNames.has(name)) &&
+    receiver.capturedLogRecords.length > 0 &&
+    ["traces", "metrics", "logs"].every((signal) =>
+      receiver.capturedRequests.some((request) => request.signal === signal)
+    )
+  );
+}
+
+async function waitForExpectedTelemetry(
+  receiver: ReturnType<typeof startLocalOtlpReceiver>,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (hasRequiredSmokeSignals(receiver)) {
+      return;
+    }
+    await delay(250);
+  }
+}
+
+function formatBoundedList(values: readonly string[], maxItems: number): string {
+  if (values.length === 0) {
+    return "(none)";
+  }
+  const visible = values.slice(0, maxItems);
+  const suffix =
+    values.length > visible.length ? `, ... (${values.length - visible.length} more)` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
 function assertSmoke(params: {
   childExitCode: number;
   disallowedBodyNeedles: string[];
@@ -967,7 +1021,9 @@ function assertSmoke(params: {
     .map((record) => record.body)
     .filter((body) => body !== "log");
   if (rawLogBodies.length > 0) {
-    failures.push(`OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`);
+    failures.push(
+      `OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`,
+    );
   }
 
   const attributeKeys = collectAttributeKeys(params.spans);
@@ -1060,7 +1116,11 @@ async function main() {
     child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     childExitCode = await waitForChild(child);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (childExitCode === 0) {
+      await waitForExpectedTelemetry(receiver, 15_000);
+    } else {
+      await delay(3000);
+    }
   } finally {
     try {
       await collector?.close();
@@ -1121,6 +1181,20 @@ async function main() {
     for (const failure of assertion.failures) {
       process.stderr.write(`qa-otel-smoke: ${failure}\n`);
     }
+    process.stderr.write(
+      `qa-otel-smoke: captured request counts traces=${assertion.signalRequestCounts.traces} ` +
+        `metrics=${assertion.signalRequestCounts.metrics} logs=${assertion.signalRequestCounts.logs}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured decoded counts spans=${receiver.capturedSpans.length} ` +
+        `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured span names: ${formatBoundedList(assertion.spanNames, 40)}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured metric names: ${formatBoundedList(assertion.metricNames, 40)}\n`,
+    );
     for (const [signal, contexts] of Object.entries(assertion.leakContexts)) {
       for (const context of contexts ?? []) {
         process.stderr.write(`qa-otel-smoke: ${signal} leak context: ${context}\n`);
