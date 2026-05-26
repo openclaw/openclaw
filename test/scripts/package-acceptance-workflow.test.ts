@@ -17,6 +17,7 @@ const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
+const TUI_PTY_WORKFLOW = ".github/workflows/tui-pty.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
@@ -1298,5 +1299,14 @@ describe("package artifact reuse", () => {
       "timeout --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
+  });
+
+  it("kills timed TUI PTY workflow runs after the grace period", () => {
+    const job = workflowJob(TUI_PTY_WORKFLOW, "tui-pty");
+    const step = workflowStep(job, "Run TUI PTY tests");
+
+    expect(step.run).toBe(
+      "timeout --kill-after=30s 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts",
+    );
   });
 });

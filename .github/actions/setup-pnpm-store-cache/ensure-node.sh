@@ -28,9 +28,17 @@ openclaw_active_node_version() {
 
 openclaw_prepend_node_bin() {
   local node_bin_dir="$1"
-  export PATH="$node_bin_dir:$PATH"
+  local shell_node_bin_dir="$node_bin_dir"
+  if command -v cygpath >/dev/null 2>&1; then
+    shell_node_bin_dir="$(cygpath -u "$node_bin_dir" 2>/dev/null || printf '%s' "$node_bin_dir")"
+  fi
+  export PATH="$shell_node_bin_dir:$PATH"
   if [[ -n "${GITHUB_PATH:-}" ]]; then
-    echo "$node_bin_dir" >> "$GITHUB_PATH"
+    local github_node_bin_dir="$shell_node_bin_dir"
+    if command -v cygpath >/dev/null 2>&1; then
+      github_node_bin_dir="$(cygpath -w "$shell_node_bin_dir" 2>/dev/null || printf '%s' "$shell_node_bin_dir")"
+    fi
+    echo "$github_node_bin_dir" >> "$GITHUB_PATH"
   fi
   hash -r
 }

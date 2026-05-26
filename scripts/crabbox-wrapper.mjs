@@ -562,6 +562,7 @@ function commandRuntimeEntrypoint(commandArgs) {
 }
 
 function commandWordsRuntimeEntrypoint(words) {
+  words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (jsRuntimeEntrypoints.has(first)) {
     return first;
@@ -591,6 +592,7 @@ function commandNeedsAwsMacosPackageManager(commandArgs) {
 }
 
 function commandWordsNeedAwsMacosPackageManager(words) {
+  words = normalizeExecutableWords(words);
   const first = (words[0] ?? "").split("/").pop();
   if (awsMacosCorepackEntrypoints.has(first)) {
     return true;
@@ -612,6 +614,7 @@ function isChangedGateCommand(commandArgs) {
 }
 
 function isChangedGateCommandWords(words) {
+  words = normalizeExecutableWords(words);
   if (isChangedGateWords(words)) {
     return true;
   }
@@ -623,7 +626,7 @@ function isChangedGateCommandWords(words) {
 }
 
 function isChangedGateWords(words) {
-  words = [...words];
+  words = normalizeExecutableWords(words);
   if (words[0] === "corepack") {
     words.shift();
   }
@@ -686,6 +689,10 @@ function normalizedShellSegmentWords(segment) {
   return normalizedCommandWords(stripShellExecutionPrefixes(normalizedWords));
 }
 
+function normalizeExecutableWords(words) {
+  return normalizedCommandWords(stripShellExecutionPrefixes(words));
+}
+
 function stripShellExecutionPrefixes(words) {
   words = [...words];
   for (;;) {
@@ -704,6 +711,10 @@ function stripShellExecutionPrefixes(words) {
     if (first === "time") {
       words.shift();
       stripTimeOptions(words);
+      continue;
+    }
+    if (first === "timeout") {
+      stripTimeoutOptions(words);
       continue;
     }
     return words;
@@ -734,6 +745,39 @@ function stripTimeOptions(words) {
       words.shift();
       return;
     }
+    words.shift();
+  }
+}
+
+function stripTimeoutOptions(words) {
+  words.shift();
+  for (;;) {
+    const word = words[0] ?? "";
+    if (!word) {
+      return;
+    }
+    if (word === "--") {
+      words.shift();
+      break;
+    }
+    if (word === "-k" || word === "--kill-after" || word === "-s" || word === "--signal") {
+      words.shift();
+      if (words[0]) {
+        words.shift();
+      }
+      continue;
+    }
+    if (word.startsWith("--kill-after=") || word.startsWith("--signal=")) {
+      words.shift();
+      continue;
+    }
+    if (word.startsWith("-") && word !== "-") {
+      words.shift();
+      continue;
+    }
+    break;
+  }
+  if (words[0]) {
     words.shift();
   }
 }

@@ -57,6 +57,7 @@ const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
+const UPGRADE_SURVIVOR_DOCKER_E2E_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
   "scripts/e2e/lib/update-channel-switch/assertions.mjs";
@@ -558,6 +559,20 @@ grep -qx -- "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=42s" "$TMPDIR/package-args"
     }
   });
 
+  it("kills timed Docker scenario runners after the grace period", () => {
+    const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
+    const upgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+
+    expect(multiNode).toContain('timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc');
+    expect(upgradeSurvivor).toContain(
+      'timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash scripts/e2e/lib/upgrade-survivor/run.sh',
+    );
+    expect(upgradeSurvivor).toContain('timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc');
+    for (const script of [multiNode, upgradeSurvivor]) {
+      expect(script).not.toContain('timeout "$DOCKER_RUN_TIMEOUT"');
+    }
+  });
+
   it("keeps the harness run wrapper available with pre-sourced Docker command helpers", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-helper-guard-"));
 
@@ -876,6 +891,17 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(updateChannel).toContain("assert-config-channel dev");
     expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
+  });
+
+  it("routes doctor install switch commands through the E2E timeout helper", () => {
+    const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
+
+    expect(scenario).toContain('command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"');
+    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"');
+    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"');
+    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force');
+    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes');
+    expect(scenario).not.toMatch(/^\s*if ! timeout "\$command_timeout"/mu);
   });
 
   it("prepares pnpm workspace package fixtures without package dependencies", () => {

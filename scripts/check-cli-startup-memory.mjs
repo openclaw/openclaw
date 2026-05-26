@@ -14,10 +14,10 @@ if (!isLinux && !isMac) {
 }
 
 const repoRoot = process.cwd();
-const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
-const rssHookPath = path.join(tmpHome, "measure-rss.mjs");
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+let tmpHome = null;
+let rssHookPath = null;
 
 function parseArgs(argv) {
   const options = {
@@ -58,18 +58,6 @@ function parseArgs(argv) {
   }
   return options;
 }
-
-writeFileSync(
-  rssHookPath,
-  [
-    "process.on('exit', () => {",
-    "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-    `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
-    "});",
-    "",
-  ].join("\n"),
-  "utf8",
-);
 
 const DEFAULT_LIMITS_MB = {
   help: 100,
@@ -146,6 +134,9 @@ function formatCaseCommand(testCase) {
 }
 
 function buildBenchEnv() {
+  if (!tmpHome) {
+    throw new Error("temporary home is not initialized");
+  }
   const env = {
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -181,6 +172,9 @@ function buildBenchEnv() {
 }
 
 function runCase(testCase) {
+  if (!rssHookPath) {
+    throw new Error("RSS hook path is not initialized");
+  }
   const env = buildBenchEnv();
   const result = spawnSync(process.execPath, ["--import", rssHookPath, ...testCase.args], {
     cwd: repoRoot,
@@ -278,6 +272,19 @@ function writeReport(options, results) {
 }
 
 const options = parseArgs(process.argv.slice(2));
+tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
+rssHookPath = path.join(tmpHome, "measure-rss.mjs");
+writeFileSync(
+  rssHookPath,
+  [
+    "process.on('exit', () => {",
+    "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
+    `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
+    "});",
+    "",
+  ].join("\n"),
+  "utf8",
+);
 const results = [];
 try {
   for (const testCase of cases) {
@@ -285,7 +292,9 @@ try {
   }
 } finally {
   writeReport(options, results);
-  rmSync(tmpHome, { recursive: true, force: true });
+  if (tmpHome) {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
 }
 
 const failure = results.find((result) => result.status !== "pass");

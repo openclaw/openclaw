@@ -369,12 +369,12 @@ function resolveLiveModelsJsonTimeoutMs(
   modelsJsonTimeoutRaw?: string,
   setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
 ): number {
-  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 180_000));
 }
 
 describe("resolveLiveModelsJsonTimeoutMs", () => {
   it("defaults models.json preparation to a longer setup timeout", () => {
-    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(180_000);
   });
 
   it("never goes below the shared live setup timeout", () => {

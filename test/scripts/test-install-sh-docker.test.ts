@@ -147,12 +147,28 @@ describe("test-install-sh-docker", () => {
     expect(script).not.toContain('podman pull "$OPENCLAW_IMAGE"');
   });
 
+  it("bounds Podman setup image builds", () => {
+    const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
+
+    expect(script).toContain(
+      'PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"',
+    );
+    expect(script).toContain("run_podman_build()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('timeout "$PODMAN_BUILD_TIMEOUT" podman build "$@"');
+    expect(script).toContain('run_podman_build -t "$OPENCLAW_IMAGE"');
+    expect(script).not.toContain('podman build -t "$OPENCLAW_IMAGE"');
+  });
+
   it("bounds detached Podman launches without timing out onboarding", () => {
     const script = readFileSync(PODMAN_RUN_PATH, "utf8");
 
     expect(script).toContain('PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"');
     expect(script).toContain("OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT");
     expect(script).toContain("run_podman_detached()");
+    expect(script).toContain("timeout --kill-after=1s 1s true");
+    expect(script).toContain('timeout --kill-after=30s "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('timeout "$PODMAN_RUN_TIMEOUT" podman run "$@"');
     expect(script).toContain('podman run --pull="$PODMAN_PULL" --rm -it \\');
     expect(script).toContain('run_podman_detached --pull="$PODMAN_PULL" -d --replace \\');

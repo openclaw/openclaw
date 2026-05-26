@@ -3282,6 +3282,17 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandArgsAt(7).message).toContain("Can you still hear trailing");
     expect(agentCommandArgsAt(7).message).not.toContain("Molty");
 
+    const trailingMaltyTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    trailingMaltyTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "What's going on today, Malty?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(8).message).toContain("What's going on today");
+    expect(agentCommandArgsAt(8).message).not.toContain("Malty");
+
     const openChatTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
@@ -3290,7 +3301,7 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "Open chat, can you hear me now?", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(agentCommandMock).toHaveBeenCalledTimes(8);
+    expect(agentCommandMock).toHaveBeenCalledTimes(9);
   });
 
   it("rejects non-wake fuzzy leading phrases before realtime agent-proxy consults", async () => {

@@ -1329,6 +1329,98 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain(`&& ${shellScript}`);
   });
 
+  it("preserves sparse changed-gate Git bootstrap for timeout-wrapped shell commands", () => {
+    const shellScript =
+      "/usr/bin/time -v timeout 1200s node scripts/check-changed.mjs --base origin/main --head HEAD";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped node commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "timeout",
+        "1200s",
+        "node",
+        "scripts/check-changed.mjs",
+        "--base",
+        "origin/main",
+        "--head",
+        "HEAD",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toMatch(
+      /&& timeout 1200s node scripts\/check-changed\.mjs --base origin\/main --head HEAD$/u,
+    );
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for direct timeout-wrapped shell commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "timeout",
+        "1200s",
+        "bash",
+        "-lc",
+        "pnpm check:changed",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toMatch(/&& timeout 1200s bash -lc 'pnpm check:changed'$/u);
+  });
+
   it("does not treat quoted sparse shell text as a changed gate", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",

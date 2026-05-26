@@ -62,6 +62,23 @@ function isOpenAIResponsesFamily(api: string): boolean {
   );
 }
 
+function createNoopTools() {
+  return [
+    {
+      name: "noop",
+      description: "Return ok.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+    },
+  ];
+}
+
+function replayValidationTools(model: Model<Api>) {
+  // Responses-family providers may force or reject fresh tool-choice policy
+  // when tools are present. These probes validate repaired historical transcript
+  // shape, not new tool invocation.
+  return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
+}
+
 function buildReplayMessages(model: Model<Api>): AgentMessage[] {
   const now = Date.now();
   // Gemini source metadata deliberately simulates a model switch from a
@@ -253,13 +270,7 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: sanitized as never,
-            tools: [
-              {
-                name: "noop",
-                description: "Return ok.",
-                parameters: Type.Object({}, { additionalProperties: false }),
-              },
-            ],
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
@@ -334,13 +345,7 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: transformed as never,
-            tools: [
-              {
-                name: "noop",
-                description: "Return ok.",
-                parameters: Type.Object({}, { additionalProperties: false }),
-              },
-            ],
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),

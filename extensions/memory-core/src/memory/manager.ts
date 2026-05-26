@@ -1043,6 +1043,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await this.watcher.close();
       this.watcher = null;
     }
+    this.closeNativeMemoryWatchPairs();
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;

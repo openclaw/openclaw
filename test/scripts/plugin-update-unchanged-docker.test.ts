@@ -66,8 +66,9 @@ describe("plugin update unchanged Docker E2E", () => {
 
     expect(script).toContain("OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS");
     expect(script).toContain(
-      'timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
+      'openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update',
     );
+    expect(script).not.toMatch(/^\s*timeout "\$\{plugin_update_timeout_seconds\}s" node "\$entry"/mu);
     expect(script).toContain('"--- plugin update output ---"');
     expect(script).toContain('"--- local registry output ---"');
   });
