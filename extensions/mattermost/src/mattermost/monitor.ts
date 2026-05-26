@@ -19,6 +19,8 @@ import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -157,9 +159,7 @@ const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
-  return (values ?? [])
-    .map((value) => normalizeOptionalString(value))
-    .filter((value): value is string => Boolean(value));
+  return normalizeTrimmedStringList(values);
 }
 
 const recentInboundMessages = createClaimableDedupe({
@@ -188,7 +188,7 @@ function buildMattermostInboundReplayKeys(params: {
   accountId: string;
   messageIds: string[];
 }): string[] {
-  return [...new Set(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`))].filter(
+  return uniqueStrings(params.messageIds.map((id) => `${params.accountId}:${id.trim()}`)).filter(
     (key) => !key.endsWith(":"),
   );
 }

@@ -53,6 +53,7 @@ describe("subscribeEmbeddedPiSession", () => {
     subscribeEmbeddedPiSession({
       session,
       ...options,
+      trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
     return { emit };
   }

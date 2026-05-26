@@ -235,6 +235,7 @@ export abstract class MemoryManagerSyncOps {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
+  protected abstract resetProviderInitializationForRetry(): void;
   protected abstract indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
@@ -1093,12 +1094,39 @@ export abstract class MemoryManagerSyncOps {
     return state;
   }
 
+  private assertFtsOnlySyncAllowed(): void {
+    if (this.provider) {
+      return;
+    }
+    const existingMeta = this.readMeta();
+    if (
+      !existingMeta ||
+      existingMeta.model === "fts-only" ||
+      !this.settings.provider ||
+      this.settings.provider === "none"
+    ) {
+      return;
+    }
+    this.resetProviderInitializationForRetry();
+    throw new Error(
+      `Memory sync aborted: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
+        `Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: ${existingMeta.model}).`,
+    );
+  }
+
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
+    // Guard: if an embedding provider is configured but currently unavailable,
+    // abort sync to prevent silently degrading an existing semantic vector index
+    // to fts-only and wiping existing semantic vectors.
+    // This only protects existing semantic indexes; fresh or already-fts-only
+    // indexes can safely sync without an embedding provider.
+    this.assertFtsOnlySyncAllowed();
+
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
@@ -1309,6 +1337,8 @@ export abstract class MemoryManagerSyncOps {
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
+    this.assertFtsOnlySyncAllowed();
+
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);

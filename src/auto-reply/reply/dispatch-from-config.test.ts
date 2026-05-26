@@ -842,12 +842,48 @@ describe("dispatchReplyFromConfig", () => {
           ),
       },
     };
+    const signalTestPlugin = {
+      ...createChannelTestPluginBase({
+        id: "signal",
+        capabilities: {
+          chatTypes: ["direct"],
+          nativeCommands: true,
+        },
+      }),
+      outbound: {
+        deliveryMode: "direct",
+        shouldSuppressLocalPayloadPrompt: ({
+          cfg,
+          payload,
+          hint,
+        }: {
+          cfg: OpenClawConfig;
+          payload: ReplyPayload;
+          hint?: { kind?: string; approvalKind?: string; nativeRouteActive?: boolean };
+        }) =>
+          hint?.kind === "approval-pending" &&
+          hint.approvalKind === "exec" &&
+          hint.nativeRouteActive === true &&
+          cfg.approvals?.exec?.enabled === true &&
+          Boolean(
+            payload.channelData &&
+            typeof payload.channelData === "object" &&
+            !Array.isArray(payload.channelData) &&
+            payload.channelData.execApproval,
+          ),
+      },
+    };
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "discord",
           source: "test",
           plugin: discordTestPlugin,
+        },
+        {
+          pluginId: "signal",
+          source: "test",
+          plugin: signalTestPlugin,
         },
       ]),
     );
@@ -4124,6 +4160,159 @@ describe("dispatchReplyFromConfig", () => {
       await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(firstFinalReplyPayload(dispatcher)?.text).toBe("done");
+    } finally {
+      await reporter.stop();
+    }
+  });
+
+  it("keeps local signal exec approval tool prompts when the native runtime is inactive", async () => {
+    setNoAbort();
+    const cfg = {
+      channels: {
+        signal: {
+          enabled: true,
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "signal",
+      Surface: "signal",
+      AccountId: "default",
+      SessionKey: "agent:main:signal:+15551230000",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+      await options?.onToolResult?.({
+        text: "Approval required.",
+        channelData: {
+          execApproval: {
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            approvalKind: "exec",
+            sessionKey: "agent:main:signal:+15551230000",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      return { text: "done" } as ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(firstToolResultPayload(dispatcher)?.text).toBe("Approval required.");
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("done");
+  });
+
+  it("suppresses local signal exec approval tool prompts when the native runtime is active", async () => {
+    setNoAbort();
+    const cfg = {
+      channels: {
+        signal: {
+          enabled: true,
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    const reporter = createApprovalNativeRouteReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "signal",
+      channelLabel: "Signal",
+      accountId: "default",
+      requestGateway: async <T>() => ({ ok: true }) as T,
+    });
+    reporter.start();
+    try {
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "signal",
+        Surface: "signal",
+        AccountId: "default",
+        SessionKey: "agent:main:signal:+15551230000",
+      });
+      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        await options?.onToolResult?.({
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "12345678-1234-1234-1234-123456789012",
+              approvalSlug: "12345678",
+              approvalKind: "exec",
+              sessionKey: "agent:main:signal:+15551230000",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          },
+        });
+        return { text: "done" } as ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(firstFinalReplyPayload(dispatcher)?.text).toBe("done");
+    } finally {
+      await reporter.stop();
+    }
+  });
+
+  it("keeps local signal exec approval tool prompts when top-level exec approvals are disabled", async () => {
+    setNoAbort();
+    const cfg = {
+      channels: {
+        signal: {
+          enabled: true,
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: false,
+        },
+      },
+    } as OpenClawConfig;
+    const reporter = createApprovalNativeRouteReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "signal",
+      channelLabel: "Signal",
+      accountId: "default",
+      requestGateway: async <T>() => ({ ok: true }) as T,
+    });
+    reporter.start();
+    try {
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "signal",
+        Surface: "signal",
+        AccountId: "default",
+        SessionKey: "agent:main:signal:+15551230000",
+      });
+      const replyResolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        await options?.onToolResult?.({
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "12345678-1234-1234-1234-123456789012",
+              approvalSlug: "12345678",
+              approvalKind: "exec",
+              sessionKey: "agent:main:signal:+15551230000",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          },
+        });
+        return { text: "done" } as ReplyPayload;
+      });
+
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      expect(firstToolResultPayload(dispatcher)?.text).toBe("Approval required.");
       expect(firstFinalReplyPayload(dispatcher)?.text).toBe("done");
     } finally {
       await reporter.stop();

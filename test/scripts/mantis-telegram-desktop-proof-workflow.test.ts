@@ -145,16 +145,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       "needs.resolve_request.outputs.crabbox_provider",
     );
     expect(cleanupStep.run).toContain("sudo find .artifacts/qa-e2e");
-    expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/session.json");
+    expect(cleanupStep.run).toContain("-name session.json");
+    expect(cleanupStep.run).toContain('session.command === "telegram-user-crabbox-session"');
     expect(cleanupStep.run).toContain("telegram-user-crabbox-proof.ts");
     expect(cleanupStep.run).toContain(
       'finish --session "$session_file" --preview-crop telegram-window',
     );
-    expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/.session/lease.json");
+    expect(cleanupStep.run).toContain("*/.session/lease.json");
+    expect(cleanupStep.run).toContain('lease.kind === "telegram-user"');
     expect(cleanupStep.run).toContain("telegram-user-credential.ts");
     expect(cleanupStep.run).toContain("release --lease-file");
     expect(cleanupStep.run).toContain("status=1");
     expect(cleanupStep.run).toContain("sudo -u codex env");
+    expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/session.json");
+    expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/.session/lease.json");
   });
 
   it("cleans partially started proof daemons when local SUT startup fails", () => {
@@ -380,6 +384,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(startSession.indexOf("requireUserDriverScript(opts);")).toBeLessThan(
       startSession.indexOf("leaseCredential({ localRoot, opts, root })"),
     );
+    expect(startSession.indexOf("try {")).toBeLessThan(
+      startSession.indexOf("leaseCredential({ localRoot, opts, root })"),
+    );
+    expect(startSession.indexOf("leaseCredential({ localRoot, opts, root })")).toBeLessThan(
+      startSession.indexOf("warmupCrabbox(opts, root)"),
+    );
+    expect(startSession.indexOf("if (credential)")).toBeGreaterThan(
+      startSession.indexOf("catch (error)"),
+    );
+    expect(
+      startSession.indexOf("releaseCredential(root, opts, credential.leaseFile)"),
+    ).toBeGreaterThan(startSession.indexOf("catch (error)"));
     expect(defaultProof.indexOf("requireUserDriverScript(opts);")).toBeLessThan(
       defaultProof.indexOf("leaseCredential({ localRoot, opts, root })"),
     );

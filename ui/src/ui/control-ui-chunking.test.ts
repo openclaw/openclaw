@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { controlUiManualChunk, normalizeModuleId } from "./control-ui-chunking.ts";
+import { controlUiManualChunk, normalizeModuleId } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
   it("groups stable runtime dependencies into bounded chunks", () => {
@@ -29,7 +29,8 @@ describe("Control UI build chunking", () => {
     expect(normalizeModuleId(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`)).toBe(
       "C:/repo/ui/node_modules/highlight.js/lib/core.js",
     );
-    expect(controlUiManualChunk(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`))
-      .toBe("markdown-runtime");
+    expect(controlUiManualChunk(String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`)).toBe(
+      "markdown-runtime",
+    );
   });
 });

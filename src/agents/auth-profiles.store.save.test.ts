@@ -14,7 +14,12 @@ import {
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
+const listRuntimeExternalAuthProfilesMock = vi.hoisted(() =>
+  vi.fn<(_params: unknown) => unknown[]>(() => []),
+);
+
 vi.mock("./auth-profiles/external-auth.js", () => ({
+  listRuntimeExternalAuthProfiles: listRuntimeExternalAuthProfilesMock,
   overlayExternalAuthProfiles: <T>(store: T) => store,
   shouldPersistExternalAuthProfile: () => true,
   syncPersistedExternalCliAuthProfiles: <T>(store: T) => store,
@@ -35,6 +40,48 @@ function expectProfileFields(profile: unknown, expected: Record<string, unknown>
 }
 
 describe("saveAuthProfileStore", () => {
+  it("resolves external auth profiles once per save", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-once-"));
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:one": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-one",
+          refresh: "refresh-one",
+          expires: Date.now() + 60_000,
+        },
+        "openai-codex:two": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access-two",
+          refresh: "refresh-two",
+          expires: Date.now() + 60_000,
+        },
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-openai",
+        },
+      },
+    };
+
+    try {
+      listRuntimeExternalAuthProfilesMock.mockClear();
+
+      saveAuthProfileStore(store, agentDir);
+
+      expect(listRuntimeExternalAuthProfilesMock).toHaveBeenCalledTimes(1);
+      expect(listRuntimeExternalAuthProfilesMock.mock.calls[0]?.[0]).toMatchObject({
+        store,
+        agentDir,
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("strips plaintext when keyRef/tokenRef are present", async () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));

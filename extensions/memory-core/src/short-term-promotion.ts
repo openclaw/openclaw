@@ -5,7 +5,11 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -1184,7 +1188,7 @@ export async function recordDreamingPhaseSignals(params: {
   if (!workspaceDir) {
     return;
   }
-  const keys = [...new Set(params.keys.map((key) => key.trim()).filter(Boolean))];
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
   if (keys.length === 0) {
     return;
   }
@@ -1237,7 +1241,7 @@ export async function recordRemConsideredPhaseSignals(params: {
   if (!workspaceDir) {
     return;
   }
-  const keys = [...new Set(params.keys.map((key) => key.trim()).filter(Boolean))];
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
   if (keys.length === 0) {
     return;
   }

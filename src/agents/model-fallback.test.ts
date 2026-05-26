@@ -1055,6 +1055,42 @@ describe("runWithModelFallback", () => {
     expect(attempt.status).toBe(400);
   });
 
+  it("uses the candidate message instead of mismatched provider raw errors", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    });
+    const rawError = "You exceeded your current OpenAI quota.";
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("LLM request timed out.", {
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        reason: "timeout",
+        status: 408,
+        rawError,
+      }),
+    );
+
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          run,
+        }),
+      ),
+    );
+    expect(error.attempts[0]?.error).toBe("LLM request timed out.");
+    expect(error.attempts[0]?.error).not.toBe(rawError);
+  });
+
   it("carries request attribution through exhausted fallback summaries", async () => {
     const cfg = makeCfg({
       agents: {
