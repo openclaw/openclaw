@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { type CronDeliveryPlan, resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
@@ -34,13 +34,19 @@ function formatDeliveryDetail(params: {
   return params.resolved ? "explicit" : (params.error ?? "unresolved");
 }
 
+function hasExplicitDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId || plan.accountId,
+  );
+}
+
 export async function resolveCronDeliveryPreview(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
   job: CronJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
-  if (plan.mode === "none") {
+  if (plan.mode === "none" && !hasExplicitDeliveryTarget(plan)) {
     return { label: "not requested", detail: "not requested" };
   }
   if (plan.mode === "webhook") {

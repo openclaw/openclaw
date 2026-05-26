@@ -66,4 +66,40 @@ describe("resolveCronDeliveryPreview", () => {
     expect(preview).toEqual({ label: "not requested", detail: "not requested" });
     expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
   });
+
+  it("previews explicit message-tool targets on no-delivery jobs", async () => {
+    const job = makeCronJob({
+      agentId: "avery",
+      delivery: {
+        mode: "none",
+        channel: "topicchat",
+        to: "room#42",
+        threadId: 42,
+        accountId: "ops",
+      },
+      sessionTarget: "isolated",
+    });
+
+    const preview = await resolveCronDeliveryPreview({
+      cfg: {} as never,
+      job,
+    });
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+      {},
+      "avery",
+      {
+        channel: "topicchat",
+        to: "room#42",
+        threadId: 42,
+        accountId: "ops",
+        sessionKey: undefined,
+      },
+      { dryRun: true },
+    );
+    expect(preview).toEqual({
+      label: "none -> telegram:direct-123",
+      detail: "explicit",
+    });
+  });
 });
