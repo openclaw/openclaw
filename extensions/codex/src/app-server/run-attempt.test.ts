@@ -887,6 +887,7 @@ describe("runCodexAppServerAttempt", () => {
     await closeCodexSandboxExecServersForTests();
     resetCodexAppServerClientFactoryForTest();
     testing.resetOpenClawCodingToolsFactoryForTests();
+    testing.resetEnsuredCodexWorkspaceDirsForTests();
     testing.clearPendingCodexNativeHookRelayUnregistersForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
@@ -901,6 +902,16 @@ describe("runCodexAppServerAttempt", () => {
     vi.unstubAllEnvs();
     await closeCodexSandboxExecServersForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("recreates cached Codex workspace directories after cleanup removes them", async () => {
+    const workspaceDir = path.join(tempDir, "cached-workspace");
+
+    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
+
+    expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
   });
 
   it("filters Codex-native dynamic tools from app-server tool exposure", () => {
