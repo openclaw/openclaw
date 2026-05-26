@@ -862,6 +862,108 @@ describe("createCopilotToolBridge", () => {
       ).rejects.toThrow("duplicate tool names: read");
     });
   });
+
+  // Codex extension already normalises a small set of tool-name aliases
+  // before allowlist matching
+  // (extensions/codex/src/app-server/dynamic-tool-profile.ts:17-30
+  // + extensions/codex/src/app-server/run-attempt.test.ts:2062). The
+  // Copilot bridge mirrors the same two aliases so a `toolsAllow: ["bash"]`
+  // or `toolsAllow: ["apply-patch"]` resolves to the underlying tool.
+  describe("tool-name aliases (PR #86155 [P1] round-7)", () => {
+    it('matches the "exec" tool when toolsAllow contains "bash"', async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "exec" }),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["bash"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec"]);
+    });
+
+    it('matches the "apply_patch" tool when toolsAllow contains "apply-patch"', async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "apply_patch" }),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["apply-patch"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["apply_patch"]);
+    });
+
+    it("normalises case so uppercase/whitespace aliases still resolve", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "exec" }),
+        makeTool({ name: "apply_patch" }),
+        makeTool({ name: "read" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: [" BASH ", "Apply-Patch", "READ"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual([
+        "apply_patch",
+        "exec",
+        "read",
+      ]);
+    });
+
+    it("continues to match canonical names directly (no double-aliasing)", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "exec" }),
+        makeTool({ name: "apply_patch" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["exec", "apply_patch"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual([
+        "apply_patch",
+        "exec",
+      ]);
+    });
+
+    it("does not invent matches for tools outside the alias map", async () => {
+      // 'group:fs' has no alias mapping; bridge falls back to plain
+      // name-equality (codex precedent at
+      // extensions/codex/src/app-server/run-attempt.ts:4220-4234). Tools
+      // are therefore suppressed; group expansion lives inside PI's
+      // applyEmbeddedAttemptToolsAllow and is intentionally not
+      // mirrored at the SDK boundary in either extension.
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["group:fs"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools).toEqual([]);
+    });
+  });
 });
 
 describe("convertOpenClawToolToSdkTool", () => {

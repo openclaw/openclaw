@@ -592,8 +592,29 @@ function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolea
   return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
+/**
+ * Tool-name aliases honored by the bridge. Mirrors the codex extension's
+ * `DYNAMIC_TOOL_NAME_ALIASES` map
+ * (`extensions/codex/src/app-server/dynamic-tool-profile.ts:17-20`) so a
+ * Copilot run with `toolsAllow: ["bash"]` or `toolsAllow: ["apply-patch"]`
+ * resolves to the same underlying tool the codex bridge would expose. The
+ * map mirrors the two aliases in PI's `TOOL_NAME_ALIASES`
+ * (`src/agents/tool-policy-shared.ts:12-15`) that the bridge is
+ * responsible for handling at the SDK enumeration boundary. Broader
+ * policy semantics (`group:*` expansion, glob patterns, the
+ * `apply_patch`-from-`write` matcher in `src/agents/tool-policy-match.ts`)
+ * live inside PI's `applyEmbeddedAttemptToolsAllow` and are intentionally
+ * not mirrored here, matching the codex extension's scope at
+ * `extensions/codex/src/app-server/run-attempt.ts:4220-4244`.
+ */
+const COPILOT_TOOL_NAME_ALIASES: Record<string, string> = {
+  bash: "exec",
+  "apply-patch": "apply_patch",
+};
+
 function normalizeCopilotToolName(name: string | undefined): string {
-  return (name ?? "").trim().toLowerCase();
+  const normalized = (name ?? "").trim().toLowerCase();
+  return COPILOT_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
 function hasWildcardCopilotToolsAllow(toolsAllow: readonly string[]): boolean {
