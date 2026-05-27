@@ -59,6 +59,7 @@ import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { isClaudeCliSkillFileAccessible } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
@@ -129,9 +130,13 @@ function claudeCliSkillsPluginCanCarryPrompt(params: {
     return false;
   }
   return (
-    params.skillsSnapshot?.resolvedSkills?.some(
-      (skill) => Boolean(skill.name?.trim()) && Boolean(skill.filePath?.trim()),
-    ) ?? false
+    params.skillsSnapshot?.resolvedSkills?.some((skill) => {
+      const skillFilePath = skill.filePath?.trim();
+      if (!skill.name?.trim() || !skillFilePath) {
+        return false;
+      }
+      return isClaudeCliSkillFileAccessible(skillFilePath);
+    }) ?? false
   );
 }
 
