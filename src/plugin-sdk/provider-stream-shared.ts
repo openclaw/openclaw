@@ -122,30 +122,25 @@ function couldStillBeBracketedToolCall(text: string, toolNames: Set<string>): bo
 }
 
 function couldStillBeHarmonyToolCall(text: string, toolNames: Set<string>): boolean {
-  const channelMarker = "<|channel|>";
+  const harmonyChannelPrefix = "<|channel|>";
   let cursor = 0;
-  if (matchesLiteralPrefix(text, channelMarker)) {
-    if (text.length <= channelMarker.length) {
+  if (matchesLiteralPrefix(text, harmonyChannelPrefix)) {
+    if (text.length <= harmonyChannelPrefix.length) {
       return true;
     }
-    cursor = channelMarker.length;
+    cursor = harmonyChannelPrefix.length;
   }
 
   const channelRest = text.slice(cursor);
-  const commentaryMarker = "commentary";
-  if (matchesLiteralPrefix(channelRest, commentaryMarker)) {
-    if (channelRest.length <= commentaryMarker.length) {
+  const channelName = ["commentary", "analysis", "final"].find((marker) =>
+    matchesLiteralPrefix(channelRest, marker),
+  );
+  if (channelName) {
+    if (channelRest.length <= channelName.length) {
       return true;
     }
-    cursor += commentaryMarker.length;
+    cursor += channelName.length;
   } else if (cursor === 0) {
-    if (
-      matchesLiteralPrefix(text, "analysis") ||
-      matchesLiteralPrefix(text, "final") ||
-      matchesLiteralPrefix(text, commentaryMarker)
-    ) {
-      return true;
-    }
     return false;
   } else {
     return false;
