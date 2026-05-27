@@ -2119,6 +2119,20 @@ export function dropPreSessionStartAnnouncePairs(
   return changed ? kept : messages;
 }
 
+function dropLocalHistoryOverreadContextMessage(
+  messages: unknown[],
+  contextMessage: unknown | undefined,
+): unknown[] {
+  if (contextMessage === undefined) {
+    return messages;
+  }
+  const index = messages.indexOf(contextMessage);
+  if (index < 0) {
+    return messages;
+  }
+  return [...messages.slice(0, index), ...messages.slice(index + 1)];
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -2145,18 +2159,27 @@ export const chatHandlers: GatewayRequestHandlers = {
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
+    const localReadMax = max > 0 ? max + 1 : 0;
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            maxMessages: max,
+            maxMessages: localReadMax,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];
+    const overreadContextMessage = localMessages.length > max ? localMessages[0] : undefined;
+    const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
+      dropPreSessionStartAnnouncePairs(
+        localMessages,
+        typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+      ),
+      overreadContextMessage,
+    );
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
-      localMessages,
+      localMessages: localMessagesWithBoundaryFilter,
     });
     // Drop subagent_announce pairs (user inter-session announce + adjacent
     // assistant) whose record timestamp predates the current session's
