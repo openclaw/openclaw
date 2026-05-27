@@ -237,6 +237,50 @@ process.stdin.on("data", (chunk) => {
     );
   });
 
+  it("does not rotate CODEX_HOME logs while another app-server is active", async () => {
+    const codexHome = await createTempDir();
+    const dbPath = path.join(codexHome, "logs_2.sqlite");
+    const walPath = path.join(codexHome, "logs_2.sqlite-wal");
+    await writeFile(dbPath, "1", "utf8");
+    await writeFile(walPath, "wal", "utf8");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_LOG_MAX_BYTES", "4");
+
+    const sharedHarness = createClientHarness();
+    const isolatedHarness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(sharedHarness.client)
+      .mockReturnValueOnce(isolatedHarness.client);
+    const startOptions = {
+      transport: "stdio" as const,
+      command: process.execPath,
+      commandSource: "config" as const,
+      args: ["-e", ""],
+      headers: {},
+      env: { CODEX_HOME: codexHome },
+    };
+
+    const sharedPromise = getSharedCodexAppServerClient({
+      authProfileId: null,
+      timeoutMs: 1000,
+      startOptions,
+    });
+    await sendInitializeResult(sharedHarness, "openclaw/0.125.0 (macOS; shared)");
+    await expect(sharedPromise).resolves.toBe(sharedHarness.client);
+    await writeFile(dbPath, "123456", "utf8");
+
+    const isolatedPromise = createIsolatedCodexAppServerClient({
+      authProfileId: null,
+      timeoutMs: 1000,
+      startOptions,
+    });
+    await sendInitializeResult(isolatedHarness, "openclaw/0.125.0 (macOS; isolated)");
+    await expect(isolatedPromise).resolves.toBe(isolatedHarness.client);
+
+    await expect(readFile(dbPath, "utf8")).resolves.toBe("123456");
+    await expect(readFile(walPath, "utf8")).resolves.toBe("wal");
+    expect(mocks.embeddedAgentLog.warn).not.toHaveBeenCalled();
+  });
+
   it("closes the shared app-server when the version gate fails", async () => {
     const harness = createClientHarness();
     const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
