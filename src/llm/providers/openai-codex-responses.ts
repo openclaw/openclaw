@@ -196,7 +196,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       const bodyJson = JSON.stringify(body);
       const transport = options?.transport || "auto";
       const websocketDisabledForSession =
-        transport !== "sse" && isWebSocketSseFallbackActive(options?.sessionId);
+        transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
       if (websocketDisabledForSession) {
         recordWebSocketSseFallback(options?.sessionId);
       }
@@ -236,7 +236,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             output,
             createAssistantMessageDiagnostic("provider_transport_failure", error, {
               configuredTransport: transport,
-              fallbackTransport: websocketStarted ? undefined : "sse",
+              fallbackTransport: transport === "auto" && !websocketStarted ? "sse" : undefined,
               eventsEmitted: websocketStarted,
               phase: websocketStarted
                 ? "after_message_stream_start"
@@ -244,8 +244,10 @@ export const streamOpenAICodexResponses: StreamFunction<
               requestBytes: new TextEncoder().encode(bodyJson).byteLength,
             }),
           );
-          recordWebSocketFailure(options?.sessionId, error);
-          if (websocketStarted) {
+          recordWebSocketFailure(options?.sessionId, error, {
+            activateSseFallback: transport === "auto",
+          });
+          if (websocketStarted || transport !== "auto") {
             throw error;
           }
           recordWebSocketSseFallback(options?.sessionId);
@@ -795,16 +797,22 @@ function recordWebSocketSseFallback(sessionId: string | undefined): void {
   stats.websocketFallbackActive = isWebSocketSseFallbackActive(sessionId);
 }
 
-function recordWebSocketFailure(sessionId: string | undefined, error: unknown): void {
+function recordWebSocketFailure(
+  sessionId: string | undefined,
+  error: unknown,
+  options: { activateSseFallback: boolean },
+): void {
   if (!sessionId) {
     return;
   }
-  websocketSseFallbackSessions.add(sessionId);
+  if (options.activateSseFallback) {
+    websocketSseFallbackSessions.add(sessionId);
+  }
 
   const stats = getOrCreateWebSocketDebugStats(sessionId);
   stats.websocketFailures++;
   stats.lastWebSocketError = formatThrownValue(error);
-  stats.websocketFallbackActive = true;
+  stats.websocketFallbackActive = isWebSocketSseFallbackActive(sessionId);
 }
 
 type WebSocketConstructor = new (
