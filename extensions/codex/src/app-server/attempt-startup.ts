@@ -95,6 +95,7 @@ export async function startCodexAttemptThread(params: {
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
+  spawnedBy: string | undefined;
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
   let releaseSharedClientLease: (() => void) | undefined;
@@ -373,7 +374,11 @@ export async function startCodexAttemptThread(params: {
       releaseSharedClientLease,
     };
   } catch (error) {
-    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    const transportPoisoned = isCodexAppServerConnectionClosedError(error);
+    const isSpawnedHelperRun = Boolean(params.spawnedBy?.trim());
+    if (transportPoisoned || !isSpawnedHelperRun) {
+      clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    }
     throw error;
   }
 }

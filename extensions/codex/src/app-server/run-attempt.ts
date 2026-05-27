@@ -864,6 +864,7 @@ export async function runCodexAppServerAttempt(
       onStartupTimeout: () => {
         runAbortController.abort("codex_startup_timeout");
       },
+      spawnedBy: params.spawnedBy,
     });
     client = startupResult.client;
     thread = startupResult.thread;
