@@ -122,7 +122,8 @@ function normalizeCapabilities(
   const normalized: NonNullable<ResolvedChannelBrokerAccount["capabilities"]> = {};
   for (const [rawPlatform, value] of Object.entries(capabilities ?? {})) {
     const platform = normalizeKnownChannelBrokerPlatformId(value.platform ?? rawPlatform);
-    normalized[platform] = mergePlatformCapabilities(normalized[platform], {
+    const current = hasOwnProperty(normalized, platform) ? normalized[platform] : undefined;
+    normalized[platform] = mergePlatformCapabilities(current, {
       platform,
       ...(value.delivery ? { delivery: { ...value.delivery } } : {}),
       ...(value.live ? { live: { ...value.live } } : {}),

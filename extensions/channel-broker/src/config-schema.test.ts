@@ -33,7 +33,7 @@ describe("channel-broker config schema", () => {
         acme: {
           enabled: true,
           baseUrl: "https://broker.example.test",
-          platforms: ["teams", "googlechat", "qq"],
+          platforms: ["teams", "googlechat", "qq", "constructor"],
           capabilities: {
             teams: {
               delivery: { text: true, replyTo: true },
@@ -56,6 +56,9 @@ describe("channel-broker config schema", () => {
               delivery: { text: true },
               native: { botApi: true },
             },
+            constructor: {
+              delivery: { payload: true },
+            },
           },
         },
       },
@@ -67,7 +70,7 @@ describe("channel-broker config schema", () => {
       accountId: "acme",
     });
 
-    expect(account.platforms).toEqual(["microsoft-teams", "google-chat", "qqbot"]);
+    expect(account.platforms).toEqual(["microsoft-teams", "google-chat", "qqbot", "constructor"]);
     expect(account.capabilities["microsoft-teams"]).toEqual({
       platform: "microsoft-teams",
       delivery: { text: true, thread: true, replyTo: true },
@@ -80,6 +83,10 @@ describe("channel-broker config schema", () => {
       thread: true,
     });
     expect(account.capabilities.qqbot?.native).toEqual({ botApi: true });
+    expect(account.capabilities["constructor"]).toEqual({
+      platform: "constructor",
+      delivery: { payload: true },
+    });
   });
 
   it("rejects legacy flat capability fields so provider metadata matches the SDK shape", () => {
