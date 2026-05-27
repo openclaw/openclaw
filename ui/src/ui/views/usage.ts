@@ -204,7 +204,7 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
-  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
+  const agentOptions = (data.agents ?? []).map((a) => a.id);
   const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
     ...sortedSessions.map((s) => s.modelProvider),
@@ -409,6 +409,68 @@ export function renderUsage(props: UsageProps) {
                     }}
                   />
                   <span>${value}</span>
+                </label>
+              `;
+            })}
+          </div>
+        </div>
+      </details>
+    `;
+  };
+  const renderAgentFilter = (options: string[]) => {
+    if (options.length === 0) {
+      return nothing;
+    }
+    const selectedAgentId = filters.agentId;
+    const selectedLabel = selectedAgentId ?? t("usage.filters.all");
+    return html`
+      <details
+        class="usage-filter-select"
+        @toggle=${(e: Event) => {
+          const el = e.currentTarget as HTMLDetailsElement;
+          if (!el.open) {
+            return;
+          }
+          const onClick = (ev: MouseEvent) => {
+            const path = ev.composedPath();
+            if (!path.includes(el)) {
+              el.open = false;
+              window.removeEventListener("click", onClick, true);
+            }
+          };
+          window.addEventListener("click", onClick, true);
+        }}
+      >
+        <summary>
+          <span>${t("usage.filters.agent")}</span>
+          <span class="usage-filter-badge">${selectedLabel}</span>
+        </summary>
+        <div class="usage-filter-popover">
+          <div class="usage-filter-options">
+            <label class="usage-filter-option">
+              <input
+                type="radio"
+                name="usage-agent-filter"
+                .checked=${!selectedAgentId}
+                @change=${() => {
+                  filterActions.onAgentChange(null);
+                }}
+              />
+              <span>${t("usage.filters.all")}</span>
+            </label>
+            ${options.map((agentId) => {
+              const checked = selectedAgentId === agentId;
+              return html`
+                <label class="usage-filter-option">
+                  <input
+                    type="radio"
+                    name="usage-agent-filter"
+                    .checked=${checked}
+                    @change=${() => {
+                      filterActions.onAgentChange(agentId);
+                    }}
+                  />
+                  <span>${agentId}</span>
                 </label>
               `;
             })}
@@ -669,7 +731,7 @@ export function renderUsage(props: UsageProps) {
             </div>
           </div>
           <div class="usage-filter-row">
-            ${renderFilterSelect("agent", t("usage.filters.agent"), agentOptions)}
+            ${renderAgentFilter(agentOptions)}
             ${renderFilterSelect("channel", t("usage.filters.channel"), channelOptions)}
             ${renderFilterSelect("provider", t("usage.filters.provider"), providerOptions)}
             ${renderFilterSelect("model", t("usage.filters.model"), modelOptions)}

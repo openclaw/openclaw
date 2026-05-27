@@ -18,6 +18,7 @@ export type UsageState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageAgentId: string | null;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
@@ -223,12 +224,14 @@ export async function loadUsage(
             includeHistorical: state.usageScope === "family",
           }
         : undefined;
+      const agentIdParam = state.usageAgentId ? { agentId: state.usageAgentId } : undefined;
       return Promise.all([
         client.request("sessions.usage", {
           startDate,
           endDate,
           ...dateInterpretation,
           ...usageScopeParams,
+          ...agentIdParam,
           limit: 1000, // Cap at 1000 sessions
           includeContextWeight: true,
         }),

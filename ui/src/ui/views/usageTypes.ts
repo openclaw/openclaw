@@ -32,12 +32,14 @@ export type UsageDataState = {
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
   cacheStatus: SessionsUsageResult["cacheStatus"];
+  agents: { id: string }[]; // Available agents from agentsList
 };
 
 export type UsageFilterState = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
+  agentId: string | null;
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection
@@ -81,6 +83,7 @@ export type UsageCallbacks = {
     onStartDateChange: (date: string) => void;
     onEndDateChange: (date: string) => void;
     onScopeChange: (scope: "instance" | "family") => void;
+    onAgentChange: (agentId: string | null) => void;
     onRefresh: () => void;
     onTimeZoneChange: (zone: "local" | "utc") => void;
     onToggleHeaderPinned: () => void;

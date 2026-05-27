@@ -21,6 +21,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
     usageScope: "family",
+    usageAgentId: null,
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageTimeSeries: null,
@@ -98,6 +99,35 @@ describe("usage controller date interpretation params", () => {
       endDate: "2026-02-16",
       mode: "utc",
     });
+  });
+
+  it("sends agentId when usageAgentId is set", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request, { usageAgentId: "testclaw" });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: expect.any(String),
+      groupBy: "family",
+      includeHistorical: true,
+      agentId: "testclaw",
+      limit: 1000,
+      includeContextWeight: true,
+    });
+  });
+
+  it("omits agentId when usageAgentId is null", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request, { usageAgentId: null });
+
+    await loadUsage(state);
+
+    const callArgs = request.mock.calls[0][1] as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty("agentId");
   });
 
   it("captures useful error strings in loadUsage", async () => {

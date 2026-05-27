@@ -58,11 +58,13 @@ export function renderUsageTab(state: AppViewState) {
         state.usageResult?.cacheStatus,
         state.usageCostSummary?.cacheStatus,
       ),
+      agents: state.agentsList?.agents ?? [],
     },
     filters: {
       startDate: state.usageStartDate,
       endDate: state.usageEndDate,
       scope: state.usageScope,
+      agentId: state.usageAgentId,
       selectedSessions: state.usageSelectedSessions,
       selectedDays: state.usageSelectedDays,
       selectedHours: state.usageSelectedHours,
@@ -116,6 +118,15 @@ export function renderUsageTab(state: AppViewState) {
         },
         onScopeChange: (scope) => {
           state.usageScope = scope;
+          state.usageSelectedDays = [];
+          state.usageSelectedHours = [];
+          state.usageSelectedSessions = [];
+          state.usageTimeSeries = null;
+          state.usageSessionLogs = null;
+          void loadUsage(state);
+        },
+        onAgentChange: (agentId) => {
+          state.usageAgentId = agentId;
           state.usageSelectedDays = [];
           state.usageSelectedHours = [];
           state.usageSelectedSessions = [];
