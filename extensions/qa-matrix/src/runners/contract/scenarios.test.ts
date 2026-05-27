@@ -4162,11 +4162,13 @@ describe("matrix live qa scenarios", () => {
     });
     const body = mockMessageBody(sendTextMessage, "sendTextMessage");
     expect(body).toMatch(
-      /first reply with only this exact marker: `MATRIX_QA_BLOCK_ONE_[A-F0-9]{8}`/,
+      /Step 1: send an assistant text block containing only this exact marker: `MATRIX_QA_BLOCK_ONE_[A-F0-9]{8}`/,
     );
-    expect(body).toContain("Then use the read tool exactly once on `QA_KICKOFF_TASK.md`.");
+    expect(body).toContain(
+      "Step 2: do not stop after that marker. Use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+    );
     expect(body).toMatch(
-      /After that read completes, reply with only this exact marker: `MATRIX_QA_BLOCK_TWO_[A-F0-9]{8}`/,
+      /Step 3: after that read completes, send a final assistant text block containing only this exact marker: `MATRIX_QA_BLOCK_TWO_[A-F0-9]{8}`/,
     );
     expect(scenario.configOverrides?.toolProfile).toBe("coding");
     expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(

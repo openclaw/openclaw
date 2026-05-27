@@ -518,6 +518,24 @@ export async function buildChannelsTable(
     visibleChannelIds.add(channelId);
   }
 
+  if (!includeSetupFallbackPlugins) {
+    for (const channelId of readOnlyPlugins.missingConfiguredChannelIds.toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
+      if (visibleChannelIds.has(channelId)) {
+        continue;
+      }
+      rows.push({
+        id: channelId,
+        label: channelId,
+        enabled: true,
+        state: "setup",
+        detail: "configured; status unavailable in fast mode",
+      });
+      visibleChannelIds.add(channelId);
+    }
+  }
+
   return {
     rows,
     details,

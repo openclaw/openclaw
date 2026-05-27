@@ -8,11 +8,12 @@
   },
   "type": "module",
   "scripts": {
-    "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js && node -e \"let fs=require('fs'),p='assets/viewer-runtime.js',s=fs.readFileSync(p,'utf8').replace(/[ \\\\t]+$/gm,'');fs.writeFileSync(p,s)\""
+    "build:viewer": "node scripts/build-viewer.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "1.2.2",
     "@pierre/theme": "1.0.3",
+    "@shikijs/langs": "3.23.0",
     "playwright-core": "1.60.0",
     "typebox": "1.1.38",
     "zod": "4.4.3"
@@ -32,6 +33,9 @@
     },
     "compat": {
       "pluginApi": ">=2026.5.27"
+    },
+    "assetScripts": {
+      "build": "pnpm build:viewer"
     },
     "build": {
       "openclawVersion": "2026.5.27",

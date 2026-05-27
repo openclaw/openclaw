@@ -69,6 +69,11 @@ let hasLoggedModelCatalogError = false;
 let hasLoggedReadOnlyStaticCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
+type ManifestModelCatalogCacheEntry = {
+  snapshot: PluginMetadataSnapshot;
+  rows: ModelCatalogEntry[];
+};
+let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const modelSuppressionLoader = createLazyImportLoader(
   () => import("./model-suppression.runtime.js"),
 );
@@ -83,6 +88,7 @@ function loadModelSuppression() {
 
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
+  manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
   hasLoggedReadOnlyStaticCatalogError = false;
 }
@@ -203,6 +209,10 @@ export function loadManifestModelCatalog(params: {
   if (!resolvedSnapshot) {
     return [];
   }
+  const cached = manifestModelCatalogCache.get(params.config);
+  if (cached?.snapshot === resolvedSnapshot) {
+    return cached.rows;
+  }
   const eligiblePlugins = resolvedSnapshot.plugins.filter(
     (plugin) =>
       plugin.modelCatalog &&
@@ -215,7 +225,7 @@ export function loadManifestModelCatalog(params: {
   const plan = planManifestModelCatalogRows({
     registry: { plugins: eligiblePlugins },
   });
-  return plan.rows.map((row) => {
+  const rows = plan.rows.map((row) => {
     const entry: ModelCatalogEntry = {
       id: row.id,
       name: row.name,
@@ -239,6 +249,8 @@ export function loadManifestModelCatalog(params: {
     }
     return entry;
   });
+  manifestModelCatalogCache.set(params.config, { snapshot: resolvedSnapshot, rows });
+  return rows;
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {

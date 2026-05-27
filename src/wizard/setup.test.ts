@@ -618,16 +618,31 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
+    expect(replaceConfigFile).toHaveBeenCalledTimes(3);
+    const migrationParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
+      "migration config replacement params",
+    );
+    expect(
+      requireRecord(migrationParams.nextConfig, "migration next config").plugins,
+    ).toBeUndefined();
+    const migrationWriteOptions = expectRecordFields(
+      migrationParams.writeOptions,
+      { allowConfigSizeDrop: true },
+      "migration config replacement write options",
+    );
+    expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
+
     const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, 0, 0, "config replacement"),
+      getMockCallArg(replaceConfigFile, 2, 0, "config replacement"),
       "config replacement params",
     );
-    const writeOptions = expectRecordFields(
+    expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
+    expectRecordFields(
       replaceParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "config replacement write options",
     );
-    expect(writeOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
   });
 
   it("fails fast if the auth choice prompt returns nothing", async () => {

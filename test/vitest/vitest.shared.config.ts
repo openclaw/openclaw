@@ -271,6 +271,7 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.scoped-config.ts",
       "test/vitest/vitest.shared-core.config.ts",
       "test/vitest/vitest.shared.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.tooling.config.ts",
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.ui.config.ts",

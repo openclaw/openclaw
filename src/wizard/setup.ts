@@ -1,6 +1,11 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import {
+  commitConfigWriteWithPendingPluginInstalls,
+  hasPendingPluginInstallRecords,
+  stripPendingPluginInstallRecords,
+  unchangedPendingPluginInstallRecordIds,
+} from "../cli/plugins-install-record-commit.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -12,7 +17,6 @@ import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { PLUGIN_INSTALLS_CONFIG_PATH } from "../plugins/installed-plugin-index-records.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -41,13 +45,6 @@ let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
 let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
 let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
 
-function isPluginInstallsUnsetPath(path: readonly string[]): boolean {
-  return (
-    path.length === PLUGIN_INSTALLS_CONFIG_PATH.length &&
-    path.every((part, index) => part === PLUGIN_INSTALLS_CONFIG_PATH[index])
-  );
-}
-
 function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
   authChoiceModulePromise ??= import("../commands/auth-choice.js");
   return authChoiceModulePromise;
@@ -65,20 +62,41 @@ function loadModelPickerModule(): Promise<ModelPickerModule> {
 
 async function writeWizardConfigFile(
   config: OpenClawConfig,
-  opts: { allowConfigSizeDrop?: boolean } = {},
+  opts: {
+    allowConfigSizeDrop?: boolean;
+    migrationBaseConfig?: OpenClawConfig;
+    onPendingPluginInstallMigration?: () => void;
+  } = {},
 ): Promise<OpenClawConfig> {
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
+  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
+    const migrationBaseConfig = opts.migrationBaseConfig;
+    if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
+      await commitConfigWriteWithPendingPluginInstalls({
+        nextConfig: migrationBaseConfig,
+        writeOptions: { allowConfigSizeDrop: true },
+        commit: async (nextConfig, writeOptions) => {
+          return await replaceConfigFile({
+            nextConfig,
+            ...(writeOptions ? { writeOptions } : {}),
+            afterWrite: { mode: "auto" },
+          });
+        },
+      });
+      config = stripPendingPluginInstallRecords(
+        config,
+        unchangedPendingPluginInstallRecordIds(config, migrationBaseConfig),
+      );
+      opts.onPendingPluginInstallMigration?.();
+    }
+  }
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
+    writeOptions: { allowConfigSizeDrop },
     commit: async (nextConfig, writeOptions) => {
-      const allowPluginInstallMigrationSizeDrop =
-        writeOptions?.unsetPaths?.some(isPluginInstallsUnsetPath) === true;
       return await replaceConfigFile({
         nextConfig,
-        writeOptions: {
-          ...writeOptions,
-          allowConfigSizeDrop: allowConfigSizeDrop || allowPluginInstallMigrationSizeDrop,
-        },
+        ...(writeOptions ? { writeOptions } : {}),
         afterWrite: { mode: "auto" },
       });
     },
@@ -215,6 +233,18 @@ export async function runSetupWizard(
   // explicit reset or import flows are allowed to shrink the config — see issue
   // openclaw#84692.
   let configResetPerformed = false;
+  let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
+  const writeSetupConfigFile = async (
+    config: OpenClawConfig,
+    opts: { allowConfigSizeDrop?: boolean } = {},
+  ) =>
+    await writeWizardConfigFile(config, {
+      ...opts,
+      migrationBaseConfig: pendingPluginInstallMigrationBaseConfig,
+      onPendingPluginInstallMigration: () => {
+        pendingPluginInstallMigrationBaseConfig = undefined;
+      },
+    });
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(
@@ -343,6 +373,7 @@ export async function runSetupWizard(
       })) as ResetScope;
       await onboardHelpers.handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
       baseConfig = {};
+      pendingPluginInstallMigrationBaseConfig = baseConfig;
       configResetPerformed = true;
     }
   }
@@ -583,7 +614,7 @@ export async function runSetupWizard(
       nextConfig = applySkipBootstrapConfig(nextConfig);
     }
     nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-    nextConfig = await writeWizardConfigFile(nextConfig, {
+    nextConfig = await writeSetupConfigFile(nextConfig, {
       allowConfigSizeDrop: configResetPerformed,
     });
     logConfigUpdated(runtime);
@@ -771,7 +802,7 @@ export async function runSetupWizard(
     });
   }
 
-  nextConfig = await writeWizardConfigFile(nextConfig, {
+  nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: configResetPerformed,
   });
   const { logConfigUpdated } = await loadConfigLoggingModule();
@@ -822,7 +853,7 @@ export async function runSetupWizard(
   }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  nextConfig = await writeWizardConfigFile(nextConfig, {
+  nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: configResetPerformed,
   });
 

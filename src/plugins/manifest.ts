@@ -291,6 +291,8 @@ export type PluginManifestConfigContracts = {
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Plugin ids that must also be installed for this plugin to have effect. */
+  requiresPlugins?: string[];
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
@@ -1630,6 +1632,7 @@ export function loadPluginManifest(
     return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
 
+  const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
   const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
@@ -1699,6 +1702,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
       ...(enabledByDefault ? { enabledByDefault } : {}),
       ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
