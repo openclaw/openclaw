@@ -24,8 +24,6 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(OPENCLAW_MARKETING_VERSION)</string>
-	<key>OpenClawCanonicalVersion</key>
-	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -52,14 +50,14 @@
 	<array>
 		<string>_openclaw-gw._tcp</string>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
-	<key>NSCalendarsUsageDescription</key>
-	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
+	<key>NSCalendarsUsageDescription</key>
 	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>OpenClaw uses your calendars to add events when you enable calendar access.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -80,6 +78,8 @@
 	<string>OpenClaw uses on-device speech recognition for talk mode and voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawCanonicalVersion</key>
+	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>OpenClawPushAPNsEnvironment</key>
 	<string>$(OPENCLAW_PUSH_APNS_ENVIRONMENT)</string>
 	<key>OpenClawPushDistribution</key>

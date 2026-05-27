@@ -75,15 +75,54 @@ struct RootTabs: View {
     }
 
     private enum PresentedSheet: Identifiable {
-        case settings
         case quickSetup
 
         var id: Int {
             switch self {
-            case .settings: 0
-            case .quickSetup: 1
+            case .quickSetup: 0
             }
         }
+    }
+
+    enum StartupPresentationRoute: Equatable {
+        case none
+        case onboarding
+        case settings
+    }
+
+    static func startupPresentationRoute(
+        gatewayConnected: Bool,
+        hasConnectedOnce: Bool,
+        onboardingComplete: Bool,
+        hasExistingGatewayConfig: Bool,
+        shouldPresentOnLaunch: Bool) -> StartupPresentationRoute
+    {
+        if gatewayConnected {
+            return .none
+        }
+        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
+            return .onboarding
+        }
+        if !hasExistingGatewayConfig {
+            return .settings
+        }
+        return .none
+    }
+
+    static func shouldPresentQuickSetup(
+        quickSetupDismissed: Bool,
+        showOnboarding: Bool,
+        hasPresentedSheet: Bool,
+        gatewayConnected: Bool,
+        hasExistingGatewayConfig: Bool,
+        discoveredGatewayCount: Int) -> Bool
+    {
+        guard !quickSetupDismissed else { return false }
+        guard !showOnboarding else { return false }
+        guard !hasPresentedSheet else { return false }
+        guard !gatewayConnected else { return false }
+        guard !hasExistingGatewayConfig else { return false }
+        return discoveredGatewayCount > 0
     }
 
     var body: some View {
@@ -98,7 +137,7 @@ struct RootTabs: View {
         TabView(selection: self.$selectedTab) {
             CommandCenterTab(
                 openChat: { self.selectedTab = .chat },
-                openSettings: { self.presentedSheet = .settings })
+                openSettings: { self.selectedTab = .settings })
                 .tabItem { Label("Command", systemImage: "target") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
@@ -254,7 +293,7 @@ struct RootTabs: View {
             .gatewayActionsDialog(
                 isPresented: self.$showGatewayActions,
                 onDisconnect: { self.appModel.disconnectGateway() },
-                onOpenSettings: { self.presentedSheet = .settings })
+                onOpenSettings: { self.selectedTab = .settings })
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
@@ -267,12 +306,6 @@ struct RootTabs: View {
             }
             .sheet(item: self.$presentedSheet) { sheet in
                 switch sheet {
-                case .settings:
-                    SettingsTab()
-                        .environment(self.appModel)
-                        .environment(self.voiceWake)
-                        .environment(self.gatewayController)
-                        .preferredColorScheme(self.appearancePreference.colorScheme)
                 case .quickSetup:
                     GatewayQuickSetupSheet()
                         .environment(self.appModel)
@@ -469,7 +502,7 @@ struct RootTabs: View {
         } else if problem.retryable {
             Task { await self.gatewayController.connectLastKnown() }
         } else {
-            self.presentedSheet = .settings
+            self.selectedTab = .settings
         }
     }
 
@@ -482,7 +515,7 @@ struct RootTabs: View {
 
         guard !self.didEvaluateOnboarding else { return }
         self.didEvaluateOnboarding = true
-        let route = RootCanvas.startupPresentationRoute(
+        let route = Self.startupPresentationRoute(
             gatewayConnected: self.appModel.gatewayServerName != nil,
             hasConnectedOnce: self.hasConnectedOnce,
             onboardingComplete: self.onboardingComplete,
@@ -496,7 +529,7 @@ struct RootTabs: View {
             self.showOnboarding = true
         case .settings:
             self.didAutoOpenSettings = true
-            self.presentedSheet = .settings
+            self.selectedTab = .settings
         }
     }
 
@@ -514,7 +547,7 @@ struct RootTabs: View {
     private func maybeAutoOpenSettings() {
         guard !self.didAutoOpenSettings else { return }
         guard !self.showOnboarding else { return }
-        let route = RootCanvas.startupPresentationRoute(
+        let route = Self.startupPresentationRoute(
             gatewayConnected: self.appModel.gatewayServerName != nil,
             hasConnectedOnce: self.hasConnectedOnce,
             onboardingComplete: self.onboardingComplete,
@@ -522,7 +555,7 @@ struct RootTabs: View {
             shouldPresentOnLaunch: false)
         guard route == .settings else { return }
         self.didAutoOpenSettings = true
-        self.presentedSheet = .settings
+        self.selectedTab = .settings
     }
 
     private func applyInitialChatSessionIfNeeded() {
@@ -539,7 +572,7 @@ struct RootTabs: View {
     }
 
     private func maybeShowQuickSetup() {
-        let shouldPresent = RootCanvas.shouldPresentQuickSetup(
+        let shouldPresent = Self.shouldPresentQuickSetup(
             quickSetupDismissed: self.quickSetupDismissed,
             showOnboarding: self.showOnboarding,
             hasPresentedSheet: self.presentedSheet != nil,

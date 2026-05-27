@@ -24,11 +24,11 @@ import UIKit
         _ = Self.host(root)
     }
 
-    @Test @MainActor func settingsTabBuildsAViewHierarchy() {
+    @Test @MainActor func settingsProTabBuildsAViewHierarchy() {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-        let root = SettingsTab()
+        let root = SettingsProTab()
             .environment(appModel)
             .environment(appModel.voiceWake)
             .environment(gatewayController)
@@ -48,29 +48,10 @@ import UIKit
         _ = Self.host(root)
     }
 
-    @Test @MainActor func voiceTabBuildsAViewHierarchy() {
-        let appModel = NodeAppModel()
-
-        let root = VoiceTab()
-            .environment(appModel)
-            .environment(appModel.voiceWake)
-
-        _ = Self.host(root)
-    }
-
     @Test @MainActor func voiceWakeWordsViewBuildsAViewHierarchy() {
         let appModel = NodeAppModel()
         let root = NavigationStack { VoiceWakeWordsSettingsView() }
             .environment(appModel)
-        _ = Self.host(root)
-    }
-
-    @Test @MainActor func chatSheetBuildsAViewHierarchy() {
-        let appModel = NodeAppModel()
-        let gateway = GatewayNodeSession()
-        let root = ChatSheet(gateway: gateway, sessionKey: "test")
-            .environment(appModel)
-            .environment(appModel.voiceWake)
         _ = Self.host(root)
     }
 

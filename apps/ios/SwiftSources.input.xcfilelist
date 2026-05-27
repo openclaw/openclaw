@@ -1,7 +1,6 @@
 Sources/Calendar/CalendarService.swift
 Sources/Camera/CameraController.swift
 Sources/Capabilities/NodeCapabilityRouter.swift
-Sources/Chat/ChatSheet.swift
 Sources/Chat/IOSGatewayChatTransport.swift
 Sources/Contacts/ContactsService.swift
 Sources/Device/DeviceInfoHelper.swift
@@ -18,7 +17,6 @@ Sources/Design/CommandCenterTab.swift
 Sources/Design/OpenClawProComponents.swift
 Sources/Design/OpenClawProScreens.swift
 Sources/Design/SettingsProTab.swift
-Sources/Design/WorkspaceProTab.swift
 Sources/EventKit/EventKitAuthorization.swift
 Sources/Gateway/DeepLinkAgentPromptAlert.swift
 Sources/Gateway/ExecApprovalPromptDialog.swift
@@ -35,7 +33,6 @@ Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
 Sources/Gateway/KeychainStore.swift
 Sources/Gateway/TCPProbe.swift
-Sources/HomeToolbar.swift
 Sources/LiveActivity/LiveActivityManager.swift
 Sources/LiveActivity/OpenClawActivityAttributes.swift
 Sources/Location/LocationService.swift
@@ -60,12 +57,10 @@ Sources/Push/PushRegistrationManager.swift
 Sources/Push/PushRelayClient.swift
 Sources/Push/PushRelayKeychainStore.swift
 Sources/Reminders/RemindersService.swift
-Sources/RootCanvas.swift
 Sources/RootTabs.swift
 Sources/RootView.swift
 Sources/Screen/ScreenController.swift
 Sources/Screen/ScreenRecordService.swift
-Sources/Screen/ScreenTab.swift
 Sources/Screen/ScreenWebView.swift
 Sources/Services/NodeServiceProtocols.swift
 Sources/Services/NotificationService.swift
@@ -75,7 +70,6 @@ Sources/Services/WatchMessagingService.swift
 Sources/SessionKey.swift
 Sources/Settings/PrivacyAccessSectionView.swift
 Sources/Settings/SettingsNetworkingHelpers.swift
-Sources/Settings/SettingsTab.swift
 Sources/Settings/VoiceWakeWordsSettingsView.swift
 Sources/Status/GatewayActionsDialog.swift
 Sources/Status/GatewayStatusBuilder.swift
@@ -91,7 +85,6 @@ Sources/Voice/TalkPermissionPromptView.swift
 Sources/Voice/TalkRealtimeClientSession.swift
 Sources/Voice/TalkRealtimeWebRTCSession.swift
 Sources/Voice/TalkSpeechLocale.swift
-Sources/Voice/VoiceTab.swift
 Sources/Voice/VoiceWakeManager.swift
 Sources/Voice/VoiceWakePreferences.swift
 ShareExtension/ShareViewController.swift
