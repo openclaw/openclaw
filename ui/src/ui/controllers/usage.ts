@@ -283,6 +283,7 @@ export async function loadUsage(
     let includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
     let includeUsageScope = shouldSendLegacyUsageScopeParams(state);
     let includeAgentId = shouldSendLegacyUsageAgentIdParams(state);
+    let agentIdFallback = false;
     while (true) {
       try {
         const [sessionsRes, costRes] = await runUsageRequests(
@@ -290,6 +291,16 @@ export async function loadUsage(
           includeUsageScope,
           includeAgentId,
         );
+        // If agentId was requested but server-side filtering was disabled,
+        // filter sessions client-side for older gateways.
+        if (agentIdFallback && state.usageAgentId) {
+          const filteredRes = sessionsRes as SessionsUsageResult;
+          if (filteredRes?.sessions) {
+            filteredRes.sessions = filteredRes.sessions.filter(
+              (s) => s.agentId === state.usageAgentId,
+            );
+          }
+        }
         applyUsageResults(state, sessionsRes, costRes);
         break;
       } catch (err) {
@@ -298,6 +309,7 @@ export async function loadUsage(
           // Remember this per gateway and retry without the agentId field.
           rememberLegacyUsageAgentIdParams(state);
           includeAgentId = false;
+          agentIdFallback = true;
           continue;
         }
         if (includeUsageScope && isLegacyUsageScopeUnsupportedError(err)) {

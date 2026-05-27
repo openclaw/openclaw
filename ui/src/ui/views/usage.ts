@@ -422,7 +422,7 @@ export function renderUsage(props: UsageProps) {
       return nothing;
     }
     const selectedAgentId = filters.agentId;
-    const selectedLabel = selectedAgentId ?? t("usage.filters.all");
+    const selectedLabel = selectedAgentId ?? t("usage.filters.defaultAgent");
     return html`
       <details
         class="usage-filter-select"
