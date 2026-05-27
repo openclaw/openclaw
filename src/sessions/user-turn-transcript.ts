@@ -2,7 +2,11 @@ import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { mimeTypeFromFilePath } from "../media/mime.js";
-import { applyInputProvenanceToUserMessage, type InputProvenance } from "./input-provenance.js";
+import {
+  applyInputProvenanceToUserMessage,
+  type InputProvenance,
+  normalizeInputProvenance,
+} from "./input-provenance.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
 type TranscriptAppendConfig = Parameters<typeof appendSessionTranscriptMessage>[0]["config"];
@@ -349,6 +353,9 @@ function applyBeforeMessageWriteToUserTurn(
   const originalMessage = message as unknown as { idempotencyKey?: unknown };
   const idempotencyKey =
     typeof originalMessage.idempotencyKey === "string" ? originalMessage.idempotencyKey : undefined;
+  const provenance = normalizeInputProvenance(
+    (message as unknown as { provenance?: unknown }).provenance,
+  );
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -357,12 +364,15 @@ function applyBeforeMessageWriteToUserTurn(
   if (nextMessage?.role !== "user") {
     return undefined;
   }
+  const nextUserMessage = provenance
+    ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
+    : nextMessage;
   return idempotencyKey
     ? ({
-        ...(nextMessage as unknown as Record<string, unknown>),
+        ...(nextUserMessage as unknown as Record<string, unknown>),
         idempotencyKey,
       } as unknown as PersistedUserTurnMessage)
-    : nextMessage;
+    : nextUserMessage;
 }
 
 export async function appendUserTurnTranscriptMessage(

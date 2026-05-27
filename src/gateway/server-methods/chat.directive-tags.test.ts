@@ -3019,6 +3019,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "ok";
     const respond = vi.fn();
     const context = createChatContext();
+    const provenance = {
+      kind: "external_user" as const,
+      originSessionId: "acp-session-1",
+      sourceChannel: "acp",
+      sourceTool: "openclaw_acp",
+    };
 
     await runNonStreamingChatSend({
       context,
@@ -3031,24 +3037,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         version: "acp",
       }),
       requestParams: {
-        systemInputProvenance: {
-          kind: "external_user",
-          originSessionId: "acp-session-1",
-          sourceChannel: "acp",
-          sourceTool: "openclaw_acp",
-        },
+        systemInputProvenance: provenance,
         systemProvenanceReceipt:
           "[Source Receipt]\nbridge=openclaw-acp\noriginSessionId=acp-session-1\n[/Source Receipt]",
       },
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.InputProvenance).toEqual({
-      kind: "external_user",
-      originSessionId: "acp-session-1",
-      sourceChannel: "acp",
-      sourceTool: "openclaw_acp",
-    });
+    expect(mockState.lastDispatchCtx?.InputProvenance).toEqual(provenance);
     expect(mockState.lastDispatchCtx?.Body).toBe(
       "[Source Receipt]\nbridge=openclaw-acp\noriginSessionId=acp-session-1\n[/Source Receipt]\n\nbench update",
     );
@@ -3059,6 +3055,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       content: "bench update",
       timestamp: expect.any(Number),
       idempotencyKey: "idem-system-provenance-acp:user",
+      provenance: {
+        ...provenance,
+        sourceSessionKey: undefined,
+      },
     });
   });
 

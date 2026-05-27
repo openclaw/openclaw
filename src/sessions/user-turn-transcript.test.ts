@@ -221,6 +221,11 @@ describe("user turn transcript persistence", () => {
     it("appends a structured user turn through the shared transcript writer", async () => {
       const dir = createTempDir("openclaw-user-turn-append-");
       const transcriptPath = path.join(dir, "session.jsonl");
+      const provenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "source-main",
+        sourceTool: "sessions_send",
+      };
 
       const appended = await appendUserTurnTranscriptMessage({
         transcriptPath,
@@ -231,11 +236,7 @@ describe("user turn transcript persistence", () => {
           text: "What is in this image?",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "source-main",
-            sourceTool: "sessions_send",
-          },
+          provenance,
         },
         updateMode: "none",
       });
@@ -250,11 +251,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "What is in this image?",
           MediaPath: "/tmp/image.png",
-          provenance: {
-            kind: "inter_session",
-            sourceSessionKey: "source-main",
-            sourceTool: "sessions_send",
-          },
+          provenance,
           MediaType: "image/png",
         }),
       ]);
@@ -336,6 +333,11 @@ describe("user turn transcript persistence", () => {
 
     it("preserves idempotency keys when before_message_write replaces a user turn", async () => {
       let hookCalls = 0;
+      const provenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "source-main",
+        sourceTool: "sessions_send",
+      };
       initializeGlobalHookRunner(
         createMockPluginRegistry([
           {
@@ -360,6 +362,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -368,6 +371,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
+          provenance,
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -377,6 +381,7 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
+          provenance,
         }),
       ]);
       expect(hookCalls).toBe(1);
