@@ -388,8 +388,8 @@ function resolveApprovalButtonAccountConfig(
   const accounts = readRecord(qqbot?.accounts);
   if (accountId === "default") {
     return {
-      ...(qqbot ?? {}),
-      ...(readRecord(accounts?.default) ?? {}),
+      ...qqbot,
+      ...readRecord(accounts?.default),
     } as QQBotAccountConfigView;
   }
   return (readRecord(accounts?.[accountId]) ?? {}) as QQBotAccountConfigView;
