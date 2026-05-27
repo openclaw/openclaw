@@ -228,7 +228,7 @@ process.stdin.on("data", (chunk) => {
     expect(proof.entries).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/^logs_2\.sqlite\.retired\./u),
-        expect.stringMatching(/^logs_2\.sqlite-wal\.retired\./u),
+        expect.stringMatching(/^logs_2\.sqlite\.retired\..*-wal$/u),
       ]),
     );
     expect(mocks.embeddedAgentLog.warn).toHaveBeenCalledWith(

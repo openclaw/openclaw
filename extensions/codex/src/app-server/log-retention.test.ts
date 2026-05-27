@@ -77,6 +77,12 @@ describe("Codex app-server log retention", () => {
     await expect(
       pathExists(path.join(codexHome, "logs_2.sqlite.retired.2026-05-24T22-00-00-000Z")),
     ).resolves.toBe(true);
+    await expect(
+      pathExists(path.join(codexHome, "logs_2.sqlite.retired.2026-05-24T22-00-00-000Z-wal")),
+    ).resolves.toBe(true);
+    await expect(
+      pathExists(path.join(codexHome, "logs_2.sqlite.retired.2026-05-24T22-00-00-000Z-shm")),
+    ).resolves.toBe(true);
     expect(logMocks.embeddedAgentLog.warn).toHaveBeenCalledWith(
       "codex app-server log database rotated before startup",
       expect.objectContaining({ sizeBytes: 12, maxBytes: 4 }),
@@ -131,7 +137,7 @@ describe("Codex app-server log retention", () => {
       "utf8",
     );
     await writeFile(
-      path.join(codexHome, "logs_2.sqlite-wal.retired.2026-05-20T00-00-00-000Z"),
+      path.join(codexHome, "logs_2.sqlite.retired.2026-05-20T00-00-00-000Z-wal"),
       "old-a-wal",
       "utf8",
     );

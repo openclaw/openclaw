@@ -6,6 +6,8 @@ import type { CodexAppServerStartOptions } from "./config.js";
 const CODEX_LOG_DATABASE = "logs_2.sqlite";
 const CODEX_LOG_FILES = [CODEX_LOG_DATABASE, "logs_2.sqlite-wal", "logs_2.sqlite-shm"] as const;
 const RETIRED_MARKER = ".retired.";
+const RETIRED_SQLITE_WAL_SUFFIX = "-wal";
+const RETIRED_SQLITE_SHM_SUFFIX = "-shm";
 
 export const DEFAULT_CODEX_APP_SERVER_LOG_MAX_BYTES = 512 * 1024 * 1024;
 export const DEFAULT_CODEX_APP_SERVER_RETIRED_LOG_SNAPSHOTS = 2;
@@ -117,7 +119,7 @@ async function applyCodexAppServerLogRetentionInternal(
   const timestamp = formatRotationTimestamp(params.now?.() ?? new Date());
   const rotatedFiles: string[] = [];
   for (const file of logFiles) {
-    const targetPath = path.join(codexHome, `${file.fileName}${RETIRED_MARKER}${timestamp}`);
+    const targetPath = path.join(codexHome, retiredLogTargetFileName(file.fileName, timestamp));
     await fs.rename(file.filePath, targetPath);
     rotatedFiles.push(targetPath);
   }
@@ -197,16 +199,31 @@ async function pruneRetiredLogSnapshots(
 }
 
 function parseRetiredLogEntry(fileName: string): { timestamp: string } | null {
-  const markerIndex = fileName.indexOf(RETIRED_MARKER);
-  if (markerIndex < 0) {
+  const retiredDatabasePrefix = `${CODEX_LOG_DATABASE}${RETIRED_MARKER}`;
+  if (!fileName.startsWith(retiredDatabasePrefix)) {
     return null;
   }
-  const baseName = fileName.slice(0, markerIndex);
-  if (!CODEX_LOG_FILES.includes(baseName as (typeof CODEX_LOG_FILES)[number])) {
-    return null;
-  }
-  const timestamp = fileName.slice(markerIndex + RETIRED_MARKER.length);
+  const rawTimestamp = fileName.slice(retiredDatabasePrefix.length);
+  const timestamp = rawTimestamp.endsWith(RETIRED_SQLITE_WAL_SUFFIX)
+    ? rawTimestamp.slice(0, -RETIRED_SQLITE_WAL_SUFFIX.length)
+    : rawTimestamp.endsWith(RETIRED_SQLITE_SHM_SUFFIX)
+      ? rawTimestamp.slice(0, -RETIRED_SQLITE_SHM_SUFFIX.length)
+      : rawTimestamp;
   return timestamp ? { timestamp } : null;
+}
+
+function retiredLogTargetFileName(
+  fileName: (typeof CODEX_LOG_FILES)[number],
+  timestamp: string,
+): string {
+  const retiredDatabaseName = `${CODEX_LOG_DATABASE}${RETIRED_MARKER}${timestamp}`;
+  if (fileName === CODEX_LOG_DATABASE) {
+    return retiredDatabaseName;
+  }
+  if (fileName === "logs_2.sqlite-wal") {
+    return `${retiredDatabaseName}${RETIRED_SQLITE_WAL_SUFFIX}`;
+  }
+  return `${retiredDatabaseName}${RETIRED_SQLITE_SHM_SUFFIX}`;
 }
 
 function formatRotationTimestamp(date: Date): string {
