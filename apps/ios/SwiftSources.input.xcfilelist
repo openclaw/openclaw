@@ -17,6 +17,7 @@ Sources/Design/CommandCenterTab.swift
 Sources/Design/OpenClawProComponents.swift
 Sources/Design/OpenClawProScreens.swift
 Sources/Design/SettingsProTab.swift
+Sources/Design/SettingsProTabSupport.swift
 Sources/EventKit/EventKitAuthorization.swift
 Sources/Gateway/DeepLinkAgentPromptAlert.swift
 Sources/Gateway/ExecApprovalPromptDialog.swift
