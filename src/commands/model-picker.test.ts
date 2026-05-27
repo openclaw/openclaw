@@ -100,6 +100,22 @@ vi.mock("../agents/model-auth.js", () => ({
   hasRuntimeAvailableProviderAuth,
 }));
 
+const createProviderAuthChecker = vi.hoisted(() =>
+  vi.fn(
+    (params: { cfg?: OpenClawConfig; workspaceDir?: string; env?: NodeJS.ProcessEnv }) =>
+      async (provider: string) =>
+        hasRuntimeAvailableProviderAuth({
+          provider,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        }),
+  ),
+);
+vi.mock("../agents/model-provider-auth.js", () => ({
+  createProviderAuthChecker,
+}));
+
 const resolveOwningPluginIdsForProvider = vi.hoisted(() =>
   vi.fn(({ provider }: { provider: string }) => {
     if (provider === "byteplus" || provider === "byteplus-plan") {

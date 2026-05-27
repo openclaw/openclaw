@@ -704,7 +704,7 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress(t("wizard.model.loadingModels"));
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadPickerModelCatalog(cfg);
+    catalog = await loadPickerModelCatalog(cfg, { preferredProvider });
   } finally {
     catalogProgress.stop();
   }
