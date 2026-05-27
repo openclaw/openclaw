@@ -15,6 +15,7 @@ import {
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { areRuntimeModelRefsEquivalent } from "./model-runtime-aliases.js";
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
@@ -98,9 +99,10 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
+  const currentRef = `${current.provider}/${current.model}`;
+  const nextRef = `${next.provider}/${next.model}`;
   return (
-    current.provider !== next.provider ||
-    current.model !== next.model ||
+    !areRuntimeModelRefsEquivalent(currentRef, nextRef) ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
