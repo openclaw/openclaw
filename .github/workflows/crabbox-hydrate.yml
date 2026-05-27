@@ -313,13 +313,13 @@ jobs:
           node-version: "24"
 
       - name: Fetch main ref
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
 
-          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          if (git rev-parse --is-inside-work-tree 2>$null) {
             git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
-          fi
+          }
 
       - name: Setup pnpm and dependencies
         shell: powershell

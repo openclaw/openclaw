@@ -162,7 +162,9 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsPnpm.run).toContain(
       '$corepackShimDir = Join-Path $nodeBin "node_modules\\corepack\\shims"',
     );
-    expect(workflowStep(hydrateWindowsDaemon, "Fetch main ref").run).toContain(
+    const hydrateWindowsFetch = workflowStep(hydrateWindowsDaemon, "Fetch main ref");
+    expect(hydrateWindowsFetch.shell).toBe("powershell");
+    expect(hydrateWindowsFetch.run).toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
