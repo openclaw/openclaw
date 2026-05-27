@@ -94,7 +94,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         let startLogMessage =
-            "agent start sessionKey=\(sessionKey) "
+            "chat.send start sessionKey=\(sessionKey) "
                 + "len=\(message.count) attachments=\(attachments.count)"
         Self.logger.info(
             "\(startLogMessage, privacy: .public)")
@@ -104,7 +104,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             var message: String
             var thinking: String
             var attachments: [OpenClawChatAttachmentPayload]?
-            var timeout: Int
+            var timeoutMs: Int
             var idempotencyKey: String
         }
 
@@ -113,19 +113,19 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             message: message,
             thinking: thinking,
             attachments: attachments.isEmpty ? nil : attachments,
-            timeout: 120,
+            timeoutMs: 30000,
             idempotencyKey: idempotencyKey)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         do {
-            let res = try await self.gateway.request(method: "agent", paramsJSON: json, timeoutSeconds: 35)
+            let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
             let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
-            Self.logger.info("agent ok runId=\(decoded.runId, privacy: .public)")
-            GatewayDiagnostics.log("agent ok runId=\(decoded.runId) status=\(decoded.status)")
+            Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
+            GatewayDiagnostics.log("chat.send ok runId=\(decoded.runId) status=\(decoded.status)")
             return decoded
         } catch {
-            Self.logger.error("agent failed \(error.localizedDescription, privacy: .public)")
-            GatewayDiagnostics.log("agent failed error=\(error.localizedDescription)")
+            Self.logger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
+            GatewayDiagnostics.log("chat.send failed error=\(error.localizedDescription)")
             throw error
         }
     }

@@ -448,6 +448,20 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
     ) {
       continue;
     }
+    const coversAllBoolCases =
+      literalType === "Bool" &&
+      resolvedCases.some((entry) => entry.literal === true) &&
+      resolvedCases.some((entry) => entry.literal === false);
+    const unknownDiscriminatorLines = coversAllBoolCases
+      ? []
+      : [
+          "        default:",
+          "            throw DecodingError.dataCorruptedError(",
+          "                forKey: .discriminator,",
+          "                in: container,",
+          `                debugDescription: "Unknown ${name} discriminator value"`,
+          "            )",
+        ];
     return [
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
@@ -464,12 +478,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
         (entry) =>
           `        case ${swiftLiteralSource(entry.literal)}: self = try .${entry.caseName}(${entry.branchName}(from: decoder))`,
       ),
-      "        default:",
-      "            throw DecodingError.dataCorruptedError(",
-      "                forKey: .discriminator,",
-      "                in: container,",
-      `                debugDescription: "Unknown ${name} discriminator value"`,
-      "            )",
+      ...unknownDiscriminatorLines,
       "        }",
       "    }",
       "",

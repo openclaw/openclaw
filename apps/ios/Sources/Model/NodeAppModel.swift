@@ -403,13 +403,8 @@ final class NodeAppModel {
             self.beginBackgroundConnectionGracePeriod()
             // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            let talkCaptureActive = self.talkMode.hasActiveAudioCapture
-            let shouldKeepTalkActive = keepTalkActive && talkCaptureActive
-            GatewayDiagnostics.log(
-                "node app model: background talk keepActive=\(shouldKeepTalkActive) "
-                    + "setting=\(keepTalkActive) enabled=\(self.talkMode.isEnabled) active=\(talkCaptureActive)")
+            let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
             self.backgroundTalkKeptActive = shouldKeepTalkActive
-            self.talkMode.setForegroundAudioCaptureAllowed(shouldKeepTalkActive)
             self.backgroundTalkSuspended = self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
         case .active, .inactive:
             self.isBackgrounded = false
@@ -419,7 +414,6 @@ final class NodeAppModel {
                 self.startGatewayHealthMonitor()
             }
             if phase == .active {
-                self.talkMode.setForegroundAudioCaptureAllowed(true)
                 self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.backgroundVoiceWakeSuspended)
                 self.backgroundVoiceWakeSuspended = false
                 Task { [weak self] in

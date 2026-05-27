@@ -299,6 +299,8 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
+  const forceAgentConsultOnFinalTranscript =
+    params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   const talk = createTalkSessionController(
@@ -323,8 +325,8 @@ export function createTalkRealtimeRelaySession(
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
-    autoRespondToAudio: !params.forceAgentConsultOnFinalTranscript,
-    interruptResponseOnInputAudio: true,
+    autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
+    interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
@@ -424,7 +426,7 @@ export function createTalkRealtimeRelaySession(
             });
           return;
         }
-        if (params.forceAgentConsultOnFinalTranscript) {
+        if (forceAgentConsultOnFinalTranscript) {
           scheduleForcedAgentConsult(relay, question);
         }
       }

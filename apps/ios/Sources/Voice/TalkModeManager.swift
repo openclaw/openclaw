@@ -299,12 +299,30 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    func applyAudioRoutePreferenceChanged() {
+        guard self.isEnabled || self.isListening || self.isSpeaking else { return }
+        do {
+            if self.realtimeRelaySession != nil {
+                try Self.configureRealtimeAudioSession()
+            } else {
+                try Self.configureAudioSession()
+            }
+        } catch {
+            GatewayDiagnostics.log("talk audio route preference failed error=\(error.localizedDescription)")
+        }
+    }
+
     func start() async {
         GatewayDiagnostics.log(
             "talk.timeline manager start enter enabled=\(self.isEnabled) "
                 + "listening=\(self.isListening) gatewayConnected=\(self.gatewayConnected)")
         guard self.isEnabled else { return }
         guard self.captureMode != .pushToTalk else { return }
+        guard self.foregroundAudioCaptureAllowed else {
+            self.statusText = "Paused"
+            GatewayDiagnostics.log("talk start ignored: app backgrounded")
+            return
+        }
         if self.isListening { return }
         guard !self.isStarting else {
             GatewayDiagnostics.log("talk start ignored: already starting")
@@ -490,6 +508,13 @@ final class TalkModeManager: NSObject {
 
         Task { await self.unsubscribeAllChats() }
         return wasActive
+    }
+
+    func setForegroundAudioCaptureAllowed(_ allowed: Bool) {
+        self.foregroundAudioCaptureAllowed = allowed
+        if !allowed {
+            self.cancelPendingStart()
+        }
     }
 
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
@@ -1134,6 +1159,23 @@ final class TalkModeManager: NSObject {
 
     private func startRealtimeRelayIfAvailable() async -> Bool {
         guard let gateway else { return false }
+        guard self.foregroundAudioCaptureAllowed else {
+            self.statusText = "Paused"
+            GatewayDiagnostics.log("talk realtime ignored: app backgrounded")
+            return true
+        }
+        if self.realtimeRelaySession != nil {
+            self.captureMode = .continuous
+            self.isListening = true
+            GatewayDiagnostics.log("talk realtime ignored: already active")
+            return true
+        }
+        guard !self.realtimeRelayStartInFlight else {
+            GatewayDiagnostics.log("talk realtime ignored: already starting")
+            return true
+        }
+        self.realtimeRelayStartInFlight = true
+        defer { self.realtimeRelayStartInFlight = false }
         GatewayDiagnostics.log("talk.timeline realtime relay start attempt sessionKey=\(self.mainSessionKey)")
         let startedAt = Self.nowSeconds()
         let relaySession = RealtimeTalkRelaySession(
@@ -1314,7 +1356,7 @@ final class TalkModeManager: NSObject {
             "sessionKey": mainSessionKey,
             "message": message,
             "thinking": "low",
-            "timeout": 120,
+            "timeoutMs": 30000,
             "idempotencyKey": UUID().uuidString,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -1324,7 +1366,7 @@ final class TalkModeManager: NSObject {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
         }
-        let res = try await gateway.request(method: "agent", paramsJSON: json, timeoutSeconds: 30)
+        let res = try await gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 30)
         let decoded = try JSONDecoder().decode(SendResponse.self, from: res)
         return decoded.runId
     }

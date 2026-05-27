@@ -30,20 +30,20 @@ public enum ErrorCode: String, Codable, Sendable {
 }
 
 public enum EnvironmentStatus: String, Codable, Sendable {
-    case available
-    case unavailable
-    case starting
-    case stopping
-    case error
+    case available = "available"
+    case unavailable = "unavailable"
+    case starting = "starting"
+    case stopping = "stopping"
+    case error = "error"
 }
 
 public enum NodePresenceAliveReason: String, Codable, Sendable {
-    case background
+    case background = "background"
     case silentPush = "silent_push"
     case bgAppRefresh = "bg_app_refresh"
     case significantLocation = "significant_location"
-    case manual
-    case connect
+    case manual = "manual"
+    case connect = "connect"
 }
 
 public struct ConnectParams: Codable, Sendable {
@@ -6117,7 +6117,8 @@ public struct PluginsSessionActionFailureResult: Codable, Sendable {
     public init(
         error: String,
         code: String?,
-        details: AnyCodable?)
+        details: AnyCodable?
+    )
     {
         self.ok = false
         self.error = error
@@ -6138,11 +6139,12 @@ public struct PluginsSessionActionFailureResult: Codable, Sendable {
             .map(\.stringValue)
             .filter { !Set(["ok", "error", "code", "details"]).contains($0) }
         if !unexpectedKeys.isEmpty {
-            let sortedUnexpectedKeys = unexpectedKeys.sorted().joined(separator: ", ")
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: rawContainer.codingPath,
-                    debugDescription: "Unexpected keys for PluginsSessionActionFailureResult: \(sortedUnexpectedKeys)"))
+                    debugDescription: "Unexpected keys for PluginsSessionActionFailureResult: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedOk = try container.decode(Bool.self, forKey: .ok)
@@ -6150,7 +6152,8 @@ public struct PluginsSessionActionFailureResult: Codable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .ok,
                 in: container,
-                debugDescription: "Expected ok to equal false")
+                debugDescription: "Expected ok to equal false"
+            )
         }
         self.ok = false
         self.error = try container.decode(String.self, forKey: .error)
@@ -6161,9 +6164,9 @@ public struct PluginsSessionActionFailureResult: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(false, forKey: .ok)
-        try container.encode(self.error, forKey: .error)
-        try container.encodeIfPresent(self.code, forKey: .code)
-        try container.encodeIfPresent(self.details, forKey: .details)
+        try container.encode(error, forKey: .error)
+        try container.encodeIfPresent(code, forKey: .code)
+        try container.encodeIfPresent(details, forKey: .details)
     }
 }
 
@@ -6202,7 +6205,8 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
     public init(
         result: AnyCodable?,
         continueagent: Bool?,
-        reply: AnyCodable?)
+        reply: AnyCodable?
+    )
     {
         self.ok = true
         self.result = result
@@ -6223,11 +6227,12 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
             .map(\.stringValue)
             .filter { !Set(["ok", "result", "continueAgent", "reply"]).contains($0) }
         if !unexpectedKeys.isEmpty {
-            let sortedUnexpectedKeys = unexpectedKeys.sorted().joined(separator: ", ")
             throw DecodingError.dataCorrupted(
                 .init(
                     codingPath: rawContainer.codingPath,
-                    debugDescription: "Unexpected keys for PluginsSessionActionSuccessResult: \(sortedUnexpectedKeys)"))
+                    debugDescription: "Unexpected keys for PluginsSessionActionSuccessResult: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedOk = try container.decode(Bool.self, forKey: .ok)
@@ -6235,7 +6240,8 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .ok,
                 in: container,
-                debugDescription: "Expected ok to equal true")
+                debugDescription: "Expected ok to equal true"
+            )
         }
         self.ok = true
         self.result = try container.decodeIfPresent(AnyCodable.self, forKey: .result)
@@ -6246,9 +6252,9 @@ public struct PluginsSessionActionSuccessResult: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(true, forKey: .ok)
-        try container.encodeIfPresent(self.result, forKey: .result)
-        try container.encodeIfPresent(self.continueagent, forKey: .continueagent)
-        try container.encodeIfPresent(self.reply, forKey: .reply)
+        try container.encodeIfPresent(result, forKey: .result)
+        try container.encodeIfPresent(continueagent, forKey: .continueagent)
+        try container.encodeIfPresent(reply, forKey: .reply)
     }
 }
 
@@ -6847,8 +6853,8 @@ public enum PluginsSessionActionResult: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case let .success(value): try value.encode(to: encoder)
-        case let .failure(value): try value.encode(to: encoder)
+        case .success(let value): try value.encode(to: encoder)
+        case .failure(let value): try value.encode(to: encoder)
         }
     }
 }
@@ -6875,16 +6881,17 @@ public enum ChatEvent: Codable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
                 in: container,
-                debugDescription: "Unknown ChatEvent discriminator value")
+                debugDescription: "Unknown ChatEvent discriminator value"
+            )
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case let .delta(value): try value.encode(to: encoder)
-        case let .final(value): try value.encode(to: encoder)
-        case let .aborted(value): try value.encode(to: encoder)
-        case let .error(value): try value.encode(to: encoder)
+        case .delta(let value): try value.encode(to: encoder)
+        case .final(let value): try value.encode(to: encoder)
+        case .aborted(let value): try value.encode(to: encoder)
+        case .error(let value): try value.encode(to: encoder)
         }
     }
 }

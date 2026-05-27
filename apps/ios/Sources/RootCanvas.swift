@@ -625,11 +625,11 @@ private struct CanvasContent: View {
             .presentationDetents([.medium, .large])
         }
         .onAppear {
-            if self.talkEnabled {
-                self.talkEnabled = false
-            }
-            if self.appModel.talkMode.isEnabled {
+            // Keep the runtime talk state aligned with persisted toggle state on cold launch.
+            if self.talkPermissionBlocksStart, self.talkEnabled || self.appModel.talkMode.isEnabled {
                 self.stopTalk()
+            } else if self.talkEnabled != self.appModel.talkMode.isEnabled {
+                self.appModel.setTalkEnabled(self.talkEnabled)
             }
         }
     }
