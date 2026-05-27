@@ -63,6 +63,7 @@ export function renderUsageTab(state: AppViewState) {
       startDate: state.usageStartDate,
       endDate: state.usageEndDate,
       scope: state.usageScope,
+      usageAgentId: state.usageAgentId,
       selectedSessions: state.usageSelectedSessions,
       selectedDays: state.usageSelectedDays,
       selectedHours: state.usageSelectedHours,
@@ -124,6 +125,13 @@ export function renderUsageTab(state: AppViewState) {
           void loadUsage(state);
         },
         onRefresh: () => loadUsage(state),
+        onAgentChange: (agentId) => {
+          state.usageAgentId = agentId;
+          state.usageSelectedDays = [];
+          state.usageSelectedHours = [];
+          state.usageSelectedSessions = [];
+          void loadUsage(state);
+        },
         onTimeZoneChange: (zone) => {
           state.usageTimeZone = zone;
           state.usageSelectedDays = [];

@@ -38,6 +38,7 @@ export type UsageFilterState = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
+  usageAgentId: string | undefined;
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection
@@ -90,6 +91,7 @@ export type UsageCallbacks = {
     onClearHours: () => void;
     onClearSessions: () => void;
     onClearFilters: () => void;
+    onAgentChange: (agentId: string | undefined) => void;
     onQueryDraftChange: (query: string) => void;
     onApplyQuery: () => void;
     onClearQuery: () => void;

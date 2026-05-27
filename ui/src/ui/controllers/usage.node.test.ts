@@ -21,6 +21,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
     usageScope: "family",
+    usageAgentId: undefined,
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageTimeSeries: null,

@@ -204,7 +204,10 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
-  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
+  const agentOptions = unique([
+    ...sortedSessions.map((s) => s.agentId),
+    ...(filters.usageAgentId ? [filters.usageAgentId] : []),
+  ]).slice(0, 12);
   const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
     ...sortedSessions.map((s) => s.modelProvider),
@@ -587,6 +590,27 @@ export function renderUsage(props: UsageProps) {
               <option value="local">${t("usage.filters.timeZoneLocal")}</option>
               <option value="utc">${t("usage.filters.timeZoneUtc")}</option>
             </select>
+            ${agentOptions.length > 0
+              ? html`
+                  <select
+                    class="usage-select"
+                    title=${t("usage.filters.agent")}
+                    aria-label=${t("usage.filters.agent")}
+                    .value=${filters.usageAgentId ?? ""}
+                    @change=${(e: Event) => {
+                      const value = (e.target as HTMLSelectElement).value;
+                      filterActions.onAgentChange(value || undefined);
+                    }}
+                  >
+                    <option value="">${t("usage.filters.allAgents")}</option>
+                    ${agentOptions.map(
+                      (id) => html`<option value="${id}" ?selected=${filters.usageAgentId === id}>
+                        ${id}
+                      </option>`,
+                    )}
+                  </select>
+                `
+              : nothing}
             <div class="chart-toggle">
               <button
                 class="btn btn--sm toggle-btn ${filters.scope === "instance" ? "active" : ""}"

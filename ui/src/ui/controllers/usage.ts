@@ -18,6 +18,7 @@ export type UsageState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageAgentId: string | undefined;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
@@ -227,6 +228,7 @@ export async function loadUsage(
         client.request("sessions.usage", {
           startDate,
           endDate,
+          ...(state.usageAgentId ? { agentId: state.usageAgentId } : {}),
           ...dateInterpretation,
           ...usageScopeParams,
           limit: 1000, // Cap at 1000 sessions
