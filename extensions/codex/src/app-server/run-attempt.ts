@@ -2012,6 +2012,8 @@ export async function runCodexAppServerAttempt(
   };
 
   const fireTurnAttemptIdleTimeout = () => {
+    // terminalTurnNotificationQueued only suppresses short idle guards; a
+    // wedged notification queue still needs the full attempt timeout backstop.
     if (completed || runAbortController.signal.aborted || !turnAttemptIdleWatchArmed) {
       return;
     }
@@ -2481,10 +2483,21 @@ export async function runCodexAppServerAttempt(
       turnCrossedToolHandoff &&
       isRawAssistantCompletionNotification(notification) &&
       activeTurnItemIds.size === 0;
+    const rawResponseItemCompletedWithNoActiveItems =
+      isCurrentTurnNotification &&
+      notification.method === "rawResponseItem/completed" &&
+      activeTurnItemIds.size === 0 &&
+      activeAppServerTurnRequests === 0 &&
+      !assistantCompletionCanRelease &&
+      !postToolRawAssistantCompletionNeedsTerminalGuard;
     const shouldArmPostReasoningSourceReplyWatch =
       isCurrentTurnNotification &&
       isReasoningItemCompletionNotification(notification) &&
       activeTurnItemIds.size === 0 &&
+      params.sourceReplyDeliveryMode === "message_tool_only";
+    const shouldArmPostRawReasoningSourceReplyWatch =
+      rawResponseItemCompletedWithNoActiveItems &&
+      isRawReasoningCompletionNotification(notification) &&
       params.sourceReplyDeliveryMode === "message_tool_only";
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
@@ -2506,7 +2519,10 @@ export async function runCodexAppServerAttempt(
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
       armTurnCompletionIdleWatch({ timeoutMs: postToolRawAssistantCompletionIdleTimeoutMs });
-    } else if (shouldArmPostReasoningSourceReplyWatch) {
+    } else if (
+      shouldArmPostReasoningSourceReplyWatch ||
+      shouldArmPostRawReasoningSourceReplyWatch
+    ) {
       armTurnCompletionIdleWatch({ timeoutMs: CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS });
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
@@ -2514,6 +2530,8 @@ export async function runCodexAppServerAttempt(
       // If a non-assistant current-turn item is the last active item and the
       // bridge then goes quiet, reset the short completion-idle guard from that
       // final completion so the remaining silent-turn gap fails fast.
+      armTurnCompletionIdleWatch();
+    } else if (rawResponseItemCompletedWithNoActiveItems) {
       armTurnCompletionIdleWatch();
     } else if (isCurrentTurnNotification && rawToolOutputCompletion) {
       // Raw OpenAI response streams can report the tool-output handoff without
@@ -2533,7 +2551,9 @@ export async function runCodexAppServerAttempt(
       !trackedDynamicToolCompletion &&
       !rawToolOutputCompletion &&
       !postToolRawAssistantCompletionNeedsTerminalGuard &&
+      !rawResponseItemCompletedWithNoActiveItems &&
       !shouldArmPostReasoningSourceReplyWatch &&
+      !shouldArmPostRawReasoningSourceReplyWatch &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
@@ -3280,7 +3300,7 @@ export async function runCodexAppServerAttempt(
     kind: "embedded" as const,
     queueMessage: async (text: string, options?: CodexSteeringQueueOptions) =>
       activeSteeringQueue.queue(text, options),
-    isStreaming: () => !completed,
+    isStreaming: () => !completed && !terminalTurnNotificationQueued,
     isCompacting: () => projector?.isCompacting() ?? false,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => runAbortController.abort("cancelled"),
@@ -5294,6 +5314,14 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
 
 function isReasoningItemCompletionNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params) || notification.method !== "item/completed") {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "reasoning" : false;
+}
+
+function isRawReasoningCompletionNotification(notification: CodexServerNotification): boolean {
+  if (!isJsonObject(notification.params) || notification.method !== "rawResponseItem/completed") {
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;

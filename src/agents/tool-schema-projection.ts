@@ -19,6 +19,11 @@ export type RuntimeToolSchemaDiagnostic = {
   readonly violations: readonly string[];
 };
 
+export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
+  readonly tools: readonly TTool[];
+  readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
+};
+
 function isJsonValue(value: unknown): value is RuntimeToolInputSchemaJson {
   if (value === null) {
     return true;
@@ -146,4 +151,18 @@ export function inspectRuntimeToolInputSchemas(
     }
     return [{ toolName, toolIndex, violations: projection.violations }];
   });
+}
+
+export function filterRuntimeCompatibleTools<
+  TTool extends Pick<AnyAgentTool, "name" | "parameters">,
+>(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
+  const diagnostics = inspectRuntimeToolInputSchemas(tools);
+  if (diagnostics.length === 0) {
+    return { tools, diagnostics };
+  }
+  const blockedIndexes = new Set(diagnostics.map((diagnostic) => diagnostic.toolIndex));
+  return {
+    tools: tools.filter((_tool, index) => !blockedIndexes.has(index)),
+    diagnostics,
+  };
 }

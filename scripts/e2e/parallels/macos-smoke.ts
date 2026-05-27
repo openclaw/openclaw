@@ -98,8 +98,6 @@ const guestPath =
 const guestOpenClaw = "openclaw";
 const guestOpenClawEntry = '"$(npm root -g)/openclaw/openclaw.mjs"';
 const guestOpenClawEntryRunner = `node ${guestOpenClawEntry}`;
-const guestOpenClawEntryExecScript =
-  'entry="$(npm root -g)/openclaw/openclaw.mjs"; exec node "$entry" "$@"';
 const guestNode = "node";
 const guestNpm = "npm";
 
@@ -583,9 +581,12 @@ class MacosSmoke {
     args: string[],
     options: { check?: boolean; env?: Record<string, string> } = {},
   ): string {
-    return this.guestExec(
-      ["/bin/sh", "-c", guestOpenClawEntryExecScript, "openclaw-entry", ...args],
-      options,
+    const argv = args.map((arg) => shellQuote(arg)).join(" ");
+    return this.guestSh(
+      `set -e
+entry="$(npm root -g)/openclaw/openclaw.mjs"
+exec node "$entry" ${argv}`,
+      options.env,
     );
   }
 

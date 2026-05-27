@@ -244,7 +244,7 @@ function isUserMessage(message: unknown): boolean {
   );
 }
 
-/** Removes stale runtime-context custom messages while preserving current-turn context. */
+/** Keeps only current-turn runtime context positioned immediately before the active user. */
 export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
@@ -253,7 +253,17 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   if (lastUserIndex === -1) {
     return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   }
-  return messages.filter(
-    (message, index) => !isOpenClawRuntimeContextCustomMessage(message) || index > lastUserIndex,
-  );
+  const currentRuntimeContextIndexes = new Set<number>();
+  for (let index = lastUserIndex - 1; index >= 0; index -= 1) {
+    if (!isOpenClawRuntimeContextCustomMessage(messages[index])) {
+      break;
+    }
+    currentRuntimeContextIndexes.add(index);
+  }
+  return messages.filter((message, index) => {
+    if (!isOpenClawRuntimeContextCustomMessage(message)) {
+      return true;
+    }
+    return currentRuntimeContextIndexes.has(index);
+  });
 }

@@ -11,6 +11,8 @@ const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const resolveModelAsyncMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
+const ensureAuthProfileStoreMock = vi.fn();
+const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
@@ -62,6 +64,9 @@ vi.mock("./pi-embedded-runner/model.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
 }));
@@ -367,6 +372,8 @@ describe("runBtwSideQuestion", () => {
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
+    ensureAuthProfileStoreMock.mockReset();
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
     getApiKeyForModelMock.mockReset();
     requireApiKeyMock.mockReset();
     resolveSessionAuthProfileOverrideMock.mockReset();
@@ -405,6 +412,8 @@ describe("runBtwSideQuestion", () => {
       id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockResolvedValue({ apiKey: "secret", mode: "api-key", source: "test" });
     requireApiKeyMock.mockReturnValue("secret");
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
@@ -596,6 +605,203 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let an auto-selected stale Anthropic profile suppress Claude CLI auth for BTW", async () => {
+    const claudeAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "anthropic:api": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "static-key",
+        },
+        "anthropic:claude-cli": {
+          type: "oauth" as const,
+          provider: "claude-cli",
+          access: "claude-cli-access",
+          refresh: "claude-cli-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreMock.mockReturnValueOnce(claudeAuthStore);
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "claude-cli-access",
+      mode: "oauth",
+      source: "profile:anthropic:claude-cli",
+      profileId: "anthropic:claude-cli",
+    });
+    requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
+    mockDoneAnswer("Claude CLI answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:api",
+        authProfileOverrideSource: "auto",
+      }),
+    });
+
+    expect(result).toEqual({ text: "Claude CLI answer." });
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      externalCliProviderIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).not.toHaveBeenCalled();
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: undefined,
+      store: claudeAuthStore,
+    });
+    expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
+      provider: "anthropic",
+    });
+    expectRecordFields(
+      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
+      {
+        profileId: "anthropic:claude-cli",
+        authMode: "oauth",
+      },
+    );
+    expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
+      authProfileId: "anthropic:claude-cli",
+    });
+  });
+
+  it("loads Claude CLI auth for BTW from persisted auth-store order", async () => {
+    const staticAuthStore = {
+      version: 1 as const,
+      profiles: {},
+      order: { anthropic: ["anthropic:claude-cli"] },
+    };
+    const claudeAuthStore = {
+      version: 1 as const,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth" as const,
+          provider: "claude-cli",
+          access: "claude-cli-access",
+          refresh: "claude-cli-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValueOnce(staticAuthStore);
+    ensureAuthProfileStoreMock.mockReturnValueOnce(claudeAuthStore);
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "claude-cli-access",
+      mode: "oauth",
+      source: "profile:anthropic:claude-cli",
+      profileId: "anthropic:claude-cli",
+    });
+    requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce(undefined);
+    mockDoneAnswer("Claude CLI answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Claude CLI answer." });
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledWith(
+      DEFAULT_AGENT_DIR,
+      { allowKeychainPrompt: false },
+    );
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(DEFAULT_AGENT_DIR, {
+      externalCliProviderIds: ["claude-cli"],
+      allowKeychainPrompt: false,
+    });
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: undefined,
+      store: claudeAuthStore,
+    });
+  });
+
+  it("keeps user-locked static Anthropic auth for BTW", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "static-key",
+      mode: "api-key",
+      source: "profile:anthropic:api",
+      profileId: "anthropic:api",
+    });
+    requireApiKeyMock.mockReturnValueOnce("static-key");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce("anthropic:api");
+    mockDoneAnswer("Static answer.");
+
+    await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:api",
+        authProfileOverrideSource: "user",
+      }),
+    });
+
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: "anthropic:api",
+    });
+    expect((mockArg(getApiKeyForModelMock, 0, 0) as { store?: unknown }).store).toBeUndefined();
+    expectRecordFields(
+      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
+      {
+        profileId: "anthropic:api",
+        authMode: "api-key",
+      },
+    );
+  });
+
+  it("keeps legacy source-less user-locked Anthropic auth for BTW", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "static-key",
+      mode: "api-key",
+      source: "profile:anthropic:api",
+      profileId: "anthropic:api",
+    });
+    requireApiKeyMock.mockReturnValueOnce("static-key");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce("anthropic:api");
+    mockDoneAnswer("Legacy static answer.");
+
+    await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:claude-cli"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry: createSessionEntry({
+        authProfileOverride: "anthropic:api",
+      }),
+    });
+
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expectRecordFields(mockArg(getApiKeyForModelMock, 0, 0), {
+      profileId: "anthropic:api",
+    });
+    expect((mockArg(getApiKeyForModelMock, 0, 0) as { store?: unknown }).store).toBeUndefined();
+    expectRecordFields(
+      (mockArg(prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
+      {
+        profileId: "anthropic:api",
+        authMode: "api-key",
+      },
+    );
+  });
+
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "github-copilot",
@@ -632,7 +838,7 @@ describe("runBtwSideQuestion", () => {
       workspaceDir: "/tmp/workspace",
       apiKey: "github-token",
       authMode: "token",
-      profileId: "profile-1",
+      profileId: "github-copilot:github",
     });
     const [streamModel, , streamOptions] = mockCall(streamSimpleMock);
     expectRecordFields(streamModel, {

@@ -54,6 +54,14 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],
   }),
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {
+      anthropic: ["ANTHROPIC_API_KEY"],
+      minimax: ["MINIMAX_CODE_PLAN_KEY"],
+    },
+    authEvidenceMap: {},
+  }),
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;

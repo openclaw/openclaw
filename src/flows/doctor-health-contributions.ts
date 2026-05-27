@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 export {
   doctorHealthConversionRules,
@@ -657,6 +658,15 @@ async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<voi
   await noteBootstrapFileSize(ctx.cfg);
 }
 
+async function runHeartbeatTemplateRepairHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairHeartbeatTemplate } =
+    await import("../commands/doctor-heartbeat-template-repair.js");
+  await maybeRepairHeartbeatTemplate({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.runtime, ctx.prompter, {
@@ -816,7 +826,49 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   }
 }
 
-async function runRuntimeToolSchemasHealth(): Promise<void> {}
+function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): string {
+  return findings
+    .map((finding) => {
+      const lines = [`- ${finding.message}`];
+      if (finding.path) {
+        lines.push(`  path: ${finding.path}`);
+      }
+      if (finding.requirement) {
+        lines.push(`  issue: ${finding.requirement}`);
+      }
+      if (finding.fixHint) {
+        lines.push(`  fix: ${finding.fixHint}`);
+      }
+      return lines.join("\n");
+    })
+    .join("\n");
+}
+
+async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const { getHealthCheck } = await import("./health-check-registry.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../terminal/note.js");
+
+  registerCoreHealthChecks();
+  const check = getHealthCheck("core/doctor/runtime-tool-schemas");
+  if (!check) {
+    return;
+  }
+  const findings = await check.detect({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+    configPath: ctx.configPath,
+  });
+  if (findings.length === 0) {
+    return;
+  }
+  ctx.healthOk = false;
+  note(formatRuntimeToolSchemaFindings(findings), "Doctor warnings");
+}
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
@@ -984,6 +1036,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Bootstrap size",
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-template-repair",
+      label: "Heartbeat template repair",
+      run: runHeartbeatTemplateRepairHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",

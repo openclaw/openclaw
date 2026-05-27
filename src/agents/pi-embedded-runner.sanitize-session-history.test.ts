@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ThinkingContent, UserMessage, Usage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -1490,6 +1490,87 @@ describe("sanitizeSessionHistory", () => {
       ]);
       expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
         { type: "text", text: "latest visible answer" },
+      ]);
+    },
+  );
+
+  it("strips invalid direct Anthropic thinking signatures from prior assistant turns when a user follows up", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "empty signature",
+          signature: "",
+        } as unknown as ThinkingContent,
+        { type: "thinking", thinking: "blank signature", thinkingSignature: "   " },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      messages,
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
+
+  it.each([
+    {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      label: "anthropic",
+    },
+    {
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      label: "bedrock",
+    },
+  ])(
+    "preserves active tool-turn thinking signatures for $label even when a tool result follows",
+    async ({ provider, modelApi }) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("look up the answer"),
+        makeAssistantMessage([
+          {
+            type: "thinking",
+            thinking: "call the tool",
+            signature: "",
+          } as unknown as ThinkingContent,
+          { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+        ]),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [{ type: "text", text: "42" }],
+          isError: false,
+        }),
+      ]);
+
+      const result = await sanitizeAnthropicHistory({
+        provider,
+        modelApi,
+        messages,
+        modelId: "claude-sonnet-4-6",
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "thinking",
+          thinking: "call the tool",
+          signature: "",
+        },
+        { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
       ]);
     },
   );

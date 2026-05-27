@@ -86,6 +86,9 @@ function parseArgs(argv) {
   if (options.qaScenarios.length === 0) {
     options.qaScenarios = [...DEFAULT_QA_SCENARIOS];
   }
+  if (options.skipStartup && options.skipQa) {
+    throw new Error("--skip-startup and --skip-qa cannot be used together");
+  }
   return options;
 }
 

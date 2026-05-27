@@ -11,6 +11,7 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -23,7 +24,7 @@ import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -707,6 +708,39 @@ describe("agentCommand", () => {
       expect(callArgs?.modelRun).toBe(true);
       expect(callArgs?.promptMode).toBe("none");
       expect(callArgs?.disableTools).toBe(true);
+    });
+  });
+
+  it("borrows session lookup data without returning cached mutable store objects", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:cache-borrow";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-cache-borrow",
+          updatedAt: Date.now(),
+          thinkingLevel: "low",
+        },
+        "agent:main:other": {
+          sessionId: "session-other",
+          updatedAt: Date.now(),
+        },
+      });
+      mockConfig(home, store, { models: {} });
+
+      const prepared = await agentCommandTesting.prepareAgentCommandExecution(
+        {
+          message: "prepare only",
+          sessionKey,
+        },
+        runtime,
+      );
+      const cached = loadSessionStore(store, { clone: false });
+
+      expect(prepared.sessionStore).not.toBe(cached);
+      expect(prepared.sessionEntry).not.toBe(cached[sessionKey]);
+      expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
+      expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
     });
   });
 

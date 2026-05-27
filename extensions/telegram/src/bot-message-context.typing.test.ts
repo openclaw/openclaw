@@ -15,7 +15,10 @@ function createSendChatActionHandler(
 
 describe("buildTelegramMessageContext typing", () => {
   it("sends direct typing after body resolution and before session context construction", async () => {
-    const buildInboundContext = vi.fn(buildChannelInboundEventContext);
+    const buildInboundContext = vi.fn(
+      (params: Parameters<typeof buildChannelInboundEventContext>[0]) =>
+        buildChannelInboundEventContext(params as never),
+    );
     const sendChatActionHandler = createSendChatActionHandler();
 
     await expect(
@@ -27,7 +30,8 @@ describe("buildTelegramMessageContext typing", () => {
         },
         sendChatActionHandler,
         sessionRuntime: {
-          buildChannelInboundEventContext: buildInboundContext,
+          buildChannelInboundEventContext:
+            buildInboundContext as unknown as typeof buildChannelInboundEventContext,
         },
       }),
     ).resolves.not.toBeNull();

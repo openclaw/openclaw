@@ -1242,6 +1242,48 @@ describe("registerPluginCommand", () => {
     );
   });
 
+  it("binds plugin-owned command sessions to the host-resolved agent", async () => {
+    const handler = async (ctx: {
+      runtimeContext?: {
+        llm?: {
+          complete: (params: {
+            messages: Array<{ role: "user"; content: string }>;
+          }) => Promise<unknown>;
+        };
+      };
+    }) => {
+      await ctx.runtimeContext?.llm?.complete({
+        messages: [{ role: "user", content: "summarize" }],
+      });
+      return { text: "ok" };
+    };
+
+    await executePluginCommand({
+      command: {
+        name: "runtimecheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "discord",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      agentId: "codex",
+      sessionKey: "plugin-binding:openclaw-codex-app-server:dm",
+      authProfileId: "openai-codex:owner@example.com",
+      commandBody: "/runtimecheck",
+      config: {} as never,
+    });
+
+    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "codex",
+        preferredProfile: "openai-codex:owner@example.com",
+      }),
+    );
+  });
+
   it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
     const handler = async () => undefined as never;
 

@@ -14,11 +14,13 @@ import {
   resetSessionWriteLockStateForTest,
 } from "../../session-write-lock.js";
 import {
+  acquireEmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
   installPromptSubmissionLockRelease,
   installSessionEventWriteLock,
   installSessionExternalHookWriteLock,
+  resetEmbeddedAttemptSessionFileOwnersForTest,
 } from "./attempt.session-lock.js";
 
 const lockOptions = {
@@ -31,6 +33,7 @@ const lockOptions = {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  resetEmbeddedAttemptSessionFileOwnersForTest();
   resetSessionWriteLockStateForTest();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
@@ -46,6 +49,50 @@ async function createTempSessionFile(): Promise<string> {
 }
 
 describe("embedded attempt session lock lifecycle", () => {
+  it("serializes embedded attempts that share a session file owner", async () => {
+    const sessionFile = await createTempSessionFile();
+    const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
+
+    let secondOwnerAcquired = false;
+    const secondOwnerPromise = acquireEmbeddedAttemptSessionFileOwner({ sessionFile }).then(
+      (owner) => {
+        secondOwnerAcquired = true;
+        return owner;
+      },
+    );
+
+    await Promise.resolve();
+    expect(secondOwnerAcquired).toBe(false);
+
+    firstOwner.release();
+    const secondOwner = await secondOwnerPromise;
+    expect(secondOwnerAcquired).toBe(true);
+    secondOwner.release();
+  });
+
+  it("uses the same embedded attempt owner for symlinked session file paths", async () => {
+    const sessionFile = await createTempSessionFile();
+    const symlinkFile = path.join(path.dirname(sessionFile), "session-link.jsonl");
+    await fs.symlink(sessionFile, symlinkFile);
+    const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
+
+    let symlinkOwnerAcquired = false;
+    const symlinkOwnerPromise = acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile: symlinkFile,
+    }).then((owner) => {
+      symlinkOwnerAcquired = true;
+      return owner;
+    });
+
+    await Promise.resolve();
+    expect(symlinkOwnerAcquired).toBe(false);
+
+    firstOwner.release();
+    const symlinkOwner = await symlinkOwnerPromise;
+    expect(symlinkOwnerAcquired).toBe(true);
+    symlinkOwner.release();
+  });
+
   it("releases the coarse attempt lock before prompt submission and reacquires for cleanup", async () => {
     const releases: string[] = [];
     const acquireSessionWriteLock = vi
@@ -874,7 +921,7 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releaseForPrompt).toHaveBeenCalledTimes(1);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(1);
     expect(streamFn).toHaveBeenCalledWith("model", "context");
-    expect(events).toEqual(["drain", "release", "stream", "reacquire"]);
+    expect(events).toEqual(["drain", "release", "stream", "drain", "reacquire"]);
   });
 
   it("rewraps provider stream submission after the stream function is rebuilt", async () => {
@@ -921,17 +968,19 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(firstStreamFn).toHaveBeenCalledTimes(1);
     expect(secondStreamFn).toHaveBeenCalledTimes(1);
-    expect(waitForSessionEvents).toHaveBeenCalledTimes(2);
+    expect(waitForSessionEvents).toHaveBeenCalledTimes(4);
     expect(releaseForPrompt).toHaveBeenCalledTimes(2);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
     expect(events).toEqual([
       "drain",
       "release",
       "first-stream",
+      "drain",
       "reacquire",
       "drain",
       "release",
       "second-stream",
+      "drain",
       "reacquire",
     ]);
   });

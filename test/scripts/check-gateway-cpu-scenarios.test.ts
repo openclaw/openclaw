@@ -20,6 +20,12 @@ afterEach(() => {
 });
 
 describe("gateway CPU scenario guard", () => {
+  it("rejects runs with every scenario family skipped", () => {
+    expect(() =>
+      testing.parseArgs(["--output-dir", makeTempRoot(), "--skip-startup", "--skip-qa"]),
+    ).toThrow("--skip-startup and --skip-qa cannot be used together");
+  });
+
   it("prepares CLI startup artifacts before running the startup bench", async () => {
     const outputDir = makeTempRoot();
     const calls: Array<{ command: string; args: string[] }> = [];

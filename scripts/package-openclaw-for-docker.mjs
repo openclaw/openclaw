@@ -172,7 +172,11 @@ export async function buildPackageArtifacts(sourceDir, options = {}) {
   for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
     console.error(`==> ${step.label}`);
     await runImpl(step.command, step.args, sourceDir, {
-      env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      },
       timeoutMs: resolveTimeoutMs(
         "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
         DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,

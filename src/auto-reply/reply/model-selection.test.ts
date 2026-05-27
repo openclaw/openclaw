@@ -63,7 +63,7 @@ const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
   id: "gpt-5.4",
   name: "GPT-5.4",
   reasoning: true,
-  input: ["text"],
+  input: ["text"] as Array<"text">,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 16_384,
@@ -213,6 +213,115 @@ describe("createModelSelectionState catalog loading", () => {
       fallbackToMetadataScan: false,
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured compat when manifest thinking metadata is used", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+      { provider: "vllm", id: "Qwen/Qwen3-8B", name: "Qwen3", reasoning: true },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000/v1",
+            models: [
+              makeConfiguredModel({
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "vllm",
+      defaultModel: "Qwen/Qwen3-8B",
+      provider: "vllm",
+      model: "Qwen/Qwen3-8B",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      }),
+    ]);
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured compat when runtime thinking catalog is already loaded", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      {
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen3",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000/v1",
+            models: [
+              makeConfiguredModel({
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "vllm",
+      defaultModel: "Qwen/Qwen3-8B",
+      provider: "vllm",
+      model: "Qwen/Qwen3-8B",
+      hasModelDirective: true,
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["xhigh"],
+          thinkingFormat: "qwen-chat-template",
+        },
+      }),
+    ]);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
   it("prefers per-agent thinkingDefault over model and global defaults", async () => {

@@ -20,6 +20,7 @@ import {
   readSessionUpdatedAt,
   saveSessionStore,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
 
@@ -577,6 +578,24 @@ describe("Session Store Cache", () => {
     const cached = loadSessionStore(storePath, { clone: false });
     expect(cached["session:1"]).toBe(persisted);
     expect(cached["session:1"].displayName).toBe("Writer owned");
+  });
+
+  it("can publish writer-owned entry patches directly into the object cache", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    const persisted = await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "session:1",
+      takeCacheOwnership: true,
+      update: async () => ({
+        displayName: "Entry writer owned",
+        updatedAt: Date.now() + 1,
+      }),
+    });
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:1"]).toBe(persisted);
+    expect(cached["session:1"].displayName).toBe("Entry writer owned");
   });
 
   it("builds immutable session snapshots lazily after writes", async () => {

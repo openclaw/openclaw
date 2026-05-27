@@ -2,9 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
-import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
-import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
+import type {
+  ChatCommandDefinition,
+  CommandArgsParsing,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {

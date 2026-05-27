@@ -193,6 +193,7 @@
   "channel-ingress-runtime",
   "channel-message",
   "channel-message-runtime",
+  "channel-outbound",
   "channel-pairing",
   "channel-pairing-paths",
   "channel-policy",

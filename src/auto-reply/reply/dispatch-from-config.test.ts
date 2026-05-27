@@ -5360,6 +5360,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "no_handler",
     });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-no-handler-1",
       targetSessionKey: "plugin-binding:codex:nohandler123",
@@ -6781,6 +6782,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "no_handler",
     });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-message-tool-fallback",
       targetSessionKey: "plugin-binding:codex:abc123",
@@ -6850,6 +6852,232 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("lets authorized control commands without CommandSource escape plugin-bound fallback", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "no_handler",
+    });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-message-tool-command",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-1001234567890:topic:11",
+        parentConversationId: "-1001234567890",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const cfg = { messages: { visibleReplies: "message_tool" } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "reset ack" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1001234567890",
+      To: "telegram:-1001234567890",
+      AccountId: "default",
+      MessageThreadId: 11,
+      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
+      ChatType: "group",
+      GroupSubject: "Dev",
+      Body: "/reset@openclaw",
+      RawBody: "/reset@openclaw",
+      CommandBody: "/reset@openclaw",
+      BotUsername: "openclaw",
+      CommandSource: undefined,
+      CommandAuthorized: true,
+      WasMentioned: false,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset ack" });
+  });
+
+  it("keeps unauthorized native commands on the plugin-bound claim path", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-native-unauthorized",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-1001234567890:topic:11",
+        parentConversationId: "-1001234567890",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1001234567890",
+      To: "telegram:-1001234567890",
+      AccountId: "default",
+      MessageThreadId: 11,
+      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
+      ChatType: "group",
+      GroupSubject: "Dev",
+      Body: "/status",
+      RawBody: "/status",
+      CommandBody: "/status",
+      CommandSource: "native",
+      CommandAuthorized: false,
+      WasMentioned: false,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        channel: "telegram",
+        content: "/status",
+      }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: "binding-native-unauthorized" }),
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("keeps structured normal command turns on the plugin-bound claim path", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-structured-normal-turn",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-1001234567890:topic:11",
+        parentConversationId: "-1001234567890",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1001234567890",
+      To: "telegram:-1001234567890",
+      AccountId: "default",
+      MessageThreadId: 11,
+      SessionKey: "agent:main:telegram:group:-1001234567890:topic:11",
+      ChatType: "group",
+      GroupSubject: "Dev",
+      Body: "through this",
+      RawBody: "through this",
+      CommandBody: "/think high through this",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        body: "/think high through this",
+      },
+      WasMentioned: false,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        channel: "telegram",
+        content: "/think high through this",
+      }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: "binding-structured-normal-turn" }),
+      }),
+    );
+    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("keeps message-tool-only source delivery private while still processing the turn", async () => {

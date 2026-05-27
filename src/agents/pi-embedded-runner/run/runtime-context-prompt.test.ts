@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildCurrentInboundPrompt,
   buildCurrentInboundPromptContextPrefix,
+  buildRuntimeContextCustomMessage,
   buildRuntimeContextSystemContext,
-  queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 
@@ -110,30 +110,19 @@ describe("runtime context prompt submission", () => {
     ).toBe("Conversation context:\n\nvisible ask");
   });
 
-  it("queues runtime context as a hidden next-turn custom message", async () => {
-    const sentMessages: Array<{ content: string }> = [];
-    const sendCustomMessage = vi.fn(async (message: { content: string }) => {
-      sentMessages.push(message);
+  it("builds runtime context as prompt-local custom context before the current user prompt", () => {
+    expect(buildRuntimeContextCustomMessage("secret runtime context")).toMatchObject({
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: [
+        "OpenClaw runtime context for the immediately preceding user message.",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "secret runtime context",
+      ].join("\n"),
+      display: false,
+      details: { source: "openclaw-runtime-context" },
     });
-
-    await queueRuntimeContextForNextTurn({
-      session: { sendCustomMessage },
-      runtimeContext: "secret runtime context",
-    });
-
-    expect(sendCustomMessage).toHaveBeenCalledWith(
-      {
-        customType: "openclaw.runtime-context",
-        content: "secret runtime context",
-        display: false,
-        details: { source: "openclaw-runtime-context" },
-      },
-      { deliverAs: "nextTurn" },
-    );
-    expect(sentMessages[0]?.content).not.toContain(
-      "OpenClaw runtime context for the immediately preceding user message.",
-    );
-    expect(sentMessages[0]?.content).not.toContain("not user-authored");
   });
 
   it("labels next-turn runtime context only when used as prompt-local system context", () => {

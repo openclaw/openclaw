@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterRuntimeCompatibleTools,
   inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
@@ -77,5 +78,27 @@ describe("runtime tool input schema projection", () => {
         },
       }).violations,
     ).toEqual([]);
+  });
+
+  it("filters unsupported schemas without dropping healthy tools", () => {
+    const healthy = {
+      name: "healthy",
+      parameters: { type: "object", properties: {} },
+    };
+    const broken = {
+      name: "dofbot_move_angles",
+      parameters: { type: "array", items: { type: "number" } },
+    };
+
+    expect(filterRuntimeCompatibleTools([healthy, broken])).toEqual({
+      tools: [healthy],
+      diagnostics: [
+        {
+          toolName: "dofbot_move_angles",
+          toolIndex: 1,
+          violations: ['dofbot_move_angles.parameters.type must be "object"'],
+        },
+      ],
+    });
   });
 });
