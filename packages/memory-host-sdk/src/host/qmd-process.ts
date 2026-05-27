@@ -9,32 +9,6 @@ export type CliSpawnInvocation = {
   windowsHide?: boolean;
 };
 
-export class CliCommandError extends Error {
-  readonly code: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly stdout: string;
-  readonly stderr: string;
-
-  constructor(params: {
-    commandSummary: string;
-    code: number | null;
-    signal: NodeJS.Signals | null;
-    stdout: string;
-    stderr: string;
-  }) {
-    super(formatCliCommandFailureMessage(params));
-    this.name = "CliCommandError";
-    this.code = params.code;
-    this.signal = params.signal;
-    this.stdout = params.stdout;
-    this.stderr = params.stderr;
-  }
-}
-
-export function isCliCommandError(err: unknown): err is CliCommandError {
-  return err instanceof CliCommandError;
-}
-
 export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
 
 export type QmdBinaryUnavailable = {
@@ -235,7 +209,7 @@ export async function runCliCommand(params: {
           new CliCommandError({
             commandSummary: params.commandSummary,
             code,
-            signal,
+            signal: signal ?? null,
             stdout,
             stderr,
           }),
@@ -243,6 +217,32 @@ export async function runCliCommand(params: {
       }
     });
   });
+}
+
+export class CliCommandError extends Error {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+
+  constructor(params: {
+    commandSummary: string;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stdout: string;
+    stderr: string;
+  }) {
+    super(formatCliCommandFailureMessage(params));
+    this.name = "CliCommandError";
+    this.code = params.code;
+    this.signal = params.signal;
+    this.stdout = params.stdout;
+    this.stderr = params.stderr;
+  }
+}
+
+export function isCliCommandError(err: unknown): err is CliCommandError {
+  return err instanceof CliCommandError;
 }
 
 function formatCliCommandFailureMessage(params: {

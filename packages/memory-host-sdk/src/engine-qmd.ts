@@ -25,11 +25,9 @@ export {
 } from "./host/qmd-scope.js";
 export {
   checkQmdBinaryAvailability,
-  isCliCommandError,
   resolveCliSpawnInvocation,
   resolveQmdBinaryUnavailableReason,
   runCliCommand,
-  type CliCommandError,
   type QmdBinaryAvailability,
   type QmdBinaryUnavailable,
   type QmdBinaryUnavailableReason,

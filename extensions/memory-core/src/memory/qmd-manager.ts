@@ -23,7 +23,6 @@ import {
   deriveQmdScopeChannel,
   deriveQmdScopeChatType,
   isQmdScopeAllowed,
-  isCliCommandError,
   listSessionFilesForAgent,
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
@@ -1925,7 +1924,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     command: "query" | "search" | "vsearch",
   ): QmdQueryResult[] | null {
     if (
-      !isCliCommandError(err) ||
+      !isQmdCliCommandError(err) ||
       this.isMissingCollectionSearchError(err) ||
       this.isUnsupportedQmdOptionError(err) ||
       this.isSqliteBusyError(err) ||
@@ -3200,6 +3199,29 @@ function formatQmdSearchExit(err: { code: number | null; signal: NodeJS.Signals 
     return `signal ${err.signal ?? "unknown"}`;
   }
   return `code ${err.code}`;
+}
+
+function isQmdCliCommandError(err: unknown): err is {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+} {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const candidate = err as {
+    code?: unknown;
+    signal?: unknown;
+    stdout?: unknown;
+    stderr?: unknown;
+  };
+  return (
+    (typeof candidate.code === "number" || candidate.code === null) &&
+    (typeof candidate.signal === "string" || candidate.signal === null) &&
+    typeof candidate.stdout === "string" &&
+    typeof candidate.stderr === "string"
+  );
 }
 
 function isQmdNativeAbortAfterOutput(err: {
