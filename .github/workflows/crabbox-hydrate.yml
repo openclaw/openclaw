@@ -340,7 +340,6 @@ jobs:
           $env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"
           $env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"
           $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
-          $env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"
           $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
           function Add-GitHubCommandLine([string]$Path, [string]$Value) {
             $Value | Out-File -FilePath $Path -Encoding utf8 -Append
@@ -361,7 +360,6 @@ jobs:
             "PNPM_CONFIG_CHILD_CONCURRENCY=$env:PNPM_CONFIG_CHILD_CONCURRENCY"
             "PNPM_CONFIG_NETWORK_CONCURRENCY=$env:PNPM_CONFIG_NETWORK_CONCURRENCY"
             "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN"
-            "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD"
             "PNPM_CONFIG_SIDE_EFFECTS_CACHE=$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE"
           ) | ForEach-Object { Add-GitHubCommandLine $env:GITHUB_ENV $_ }
           Add-GitHubCommandLine $env:GITHUB_PATH $env:PNPM_HOME
@@ -403,7 +401,6 @@ jobs:
             "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
             "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
             "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
-            "--package-import-method=$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD",
             "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
             "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
           )
@@ -443,8 +440,7 @@ jobs:
             "PNPM_HOME", "PNPM_CONFIG_CHILD_CONCURRENCY", "PNPM_CONFIG_MODULES_DIR",
             "PNPM_CONFIG_NETWORK_CONCURRENCY", "PNPM_CONFIG_STORE_DIR",
             "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN", "PNPM_CONFIG_VIRTUAL_STORE_DIR",
-            "PNPM_CONFIG_PACKAGE_IMPORT_METHOD", "PNPM_CONFIG_SIDE_EFFECTS_CACHE",
-            "PATH"
+            "PNPM_CONFIG_SIDE_EFFECTS_CACHE", "PATH"
           )
           $envLines = foreach ($key in $keys) {
             $value = [Environment]::GetEnvironmentVariable($key)

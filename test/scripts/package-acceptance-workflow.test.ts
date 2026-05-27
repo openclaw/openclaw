@@ -153,7 +153,7 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsPnpm.run).toContain(
       '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
     );
-    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"');
+    expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
     expect(hydrateWindowsPnpm.run).toContain("--ignore-scripts=true");
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"');
