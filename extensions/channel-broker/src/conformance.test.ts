@@ -313,6 +313,7 @@ describe("channel-broker conformance baseline", () => {
       to: "discord:channel%3A123?threadId=thread-1",
       text: "Done",
       payload: { text: "Done" },
+      previewReceipt: preview.receipt,
     });
 
     expect(preview.receipt.parts[0]?.kind).toBe("preview");
@@ -330,6 +331,10 @@ describe("channel-broker conformance baseline", () => {
       request: expect.objectContaining({
         mode: "finalize_preview",
         payloads: [{ text: "Done" }],
+        preview: {
+          primaryMessageId: "preview_update-native-id",
+          messageIds: ["preview_update-native-id"],
+        },
         requirements: { text: true, thread: true, previewFinalization: true },
       }),
     });

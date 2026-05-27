@@ -7,6 +7,7 @@ import {
   type BrokerMessageAttachment,
   type BrokerOutboundRequestV1,
   type BrokerOutboundPayload,
+  type BrokerPreviewRef,
   type BrokerReceiptV1,
   type BrokerReceiptStatus,
 } from "openclaw/plugin-sdk/channel-broker";
@@ -14,6 +15,7 @@ import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contrac
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageSendResult,
+  type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -57,6 +59,20 @@ function normalizeMaybeString(value: string | number | null | undefined): string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function buildBrokerPreviewRef(receipt: MessageReceipt): BrokerPreviewRef {
+  const messageIds = receipt.platformMessageIds
+    .map((messageId) => messageId.trim())
+    .filter(Boolean);
+  return {
+    ...(receipt.primaryPlatformMessageId
+      ? { primaryMessageId: receipt.primaryPlatformMessageId }
+      : {}),
+    ...(messageIds.length ? { messageIds } : {}),
+    ...(receipt.editToken ? { editToken: receipt.editToken } : {}),
+    ...(receipt.deleteToken ? { deleteToken: receipt.deleteToken } : {}),
+  };
 }
 
 function listPayloadMediaUrls(params: {
@@ -270,6 +286,7 @@ async function sendChannelBrokerFinal(params: {
   requirements: BrokerDeliveryRequirements;
   receiptKind: MessageReceiptPartKind;
   mode?: BrokerOutboundRequestV1["mode"];
+  preview?: BrokerPreviewRef;
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
@@ -315,6 +332,7 @@ async function sendChannelBrokerFinal(params: {
           },
         }
       : {}),
+    ...(params.preview ? { preview: params.preview } : {}),
     requirements,
   });
   const receipt = validateBrokerReceiptForRequest(
@@ -408,6 +426,7 @@ export async function sendChannelBrokerPreviewFinalization(params: {
   to: string;
   text?: string | null;
   payload: ReplyPayload;
+  previewReceipt: MessageReceipt;
   mediaUrl?: string | null;
   audioAsVoice?: boolean;
   threadId?: string | number | null;
@@ -423,6 +442,7 @@ export async function sendChannelBrokerPreviewFinalization(params: {
     requirements: buildPayloadDeliveryRequirements(payload, {
       extra: { previewFinalization: true },
     }),
+    preview: buildBrokerPreviewRef(params.previewReceipt),
     receiptKind: "preview",
     mode: "finalize_preview",
   });

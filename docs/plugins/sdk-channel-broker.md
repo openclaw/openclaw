@@ -60,6 +60,8 @@ deferred so providers can first prove the stable message lifecycle contract.
   and reactions.
 - `payloads` with text, attachments, and provider-owned `channelData`.
 - `relation` for reply, silent, and native quote references.
+- `preview` on preview finalization requests with the original preview message
+  ids and edit/delete tokens.
 - `requirements` describing durable delivery features OpenClaw expects.
 
 Providers should return `BrokerReceiptV1` with stable message ids, status,

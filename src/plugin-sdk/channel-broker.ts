@@ -65,9 +65,7 @@ export type BrokerInboundMentionFacts = {
   canDetectMention?: boolean;
   wasMentioned?: boolean;
   hasAnyMention?: boolean;
-  implicitMentionKinds?: Array<
-    "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
-  >;
+  implicitMentionKinds?: Array<"reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native">;
 };
 
 export type BrokerInboundEventV1 = {
@@ -99,6 +97,13 @@ export type BrokerOutboundPayload = {
   channelData?: Record<string, unknown>;
 };
 
+export type BrokerPreviewRef = {
+  primaryMessageId?: string;
+  messageIds?: string[];
+  editToken?: string;
+  deleteToken?: string;
+};
+
 export type BrokerOutboundRequestV1 = {
   version: BrokerProtocolVersion;
   requestId: string;
@@ -113,6 +118,7 @@ export type BrokerOutboundRequestV1 = {
     silent?: boolean;
     nativeQuoteId?: string;
   };
+  preview?: BrokerPreviewRef;
   requirements?: BrokerDeliveryRequirements;
   raw?: unknown;
 };
@@ -324,7 +330,9 @@ function normalizeBrokerMentionFacts(
       ? { canDetectMention: mentions.canDetectMention }
       : {}),
     ...(typeof mentions.wasMentioned === "boolean" ? { wasMentioned: mentions.wasMentioned } : {}),
-    ...(typeof mentions.hasAnyMention === "boolean" ? { hasAnyMention: mentions.hasAnyMention } : {}),
+    ...(typeof mentions.hasAnyMention === "boolean"
+      ? { hasAnyMention: mentions.hasAnyMention }
+      : {}),
     ...(implicitMentionKinds.length ? { implicitMentionKinds } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;

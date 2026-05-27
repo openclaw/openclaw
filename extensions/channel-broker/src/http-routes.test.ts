@@ -576,6 +576,7 @@ describe("channel-broker HTTP routes", () => {
         platform: request.platform,
         status: "sent",
         messageIds: ["preview-1"],
+        ...(request.mode === "preview_update" ? { editToken: "edit-preview-1" } : {}),
       }),
     );
     const pluginRuntime = createPluginRuntimeMock({
@@ -623,6 +624,11 @@ describe("channel-broker HTTP routes", () => {
       request: expect.objectContaining({
         mode: "finalize_preview",
         payloads: [{ text: "done" }],
+        preview: {
+          primaryMessageId: "preview-1",
+          messageIds: ["preview-1"],
+          editToken: "edit-preview-1",
+        },
         requirements: { text: true, thread: true, previewFinalization: true },
       }),
     });
@@ -689,6 +695,7 @@ describe("channel-broker HTTP routes", () => {
           platform: request.platform,
           status: "sent",
           messageIds: ["preview-1"],
+          editToken: "edit-preview-1",
         }),
       )
       .mockRejectedValueOnce(new Error("finalize failed"))
@@ -740,7 +747,14 @@ describe("channel-broker HTTP routes", () => {
     });
     expect(sendOutboundRequest).toHaveBeenNthCalledWith(2, {
       account: expect.objectContaining({ providerId: "acme" }),
-      request: expect.objectContaining({ mode: "finalize_preview" }),
+      request: expect.objectContaining({
+        mode: "finalize_preview",
+        preview: {
+          primaryMessageId: "preview-1",
+          messageIds: ["preview-1"],
+          editToken: "edit-preview-1",
+        },
+      }),
     });
     expect(sendOutboundRequest).toHaveBeenNthCalledWith(3, {
       account: expect.objectContaining({ providerId: "acme" }),

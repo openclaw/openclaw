@@ -6,6 +6,7 @@ import type {
   BrokerReceiptV1,
 } from "openclaw/plugin-sdk/channel-broker";
 import { buildBrokerConversationTarget } from "openclaw/plugin-sdk/channel-broker";
+import type { InboundMediaFacts } from "openclaw/plugin-sdk/channel-inbound";
 import {
   defineStableChannelIngressIdentity,
   resolveChannelMessageIngress,
@@ -14,8 +15,8 @@ import {
   createDurableInboundReceiveJournal,
   type DurableInboundReceiveCompletedRecord,
   type DurableInboundReceivePendingRecord,
+  type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-message";
-import type { InboundMediaFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { ResolvedChannelBrokerAccount } from "./types.js";
@@ -31,6 +32,7 @@ type BrokerInboundDeliveryState = {
   replyDispatchStarted: boolean;
   visibleFailureReported: boolean;
   previewSent: boolean;
+  previewReceipt?: MessageReceipt;
   finalSent: boolean;
 };
 
@@ -114,7 +116,10 @@ function resolveBrokerMentionFacts(
   };
 }
 
-function brokerAdmissionFromIngress(admission: "dispatch" | "observe" | "skip" | "drop" | "pairing-required", reason: string) {
+function brokerAdmissionFromIngress(
+  admission: "dispatch" | "observe" | "skip" | "drop" | "pairing-required",
+  reason: string,
+) {
   switch (admission) {
     case "dispatch":
       return undefined;
@@ -126,6 +131,7 @@ function brokerAdmissionFromIngress(admission: "dispatch" | "observe" | "skip" |
     case "pairing-required":
       return { kind: "drop" as const, reason };
   }
+  return undefined;
 }
 
 function hashNamespacePart(value: string): string {
@@ -180,9 +186,7 @@ function isVisibleDeliveryFailure(error: unknown): boolean {
 
 function hasVisibleDelivery(deliveryState: BrokerInboundDeliveryState): boolean {
   return (
-    deliveryState.previewSent ||
-    deliveryState.finalSent ||
-    deliveryState.visibleFailureReported
+    deliveryState.previewSent || deliveryState.finalSent || deliveryState.visibleFailureReported
   );
 }
 
@@ -308,10 +312,15 @@ async function deliverBrokerInboundReply(params: {
     });
     if (params.deliveryState) {
       params.deliveryState.previewSent = true;
+      params.deliveryState.previewReceipt = result.receipt;
     }
     return result;
   }
-  if (params.kind === "final" && params.deliveryState?.previewSent && supportsPreviewFinalization) {
+  if (
+    params.kind === "final" &&
+    params.deliveryState?.previewReceipt &&
+    supportsPreviewFinalization
+  ) {
     try {
       const result = await sendChannelBrokerPreviewFinalization({
         cfg: params.cfg,
@@ -319,6 +328,7 @@ async function deliverBrokerInboundReply(params: {
         to: params.to,
         text,
         payload: params.payload,
+        previewReceipt: params.deliveryState.previewReceipt,
         mediaUrl,
         threadId: params.threadId,
         replyToId: params.replyToId,
@@ -437,13 +447,12 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
             ? `${event.platform}:${event.conversation.id}:thread:${event.conversation.threadId}`
             : `${event.platform}:${event.conversation.id}`,
         };
-        const parentPeer =
-          hasThread
-            ? {
-                kind: chatKind,
-                id: `${event.platform}:${event.conversation.parentId ?? event.conversation.id}`,
-              }
-            : null;
+        const parentPeer = hasThread
+          ? {
+              kind: chatKind,
+              id: `${event.platform}:${event.conversation.parentId ?? event.conversation.id}`,
+            }
+          : null;
         const route = pluginRuntime.channel.routing.resolveAgentRoute({
           cfg: cfg as never,
           channel: "channel-broker",
@@ -470,7 +479,9 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
               aliases: {
                 ...(event.sender.handle ? { handle: event.sender.handle } : {}),
                 platformScopedSender: `${event.platform}:${event.sender.id}`,
-                ...(event.message.nativeIds?.from ? { nativeFrom: event.message.nativeIds.from } : {}),
+                ...(event.message.nativeIds?.from
+                  ? { nativeFrom: event.message.nativeIds.from }
+                  : {}),
               },
             },
             conversation: {
