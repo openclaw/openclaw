@@ -261,6 +261,31 @@ function shouldPreserveCurrentToolTurnReasoning(
   return false;
 }
 
+export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
+  let latestAssistantIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isAssistantMessageWithContent(messages[index])) {
+      latestAssistantIndex = index;
+      break;
+    }
+  }
+  if (latestAssistantIndex < 0) {
+    return false;
+  }
+  if (latestAssistantIndex === messages.length - 1) {
+    return true;
+  }
+
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index] as { role?: unknown })?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  return shouldPreserveCurrentToolTurnReasoning(messages, latestAssistantIndex, latestUserIndex);
+}
+
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];

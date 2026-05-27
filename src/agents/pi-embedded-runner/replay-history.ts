@@ -50,6 +50,7 @@ import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
+  shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
 } from "./thinking.js";
 
@@ -727,12 +728,9 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const lastMessage = sanitizedImages[sanitizedImages.length - 1];
   const preserveLatestAssistantThinking =
     params.preserveLatestAssistantThinking ??
-    (!!lastMessage &&
-      typeof lastMessage === "object" &&
-      (lastMessage as { role?: unknown }).role === "assistant");
+    shouldPreserveLatestAssistantThinking(sanitizedImages);
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound

@@ -1533,6 +1533,59 @@ describe("sanitizeSessionHistory", () => {
       modelApi: "bedrock-converse-stream",
       label: "bedrock",
     },
+  ])(
+    "preserves active tool-turn thinking signatures for $label even when a tool result follows",
+    async ({ provider, modelApi }) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("look up the answer"),
+        makeAssistantMessage([
+          {
+            type: "thinking",
+            thinking: "call the tool",
+            signature: "",
+          } as unknown as ThinkingContent,
+          { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+        ]),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [{ type: "text", text: "42" }],
+          isError: false,
+        }),
+      ]);
+
+      const result = await sanitizeAnthropicHistory({
+        provider,
+        modelApi,
+        messages,
+        modelId: "claude-sonnet-4-6",
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "thinking",
+          thinking: "call the tool",
+          signature: "",
+        },
+        { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      label: "anthropic",
+    },
+    {
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      label: "bedrock",
+    },
   ])("strips invalid thinking signatures before $label replay", async ({ provider, modelApi }) => {
     setNonGoogleModelApi();
 
