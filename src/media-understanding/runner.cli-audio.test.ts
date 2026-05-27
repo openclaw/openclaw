@@ -229,7 +229,7 @@ describe("media-understanding CLI audio entry", () => {
     });
   });
 
-  it("treats an empty parakeet-mlx inferred transcript file as no transcript", async () => {
+  it("treats an empty explicit txt parakeet-mlx inferred transcript file as no transcript", async () => {
     runExecMock.mockImplementationOnce(async (_command, args) => {
       await fs.writeFile(parakeetTranscriptPath(args as unknown[]), "");
       return {
@@ -244,7 +244,7 @@ describe("media-understanding CLI audio entry", () => {
         entry: {
           type: "cli",
           command: "parakeet-mlx",
-          args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
+          args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}", "--output-format", "txt"],
         },
         cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
         ctx,
@@ -255,6 +255,34 @@ describe("media-understanding CLI audio entry", () => {
 
       expect(result).toBeNull();
     });
+  });
+
+  it("keeps stdout fallback for parakeet-mlx output-dir without explicit txt format", async () => {
+    runExecMock.mockImplementationOnce(async () => ({
+      stdout: "parakeet stdout transcript\n",
+      stderr: "",
+    }));
+
+    await withAudioFixture(
+      "openclaw-cli-audio-parakeet-output-dir-default",
+      async ({ ctx, cache }) => {
+        const result = await runCliEntry({
+          capability: "audio",
+          entry: {
+            type: "cli",
+            command: "parakeet-mlx",
+            args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
+          },
+          cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
+          ctx,
+          attachmentIndex: 0,
+          cache,
+          config: {} as never,
+        });
+
+        expect(result?.text).toBe("parakeet stdout transcript");
+      },
+    );
   });
 
   it("reads transcript text emitted by the local whisper node wrapper", async () => {

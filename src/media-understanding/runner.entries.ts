@@ -197,7 +197,7 @@ function resolveParakeetOutputPath(args: string[], mediaPath: string): string | 
   if (!outputDir) {
     return null;
   }
-  if (outputFormat && outputFormat !== "txt") {
+  if (outputFormat?.toLowerCase() !== "txt") {
     return null;
   }
   return resolveOutputDirTxtPath(outputDir, mediaPath);
