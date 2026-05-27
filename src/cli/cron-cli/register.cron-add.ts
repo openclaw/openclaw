@@ -6,9 +6,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { theme } from "../../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -209,18 +209,6 @@ export function registerCronAddCommand(cron: Command) {
           ) {
             throw new Error("--announce/--no-deliver require a non-main agentTurn session target.");
           }
-          if (
-            hasAnnounce &&
-            typeof opts.channel === "string" &&
-            normalizeMessageChannel(opts.channel) === INTERNAL_MESSAGE_CHANNEL
-          ) {
-            throw new Error(
-              `Webchat is not a deliverable channel: --announce --channel webchat will always fail at fire time. ` +
-                `Use --session session:agent:<id>:main --message "<task>" --no-deliver to wake the agent's main ` +
-                `session at fire time and let the reply render in webchat naturally. ` +
-                `See docs/automation/cron-jobs.md “Webchat is not an announce target”.`,
-            );
-          }
 
           const accountId = normalizeOptionalString(opts.account);
           const threadId = parseCronThreadIdOption(opts.threadId);
@@ -235,6 +223,11 @@ export function registerCronAddCommand(cron: Command) {
             );
           }
 
+          // Isolated/agentTurn jobs default delivery.mode to "announce" when
+          // neither --announce nor --no-deliver is passed (back-compat). The
+          // webchat rejection below must therefore key on the EFFECTIVE
+          // delivery mode, not just `hasAnnounce` — otherwise an implicit
+          // announce + --channel webchat slips through create-time.
           const deliveryMode =
             isIsolatedLikeSessionTarget && payload.kind === "agentTurn"
               ? hasAnnounce
@@ -243,6 +236,20 @@ export function registerCronAddCommand(cron: Command) {
                   ? "none"
                   : "announce"
               : undefined;
+
+          if (
+            deliveryMode === "announce" &&
+            typeof opts.channel === "string" &&
+            normalizeMessageChannel(opts.channel) === INTERNAL_MESSAGE_CHANNEL
+          ) {
+            throw new Error(
+              `Webchat is not a deliverable channel: announce delivery to --channel webchat will always fail at fire time. ` +
+                `Isolated agentTurn jobs default to announce delivery, so passing --channel webchat without --no-deliver still produces an unrunnable job. ` +
+                `Use --session session:agent:<id>:main --message "<task>" --no-deliver to wake the agent's main ` +
+                `session at fire time and let the reply render in webchat naturally. ` +
+                `See docs/automation/cron-jobs.md “Webchat is not an announce target”.`,
+            );
+          }
 
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!name) {
