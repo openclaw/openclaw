@@ -1514,6 +1514,65 @@ describe("plugin scheduled turns", () => {
     expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
   });
 
+  it("uses the active replacement registry cron for stale captured workflow APIs", async () => {
+    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "replacement-cron-job" }));
+    const staleFixture = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry: staleFixture.registry,
+      config: staleFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-plugin",
+        name: "Scheduler Plugin",
+        origin: "bundled",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+
+    const activeFixture = createPluginRegistryFixture({}, { hostServices: { cron } });
+    registerTestPlugin({
+      registry: activeFixture.registry,
+      config: activeFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-plugin",
+        name: "Scheduler Plugin",
+        origin: "bundled",
+      }),
+      register() {},
+    });
+    setActivePluginRegistry(activeFixture.registry.registry);
+
+    await expect(
+      capturedApi?.session.workflow.requestSessionContinuationLease({
+        session: { sessionKey: "agent:main:discord:channel:1508508152348414034" },
+        leaseKey: "active-goal",
+        message: "continue the active goal",
+        delayMs: 10,
+        deliveryMode: "announce",
+      }),
+    ).resolves.toMatchObject({
+      scheduled: true,
+      handle: {
+        id: "replacement-cron-job",
+        pluginId: "scheduler-plugin",
+        sessionKey: "agent:main:discord:channel:1508508152348414034",
+        kind: "session-turn",
+      },
+    });
+
+    expect(workflowMocks.cronListPage).toHaveBeenCalledTimes(1);
+    expect(getCronAddBody()).toMatchObject({
+      sessionTarget: "session:agent:main:discord:channel:1508508152348414034",
+      delivery: {
+        mode: "announce",
+        channel: "discord",
+        to: "channel:1508508152348414034",
+      },
+    });
+  });
+
   it("resolves live cron service for captured plugin scheduled-turn APIs", async () => {
     const firstCron = createMockCronService();
     const secondCron = createMockCronService();

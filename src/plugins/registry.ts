@@ -376,6 +376,7 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
+  registry.hostServices = registryParams.hostServices;
   const coreGatewayMethodNames = Array.from(
     new Set([
       ...(registryParams.coreGatewayMethodNames ?? []),
@@ -384,7 +385,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ).toSorted();
   registry.coreGatewayMethodNames = coreGatewayMethodNames;
   const coreGatewayMethods = new Set(coreGatewayMethodNames);
-  const getHostCronService = () => registryParams.hostServices?.cron;
+  const getHostCronService = (record?: PluginRecord) => {
+    const cron = registryParams.hostServices?.cron;
+    if (cron || !record) {
+      return cron;
+    }
+    const activeRegistry = getActivePluginRegistry();
+    if (!activeRegistry || activeRegistry === registry) {
+      return undefined;
+    }
+    const activeRecord = activeRegistry.plugins.find(
+      (plugin) =>
+        plugin.id === record.id && plugin.status === "loaded" && plugin.origin === record.origin,
+    );
+    return activeRecord ? activeRegistry.hostServices?.cron : undefined;
+  };
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
   const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
@@ -2614,8 +2629,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
       registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
-    const isLoadedRecordInActiveRegistry = () =>
-      getActivePluginRegistry() === registry && isLoadedRecordInRegistry();
+    const isLoadedRecordInActiveRegistry = () => {
+      const activeRegistry = getActivePluginRegistry();
+      if (activeRegistry === registry) {
+        return isLoadedRecordInRegistry();
+      }
+      return Boolean(
+        activeRegistry?.plugins.some(
+          (plugin) =>
+            plugin.id === record.id &&
+            plugin.status === "loaded" &&
+            plugin.origin === record.origin,
+        ),
+      );
+    };
     const isActivatingLoadedRecord = () =>
       registryParams.activateGlobalSideEffects !== false &&
       record.enabled &&
@@ -2911,7 +2938,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   pluginName: record.name,
                   origin: record.origin,
                   schedule,
-                  cron: getHostCronService(),
+                  cron: getHostCronService(record),
                   shouldCommit: isLoadedRecordInActiveRegistry,
                   ownerRegistry: registry,
                 });
@@ -2926,7 +2953,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   pluginName: record.name,
                   origin: record.origin,
                   request,
-                  cron: getHostCronService(),
+                  cron: getHostCronService(record),
                   shouldCommit: isLoadedRecordInActiveRegistry,
                   ownerRegistry: registry,
                 });
@@ -2942,7 +2969,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 return clearPluginSessionContinuationLease({
                   pluginId: record.id,
                   origin: record.origin,
-                  cron: getHostCronService(),
+                  cron: getHostCronService(record),
                   request,
                 });
               },
@@ -2957,7 +2984,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 return unschedulePluginSessionTurnsByTag({
                   pluginId: record.id,
                   origin: record.origin,
-                  cron: getHostCronService(),
+                  cron: getHostCronService(record),
                   request,
                 });
               },

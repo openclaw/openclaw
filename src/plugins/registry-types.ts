@@ -428,6 +428,7 @@ export type PluginRecord = {
 
 export type PluginRegistry = {
   plugins: PluginRecord[];
+  hostServices?: PluginRegistryParams["hostServices"];
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];
