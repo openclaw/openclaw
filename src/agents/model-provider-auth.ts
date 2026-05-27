@@ -35,6 +35,37 @@ type PreparedProviderAuthState = {
   providers: ReadonlyMap<string, boolean>;
 };
 
+// Cache for externalCliDiscoveryForProviders to avoid redundant discovery
+// across per-agent warm calls. Keyed by config fingerprint + provider list.
+const EXTERNAL_CLI_DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+type CachedCliDiscovery = {
+  value: ReturnType<typeof externalCliDiscoveryForProviders>;
+  expiresAt: number;
+};
+
+const externalCliDiscoveryCache = new Map<string, CachedCliDiscovery>();
+
+function resolveCachedExternalCliDiscovery(
+  cfg: OpenClawConfig,
+  providerList: string[],
+): ReturnType<typeof externalCliDiscoveryForProviders> {
+  const key = `${resolveProviderAuthConfigFingerprint(cfg) ?? ""}:${providerList.join(",")}`;
+  const cached = externalCliDiscoveryCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+  const value = externalCliDiscoveryForProviders({
+    cfg,
+    providers: providerList,
+  });
+  externalCliDiscoveryCache.set(key, {
+    value,
+    expiresAt: Date.now() + EXTERNAL_CLI_DISCOVERY_CACHE_TTL_MS,
+  });
+  return value;
+}
+
 // One entry per configured agent, keyed by agentId. Populated by
 // warmCurrentProviderAuthState at gateway startup / on reload; consulted by
 // hasAuthForModelProvider on every model-listing call.
@@ -47,6 +78,9 @@ let currentProviderAuthStateGeneration = 0;
 export function clearCurrentProviderAuthState(): void {
   currentProviderAuthStates = null;
   currentProviderAuthStateGeneration += 1;
+  // Invalidate the external CLI discovery cache so the next warm picks up
+  // any auth changes (e.g. provider added/removed, CLI login state changed).
+  externalCliDiscoveryCache.clear();
 }
 
 function resolvePreparedStateForCaller(params: {
@@ -232,27 +266,46 @@ export async function warmCurrentProviderAuthState(
     });
     // One AuthProfileStore scoped to every candidate provider; without this
     // the per-provider externalCli discovery rebuilds the store ~N times.
+    // Use cached externalCli discovery to avoid redundant CLI probing across
+    // agents sharing the same config + provider set.
     const store = ensureAuthProfileStore(agentDir, {
       config: cfg,
-      externalCli: externalCliDiscoveryForProviders({
-        cfg,
-        providers: providerList,
-      }),
+      externalCli: resolveCachedExternalCliDiscovery(cfg, providerList),
     });
     const state = new Map<string, boolean>();
-    for (const provider of providers) {
+    // Run provider auth checks in parallel via Promise.allSettled so a slow
+    // external-CLI probe (e.g. codex login status) does not stall the rest.
+    // Batch into chunks of 4 to avoid spawning too many concurrent subprocess
+    // probes while still providing parallelism over the serial loop.
+    const BATCH_SIZE = 4;
+    const providerArray = [...providers];
+    for (let i = 0; i < providerArray.length; i += BATCH_SIZE) {
       if (isWarmStale()) {
         return;
       }
-      const value = await hasAuthForModelProvider({
-        provider,
-        cfg,
-        workspaceDir,
-        agentId,
-        store,
-        runtimeAuthLookup,
-      });
-      state.set(provider, value);
+      const batch = providerArray.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map((provider) =>
+          hasAuthForModelProvider({
+            provider,
+            cfg,
+            workspaceDir,
+            agentId,
+            store,
+            runtimeAuthLookup,
+          }),
+        ),
+      );
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        state.set(
+          batch[j],
+          result.status === "fulfilled" ? result.value : false,
+        );
+      }
+      // Yield to the event loop between batches so channel handshakes and
+      // other startup tasks are not starved.
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
     states.set(agentId, {
       agentId,
