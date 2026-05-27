@@ -214,7 +214,10 @@ describe("deepinfra capability registration", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       expect(mockFetch.mock.calls[0]?.[0]).toBe(DEEPINFRA_MODELS_URL);
       expect(result?.provider.apiKey).toBe("profile-key");
-      expect(result?.provider.models.map((model) => model.id)).toEqual(["profile/live-model"]);
+      expect(result.provider.models.map((model) => model.id)).toEqual([
+        "profile/live-model",
+        ...DEEPINFRA_MODEL_CATALOG.map((model) => model.id),
+      ]);
     });
   });
 });

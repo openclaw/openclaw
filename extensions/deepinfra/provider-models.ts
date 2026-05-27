@@ -62,14 +62,7 @@ interface DeepInfraAgentModelsResponse {
   data?: DeepInfraAgentModelEntry[];
 }
 
-export type DeepInfraSurface =
-  | "chat"
-  | "vlm"
-  | "embed"
-  | "image-gen"
-  | "video-gen"
-  | "tts"
-  | "stt";
+export type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
 
 export interface DeepInfraSurfaceModel {
   id: string;
@@ -123,18 +116,22 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceM
   if (!metadata) {
     return null;
   }
-  const tags = Array.isArray(metadata.tags) ? metadata.tags.filter((t): t is string => typeof t === "string") : [];
+  const tags = Array.isArray(metadata.tags)
+    ? metadata.tags.filter((t): t is string => typeof t === "string")
+    : [];
   const pricing: DeepInfraAgentModelPricing = metadata.pricing ?? {};
   return {
     id,
     name: id,
     description: metadata.description ?? undefined,
     tags,
-    contextWindow: typeof metadata.context_length === "number" ? metadata.context_length : undefined,
+    contextWindow:
+      typeof metadata.context_length === "number" ? metadata.context_length : undefined,
     maxTokens: typeof metadata.max_tokens === "number" ? metadata.max_tokens : undefined,
     pricing,
     defaultWidth: typeof metadata.default_width === "number" ? metadata.default_width : undefined,
-    defaultHeight: typeof metadata.default_height === "number" ? metadata.default_height : undefined,
+    defaultHeight:
+      typeof metadata.default_height === "number" ? metadata.default_height : undefined,
     defaultIterations:
       typeof metadata.default_iterations === "number" ? metadata.default_iterations : undefined,
   };
@@ -319,7 +316,8 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
 ];
 
 function manifestFallbackCatalog(): DeepInfraDiscoveredCatalog {
-  const rawChat = (manifest.modelCatalog.providers.deepinfra.models ?? []) as ManifestChatModelEntry[];
+  const rawChat = (manifest.modelCatalog.providers.deepinfra.models ??
+    []) as ManifestChatModelEntry[];
   const chatModels = rawChat.map(manifestChatEntryToSurfaceModel);
   const catalog = bucketBySurface([...chatModels, ...STATIC_NON_CHAT_FALLBACK]);
   catalog.live = false;
@@ -391,8 +389,7 @@ export async function discoverDeepInfraSurfaces(options?: {
   }
 
   const env = options?.env ?? process.env;
-  const hasKey =
-    options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
+  const hasKey = options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
   if (!hasKey) {
     return manifestFallbackCatalog();
   }
@@ -452,5 +449,16 @@ export async function discoverDeepInfraModels(options?: {
     // True empty (no manifest entries either) — keep behavior stable.
     return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
   }
-  return chatModels.map(chatSurfaceModelToModelDefinition);
+  const liveModels = chatModels.map(chatSurfaceModelToModelDefinition);
+  const seen = new Set(liveModels.map((model) => model.id));
+  const manifestModels = DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition).filter(
+    (model) => {
+      if (seen.has(model.id)) {
+        return false;
+      }
+      seen.add(model.id);
+      return true;
+    },
+  );
+  return [...liveModels, ...manifestModels];
 }
