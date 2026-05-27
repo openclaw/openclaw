@@ -55,7 +55,8 @@ export async function scanStatus(
         includeLiveChannelStatus: isFullScan,
         includeChannelSetupRuntimeFallback: isFullScan,
         includeChannelSecretTargets: isFullScan ? undefined : false,
-        skipUpdateCheck: !isFullScan,
+        fetchGitUpdate: isFullScan,
+        includeRegistryUpdate: isFullScan,
         progress,
         labels: {
           loadingConfig: "Loading config…",

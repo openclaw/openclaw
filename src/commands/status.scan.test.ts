@@ -14,6 +14,7 @@ const mocks = {
   ...createStatusScanSharedMocks("status-scan"),
   buildChannelsTable: vi.fn(),
   callGateway: vi.fn(),
+  getStatusCommandSecretTargetIds: vi.fn(() => new Set<string>()),
 };
 
 let originalForceStderr: boolean;
@@ -69,6 +70,7 @@ function configureScanStatus(
     details: [],
   });
   mocks.callGateway.mockResolvedValue(null);
+  mocks.getStatusCommandSecretTargetIds.mockReturnValue(new Set<string>());
 }
 
 function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
@@ -143,6 +145,15 @@ describe("scanStatus", () => {
         return (call as { method?: unknown } | undefined)?.method === "channels.status";
       }),
     ).toBe(false);
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      fetchGit: false,
+      includeRegistry: false,
+      updateConfigChannel: null,
+    });
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(cfg, process.env, {
+      includeChannelTargets: false,
+    });
     expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
     expect(firstBuildChannelsTableCall()).toStrictEqual([
       cfg,

@@ -136,6 +136,8 @@ export async function collectStatusScanOverview(params: {
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
   skipUpdateCheck?: boolean;
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
   resolveHasConfiguredChannels?: (
     cfg: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -208,6 +210,8 @@ export async function collectStatusScanOverview(params: {
     hasConfiguredChannels,
     opts: params.opts,
     skipUpdateCheck: params.skipUpdateCheck,
+    fetchGitUpdate: params.fetchGitUpdate,
+    includeRegistryUpdate: params.includeRegistryUpdate,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
