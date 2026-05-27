@@ -484,7 +484,6 @@ describe("heartbeat runner skips when target session lane is busy", () => {
       expect(replySpy).toHaveBeenCalledOnce();
       expect(replySpy.mock.calls[0]?.[1]).toMatchObject({
         isHeartbeat: true,
-        suppressPendingFinalDeliveryReplay: true,
       });
       expect(sendTelegram).not.toHaveBeenCalled();
     });
