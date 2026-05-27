@@ -91,6 +91,7 @@ const TelegramStreamingPreviewSchema = ChannelStreamingPreviewSchema.extend({
   nativeToolProgress: z.boolean().optional(),
   nativeToolProgressAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   interleavedProgress: z.boolean().optional(),
+  interleavedToolArgs: z.boolean().optional(),
 }).strict();
 const ChannelStreamingProgressSchema = z
   .object({

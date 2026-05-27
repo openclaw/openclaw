@@ -93,6 +93,15 @@ describe("telegram custom commands schema", () => {
     });
   });
 
+  it("accepts the opt-in interleaved tool-args flag", () => {
+    expectTelegramConfigValid({
+      streaming: { preview: { interleavedProgress: true, interleavedToolArgs: true } },
+    });
+    expectTelegramConfigValid({
+      accounts: { ops: { streaming: { preview: { interleavedToolArgs: true } } } },
+    });
+  });
+
   it("accepts Telegram native tool-progress draft config only on Telegram", () => {
     expectTelegramConfigValid({
       streaming: {

@@ -76,6 +76,14 @@ export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
    * Projection-only — does not change prompts, routing, tools, or auth.
    */
   interleavedProgress?: boolean;
+  /**
+   * Opt-in (requires `interleavedProgress`): include each tool call's sanitized
+   * args/detail in the interleaved lane instead of the tool name only, matching
+   * what the default tool-progress lane shows. Still sanitized — secret-looking
+   * values are redacted and `commandText` is honoured; this never surfaces raw
+   * command output.
+   */
+  interleavedToolArgs?: boolean;
 };
 
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {

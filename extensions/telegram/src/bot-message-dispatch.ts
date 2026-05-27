@@ -1206,6 +1206,10 @@ export const dispatchTelegramMessage = async ({
     configEnabled: telegramCfg.streaming?.preview?.interleavedProgress,
     hasReasoningLane: Boolean(reasoningLane.stream),
   });
+  // Opt-in within interleaved mode: show each tool call's sanitized args/detail
+  // (via the same formatter the default lane uses) instead of the name only.
+  const interleavedToolArgsEnabled =
+    interleavedProgressEnabled && telegramCfg.streaming?.preview?.interleavedToolArgs === true;
   let interleavedBody = "";
   let interleavedReasoningPrev = "";
   let interleavedTimer: ReturnType<typeof setInterval> | undefined;
@@ -2054,25 +2058,30 @@ export const dispatchTelegramMessage = async ({
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    // Interleaved lane shows the tool name only (never raw args)
-                    // and arms the rolling timer; falls back to the default
-                    // tool-progress lane when interleaved mode is off.
-                    if (!appendInterleavedLine(toolName ? `tool: ${toolName}` : "tool running", {
-                      startTimer: true,
-                    })) {
-                      await pushStreamToolProgress(
-                        formatChannelProgressDraftLineForEntry(
-                          telegramCfg,
-                          {
-                            event: "tool",
-                            name: toolName,
-                            phase: payload.phase,
-                            args: payload.args,
-                          },
-                          payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                        ),
-                        { toolName, startImmediately: true },
-                      );
+                    // Sanitized detailed line (args/detail per commandText), reused
+                    // by both the interleaved lane (when interleavedToolArgs is on)
+                    // and the default tool-progress fallback below.
+                    const sanitizedToolLine = formatChannelProgressDraftLineForEntry(
+                      telegramCfg,
+                      {
+                        event: "tool",
+                        name: toolName,
+                        phase: payload.phase,
+                        args: payload.args,
+                      },
+                      payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                    );
+                    // Interleaved lane: name-only by default; sanitized args/detail
+                    // when interleavedToolArgs is opted in. Arms the rolling timer.
+                    // Falls back to the default tool-progress lane when off.
+                    const interleavedToolLine =
+                      (interleavedToolArgsEnabled ? sanitizedToolLine : undefined) ??
+                      (toolName ? `tool: ${toolName}` : "tool running");
+                    if (!appendInterleavedLine(interleavedToolLine, { startTimer: true })) {
+                      await pushStreamToolProgress(sanitizedToolLine, {
+                        toolName,
+                        startImmediately: true,
+                      });
                     }
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
