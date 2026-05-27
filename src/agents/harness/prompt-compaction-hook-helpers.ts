@@ -10,6 +10,22 @@ import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-cont
 
 const log = createSubsystemLogger("agents/harness");
 
+/**
+ * Wraps a plugin-emitted system-prompt segment with a stable boundary so the
+ * model cannot continue the heading hierarchy of an adjacent block. See
+ * issue #87045: without a boundary, an injected `## My Custom Rules` block
+ * appended after a workspace-files block was attributed to the last
+ * workspace file (e.g. `TOOLS.md`).
+ */
+const PLUGIN_SYSTEM_CONTEXT_BOUNDARY = "\n---\n[plugin-injected context — not a workspace file]\n";
+
+function wrapPluginSystemContext(segment: string | undefined): string | undefined {
+  if (typeof segment !== "string" || segment.trim().length === 0) {
+    return undefined;
+  }
+  return `${PLUGIN_SYSTEM_CONTEXT_BOUNDARY}\n${segment.trim()}\n${PLUGIN_SYSTEM_CONTEXT_BOUNDARY}`;
+}
+
 export type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
@@ -61,11 +77,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ]) ?? params.prompt,
     developerInstructions:
       joinPresentTextSegments([
-        promptBuildResult?.prependSystemContext,
-        legacyResult?.prependSystemContext,
+        wrapPluginSystemContext(promptBuildResult?.prependSystemContext),
+        wrapPluginSystemContext(legacyResult?.prependSystemContext),
         systemPrompt,
-        promptBuildResult?.appendSystemContext,
-        legacyResult?.appendSystemContext,
+        wrapPluginSystemContext(promptBuildResult?.appendSystemContext),
+        wrapPluginSystemContext(legacyResult?.appendSystemContext),
       ]) ?? systemPrompt,
   };
 }
