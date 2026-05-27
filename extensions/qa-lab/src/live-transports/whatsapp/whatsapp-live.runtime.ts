@@ -507,6 +507,9 @@ function buildWhatsAppQaConfig(
           modelRef,
           {
             ...modelCfg,
+            agentRuntime: {
+              id: "pi",
+            },
             params: {
               ...modelCfg.params,
               thinking: "off",
@@ -1001,9 +1004,9 @@ async function runWhatsAppScenario(params: {
         throw new Error("unexpected WhatsApp group reply before mention gate was triggered");
       }
     }
+    params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:before-send`);
     const requestStartedAt = new Date();
     const requestStartedAtMs = requestStartedAt.getTime();
-    params.sampleGatewayProcessRss?.(gatewayHarness.gateway, `${params.scenario.id}:before-send`);
     const sendTextStartedAtMs = Date.now();
     await params.driver.sendText(target, scenarioRun.input);
     const sendTextMs = Date.now() - sendTextStartedAtMs;

@@ -197,7 +197,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(cfg.agents?.defaults?.skills).toEqual([]);
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("off");
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
-      id: "codex",
+      id: "pi",
     });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.params?.thinking).toBe("off");
     expect(cfg.tools?.profile).toBe("messaging");
