@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   extractIMessageApprovalPromptBinding,
+  handleIMessageApprovalReaction,
   listPendingIMessageApprovalReactionPollTargets,
-  maybeResolveIMessageApprovalReaction,
   registerIMessageApprovalReactionTarget,
   type PendingIMessageApprovalReactionPollTarget,
   type IMessageApprovalConversationKey,
@@ -263,14 +263,14 @@ export async function pollPendingIMessageApprovalReactions(params: {
         if (!reactionPayload) {
           continue;
         }
-        const handled = await maybeResolveIMessageApprovalReaction({
+        const handled = await handleIMessageApprovalReaction({
           cfg: params.cfg,
           accountId: params.accountId,
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
           logVerboseMessage: params.logVerboseMessage,
         });
-        if (handled) {
+        if (handled.stopPolling) {
           return;
         }
       }

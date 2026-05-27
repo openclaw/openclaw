@@ -24,6 +24,9 @@ type IMessageApprovalReactionResolution = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
 };
+export type IMessageApprovalReactionHandleResult =
+  | { handled: false; stopPolling: false }
+  | { handled: true; stopPolling: boolean };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord;
 
@@ -469,17 +472,17 @@ function readApprovalReactionEvent(
   };
 }
 
-export async function maybeResolveIMessageApprovalReaction(params: {
+export async function handleIMessageApprovalReaction(params: {
   cfg: OpenClawConfig;
   accountId: string;
   message: IMessagePayload;
   bodyText: string;
   gatewayUrl?: string;
   logVerboseMessage?: (message: string) => void;
-}): Promise<boolean> {
+}): Promise<IMessageApprovalReactionHandleResult> {
   const event = readApprovalReactionEvent(params.message, params.bodyText);
   if (!event) {
-    return false;
+    return { handled: false, stopPolling: false };
   }
   // A removed tapback (user un-taps 👍 or switches to a different emoji) is
   // intentionally NOT a fresh resolve. We only want to clear the binding so
@@ -487,7 +490,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
   // would surface the un-tap as a noisy reaction system event; instead we
   // own the event and stay quiet.
   if (event.action === "removed") {
-    return false;
+    return { handled: false, stopPolling: false };
   }
   let target: IMessageApprovalReactionResolution | null = null;
   let matchedMessageId: string | null = null;
@@ -504,7 +507,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
     }
   }
   if (!target) {
-    return false;
+    return { handled: false, stopPolling: false };
   }
 
   const approvalKind = target.approvalId.startsWith("plugin:") ? "plugin" : "exec";
@@ -513,7 +516,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction denied id=${target.approvalId}; reactions require explicit approvers`,
     );
-    return true;
+    return { handled: true, stopPolling: false };
   }
   const auth = imessageApprovalAuth.authorizeActorAction({
     cfg: params.cfg,
@@ -526,7 +529,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction denied id=${target.approvalId} sender=${event.actorHandle}`,
     );
-    return true;
+    return { handled: true, stopPolling: false };
   }
 
   const { isApprovalNotFoundError, resolveIMessageApproval } = await loadApprovalResolver();
@@ -552,7 +555,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction resolved id=${target.approvalId} sender=${event.actorHandle} decision=${target.decision} via messageId=${matchedMessageId ?? event.messageId}`,
     );
-    return true;
+    return { handled: true, stopPolling: true };
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
       for (const candidate of event.messageIdCandidates) {
@@ -565,7 +568,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
       params.logVerboseMessage?.(
         `imessage: approval reaction ignored for expired approval id=${target.approvalId} sender=${event.actorHandle}`,
       );
-      return true;
+      return { handled: true, stopPolling: true };
     }
     // Surface non-NotFound errors at warn level so a gateway 5xx / network
     // outage / auth failure is visible without OPENCLAW_LOG_LEVEL=debug.
@@ -583,8 +586,19 @@ export async function maybeResolveIMessageApprovalReaction(params: {
     params.logVerboseMessage?.(
       `imessage: approval reaction failed id=${target.approvalId} sender=${event.actorHandle}: ${String(error)}`,
     );
-    return true;
+    return { handled: true, stopPolling: true };
   }
+}
+
+export async function maybeResolveIMessageApprovalReaction(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  message: IMessagePayload;
+  bodyText: string;
+  gatewayUrl?: string;
+  logVerboseMessage?: (message: string) => void;
+}): Promise<boolean> {
+  return (await handleIMessageApprovalReaction(params)).handled;
 }
 
 export function clearIMessageApprovalReactionTargetsForTest(): void {

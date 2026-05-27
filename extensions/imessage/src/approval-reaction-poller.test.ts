@@ -227,4 +227,121 @@ describe("iMessage approval reaction poller", () => {
       gatewayUrl: undefined,
     });
   });
+
+  it("continues scanning after an unauthorized reaction leaves the approval pending", async () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
+      messageId: "msg-1",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "messages.history") {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "iMessage;+;chat-guid",
+              is_group: true,
+              is_from_me: true,
+              text: "Exec approval required\nID: exec-1",
+              reactions: [
+                {
+                  id: 8,
+                  sender: "+15550000000",
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:01:00.000Z",
+                },
+                {
+                  id: 9,
+                  sender: "+15551230000",
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:02:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    await pollPendingIMessageApprovalReactions({
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+    });
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      approvalId: "exec-1",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
+  it("stops scanning after an authorized resolver failure", async () => {
+    resolverMocks.resolveIMessageApproval.mockRejectedValueOnce(new Error("gateway down"));
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
+      messageId: "msg-1",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "messages.history") {
+        return {
+          messages: [
+            {
+              guid: "msg-1",
+              chat_id: 42,
+              chat_guid: "iMessage;+;chat-guid",
+              is_group: true,
+              is_from_me: true,
+              text: "Exec approval required\nID: exec-1",
+              reactions: [
+                {
+                  id: 8,
+                  sender: "+15551230000",
+                  type: "like",
+                  emoji: "👍",
+                  created_at: "2026-05-27T21:01:00.000Z",
+                },
+                {
+                  id: 9,
+                  sender: "+15551230000",
+                  type: "dislike",
+                  emoji: "👎",
+                  created_at: "2026-05-27T21:02:00.000Z",
+                },
+              ],
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    await pollPendingIMessageApprovalReactions({
+      client: createClient(request),
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+    });
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      approvalId: "exec-1",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
 });
