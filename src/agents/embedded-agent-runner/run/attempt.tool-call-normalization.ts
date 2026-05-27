@@ -1,5 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { streamSimple } from "../../../llm/stream.js";
+import {
+  parseStandalonePlainTextToolCallBlocks,
+  type PlainTextToolCallBlock,
+} from "../../../plugin-sdk/tool-payload.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
+import {
+  normalizePlainTextToolCallStreamEvents,
+  scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallNameMatcher,
+} from "../../../shared/plain-text-tool-call-stream-normalizer.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -16,7 +28,7 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
-import { normalizeToolName } from "../../tool-policy.js";
+import { couldNormalizeToolNamePrefixToAllowedTool, normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
@@ -94,10 +106,7 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   addCandidate(normalizedDelimiter);
   addCandidate(normalizeToolName(normalizedDelimiter));
 
-  const segments = normalizedDelimiter
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = normalizeStringEntries(normalizedDelimiter.split("."));
   if (segments.length > 1) {
     for (let index = 1; index < segments.length; index += 1) {
       const suffix = segments.slice(index).join(".");
@@ -849,11 +858,341 @@ function guardUnknownToolLoopInMessage(
   return true;
 }
 
+type PromotedTextToolCallBlock = {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  partialArgs: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function createStandaloneTextToolCallId(): string {
+  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+function createPromotedTextToolCallBlock(
+  block: PlainTextToolCallBlock,
+  name: string,
+): PromotedTextToolCallBlock {
+  return {
+    type: "toolCall",
+    id: createStandaloneTextToolCallId(),
+    name,
+    arguments: block.arguments,
+    partialArgs: JSON.stringify(block.arguments),
+  };
+}
+
+function isRetainableNonVisibleBlock(block: Record<string, unknown>): boolean {
+  return block.type === "thinking" || block.type === "redacted_thinking";
+}
+
+const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop"]);
+const STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS = new Set<unknown>(["stop", "length"]);
+
+function extractStandaloneTextToolCallCandidateForStopReasons(
+  message: unknown,
+  allowedStopReasons: ReadonlySet<unknown>,
+):
+  | {
+      text: string;
+    }
+  | undefined {
+  const record = asRecord(message);
+  if (!record || record.role !== "assistant" || !allowedStopReasons.has(record.stopReason)) {
+    return undefined;
+  }
+
+  const content = record.content;
+  if (typeof content === "string") {
+    const text = content.trim();
+    return text ? { text } : undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+
+  const textParts: string[] = [];
+  for (const block of content) {
+    const blockRecord = asRecord(block);
+    if (!blockRecord) {
+      return undefined;
+    }
+    if (blockRecord.type === "text") {
+      if (typeof blockRecord.text !== "string") {
+        return undefined;
+      }
+      if (blockRecord.text.trim()) {
+        textParts.push(blockRecord.text);
+      }
+      continue;
+    }
+    if (isRetainableNonVisibleBlock(blockRecord)) {
+      continue;
+    }
+    return undefined;
+  }
+
+  const text = textParts.join("\n").trim();
+  return text ? { text } : undefined;
+}
+
+function promoteStandaloneTextToolCallMessage(
+  message: unknown,
+  allowedToolNames?: Set<string>,
+): Record<string, unknown> | undefined {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return undefined;
+  }
+  const messageRecord = asRecord(message);
+  if (
+    !messageRecord ||
+    messageRecord.role !== "assistant" ||
+    !STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(messageRecord.stopReason)
+  ) {
+    return undefined;
+  }
+
+  const originalContent = messageRecord.content;
+  if (typeof originalContent === "string") {
+    const text = originalContent.trim();
+    if (!text) {
+      return undefined;
+    }
+    const toolCalls = createPromotedTextToolCallBlocks(text, allowedToolNames);
+    if (!toolCalls) {
+      return undefined;
+    }
+    return {
+      ...messageRecord,
+      content: toolCalls,
+      stopReason: "toolUse",
+    };
+  }
+
+  if (!Array.isArray(originalContent)) {
+    return undefined;
+  }
+
+  const content: Array<Record<string, unknown>> = [];
+  let promotedTextBlock = false;
+  let textParts: string[] = [];
+  const flushTextParts = (): boolean | undefined => {
+    if (textParts.length === 0) {
+      return false;
+    }
+    const text = textParts.join("\n").trim();
+    textParts = [];
+    if (!text) {
+      return false;
+    }
+    const toolCalls = createPromotedTextToolCallBlocks(text, allowedToolNames);
+    if (!toolCalls) {
+      return undefined;
+    }
+    content.push(...toolCalls);
+    return true;
+  };
+
+  for (const block of originalContent) {
+    const blockRecord = asRecord(block);
+    if (!blockRecord) {
+      return undefined;
+    }
+    if (blockRecord.type === "text") {
+      if (typeof blockRecord.text !== "string") {
+        return undefined;
+      }
+      const text = blockRecord.text.trim();
+      if (!text) {
+        continue;
+      }
+      textParts.push(blockRecord.text);
+      continue;
+    }
+    const promotedTextRun = flushTextParts();
+    if (promotedTextRun === undefined) {
+      return undefined;
+    }
+    promotedTextBlock ||= promotedTextRun;
+    if (isRetainableNonVisibleBlock(blockRecord)) {
+      content.push(blockRecord);
+      continue;
+    }
+    return undefined;
+  }
+  const promotedTrailingTextRun = flushTextParts();
+  if (promotedTrailingTextRun === undefined) {
+    return undefined;
+  }
+  promotedTextBlock ||= promotedTrailingTextRun;
+  if (!promotedTextBlock) {
+    return undefined;
+  }
+
+  return {
+    ...messageRecord,
+    content,
+    stopReason: "toolUse",
+  };
+}
+
+function createPromotedTextToolCallBlocks(
+  text: string,
+  allowedToolNames: Set<string>,
+): PromotedTextToolCallBlock[] | undefined {
+  const parsedBlocks = parseStandalonePlainTextToolCallBlocks(text);
+  if (!parsedBlocks) {
+    return undefined;
+  }
+
+  const toolCalls: PromotedTextToolCallBlock[] = [];
+  for (const block of parsedBlocks) {
+    const resolvedName = resolveExactAllowedToolName(block.name, allowedToolNames);
+    if (!resolvedName) {
+      return undefined;
+    }
+    toolCalls.push(createPromotedTextToolCallBlock(block, resolvedName));
+  }
+  return toolCalls;
+}
+
+function createPromotedToolCallEvents(
+  message: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const content = Array.isArray(message.content) ? message.content : [];
+  const events: Array<Record<string, unknown>> = [];
+  content.forEach((block, contentIndex) => {
+    const record = asRecord(block);
+    if (record?.type !== "toolCall") {
+      return;
+    }
+    events.push({ type: "toolcall_start", contentIndex, partial: message });
+    events.push({
+      type: "toolcall_delta",
+      contentIndex,
+      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
+      partial: message,
+    });
+  });
+  return events;
+}
+
+function createStandaloneToolCallNameMatcher(
+  allowedToolNames: Set<string>,
+): PlainTextToolCallNameMatcher {
+  return {
+    hasExactName: (name) => Boolean(resolveExactAllowedToolName(name, allowedToolNames)),
+    hasNamePrefix: (prefix) => couldNormalizeToolNamePrefixToAllowedTool(prefix, allowedToolNames),
+  };
+}
+
+function wrapStreamPromoteStandaloneTextToolCalls(
+  stream: ReturnType<typeof streamSimple>,
+  allowedToolNames: Set<string>,
+): ReturnType<typeof streamSimple> {
+  const matcher = createStandaloneToolCallNameMatcher(allowedToolNames);
+  const normalizedMessages = new WeakMap<
+    object,
+    { kind: "promoted" | "scrubbed"; message: Record<string, unknown> }
+  >();
+  const normalizeMessage = (
+    message: unknown,
+  ): { kind: "promoted" | "scrubbed"; message: Record<string, unknown> } | undefined => {
+    if (!message || typeof message !== "object") {
+      return undefined;
+    }
+    const cached = normalizedMessages.get(message);
+    if (cached) {
+      return cached;
+    }
+    const promoted = promoteStandaloneTextToolCallMessage(message, allowedToolNames);
+    if (promoted) {
+      const result = { kind: "promoted" as const, message: promoted };
+      normalizedMessages.set(message, result);
+      return result;
+    }
+    const scrubbed = scrubOverCapPlainTextToolCallMessage({
+      candidateText: extractStandaloneTextToolCallCandidateForStopReasons(
+        message,
+        STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS,
+      )?.text,
+      matcher,
+      message,
+    });
+    if (scrubbed) {
+      const result = { kind: "scrubbed" as const, message: scrubbed };
+      normalizedMessages.set(message, result);
+      return result;
+    }
+    return undefined;
+  };
+
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    return (normalizeMessage(message)?.message ?? message) as Awaited<
+      ReturnType<typeof originalResult>
+    >;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as unknown as { [Symbol.asyncIterator]: () => AsyncIterator<unknown> })[
+    Symbol.asyncIterator
+  ] = async function* () {
+    const source = {
+      [Symbol.asyncIterator]: originalAsyncIterator,
+    } as AsyncIterable<unknown>;
+    yield* normalizePlainTextToolCallStreamEvents(source, {
+      createPromotedToolCallEvents,
+      matcher,
+      normalizeDoneMessage: ({ message, reason }) => {
+        if (reason === "stop") {
+          return normalizeMessage(message);
+        }
+        const scrubbed = scrubOverCapPlainTextToolCallMessage({
+          candidateText: extractStandaloneTextToolCallCandidateForStopReasons(
+            message,
+            STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS,
+          )?.text,
+          matcher,
+          message,
+        });
+        return scrubbed ? { kind: "scrubbed", message: scrubbed } : undefined;
+      },
+    });
+  };
+
+  return stream;
+}
+
+export function wrapStreamFnPromoteStandaloneTextToolCalls(
+  baseFn: StreamFn,
+  allowedToolNames?: Set<string>,
+): StreamFn {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return baseFn;
+  }
+  return (model, context, streamOptions) => {
+    const maybeStream = baseFn(model, context, streamOptions);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+      );
+    }
+    return wrapStreamPromoteStandaloneTextToolCalls(maybeStream, allowedToolNames);
+  };
+}
+
 function wrapStreamTrimToolCallNames(
-  stream: MutableAssistantMessageEventStream,
+  stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
   options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
-): MutableAssistantMessageEventStream {
+): ReturnType<typeof streamSimple> {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
     countedMessages: new WeakSet<object>(),

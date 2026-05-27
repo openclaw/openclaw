@@ -60,9 +60,9 @@ const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
 const HARMONY_CHANNEL_MARKER = "<|channel|>";
 const HARMONY_MESSAGE_MARKER = "<|message|>";
 const HARMONY_CALL_MARKER = "<|call|>";
-const XMLISH_PARAMETER_CLOSE = "</parameter>";
 
 type PlainTextToolCallOpening = {
+  allowsOptionalXmlishClose?: boolean;
   end: number;
   name: string;
   requiresClosing: boolean;
@@ -112,7 +112,12 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
     if (cursor === nameStart || text[cursor] !== "]") {
       return null;
     }
-    return { end: cursor + 1, name: text.slice(nameStart, cursor), requiresClosing: false };
+    return {
+      allowsOptionalXmlishClose: true,
+      end: cursor + 1,
+      name: text.slice(nameStart, cursor),
+      requiresClosing: false,
+    };
   }
   const nameStart = cursor;
   while (isToolNameChar(text[cursor])) {
@@ -291,50 +296,82 @@ function parsePlainTextToolCallBlockAt(
   };
 }
 
+type XmlishParameterBlockBounds = {
+  closeStart: number;
+  end: number;
+  name: string;
+  payloadStart: number;
+  start: number;
+};
+
+function findXmlishParameterBlock(text: string, start: number): XmlishParameterBlockBounds | null {
+  const cursor = skipWhitespace(text, start);
+  const openMatch = /^<parameter=([A-Za-z0-9_.:-]{1,120})>/i.exec(text.slice(cursor));
+  if (!openMatch?.[1]) {
+    return null;
+  }
+  const payloadStart = cursor + openMatch[0].length;
+  const closeMatch = /<\/parameter>/i.exec(text.slice(payloadStart));
+  if (!closeMatch) {
+    return null;
+  }
+  const closeStart = payloadStart + closeMatch.index;
+  const closeEnd = closeStart + closeMatch[0].length;
+  return {
+    closeStart,
+    end: closeEnd,
+    name: openMatch[1],
+    payloadStart,
+    start: cursor,
+  };
+}
+
 function consumeXmlishParameterBlock(
   text: string,
   start: number,
   maxPayloadBytes: number,
-): number | null {
-  const cursor = skipWhitespace(text, start);
-  const openMatch = /^<parameter=[A-Za-z0-9_.:-]{1,120}>\s*/i.exec(text.slice(cursor));
-  if (!openMatch) {
+): { end: number; name: string; value: string } | null {
+  const bounds = findXmlishParameterBlock(text, start);
+  if (!bounds) {
     return null;
   }
-  const payloadStart = cursor + openMatch[0].length;
-  const closeStart = text.toLowerCase().indexOf(XMLISH_PARAMETER_CLOSE, payloadStart);
-  if (closeStart === -1 || closeStart + XMLISH_PARAMETER_CLOSE.length - cursor > maxPayloadBytes) {
+  if (bounds.end - bounds.start > maxPayloadBytes) {
     return null;
   }
-  return closeStart + XMLISH_PARAMETER_CLOSE.length;
+  return {
+    end: bounds.end,
+    name: bounds.name,
+    value: extractXmlishParameterValue(text, bounds.payloadStart, bounds.closeStart),
+  };
 }
 
-function consumeXmlishParameterBlocks(
-  text: string,
-  start: number,
-  maxPayloadBytes: number,
-): number | null {
-  let cursor = start;
-  let consumed = false;
-  while (true) {
-    const next = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
-    if (next === null) {
-      break;
+function extractXmlishParameterValue(text: string, start: number, end: number): string {
+  let payloadStart = start;
+  let payloadEnd = end;
+  const afterOpeningLineBreak = consumeLineBreak(text, payloadStart);
+  if (afterOpeningLineBreak !== null) {
+    payloadStart = afterOpeningLineBreak;
+    if (payloadEnd > payloadStart && text[payloadEnd - 1] === "\n") {
+      payloadEnd -= 1;
+      if (payloadEnd > payloadStart && text[payloadEnd - 1] === "\r") {
+        payloadEnd -= 1;
+      }
+    } else if (payloadEnd > payloadStart && text[payloadEnd - 1] === "\r") {
+      payloadEnd -= 1;
     }
-    if (next - start > maxPayloadBytes) {
-      return null;
-    }
-    cursor = next;
-    consumed = true;
   }
-  return consumed ? cursor : null;
+  return text.slice(payloadStart, payloadEnd);
 }
 
-function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
+function consumeXmlishFunctionClose(text: string, start: number): number | null {
   const cursor = skipWhitespace(text, start);
   return text.slice(cursor).toLowerCase().startsWith("</function>")
     ? cursor + "</function>".length
-    : start;
+    : null;
+}
+
+function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
+  return consumeXmlishFunctionClose(text, start) ?? start;
 }
 
 function parseXmlishPlainTextToolCallBlockEndAt(
@@ -342,7 +379,7 @@ function parseXmlishPlainTextToolCallBlockEndAt(
   start: number,
   options?: PlainTextToolCallParseOptions,
 ): number | null {
-  const opening = parseBracketOpening(text, start) ?? parseXmlishFunctionOpening(text, start);
+  const opening = parseXmlishOpening(text, start);
   if (!opening) {
     return null;
   }
@@ -352,15 +389,76 @@ function parseXmlishPlainTextToolCallBlockEndAt(
   if (allowedToolNames && !allowedToolNames.has(opening.name)) {
     return null;
   }
-  const payloadEnd = consumeXmlishParameterBlocks(
-    text,
-    opening.end,
-    options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
-  );
-  if (payloadEnd === null) {
+
+  let cursor = opening.end;
+  let parameterCount = 0;
+  while (true) {
+    const parameter = findXmlishParameterBlock(text, cursor);
+    if (!parameter) {
+      break;
+    }
+    parameterCount += 1;
+    cursor = parameter.end;
+  }
+  if (parameterCount === 0) {
     return null;
   }
-  return consumeOptionalXmlishFunctionClose(text, payloadEnd);
+  return opening.allowsOptionalXmlishClose
+    ? consumeOptionalXmlishFunctionClose(text, cursor)
+    : consumeXmlishFunctionClose(text, cursor);
+}
+
+function parseXmlishOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  return parseBracketOpening(text, start) ?? parseXmlishFunctionOpening(text, start);
+}
+
+function parseXmlishPlainTextToolCallBlockAt(
+  text: string,
+  start: number,
+  options?: PlainTextToolCallParseOptions,
+): PlainTextToolCallBlock | null {
+  const opening = parseXmlishOpening(text, start);
+  if (!opening) {
+    return null;
+  }
+  const allowedToolNames = options?.allowedToolNames
+    ? new Set(options.allowedToolNames)
+    : undefined;
+  if (allowedToolNames && !allowedToolNames.has(opening.name)) {
+    return null;
+  }
+
+  const maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES;
+  const args: Record<string, unknown> = {};
+  let cursor = opening.end;
+  let parameterCount = 0;
+  while (true) {
+    const parameter = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
+    if (!parameter) {
+      break;
+    }
+    if (parameter.end - opening.end > maxPayloadBytes) {
+      return null;
+    }
+    args[parameter.name] = parameter.value;
+    parameterCount += 1;
+    cursor = parameter.end;
+  }
+  if (parameterCount === 0) {
+    return null;
+  }
+
+  const end = consumeXmlishFunctionClose(text, cursor);
+  if (end === null) {
+    return null;
+  }
+  return {
+    arguments: args,
+    end,
+    name: opening.name,
+    raw: text.slice(start, end),
+    start,
+  };
 }
 
 export function parseStandalonePlainTextToolCallBlocks(
@@ -370,7 +468,9 @@ export function parseStandalonePlainTextToolCallBlocks(
   const blocks: PlainTextToolCallBlock[] = [];
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
-    const block = parsePlainTextToolCallBlockAt(text, cursor, options);
+    const block =
+      parsePlainTextToolCallBlockAt(text, cursor, options) ??
+      parseXmlishPlainTextToolCallBlockAt(text, cursor, options);
     if (!block) {
       return null;
     }

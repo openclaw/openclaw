@@ -379,6 +379,7 @@ import {
   sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
+  wrapStreamFnPromoteStandaloneTextToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -454,6 +455,7 @@ export {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 export {
+  wrapStreamFnPromoteStandaloneTextToolCalls,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -2615,6 +2617,10 @@ export async function runEmbeddedAttempt(
         allowedToolNames,
         transcriptPolicy,
         params.provider,
+      );
+      activeSession.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
+        activeSession.agent.streamFn,
+        allowedToolNames,
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
