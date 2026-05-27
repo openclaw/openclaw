@@ -212,6 +212,51 @@ describe("createInteractionHandler approval buttons", () => {
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "no allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+          },
+        },
+      },
+    ],
+    [
+      "wildcard allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    ],
+  ] satisfies Array<[string, OpenClawConfig]>)(
+    "rejects fallback approval buttons when %s does not grant command auth",
+    async (_name, cfg) => {
+      const handler = createInteractionHandler(account, runtime, undefined, {
+        getActiveCfg: () => cfg,
+      });
+
+      handler(makeApprovalEvent());
+
+      await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: "You are not authorized to approve this request." },
+      );
+      expect(resolveApprovalMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects fallback approval buttons without a trusted actor id", async () => {
     const handler = createInteractionHandler(account, runtime, undefined, {
       getActiveCfg: () => makeCommandAuthorizedFallbackCfg(),
