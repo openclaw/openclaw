@@ -58,7 +58,7 @@ const jwtState = vi.hoisted(() => ({
   verifyBehavior: "success" as "success" | "throw",
   decodedHeader: { kid: "key-1" } as { kid?: string } | null,
   decodedPayload: { iss: "https://api.botframework.com" } as { iss?: string } | string | null,
-  verifyResult: { sub: "ok" } as unknown,
+  verifyResult: { sub: "ok", serviceurl: "https://smba.trafficmanager.net/amer/" } as unknown,
   verifyCalls: [] as Array<{ token: string; options: unknown }>,
 }));
 
@@ -133,7 +133,7 @@ afterEach(() => {
   jwtState.verifyBehavior = "success";
   jwtState.decodedHeader = { kid: "key-1" };
   jwtState.decodedPayload = { iss: "https://api.botframework.com" };
-  jwtState.verifyResult = { sub: "ok" };
+  jwtState.verifyResult = { sub: "ok", serviceurl: "https://smba.trafficmanager.net/amer/" };
   vi.restoreAllMocks();
 });
 
@@ -328,6 +328,7 @@ describe("createMSTeamsAdapter", () => {
 });
 
 describe("createBotFrameworkJwtValidator", () => {
+  const activityServiceUrl = "https://smba.trafficmanager.net/amer";
   const creds = {
     appId: "app-id",
     type: "secret",
@@ -339,7 +340,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-bf")).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-bf", activityServiceUrl)).resolves.toBe(true);
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
@@ -354,10 +355,11 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = {
       aud: ["https://api.botframework.com"],
       appid: creds.appId,
+      serviceurl: activityServiceUrl,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token")).resolves.toBe(true);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(true);
 
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
     expect(opts.audience).toContain("https://api.botframework.com");
@@ -368,10 +370,13 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = {
       aud: ["https://api.botframework.com"],
       azp: "APP-ID",
+      serviceurl: activityServiceUrl,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token-azp")).resolves.toBe(true);
+    await expect(validator.validate("Bearer botfw-token-azp", activityServiceUrl)).resolves.toBe(
+      true,
+    );
   });
 
   it("rejects global audience tokens when app binding does not match the configured app id", async () => {
@@ -379,10 +384,49 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = {
       aud: ["https://api.botframework.com"],
       azp: "other-app-id",
+      serviceurl: activityServiceUrl,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token-wrong-app")).resolves.toBe(false);
+    await expect(
+      validator.validate("Bearer botfw-token-wrong-app", activityServiceUrl),
+    ).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the serviceurl claim does not match the activity serviceUrl", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: "https://attacker.trafficmanager.net/amer",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the serviceurl claim is missing", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      sub: "ok",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the activity serviceUrl is missing", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", undefined)).resolves.toBe(false);
+  });
+
+  it("rejects serviceUrl values that are not Bot Framework base URLs", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(
+      validator.validate("Bearer botfw-token", `${activityServiceUrl}?target=attacker`),
+    ).resolves.toBe(false);
   });
 
   it("rejects non-object verified payloads", async () => {
@@ -390,14 +434,16 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyResult = "verified-string-payload";
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer botfw-token-string")).resolves.toBe(false);
+    await expect(validator.validate("Bearer botfw-token-string", activityServiceUrl)).resolves.toBe(
+      false,
+    );
   });
 
   it("validates a token with Entra issuer", async () => {
     jwtState.decodedPayload = { iss: `https://login.microsoftonline.com/tenant-id/v2.0` };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-entra")).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-entra", activityServiceUrl)).resolves.toBe(true);
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
@@ -413,7 +459,7 @@ describe("createBotFrameworkJwtValidator", () => {
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-sts")).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-sts", activityServiceUrl)).resolves.toBe(true);
 
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
@@ -429,7 +475,9 @@ describe("createBotFrameworkJwtValidator", () => {
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-sts-other-tenant")).resolves.toBe(false);
+    await expect(
+      validator.validate("Bearer token-sts-other-tenant", activityServiceUrl),
+    ).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -437,7 +485,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: "https://evil.example.com" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-evil")).resolves.toBe(false);
+    await expect(validator.validate("Bearer token-evil", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -445,12 +493,12 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.verifyBehavior = "throw";
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-bad")).resolves.toBe(false);
+    await expect(validator.validate("Bearer token-bad", activityServiceUrl)).resolves.toBe(false);
   });
 
   it("returns false for empty bearer token", async () => {
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer ")).resolves.toBe(false);
+    await expect(validator.validate("Bearer ", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -458,7 +506,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedHeader = { kid: undefined };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer no-kid")).resolves.toBe(false);
+    await expect(validator.validate("Bearer no-kid", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -466,7 +514,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: undefined };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer no-iss")).resolves.toBe(false);
+    await expect(validator.validate("Bearer no-iss", activityServiceUrl)).resolves.toBe(false);
     expect(jwtState.verifyCalls).toHaveLength(0);
   });
 
@@ -484,7 +532,9 @@ describe("createBotFrameworkJwtValidator", () => {
     const validator = await createBotFrameworkJwtValidator(creds);
     // Network errors must bubble out — callers can then log them at warn/error
     // level rather than silently returning 401 that looks like a bad credential.
-    await expect(validator.validate("Bearer token-firewall")).rejects.toThrow("ECONNREFUSED");
+    await expect(validator.validate("Bearer token-firewall", activityServiceUrl)).rejects.toThrow(
+      "ECONNREFUSED",
+    );
   });
 
   it("returns false (not throws) for non-network JWKS errors like bad signature (#77674)", async () => {
@@ -492,7 +542,9 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
     jwtState.verifyBehavior = "throw";
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-bad-sig")).resolves.toBe(false);
+    await expect(validator.validate("Bearer token-bad-sig", activityServiceUrl)).resolves.toBe(
+      false,
+    );
   });
 });
 

@@ -304,7 +304,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ).rejects.toThrow(/EADDRINUSE/);
   });
 
-  it("runs JWT validation before JSON body parsing", async () => {
+  it("parses bounded JSON after the Bearer gate and binds serviceUrl during JWT validation", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -328,17 +328,32 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (typeof jsonMiddleware !== "function") {
       throw new Error("expected Express JSON middleware");
     }
-    expect(readMockCallArg(app.use, 1, 0)).not.toBe(jsonMiddleware);
-    expect(readMockCallArg(app.use, 2, 0)).toBe(jsonMiddleware);
+    expect(readMockCallArg(app.use, 1, 0)).toBe(jsonMiddleware);
 
-    const jwtMiddleware = readMockCallArg(app.use, 1, 0) as (
+    const authGate = readMockCallArg(app.use, 0, 0) as (
+      req: Request,
+      res: Response,
+      next: (err?: unknown) => void,
+    ) => void;
+    const authNext = vi.fn();
+    const unauthorizedResponse = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as Response;
+    authGate({ headers: {} } as Request, unauthorizedResponse, authNext);
+    expect(authNext).not.toHaveBeenCalled();
+
+    const jwtMiddleware = readMockCallArg(app.use, 3, 0) as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,
     ) => void;
     const next = vi.fn();
     jwtMiddleware(
-      { headers: { authorization: "Bearer token" } } as Request,
+      {
+        headers: { authorization: "Bearer token" },
+        body: { serviceUrl: "https://smba.trafficmanager.net/amer/" },
+      } as Request,
       {
         status: vi.fn().mockReturnThis(),
         json: vi.fn(),
@@ -347,7 +362,10 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     );
 
     await vi.waitFor(() => {
-      expect(jwtValidate).toHaveBeenCalledWith("Bearer token");
+      expect(jwtValidate).toHaveBeenCalledWith(
+        "Bearer token",
+        "https://smba.trafficmanager.net/amer/",
+      );
       expect(next).toHaveBeenCalledTimes(1);
     });
 

@@ -205,6 +205,27 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(runtime.saveCalls).toHaveLength(0);
   });
 
+  it("does not send Bot Framework service tokens to non-auth-allowlisted media hosts", async () => {
+    const seenAuth: Array<string | null> = [];
+    const fetchFn: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenAuth.push(new Headers(init?.headers).get("authorization"));
+      return new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://attacker.trafficmanager.net",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      resolveFn: resolvePublicHost,
+    });
+
+    expect(media).toBeUndefined();
+    expect(seenAuth).toEqual([null]);
+    expect(runtime.saveCalls).toHaveLength(0);
+  });
+
   it("skips when attachment view size exceeds maxBytes", async () => {
     const info = {
       name: "huge.bin",
