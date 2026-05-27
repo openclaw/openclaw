@@ -12,7 +12,6 @@
   "qa-channel",
   "qa-channel-protocol",
   "qa-lab",
-  "qa-runner-shared-runtime",
   "qa-runtime",
   "reply-payload-testing",
   "ssrf-runtime-internal",

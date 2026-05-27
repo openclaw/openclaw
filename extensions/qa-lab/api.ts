@@ -51,7 +51,7 @@ export {
   renderQaMarkdownReport,
   type QaReportCheck,
   type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
+} from "openclaw/plugin-sdk/qa-runtime";
 export {
   type QaScenarioDefinition,
   type QaScenarioResult,

@@ -1,7 +1,7 @@
 import {
   printLiveTransportQaArtifacts,
   startLiveTransportQaOutputTee,
-} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
+} from "openclaw/plugin-sdk/qa-runtime";
 import { runMatrixQaLive } from "./runners/contract/runtime.js";
 import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
 import { resolveLiveTransportQaRunOptions } from "./shared/live-transport-cli.runtime.js";

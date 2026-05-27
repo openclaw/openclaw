@@ -10,7 +10,7 @@ import {
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
   renderQaMarkdownReport,
   type QaReportCheck,
-} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
+} from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
