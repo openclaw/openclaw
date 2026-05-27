@@ -13,11 +13,25 @@ type EditToolRecoveryOptions = {
 type WriteToolRecoveryOptions = {
   root: string;
   readFile: (absolutePath: string) => Promise<string>;
+  statFile?: (absolutePath: string) => Promise<WriteToolFileStat | null>;
 };
 
 type WriteToolParams = {
   pathParam?: string;
   content?: string;
+};
+
+type WriteToolFileStat = {
+  type: "file" | "directory" | "other";
+  size: number;
+  mtimeMs?: number;
+};
+
+type WriteToolOriginalState = "different" | "same" | "unknown";
+
+type WriteToolPrecheck = {
+  state: WriteToolOriginalState;
+  beforeStat?: WriteToolFileStat | null;
 };
 
 type EditToolParams = {
@@ -32,6 +46,7 @@ type EditReplacement = {
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
+const WRITE_PRECHECK_READ_LIMIT_BYTES = 1024 * 1024;
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
 function normalizeMutationPathLikeUpstreamWrite(pathParam: string): string {
@@ -207,6 +222,72 @@ function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefine
   );
 }
 
+function isMissingFileError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  if ("code" in error && (error as { code?: unknown }).code === "ENOENT") {
+    return true;
+  }
+  return error instanceof Error && error.message.includes("No such file or directory");
+}
+
+async function readOriginalWriteState(
+  absolutePath: string,
+  content: string,
+  options: WriteToolRecoveryOptions,
+): Promise<WriteToolPrecheck> {
+  if (!options.statFile) {
+    return { state: "unknown" };
+  }
+  const contentBytes = Buffer.byteLength(content, "utf8");
+  let stat: WriteToolFileStat | null;
+  try {
+    stat = await options.statFile(absolutePath);
+  } catch (err) {
+    return { state: isMissingFileError(err) ? "different" : "unknown" };
+  }
+  if (!stat) {
+    return { state: "different", beforeStat: stat };
+  }
+  if (stat.type !== "file") {
+    return { state: "unknown", beforeStat: stat };
+  }
+  if (stat.size !== contentBytes) {
+    return { state: "different", beforeStat: stat };
+  }
+  if (stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+    return { state: "unknown", beforeStat: stat };
+  }
+
+  try {
+    const originalContent = await options.readFile(absolutePath);
+    return { state: originalContent === content ? "same" : "different", beforeStat: stat };
+  } catch {
+    return { state: "unknown", beforeStat: stat };
+  }
+}
+
+async function didWriteMetadataChange(
+  absolutePath: string,
+  beforeStat: WriteToolFileStat | null | undefined,
+  options: WriteToolRecoveryOptions,
+): Promise<boolean> {
+  if (!beforeStat || !options.statFile) {
+    return false;
+  }
+  let afterStat: WriteToolFileStat | null;
+  try {
+    afterStat = await options.statFile(absolutePath);
+  } catch {
+    return false;
+  }
+  if (!afterStat || afterStat.type !== "file") {
+    return false;
+  }
+  return afterStat.size !== beforeStat.size || afterStat.mtimeMs !== beforeStat.mtimeMs;
+}
+
 /**
  * Recover from two edit-tool failure classes without changing edit semantics:
  * - exact-match mismatch errors become actionable by including current file contents
@@ -300,15 +381,10 @@ export function wrapWriteToolWithRecovery(
         typeof pathParam === "string" && typeof content === "string"
           ? resolveFileMutationPath(options.root, pathParam)
           : undefined;
-      let originalContent: string | undefined;
-
-      if (absolutePath) {
-        try {
-          originalContent = await options.readFile(absolutePath);
-        } catch {
-          // Missing/unreadable before the call is still recoverable if readback later matches.
-        }
-      }
+      const precheck =
+        absolutePath && typeof content === "string"
+          ? await readOriginalWriteState(absolutePath, content, options)
+          : { state: "unknown" };
 
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
@@ -327,7 +403,11 @@ export function wrapWriteToolWithRecovery(
         } catch {
           // Fall through to the original abort if readback fails.
         }
-        if (currentContent === content && originalContent !== content) {
+        const changed =
+          precheck.state === "different" ||
+          (precheck.state === "unknown" &&
+            (await didWriteMetadataChange(absolutePath, precheck.beforeStat, options)));
+        if (currentContent === content && changed) {
           return buildWriteSuccessResult(pathParam, content);
         }
         throw err;

@@ -809,6 +809,8 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
     root: params.root,
     readFile: async (absolutePath: string) =>
       (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
+    statFile: (absolutePath: string) =>
+      params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
   });
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.write);
 }
@@ -832,6 +834,27 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   const withRecovery = wrapWriteToolWithRecovery(base, {
     root,
     readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
+    statFile: async (absolutePath: string) => {
+      let stat;
+      try {
+        stat = await fs.stat(absolutePath);
+      } catch (err) {
+        if (
+          err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code?: unknown }).code === "ENOENT"
+        ) {
+          return null;
+        }
+        throw err;
+      }
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      };
+    },
   });
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.write);
 }

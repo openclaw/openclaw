@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { wrapEditToolWithRecovery, wrapWriteToolWithRecovery } from "./pi-tools.host-edit.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxFsBridge, SandboxFsStat } from "./sandbox/fs-bridge.js";
@@ -349,6 +350,7 @@ describe("write tool recovery hardening", () => {
   function createRecoveredWriteTool(params: {
     root: string;
     readFile: (absolutePath: string) => Promise<string>;
+    statFile?: Parameters<typeof wrapWriteToolWithRecovery>[1]["statFile"];
     execute: AnyAgentTool["execute"];
   }) {
     const base = {
@@ -358,6 +360,28 @@ describe("write tool recovery hardening", () => {
     return wrapWriteToolWithRecovery(base, {
       root: params.root,
       readFile: params.readFile,
+      statFile:
+        params.statFile ??
+        (async (absolutePath) => {
+          try {
+            const stat = await fs.stat(absolutePath);
+            return {
+              type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+              size: stat.size,
+              mtimeMs: stat.mtimeMs,
+            };
+          } catch (err) {
+            if (
+              err &&
+              typeof err === "object" &&
+              "code" in err &&
+              (err as { code?: unknown }).code === "ENOENT"
+            ) {
+              return null;
+            }
+            throw err;
+          }
+        }),
     });
   }
 
@@ -427,6 +451,104 @@ describe("write tool recovery hardening", () => {
     await expect(
       tool.execute("call-1", { path: filePath, content: "finished\n" }, controller.signal),
     ).rejects.toThrow("Operation aborted");
+  });
+
+  it("does not pre-read large same-size files on successful writes", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "large.txt");
+    const content = "x".repeat(1024 * 1024 + 1);
+    const readFile = vi.fn(async () => {
+      throw new Error("readFile should not run on the success path");
+    });
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile,
+      statFile: async () => ({ type: "file", size: Buffer.byteLength(content, "utf8") }),
+      execute: async () =>
+        ({
+          isError: false,
+          content: [{ type: "text", text: "ok" }],
+        }) as AgentToolResult<unknown>,
+    });
+
+    const result = await tool.execute("call-1", { path: filePath, content }, undefined);
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("recovers large same-size rewrites when timeout follows changed metadata", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "large.txt");
+    const content = "x".repeat(1024 * 1024 + 1);
+    const readFile = vi.fn(async () => content);
+    let statCall = 0;
+    const statFile = vi.fn(async () => {
+      statCall += 1;
+      return {
+        type: "file",
+        size: Buffer.byteLength(content, "utf8"),
+        mtimeMs: statCall,
+      } as const;
+    });
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile,
+      statFile,
+      execute: async () => {
+        throw new Error("node invoke timed out");
+      },
+    });
+
+    const result = await tool.execute("call-1", { path: filePath, content }, undefined);
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(statFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers new-file writes when pre-stat throws before a timeout", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "created.txt");
+    const content = "created\n";
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: async () => content,
+      statFile: async () => {
+        throw new Error("No such file or directory");
+      },
+      execute: async () => {
+        throw new Error("node invoke timed out");
+      },
+    });
+
+    const result = await tool.execute("call-1", { path: filePath, content }, undefined);
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
+  });
+
+  it("keeps timeout when pre-stat fails for an unknown reason", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    const content = "already there\n";
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: async () => content,
+      statFile: async () => {
+        throw new Error("stat bridge failed");
+      },
+      execute: async () => {
+        throw new Error("node invoke timed out");
+      },
+    });
+
+    await expect(tool.execute("call-1", { path: filePath, content }, undefined)).rejects.toThrow(
+      "node invoke timed out",
+    );
   });
 
   it("recovers @-prefixed write paths through the upstream write path contract", async () => {
