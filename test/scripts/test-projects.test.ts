@@ -325,6 +325,40 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("includes the isolated tooling shard for broad shell helper targets", () => {
+    expect(buildVitestRunPlans(["test/scripts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("includes the isolated tooling shard for broad shell helper globs", () => {
+    expect(buildVitestRunPlans(["test/scripts/*.test.ts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/openclaw-e2e-instance.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
