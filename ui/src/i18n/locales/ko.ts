@@ -782,6 +782,7 @@ export const ko: TranslationMap = {
       clearAll: "모두 지우기",
       remove: "필터 제거",
       all: "전체",
+      defaultAgent: "Default agent",
       days: "일",
       hours: "시간",
       session: "세션",

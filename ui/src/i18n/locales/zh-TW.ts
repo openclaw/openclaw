@@ -773,6 +773,7 @@ export const zh_TW: TranslationMap = {
       clearAll: "全部清除",
       remove: "移除篩選條件",
       all: "全部",
+      defaultAgent: "Default agent",
       days: "天",
       hours: "小時",
       session: "工作階段",

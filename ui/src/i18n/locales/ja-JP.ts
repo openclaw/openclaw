@@ -786,6 +786,7 @@ export const ja_JP: TranslationMap = {
       clearAll: "すべてクリア",
       remove: "フィルターを削除",
       all: "すべて",
+      defaultAgent: "Default agent",
       days: "日",
       hours: "時間",
       session: "セッション",

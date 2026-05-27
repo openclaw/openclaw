@@ -784,6 +784,7 @@ export const id: TranslationMap = {
       clearAll: "Bersihkan Semua",
       remove: "Hapus filter",
       all: "Semua",
+      defaultAgent: "Default agent",
       days: "Hari",
       hours: "Jam",
       session: "Sesi",

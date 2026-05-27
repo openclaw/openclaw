@@ -784,6 +784,7 @@ export const fa: TranslationMap = {
       clearAll: "پاک کردن همه",
       remove: "حذف فیلتر",
       all: "همه",
+      defaultAgent: "Default agent",
       days: "روزها",
       hours: "ساعت‌ها",
       session: "نشست",

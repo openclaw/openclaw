@@ -786,6 +786,7 @@ export const it: TranslationMap = {
       clearAll: "Cancella tutto",
       remove: "Rimuovi filtro",
       all: "Tutti",
+      defaultAgent: "Default agent",
       days: "Giorni",
       hours: "Ore",
       session: "Sessione",

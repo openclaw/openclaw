@@ -283,25 +283,31 @@ export function renderUsage(props: UsageProps) {
           ? dayFilteredSessions
           : sortedSessions;
   const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const shouldUseSessionDerivedDaily =
+    Boolean(filters.usageAgentId) ||
+    filters.selectedSessions.length > 0 ||
+    filters.selectedDays.length > 0 ||
+    filters.selectedHours.length > 0 ||
+    hasQuery;
 
-  // Filter daily chart data if sessions are selected
-  const filteredDaily =
-    filters.selectedSessions.length > 0
-      ? (() => {
-          const selectedEntries = filteredSessions.filter((s) =>
-            filters.selectedSessions.includes(s.key),
-          );
-          const allActivityDates = new Set<string>();
-          for (const entry of selectedEntries) {
-            for (const date of entry.usage?.activityDates ?? []) {
-              allActivityDates.add(date);
-            }
-          }
-          return allActivityDates.size > 0
-            ? data.costDaily.filter((d) => allActivityDates.has(d.date))
-            : data.costDaily;
-        })()
-      : data.costDaily;
+  const filteredDaily = shouldUseSessionDerivedDaily
+    ? activeAggregates.daily.map((day) => {
+        return {
+          date: day.date,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: day.tokens,
+          totalCost: day.cost,
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        };
+      })
+    : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
   const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
@@ -604,7 +610,7 @@ export function renderUsage(props: UsageProps) {
                       filterActions.onAgentChange(value || undefined);
                     }}
                   >
-                    <option value="">${t("usage.filters.allAgents")}</option>
+                    <option value="">${t("usage.filters.defaultAgent")}</option>
                     ${agentOptions.map(
                       (id) => html`<option value="${id}" ?selected=${filters.usageAgentId === id}>
                         ${id}

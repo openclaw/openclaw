@@ -788,6 +788,7 @@ export const uk: TranslationMap = {
       clearAll: "Очистити все",
       remove: "Видалити фільтр",
       all: "Усі",
+      defaultAgent: "Default agent",
       days: "Дні",
       hours: "Години",
       session: "Сеанс",

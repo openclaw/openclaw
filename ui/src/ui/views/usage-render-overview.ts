@@ -446,8 +446,9 @@ function renderDailyChartCompact(
                       { value: d.cacheReadCost ?? 0, class: "cache-read" },
                     ]
                 : [];
+            const hasSegmentBreakdown = segments.some((seg) => seg.value > 0);
             const breakdownLines =
-              dailyChartMode === "by-type"
+              dailyChartMode === "by-type" && hasSegmentBreakdown
                 ? isTokenMode
                   ? [
                       `${t("usage.breakdown.output")} ${formatTokens(d.output)}`,
@@ -490,7 +491,7 @@ function renderDailyChartCompact(
                 @keydown=${(e: KeyboardEvent) => handleDailyBarKeydown(e, d.date, onSelectDay)}
                 @click=${(e: MouseEvent) => onSelectDay(d.date, e.shiftKey)}
               >
-                ${dailyChartMode === "by-type"
+                ${dailyChartMode === "by-type" && hasSegmentBreakdown
                   ? html`
                       <div
                         class="daily-bar daily-bar--stacked"

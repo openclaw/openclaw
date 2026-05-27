@@ -147,6 +147,7 @@ describe("renderUsage", () => {
     expect(optionValues).toContain("main");
     expect(optionValues).toContain("opus");
     expect(agentSelect!.value).toBe("");
+    expect(agentSelect!.options[0]?.textContent).toBe("Default agent");
   });
 
   it("shows selected usageAgentId in agent selector", () => {

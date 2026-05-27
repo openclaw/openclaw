@@ -782,6 +782,7 @@ export const vi: TranslationMap = {
       clearAll: "Xóa tất cả",
       remove: "Xóa bộ lọc",
       all: "Tất cả",
+      defaultAgent: "Default agent",
       days: "Ngày",
       hours: "Giờ",
       session: "Phiên",

@@ -788,6 +788,7 @@ export const tr: TranslationMap = {
       clearAll: "Tümünü Temizle",
       remove: "Filtreyi kaldır",
       all: "Tümü",
+      defaultAgent: "Default agent",
       days: "Günler",
       hours: "Saat",
       session: "Oturum",

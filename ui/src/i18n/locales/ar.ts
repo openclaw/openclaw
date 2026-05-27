@@ -777,6 +777,7 @@ export const ar: TranslationMap = {
       clearAll: "مسح الكل",
       remove: "إزالة عامل التصفية",
       all: "الكل",
+      defaultAgent: "Default agent",
       days: "الأيام",
       hours: "الساعات",
       session: "الجلسة",

@@ -774,6 +774,7 @@ export const th: TranslationMap = {
       clearAll: "ล้างทั้งหมด",
       remove: "ลบตัวกรอง",
       all: "ทั้งหมด",
+      defaultAgent: "Default agent",
       days: "วัน",
       hours: "ชั่วโมง",
       session: "เซสชัน",

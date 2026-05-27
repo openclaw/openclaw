@@ -787,6 +787,7 @@ export const nl: TranslationMap = {
       clearAll: "Alles wissen",
       remove: "Filter verwijderen",
       all: "Alle",
+      defaultAgent: "Default agent",
       days: "Dagen",
       hours: "Uren",
       session: "Sessie",
