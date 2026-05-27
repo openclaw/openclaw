@@ -81,7 +81,14 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 }
 
 function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+  const hasCodeBlock = /```[\s\S]*?```/.test(text);
+  const hasTable = /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+  if (!hasCodeBlock && !hasTable) {
+    return false;
+  }
+  const stripped = text.replace(/```[\s\S]*?```/g, "");
+  const separators = stripped.match(/^[ \t]*\|[-:| \t]+\|[ \t]*$/gm);
+  return (separators?.length ?? 0) <= 5;
 }
 
 function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
