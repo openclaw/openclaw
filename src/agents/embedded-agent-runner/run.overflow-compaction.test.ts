@@ -298,7 +298,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:claude-cli"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
@@ -349,7 +349,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:claude-cli"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
@@ -404,7 +404,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:claude-cli", "anthropic:api"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
@@ -462,7 +462,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:claude-cli", "anthropic:api"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
@@ -526,7 +526,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:api", "anthropic:claude-cli"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
@@ -576,7 +576,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["anthropic:claude-cli"]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
@@ -597,7 +597,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   it("keeps static Anthropic PI auth on the no-external auth profile store", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    await runEmbeddedPiAgent({
+    await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "test-model",
