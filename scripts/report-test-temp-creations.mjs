@@ -7,7 +7,7 @@ import { runAsScript } from "./lib/ts-guard-utils.mjs";
 const DEFAULT_BASE_REF = "origin/main";
 const DEFAULT_HEAD_REF = "HEAD";
 const TEST_FILE_PATTERN =
-  /(?:\.test(?:-[^./]+)?|\.spec|\.e2e(?:\.test|-harness)?|\.test-helpers|\.test-harness|\.test-support|\.test-utils)\.ts$/u;
+  /(?:\.test(?:-[^./]+)?|\.spec|\.e2e(?:\.test|-harness)?|\.test-helpers|\.test-harness|\.test-support|\.test-utils)\.[cm]?[jt]sx?$/u;
 const FINDING_PATTERNS = [
   {
     pattern: /\bmkdtemp(?:Sync)?\s*\(/u,

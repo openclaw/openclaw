@@ -35,6 +35,11 @@ describe("report-test-temp-creations", () => {
       "@@ -1,0 +2,2 @@",
       '+const tempRoot = tmp.dirSync({ prefix: "case-" });',
       "+const tempParent = os.tmpdir();",
+      "diff --git a/test/helper.test-support.mjs b/test/helper.test-support.mjs",
+      "--- a/test/helper.test-support.mjs",
+      "+++ b/test/helper.test-support.mjs",
+      "@@ -1,0 +2,1 @@",
+      "+" + "const tempRoot = fs." + "mkdtemp" + 'Sync("case-");',
     ].join("\n");
 
     expect(collectTempCreationFindingsFromDiff(diff)).toEqual([
@@ -49,6 +54,12 @@ describe("report-test-temp-creations", () => {
         line: 2,
         reason: "new tmp.dir temp directory creation",
         source: 'const tempRoot = tmp.dirSync({ prefix: "case-" });',
+      },
+      {
+        file: "test/helper.test-support.mjs",
+        line: 2,
+        reason: "new mkdtemp temp directory creation",
+        source: 'const tempRoot = fs.mkdtempSync("case-");',
       },
     ]);
   });
