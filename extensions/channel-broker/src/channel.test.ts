@@ -39,7 +39,8 @@ describe("channel-broker plugin", () => {
   });
 
   it("exposes the bundled runtime setter declared by the channel entry", () => {
-    expect(() => channelBrokerEntry.setChannelRuntime?.({} as never)).not.toThrow();
+    expect(channelBrokerEntry.setChannelRuntime).toBeTypeOf("function");
+    expect(() => setChannelBrokerRuntime({} as never)).not.toThrow();
   });
 
   it("infers broker-prefixed platform DMs before defaulting to channel semantics", () => {
