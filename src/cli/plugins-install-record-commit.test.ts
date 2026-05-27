@@ -26,6 +26,7 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
+  stripPendingPluginInstallRecords,
 } from "./plugins-install-record-commit.js";
 
 describe("commitConfigWithPendingPluginInstalls", () => {
@@ -104,6 +105,25 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       movedInstallRecords: true,
       persistedHash: "test-config-hash",
+    });
+  });
+
+  it("strips only selected pending plugin install records", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          legacy: { source: "npm", spec: "legacy@1.0.0" },
+          fresh: { source: "npm", spec: "fresh@1.0.0" },
+        },
+      },
+    };
+
+    expect(stripPendingPluginInstallRecords(config, ["legacy"])).toEqual({
+      plugins: {
+        installs: {
+          fresh: { source: "npm", spec: "fresh@1.0.0" },
+        },
+      },
     });
   });
 

@@ -2,6 +2,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
+  pendingPluginInstallRecordIds,
   stripPendingPluginInstallRecords,
 } from "../../cli/plugins-install-record-commit.js";
 import { replaceConfigFile } from "../../config/config.js";
@@ -63,7 +64,10 @@ export async function runNonInteractiveRemoteSetup(params: {
       },
     });
     writeBaseHash = migrated.persistedHash ?? undefined;
-    nextConfig = stripPendingPluginInstallRecords(nextConfig);
+    nextConfig = stripPendingPluginInstallRecords(
+      nextConfig,
+      pendingPluginInstallRecordIds(baseConfig),
+    );
   }
   await commitConfigWriteWithPendingPluginInstalls({
     nextConfig,

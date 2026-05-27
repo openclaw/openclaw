@@ -3,6 +3,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
+  pendingPluginInstallRecordIds,
   stripPendingPluginInstallRecords,
 } from "../cli/plugins-install-record-commit.js";
 import type {
@@ -78,7 +79,10 @@ async function writeWizardConfigFile(
           });
         },
       });
-      config = stripPendingPluginInstallRecords(config);
+      config = stripPendingPluginInstallRecords(
+        config,
+        pendingPluginInstallRecordIds(migrationBaseConfig),
+      );
     }
   }
   const committed = await commitConfigWriteWithPendingPluginInstalls({
