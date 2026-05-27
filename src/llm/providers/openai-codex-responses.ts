@@ -477,7 +477,10 @@ function buildRequestBody(
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],
-    prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
+    prompt_cache_key:
+      options?.cacheRetention === "none"
+        ? undefined
+        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     tool_choice: "auto",
     parallel_tool_calls: true,
   };

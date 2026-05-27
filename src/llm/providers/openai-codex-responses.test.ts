@@ -217,4 +217,32 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Request timed out after 5ms");
   });
+
+  it("prefers promptCacheKey over sessionId for request cache affinity", async () => {
+    let payload: unknown;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("stop after payload");
+      }),
+    );
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      sessionId: "run-session",
+      promptCacheKey: "stable-cache-key",
+      transport: "sse",
+      onPayload: (nextPayload) => {
+        payload = nextPayload;
+      },
+    });
+
+    await stream.result();
+
+    expect(payload).toMatchObject({ prompt_cache_key: "stable-cache-key" });
+  });
 });

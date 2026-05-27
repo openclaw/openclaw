@@ -252,7 +252,9 @@ function buildParams(
     input: messages,
     stream: true,
     prompt_cache_key:
-      cacheRetention === "none" ? undefined : clampOpenAIPromptCacheKey(options?.sessionId),
+      cacheRetention === "none"
+        ? undefined
+        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     prompt_cache_retention: getPromptCacheRetention(compat, cacheRetention),
     store: false,
   };

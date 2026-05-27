@@ -559,7 +559,7 @@ function buildParams(
     prompt_cache_key:
       (model.baseUrl.includes("api.openai.com") && cacheRetention !== "none") ||
       (cacheRetention === "long" && compat.supportsLongCacheRetention)
-        ? clampOpenAIPromptCacheKey(options?.sessionId)
+        ? clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId)
         : undefined,
     prompt_cache_retention:
       cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
