@@ -328,10 +328,20 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
+  scopes?: string[];
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
   const hasSharedAuth = Boolean(params.token || params.password);
+  // When the call carries explicit operator scopes (e.g. ["operator.write"]),
+  // keep device identity so the gateway can verify them against the paired
+  // device token. Without this, loopback backend calls — such as subagent
+  // completion announce — fail with "missing scope: operator.write" even when
+  // the device has full scopes. Fixes #77807.
+  const requestedScopes = Array.isArray(params.scopes) ? params.scopes : [];
+  if (requestedScopes.length > 0) {
+    return false;
+  }
   return (
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
@@ -345,6 +355,7 @@ function resolveDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
+  scopes?: string[];
 }): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
   if (shouldOmitDeviceIdentityForGatewayCall(params)) {
     return null;
@@ -773,7 +784,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       scopes,
       deviceIdentity:
         opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password, scopes })
           : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,

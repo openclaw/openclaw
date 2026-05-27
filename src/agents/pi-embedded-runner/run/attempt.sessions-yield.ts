@@ -40,6 +40,11 @@ export async function waitForSessionsYieldAbortSettle(params: {
     log.warn(
       `sessions_yield abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS}`,
     );
+    // Continue waiting for the settle to complete so the session file lock is
+    // released before the next turn starts. Without this, the lock remains
+    // held and the next turn fails with "file lock stale", causing model
+    // fallback and visible error messages in the delivery channel.
+    await params.settlePromise.catch(() => {});
   }
 }
 
@@ -167,6 +172,20 @@ export function stripSessionsYieldArtifacts(activeSession: {
       strippedMessages.pop();
       continue;
     }
+    // Also strip the sessions_yield context message. When a new incoming
+    // message aborts an active sessions_yield, this context marker remains in
+    // the session. If a subagent completion announce then re-runs the agent to
+    // deliver the result, the agent sees the context message, responds via
+    // sessions_yield again (a custom_message), and the announce system
+    // rejects it as "completion agent did not produce a visible reply".
+    if (
+      last?.role === "custom" &&
+      "customType" in last &&
+      last.customType === SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE
+    ) {
+      strippedMessages.pop();
+      continue;
+    }
     break;
   }
   if (strippedMessages.length !== activeSession.messages.length) {
@@ -205,7 +224,9 @@ export function stripSessionsYieldArtifacts(activeSession: {
       last.message?.stopReason === "aborted";
     const isYieldInterruptMessage =
       last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
+    const isYieldContextMessage =
+      last.type === "custom_message" && last.customType === SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE;
+    if (!isYieldAbortAssistant && !isYieldInterruptMessage && !isYieldContextMessage) {
       break;
     }
     fileEntries.pop();
