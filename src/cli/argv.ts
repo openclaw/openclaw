@@ -195,7 +195,7 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   if (
     !primary ||
     secondary?.value !== "help" ||
-    !ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary.value)
+    (KNOWN_ROOT_COMMANDS.has(primary.value) && !ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary.value))
   ) {
     return argv;
   }
