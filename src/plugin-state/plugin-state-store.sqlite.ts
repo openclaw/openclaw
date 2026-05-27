@@ -16,7 +16,8 @@ const PLUGIN_STATE_SCHEMA_VERSION = 1;
 const PLUGIN_STATE_DIR_MODE = 0o700;
 const PLUGIN_STATE_FILE_MODE = 0o600;
 const PLUGIN_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-const MAX_ENTRIES_PER_PLUGIN = 3_000;
+// Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
+const MAX_ENTRIES_PER_PLUGIN = 6_000;
 
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = MAX_ENTRIES_PER_PLUGIN;

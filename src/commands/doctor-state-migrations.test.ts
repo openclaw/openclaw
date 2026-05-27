@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
@@ -723,7 +724,7 @@ describe("doctor legacy state migrations", () => {
         targetPath: "plugin state:test.capped-cache",
         pluginId: "telegram",
         namespace: "test.capped-cache",
-        maxEntries: 3000,
+        maxEntries: 6_000,
         scopeKey: "scope",
         cleanupSource: "rename",
         readEntries: () => [
@@ -734,13 +735,14 @@ describe("doctor legacy state migrations", () => {
     ];
 
     await withStateDir(root, async () => {
-      const siblingStore = createPluginStateKeyedStore<{ body: string }>("telegram", {
-        namespace: "test.sibling-cache",
-        maxEntries: 3000,
-      });
-      for (let index = 0; index < 2999; index++) {
-        await siblingStore.register(`sibling-${index}`, { body: "sibling" });
-      }
+      seedPluginStateEntriesForTests(
+        Array.from({ length: 5_999 }, (_, index) => ({
+          pluginId: "telegram",
+          namespace: "test.sibling-cache",
+          key: `sibling-${index}`,
+          value: { body: "sibling" },
+        })),
+      );
     });
     resetPluginStateStoreForTests();
 
@@ -761,7 +763,7 @@ describe("doctor legacy state migrations", () => {
     await withStateDir(root, async () => {
       const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
         namespace: "test.capped-cache",
-        maxEntries: 3000,
+        maxEntries: 6_000,
       });
       const valuesByKey = new Map(
         (await store.entries()).map(({ key, value }) => [key, value.body]),

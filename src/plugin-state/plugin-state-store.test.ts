@@ -210,7 +210,7 @@ describe("plugin state keyed store", () => {
       expect((await evicting.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
 
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 2_999 }, (_, entryIndex) => ({
+        ...Array.from({ length: 5_999 }, (_, entryIndex) => ({
           pluginId: "limited-plugin",
           namespace: "limit",
           key: `k-${entryIndex}`,
@@ -225,7 +225,7 @@ describe("plugin state keyed store", () => {
       ]);
       const limited = createPluginStateKeyedStore("limited-plugin", {
         namespace: "limit",
-        maxEntries: 3_001,
+        maxEntries: 6_001,
       });
       const sibling = createPluginStateKeyedStore("limited-plugin", {
         namespace: "sibling",
@@ -342,7 +342,7 @@ describe("plugin state keyed store", () => {
   it("evicts current namespace rows when sibling namespaces consume plugin row budget", async () => {
     await withPluginStateTestState(async () => {
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 2_989 }, (_, entryIndex) => ({
+        ...Array.from({ length: 5_989 }, (_, entryIndex) => ({
           pluginId: "telegram",
           namespace: "telegram.message-cache",
           key: `k-${entryIndex}`,
@@ -358,7 +358,7 @@ describe("plugin state keyed store", () => {
 
       const messageStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.message-cache",
-        maxEntries: 3_000,
+        maxEntries: 6_000,
       });
       const topicStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.topic-name-cache",
@@ -378,15 +378,65 @@ describe("plugin state keyed store", () => {
         kind: "topic",
         entryIndex: 0,
       });
-      await expect(messageStore.entries()).resolves.toHaveLength(2_989);
+      await expect(messageStore.entries()).resolves.toHaveLength(5_989);
       await expect(topicStore.entries()).resolves.toHaveLength(11);
+    });
+  });
+
+  it("leaves room for Telegram sibling namespaces at their persistent budgets", async () => {
+    await withPluginStateTestState(async () => {
+      seedPluginStateEntriesForTests([
+        ...Array.from({ length: 3_000 }, (_, entryIndex) => ({
+          pluginId: "telegram",
+          namespace: "telegram.message-cache",
+          key: `message-${entryIndex}`,
+          value: { kind: "message", entryIndex },
+        })),
+        ...Array.from({ length: 2_047 }, (_, entryIndex) => ({
+          pluginId: "telegram",
+          namespace: "telegram.topic-name-cache",
+          key: `topic-${entryIndex}`,
+          value: { kind: "topic", updatedAt: entryIndex },
+        })),
+        ...Array.from({ length: 127 }, (_, entryIndex) => ({
+          pluginId: "telegram",
+          namespace: "telegram.bot-info-cache",
+          key: `bot-${entryIndex}`,
+          value: { kind: "bot-info", fetchedAt: String(entryIndex) },
+        })),
+      ]);
+
+      const topicStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.topic-name-cache",
+        maxEntries: 2_048,
+      });
+      const botInfoStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.bot-info-cache",
+        maxEntries: 128,
+      });
+
+      await expect(
+        topicStore.register("topic-final", { kind: "topic", updatedAt: 2_048 }),
+      ).resolves.toBeUndefined();
+      await expect(
+        botInfoStore.register("default", { kind: "bot-info", fetchedAt: "now" }),
+      ).resolves.toBeUndefined();
+
+      await expect(topicStore.lookup("topic-final")).resolves.toEqual({
+        kind: "topic",
+        updatedAt: 2_048,
+      });
+      await expect(botInfoStore.lookup("default")).resolves.toEqual({
+        kind: "bot-info",
+        fetchedAt: "now",
+      });
     });
   });
 
   it("rejects plugin overflow when the current namespace cannot shed old rows", async () => {
     await withPluginStateTestState(async () => {
       seedPluginStateEntriesForTests(
-        Array.from({ length: 3_000 }, (_, entryIndex) => ({
+        Array.from({ length: 6_000 }, (_, entryIndex) => ({
           pluginId: "telegram",
           namespace: "telegram.topic-name-cache",
           key: `topic-${entryIndex}`,
@@ -396,11 +446,11 @@ describe("plugin state keyed store", () => {
 
       const messageStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.message-cache",
-        maxEntries: 3_000,
+        maxEntries: 6_000,
       });
       const topicStore = createPluginStateKeyedStore("telegram", {
         namespace: "telegram.topic-name-cache",
-        maxEntries: 3_000,
+        maxEntries: 6_000,
       });
 
       await expectPluginStateStoreError(messageStore.register("new-message", { fresh: true }), {
