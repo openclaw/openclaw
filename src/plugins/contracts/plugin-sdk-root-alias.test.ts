@@ -525,6 +525,36 @@ describe("plugin-sdk root alias", () => {
     );
   });
 
+  it("resolves the diagnostic event export by function name when dist aliases shift", () => {
+    let subscribeCount = 0;
+    let unsubscribeCount = 0;
+    const lazyModule = loadRootAliasWithStubs({
+      aliasPath: createDistAliasPath(),
+      distEntries: ["diagnostic-events-W3Hz61fI.js"],
+      monolithicExports: {
+        r: function emitFailoverEvent(): void {
+          throw new Error("wrong diagnostic event alias selected");
+        },
+        u: function onDiagnosticEvent(_listener: () => void): () => void {
+          subscribeCount += 1;
+          return () => {
+            unsubscribeCount += 1;
+          };
+        },
+      },
+    });
+
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )(() => undefined);
+    unsubscribe();
+
+    expect(subscribeCount).toBe(1);
+    expect(unsubscribeCount).toBe(1);
+  });
+
   it("bridges diagnostic listeners through shared process state when the lazy module is isolated", () => {
     const seen: string[] = [];
     const lazyModule = loadDiagnosticEventsAlias(["diagnostic-events-W3Hz61fI.js"]);
