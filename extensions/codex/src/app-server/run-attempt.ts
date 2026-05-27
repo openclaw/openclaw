@@ -67,27 +67,16 @@ import {
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
 import {
-  codexExecutionToolName,
-  describeNotificationActivity,
-  isAssistantCompletionReleaseNotification,
+  applyCodexTurnNotificationState,
+  isTerminalCodexTurnNotificationForTurn,
+  reportCodexExecutionNotification,
+} from "./attempt-notification-state.js";
+import {
   isCodexNotificationOutsideActiveRun,
-  isCodexTurnAbortMarkerNotification,
   isCurrentApprovalTurnRequestParams,
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
-  isNativeToolProgressNotification,
-  isPendingOpenClawDynamicToolCompletionNotification,
-  isRawAssistantCompletionNotification,
-  isRawReasoningCompletionNotification,
-  isRawToolOutputCompletionNotification,
-  isReasoningItemCompletionNotification,
-  isRetryableErrorNotification,
   isTerminalTurnStatus,
-  isTurnNotification,
-  readCodexNotificationItem,
-  readNotificationItemId,
-  shouldDisarmAssistantCompletionIdleWatch,
-  updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -99,7 +88,6 @@ import {
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import {
-  CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexStartupTimeoutMs,
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
@@ -1136,44 +1124,23 @@ export async function runCodexAppServerAttempt(
       ...info,
     });
   };
-  const reportCodexExecutionNotification = (notification: CodexServerNotification) => {
-    if (notification.method === "turn/started") {
-      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
-      return;
-    }
-    if (notification.method === "item/agentMessage/delta") {
-      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
-      return;
-    }
-    if (notification.method !== "item/started") {
-      return;
-    }
-    const item = readCodexNotificationItem(notification.params);
-    const tool = item ? codexExecutionToolName(item) : undefined;
-    if (!item || !tool) {
-      return;
-    }
-    emitExecutionPhaseOnce(`tool:${item.id}`, {
-      phase: "tool_execution_started",
-      tool,
-      itemId: item.id,
+  const reportExecutionNotification = (notification: CodexServerNotification) => {
+    reportCodexExecutionNotification({
+      notification,
+      emitExecutionPhaseOnce,
     });
   };
 
   const isTerminalTurnNotificationForTurn = (
     notification: CodexServerNotification,
     notificationTurnId: string,
-  ): boolean => {
-    if (!isTurnNotification(notification.params, thread.threadId, notificationTurnId)) {
-      return false;
-    }
-    return (
-      notification.method === "turn/completed" ||
-      isCodexTurnAbortMarkerNotification(notification, {
-        currentPromptTexts: [codexTurnPromptText],
-      })
-    );
-  };
+  ): boolean =>
+    isTerminalCodexTurnNotificationForTurn({
+      notification,
+      threadId: thread.threadId,
+      turnId: notificationTurnId,
+      currentPromptTexts: [codexTurnPromptText],
+    });
 
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
@@ -1181,151 +1148,26 @@ export async function runCodexAppServerAttempt(
       pendingNotifications.push(notification);
       return;
     }
-    const isCurrentTurnNotification = isTurnNotification(
-      notification.params,
-      thread.threadId,
+    const notificationState = applyCodexTurnNotificationState({
+      notification,
+      threadId: thread.threadId,
       turnId,
-    );
-    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
-    if (isCurrentTurnNotification) {
-      turnWatches.touchActivity(`notification:${notification.method}`, {
-        details: describeNotificationActivity(notification),
-        attemptProgress: true,
-      });
-      reportCodexExecutionNotification(notification);
-    }
-    if (isCurrentTurnNotification) {
-      updateActiveTurnItemIds(notification, activeTurnItemIds);
-      if (notification.method === "item/completed" && activeTurnItemIds.size === 0) {
-        scheduleTerminalDynamicToolReleaseCheck();
-      }
-    }
-    const unblockedAssistantCompletionRelease =
-      isCurrentTurnNotification &&
-      turnWatches.isAssistantCompletionIdleWatchArmed() &&
-      notification.method === "item/completed" &&
-      activeTurnItemIds.size === 0;
-    const trackedDynamicToolCompletion = isPendingOpenClawDynamicToolCompletionNotification(
-      notification,
+      currentPromptTexts: [codexTurnPromptText],
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      turnWatches,
+      activeTurnItemIds,
+      activeAppServerTurnRequests,
       pendingOpenClawDynamicToolCompletionIds,
-    );
-    const rawToolOutputCompletion = isRawToolOutputCompletionNotification(notification);
-    if (
-      isCurrentTurnNotification &&
-      (rawToolOutputCompletion || isNativeToolProgressNotification(notification))
-    ) {
-      turnCrossedToolHandoff = true;
-    }
-    const assistantCompletionCanRelease = isAssistantCompletionReleaseNotification(
-      notification,
       turnCrossedToolHandoff,
-    );
-    const postToolRawAssistantCompletionNeedsTerminalGuard =
-      isCurrentTurnNotification &&
-      turnCrossedToolHandoff &&
-      isRawAssistantCompletionNotification(notification) &&
-      activeTurnItemIds.size === 0;
-    const rawResponseItemCompletedWithNoActiveItems =
-      isCurrentTurnNotification &&
-      notification.method === "rawResponseItem/completed" &&
-      activeTurnItemIds.size === 0 &&
-      activeAppServerTurnRequests === 0 &&
-      !assistantCompletionCanRelease &&
-      !postToolRawAssistantCompletionNeedsTerminalGuard;
-    const shouldArmPostReasoningSourceReplyWatch =
-      isCurrentTurnNotification &&
-      isReasoningItemCompletionNotification(notification) &&
-      activeTurnItemIds.size === 0 &&
-      params.sourceReplyDeliveryMode === "message_tool_only";
-    const shouldArmPostRawReasoningSourceReplyWatch =
-      rawResponseItemCompletedWithNoActiveItems &&
-      isRawReasoningCompletionNotification(notification) &&
-      params.sourceReplyDeliveryMode === "message_tool_only";
-    const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
-      isCurrentTurnNotification &&
-      notification.method === "item/completed" &&
-      activeTurnItemIds.size === 0 &&
-      !trackedDynamicToolCompletion &&
-      !assistantCompletionCanRelease &&
-      !shouldArmPostReasoningSourceReplyWatch;
-    if (isCurrentTurnNotification && notification.method === "error") {
-      if (isRetryableErrorNotification(notification.params)) {
-        turnWatches.disarmCompletionIdleWatch();
-      } else {
-        turnWatches.armCompletionIdleWatch({ pinnedByTerminalError: true });
-      }
-      turnWatches.disarmAssistantCompletionIdleWatch();
-    } else if (isTurnCompletion) {
-      turnWatches.disarmAssistantCompletionIdleWatch();
-    } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
-      turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-    } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
-      turnWatches.armCompletionIdleWatch({
-        timeoutMs: postToolRawAssistantCompletionIdleTimeoutMs,
-      });
-    } else if (
-      shouldArmPostReasoningSourceReplyWatch ||
-      shouldArmPostRawReasoningSourceReplyWatch
-    ) {
-      turnWatches.armCompletionIdleWatch({
-        timeoutMs: CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS,
-      });
-    } else if (unblockedAssistantCompletionRelease) {
-      turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-    } else if (shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem) {
-      // If a non-assistant current-turn item is the last active item and the
-      // bridge then goes quiet, reset the short completion-idle guard from that
-      // final completion so the remaining silent-turn gap fails fast.
-      turnWatches.armCompletionIdleWatch();
-    } else if (rawResponseItemCompletedWithNoActiveItems) {
-      turnWatches.armCompletionIdleWatch();
-    } else if (isCurrentTurnNotification && rawToolOutputCompletion) {
-      // Raw OpenAI response streams can report the tool-output handoff without
-      // a matching app-server `item/completed`; keep the post-tool guard alive.
-      turnWatches.armCompletionIdleWatch();
-    } else if (
-      isCurrentTurnNotification &&
-      shouldDisarmAssistantCompletionIdleWatch(notification)
-    ) {
-      turnWatches.disarmAssistantCompletionIdleWatch();
-    }
-    if (
-      turnWatches.isCompletionIdleWatchArmed() &&
-      !turnWatches.isCompletionIdleWatchPinnedByTerminalError() &&
-      notification.method !== "turn/completed" &&
-      isCurrentTurnNotification &&
-      !trackedDynamicToolCompletion &&
-      !rawToolOutputCompletion &&
-      !postToolRawAssistantCompletionNeedsTerminalGuard &&
-      !rawResponseItemCompletedWithNoActiveItems &&
-      !shouldArmPostReasoningSourceReplyWatch &&
-      !shouldArmPostRawReasoningSourceReplyWatch &&
-      !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
-    ) {
-      // The short completion-idle watchdog guards blind gaps after Codex
-      // accepts a turn or after OpenClaw hands a turn-scoped request result
-      // back to Codex. Bookkeeping that closes the just-served OpenClaw
-      // dynamic tool item is still part of that handoff, so keep the short
-      // watchdog armed for that notification.
-      turnWatches.disarmCompletionIdleWatch();
-    }
-    if (trackedDynamicToolCompletion) {
-      const itemId = readNotificationItemId(notification);
-      if (itemId) {
-        pendingOpenClawDynamicToolCompletionIds.delete(itemId);
-        scheduleTerminalDynamicToolReleaseCheck();
-      }
-    }
+      postToolRawAssistantCompletionIdleTimeoutMs,
+      onScheduleTerminalDynamicToolReleaseCheck: scheduleTerminalDynamicToolReleaseCheck,
+      onReportExecutionNotification: reportExecutionNotification,
+    });
+    turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
-    const isTurnAbortMarker =
-      isCurrentTurnNotification &&
-      isCodexTurnAbortMarkerNotification(notification, {
-        currentPromptTexts: [codexTurnPromptText],
-      });
-    const isTurnTerminal = isTerminalTurnNotificationForTurn(notification, turnId);
-    if (isTurnTerminal) {
+    if (notificationState.isTurnTerminal) {
       terminalTurnNotificationQueued = true;
     }
     try {
@@ -1337,8 +1179,8 @@ export async function runCodexAppServerAttempt(
         error,
       });
     } finally {
-      if (isTurnTerminal) {
-        if (isTurnAbortMarker) {
+      if (notificationState.isTurnTerminal) {
+        if (notificationState.isTurnAbortMarker) {
           projector.markAborted();
         }
         if (!timedOut && !runAbortController.signal.aborted) {
