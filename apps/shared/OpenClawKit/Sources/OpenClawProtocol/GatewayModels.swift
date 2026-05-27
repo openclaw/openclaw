@@ -4990,25 +4990,51 @@ public struct ToolsEffectiveGroup: Codable, Sendable {
     }
 }
 
+public struct ToolsEffectiveNotice: Codable, Sendable {
+    public let id: String
+    public let severity: AnyCodable
+    public let message: String
+
+    public init(
+        id: String,
+        severity: AnyCodable,
+        message: String)
+    {
+        self.id = id
+        self.severity = severity
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case severity
+        case message
+    }
+}
+
 public struct ToolsEffectiveResult: Codable, Sendable {
     public let agentid: String
     public let profile: String
     public let groups: [ToolsEffectiveGroup]
+    public let notices: [ToolsEffectiveNotice]?
 
     public init(
         agentid: String,
         profile: String,
-        groups: [ToolsEffectiveGroup])
+        groups: [ToolsEffectiveGroup],
+        notices: [ToolsEffectiveNotice]?)
     {
         self.agentid = agentid
         self.profile = profile
         self.groups = groups
+        self.notices = notices
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case profile
         case groups
+        case notices
     }
 }
 
