@@ -71,6 +71,16 @@ type AnthropicMessagesClient = {
   };
 };
 
+function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
+  if (
+    normalizeLowercaseStringOrEmpty(model.provider) === "anthropic" &&
+    /^anthropic\//i.test(model.id)
+  ) {
+    return model.id.replace(/^anthropic\//i, "");
+  }
+  return model.id;
+}
+
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
   | {
@@ -794,7 +804,7 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const params: Record<string, unknown> = {
-    model: model.id,
+    model: resolveAnthropicRequestModelId(model),
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
