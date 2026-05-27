@@ -772,8 +772,7 @@ Docs: https://docs.openclaw.ai
 - Crabbox: exclude local `.tmp` captures from OpenClaw syncs so heapdump and trace analysis artifacts do not bloat remote proof uploads.
 - WhatsApp: extend QA trace phases through inbound processing and buffered reply dispatch so RTT artifacts isolate the remaining pre-send delay.
 - WhatsApp: keep raw session identifiers out of QA trace phase logs while preserving reply-path timing instrumentation.
-- WhatsApp: lazy-load outbound send helpers from the channel plugin so registration avoids loading runtime send/media code before the first outbound action.
-- WhatsApp: keep channel outbound registration on a light descriptor and defer media, quote-cache, and send runtimes until outbound delivery.
+- WhatsApp: keep outbound send helpers eager on the live reply path so first WhatsApp delivery does not pay a lazy runtime import during RTT probes.
 - WhatsApp: defer heartbeat readiness runtime from channel registration so the descriptor does not pull auth-state helpers until heartbeat checks run.
 - WhatsApp: lazy-load doctor-only security repair code so channel registration avoids config-repair imports on normal startup.
 - WhatsApp: lazy-load legacy state migration checks so channel registration avoids filesystem repair helpers until migration scanning runs.
