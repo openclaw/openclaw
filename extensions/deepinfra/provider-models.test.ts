@@ -134,6 +134,26 @@ describe("hasDeepInfraApiKey", () => {
     });
   });
 
+  it("accepts config-backed provider API keys before probing the profile store", () => {
+    expect(
+      hasDeepInfraApiKey({
+        env: {},
+        agentDir: "/tmp/openclaw-agent",
+        config: {
+          models: {
+            providers: {
+              deepinfra: {
+                apiKey: { source: "env", provider: "default", id: "CUSTOM_DEEPINFRA_KEY" },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+
+    expect(isProviderApiKeyConfiguredMock).not.toHaveBeenCalled();
+  });
+
   it("short-circuits on env var and skips the profile-store probe", () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
 

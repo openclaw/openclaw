@@ -3,6 +3,7 @@ import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-c
 import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const log = createSubsystemLogger("deepinfra-models");
@@ -25,6 +26,11 @@ export const DEEPINFRA_MODEL_CATALOG: ModelDefinitionConfig[] = DEEPINFRA_MANIFE
 
 const DISCOVERY_TIMEOUT_MS = 5000;
 const DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type DeepInfraAuthConfig = {
+  secrets?: { defaults?: { env?: string; file?: string; exec?: string } };
+  models?: { providers?: Record<string, { apiKey?: unknown } | undefined> };
+};
 
 // Wire format — mirrors deepapi/agent_models_api.AgentOpenAIModelsOut.
 interface DeepInfraAgentModelPricing {
@@ -368,11 +374,21 @@ function chatSurfaceModelToModelDefinition(model: DeepInfraSurfaceModel): ModelD
 export function hasDeepInfraApiKey(options?: {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
+  config?: DeepInfraAuthConfig;
 }): boolean {
   const env = options?.env ?? process.env;
   const fromEnv = env.DEEPINFRA_API_KEY;
   if (typeof fromEnv === "string" && fromEnv.trim() !== "") {
     return true;
+  }
+  const providers = options?.config?.models?.providers;
+  for (const [providerId, provider] of Object.entries(providers ?? {})) {
+    if (
+      providerId.trim().toLowerCase() === "deepinfra" &&
+      hasConfiguredSecretInput(provider?.apiKey, options?.config?.secrets?.defaults)
+    ) {
+      return true;
+    }
   }
   return isProviderApiKeyConfigured({ provider: "deepinfra", agentDir: options?.agentDir });
 }

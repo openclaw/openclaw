@@ -119,6 +119,35 @@ describe("deepinfra augmentModelCatalog", () => {
     expect(entries.length).toBe(DEEPINFRA_MODEL_CATALOG.length);
   });
 
+  it("uses config-backed API keys to enable live model catalog augmentation", async () => {
+    resetDeepInfraModelCacheForTest();
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAgentModelEntry("config/live-model")] }),
+    });
+    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
+
+    await withLiveDiscoveryTestEnv(mockFetch, async () => {
+      const entries =
+        (await provider.augmentModelCatalog?.({
+          entries: [],
+          env: {},
+          config: {
+            models: {
+              providers: {
+                deepinfra: {
+                  apiKey: { source: "env", provider: "default", id: "CUSTOM_DEEPINFRA_KEY" },
+                },
+              },
+            },
+          },
+        } as never)) ?? [];
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(entries.map((entry) => entry.id)).toContain("config/live-model");
+    });
+  });
+
   it("skips live discovery and returns only configured entries when ctx.entries already has more DeepInfra rows than the static catalog", async () => {
     resetDeepInfraModelCacheForTest();
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);

@@ -85,10 +85,10 @@ export default defineSingleProviderPluginEntry({
         return configured;
       }
       // Gate dynamic discovery on the user having configured a DeepInfra API
-      // key (env var OR auth-profile store via isProviderApiKeyConfigured).
+      // key (env var, config SecretInput, or auth-profile store).
       // Pre-auth flows keep the curated manifest fallback so the model picker
       // stays tight and startup stays offline-friendly.
-      const hasApiKey = hasDeepInfraApiKey({ env, agentDir });
+      const hasApiKey = hasDeepInfraApiKey({ env, agentDir, config });
       const seen = new Set(configured.map((entry) => entry.id));
       const discovered = await discoverDeepInfraModels({ hasApiKey, env, agentDir });
       const merged: ConfiguredProviderCatalogEntry[] = [...configured];
