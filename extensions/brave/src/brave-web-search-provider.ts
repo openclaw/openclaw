@@ -4,23 +4,14 @@ import type {
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search";
+import {
+  mergeScopedSearchConfig,
+  resolveProviderWebSearchPluginConfig,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
-
-const LEGACY_WEB_SEARCH_PROVIDER_KEYS: ReadonlySet<string> = new Set([
-  "brave",
-  "duckduckgo",
-  "exa",
-  "gemini",
-  "google",
-  "kimi",
-  "minimax",
-  "moonshot",
-  "perplexity",
-  "xai",
-]);
 
 type BraveWebSearchRuntime = typeof import("./brave-web-search-provider.runtime.js");
 
@@ -75,20 +66,6 @@ const BraveSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-function resolveProviderWebSearchPluginConfig(
-  config: unknown,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  if (!isRecord(config)) {
-    return undefined;
-  }
-  const plugins = isRecord(config.plugins) ? config.plugins : undefined;
-  const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
-  const entry = isRecord(entries?.[pluginId]) ? entries[pluginId] : undefined;
-  const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
-  return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
-}
-
 function resolveLegacyTopLevelBraveCredential(
   config: unknown,
 ): { path: string; value: unknown } | undefined {
@@ -109,40 +86,6 @@ function resolveConfiguredBraveCredential(config: unknown): unknown {
     resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey ??
     resolveLegacyTopLevelBraveCredential(config)?.value
   );
-}
-
-function mergeScopedSearchConfig(
-  searchConfig: Record<string, unknown> | undefined,
-  key: string,
-  pluginConfig: Record<string, unknown> | undefined,
-  options?: { mirrorApiKeyToTopLevel?: boolean },
-): Record<string, unknown> | undefined {
-  if (!pluginConfig) {
-    return searchConfig;
-  }
-
-  const currentScoped = isRecord(searchConfig?.[key]) ? searchConfig?.[key] : {};
-  const next: Record<string, unknown> = { ...searchConfig };
-  const existingDescriptor = searchConfig
-    ? Object.getOwnPropertyDescriptor(searchConfig, key)
-    : undefined;
-  const shouldHide = LEGACY_WEB_SEARCH_PROVIDER_KEYS.has(key) && existingDescriptor === undefined;
-
-  Object.defineProperty(next, key, {
-    value: {
-      ...currentScoped,
-      ...pluginConfig,
-    },
-    enumerable: !shouldHide,
-    configurable: true,
-    writable: true,
-  });
-
-  if (options?.mirrorApiKeyToTopLevel && pluginConfig.apiKey !== undefined) {
-    next.apiKey = pluginConfig.apiKey;
-  }
-
-  return next;
 }
 
 function resolveBraveMode(searchConfig?: Record<string, unknown>): "web" | "llm-context" {
