@@ -129,7 +129,7 @@ describe("phone-control plugin", () => {
   it("arms sms.send as part of the writes group", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");
-      expect(command.requiredScopes).toEqual(["operator.admin"]);
+      expect(command.requiredScopes).toBeUndefined();
 
       const res = await command.handler({
         ...createCommandContext("arm writes 30s"),
@@ -186,6 +186,32 @@ describe("phone-control plugin", () => {
       });
 
       expect(res?.text ?? "").toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external non-owner callers without operator.admin to read phone control status", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("status"),
+        channel: "telegram",
+        senderIsOwner: false,
+      });
+
+      expect(res?.text ?? "").toContain("Phone control: disarmed.");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external non-owner callers without operator.admin to read phone control help", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("help"),
+        channel: "telegram",
+        senderIsOwner: false,
+      });
+
+      expect(res?.text ?? "").toContain("/phone status");
       expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
