@@ -31,11 +31,11 @@ describe("deepinfra video generation provider", () => {
   it("uses the current DeepInfra text-to-video fallback model first", () => {
     const provider = buildDeepInfraVideoGenerationProvider();
 
-    expect(provider.defaultModel).toBe("Wan-AI/Wan2.6-T2V");
+    expect(provider.defaultModel).toBe("Pixverse/Pixverse-T2V");
     expect(provider.models?.slice(0, 3)).toEqual([
-      "Wan-AI/Wan2.6-T2V",
       "Pixverse/Pixverse-T2V",
       "Pixverse/Pixverse-T2V-HD",
+      "Wan-AI/Wan2.6-T2V",
     ]);
   });
 

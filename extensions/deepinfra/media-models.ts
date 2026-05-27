@@ -29,9 +29,9 @@ export const DEEPINFRA_TTS_FALLBACK_MODELS = [
 ] as const;
 
 export const DEEPINFRA_VIDEO_FALLBACK_MODELS = [
-  "Wan-AI/Wan2.6-T2V",
   "Pixverse/Pixverse-T2V",
   "Pixverse/Pixverse-T2V-HD",
+  "Wan-AI/Wan2.6-T2V",
   "google/veo-3.1-fast",
 ] as const;
 
