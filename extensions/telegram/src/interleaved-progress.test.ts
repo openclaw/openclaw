@@ -5,9 +5,38 @@ import {
   INTERLEAVED_LINE_MAX_CHARS,
   renderInterleavedMessage,
   resolveInterleavedProgressEnabled,
+  resolveInterleavedToolLine,
   sanitizeInterleavedLine,
   stripReasoningHeader,
 } from "./interleaved-progress.js";
+
+describe("resolveInterleavedToolLine", () => {
+  const sanitized = "🛠️ Bash: ls -la";
+
+  it("shows the tool name only by default (args never appear unless opted in)", () => {
+    expect(resolveInterleavedToolLine({ showArgs: false, sanitizedLine: sanitized, toolName: "Bash" })).toBe(
+      "tool: Bash",
+    );
+  });
+
+  it("shows the sanitized args/detail line when opted in", () => {
+    expect(resolveInterleavedToolLine({ showArgs: true, sanitizedLine: sanitized, toolName: "Bash" })).toBe(
+      sanitized,
+    );
+  });
+
+  it("falls back to name-only when opted in but no detail line was produced", () => {
+    expect(resolveInterleavedToolLine({ showArgs: true, sanitizedLine: undefined, toolName: "Bash" })).toBe(
+      "tool: Bash",
+    );
+  });
+
+  it("uses a generic label when the tool name is missing", () => {
+    expect(resolveInterleavedToolLine({ showArgs: false, sanitizedLine: undefined, toolName: undefined })).toBe(
+      "tool running",
+    );
+  });
+});
 
 describe("resolveInterleavedProgressEnabled", () => {
   const base = { toolProgressEnabled: true, configEnabled: true, hasReasoningLane: true };

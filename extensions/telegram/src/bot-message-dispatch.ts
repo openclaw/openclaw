@@ -124,6 +124,7 @@ import {
   appendStatusLine,
   renderInterleavedMessage,
   resolveInterleavedProgressEnabled,
+  resolveInterleavedToolLine,
 } from "./interleaved-progress.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
@@ -2074,9 +2075,11 @@ export const dispatchTelegramMessage = async ({
                     // Interleaved lane: name-only by default; sanitized args/detail
                     // when interleavedToolArgs is opted in. Arms the rolling timer.
                     // Falls back to the default tool-progress lane when off.
-                    const interleavedToolLine =
-                      (interleavedToolArgsEnabled ? sanitizedToolLine : undefined) ??
-                      (toolName ? `tool: ${toolName}` : "tool running");
+                    const interleavedToolLine = resolveInterleavedToolLine({
+                      showArgs: interleavedToolArgsEnabled,
+                      sanitizedLine: sanitizedToolLine,
+                      toolName,
+                    });
                     if (!appendInterleavedLine(interleavedToolLine, { startTimer: true })) {
                       await pushStreamToolProgress(sanitizedToolLine, {
                         toolName,

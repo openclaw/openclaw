@@ -121,3 +121,19 @@ export function appendStatusLine(params: {
   }
   return `${params.body}\n[${params.timestamp}] ${text}\n`;
 }
+
+/**
+ * Choose the interleaved lane's text for a tool start. Default is the tool name
+ * only — args/detail are shown ONLY when the operator opts into
+ * `interleavedToolArgs` AND a sanitized detail line was produced. Falls back to
+ * the tool name (or a generic label) otherwise, so tool args never appear by
+ * default. `sanitizedLine` must already be the sanitized formatter output.
+ */
+export function resolveInterleavedToolLine(params: {
+  showArgs: boolean;
+  sanitizedLine: string | undefined;
+  toolName: string | undefined;
+}): string {
+  const nameOnly = params.toolName ? `tool: ${params.toolName}` : "tool running";
+  return params.showArgs && params.sanitizedLine ? params.sanitizedLine : nameOnly;
+}
