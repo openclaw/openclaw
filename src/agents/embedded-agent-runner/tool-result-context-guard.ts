@@ -102,6 +102,15 @@ function restoreTranscriptPromptText(
   return restoredMessage;
 }
 
+function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
+  if (getTranscriptPromptText(message) === undefined) {
+    return message;
+  }
+  const { [TRANSCRIPT_PROMPT_TEXT_KEY]: _transcriptPromptText, ...messageRest } =
+    message as unknown as Record<string, unknown>;
+  return messageRest as unknown as AgentMessage;
+}
+
 function projectTranscriptPromptMessages(
   messages: AgentMessage[],
   cache: WeakMap<AgentMessage, AgentMessage>,
@@ -113,6 +122,16 @@ function projectTranscriptPromptMessages(
     return next;
   });
   return changed ? projected : messages;
+}
+
+function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const stripped = messages.map((message) => {
+    const next = stripTranscriptPromptMarker(message);
+    changed ||= next !== message;
+    return next;
+  });
+  return changed ? stripped : messages;
 }
 
 function truncateTextToBudget(text: string, maxChars: number): string {
@@ -329,6 +348,7 @@ export function installContextEngineLoopHook(params: {
       sourceMessages,
       transcriptProjectionCache,
     );
+    const providerMessages = stripTranscriptPromptMarkers(sourceMessages);
     const checkedPrefixLength =
       lastSeenLength == null ? 0 : Math.min(lastSeenLength, transcriptMessages.length);
     const sourceHistoryChanged =
@@ -359,7 +379,7 @@ export function installContextEngineLoopHook(params: {
     if (!hasNewMessages) {
       lastSeenLength = prePromptMessageCount;
       lastSourceMessages = transcriptMessages;
-      return lastAssembledView ?? sourceMessages;
+      return lastAssembledView ?? providerMessages;
     }
     try {
       if (typeof contextEngine.afterTurn === "function") {
@@ -401,11 +421,15 @@ export function installContextEngineLoopHook(params: {
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
-        messages: sourceMessages,
+        messages: providerMessages,
         tokenBudget,
         model: modelId,
       });
-      if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {
+      if (
+        assembled &&
+        Array.isArray(assembled.messages) &&
+        assembled.messages !== providerMessages
+      ) {
         lastAssembledView = assembled.messages;
         return assembled.messages;
       }
@@ -418,7 +442,7 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
     }
 
-    return sourceMessages;
+    return providerMessages;
   }) as GuardableTransformContext;
 
   return () => {
