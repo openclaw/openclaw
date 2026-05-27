@@ -741,6 +741,13 @@ export function readBrowserVersion(executablePath: string): string | null {
     }
   }
 
+  if (process.platform === "win32") {
+    const winVersion = readWindowsExeBrowserVersion(executablePath);
+    if (winVersion) {
+      return winVersion;
+    }
+  }
+
   const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
   if (!output) {
     return null;
@@ -759,6 +766,27 @@ function readMacBundleBrowserVersion(executablePath: string): string | null {
     ["-c", "Print :CFBundleShortVersionString", plistPath],
     MAC_PLISTBUDDY_TIMEOUT_MS,
   );
+}
+
+function readWindowsExeBrowserVersion(executablePath: string): string | null {
+  // Use PowerShell to read file version info from the PE executable
+  // without launching the browser itself. This is much faster and more
+  // reliable than running chrome.exe --version on Windows.
+  const script = `(Get-Item '${executablePath.replace(/'/g, "''")}').VersionInfo.ProductVersion`;
+  const output = execText("powershell", ["-NoProfile", "-Command", script], BROWSER_VERSION_TIMEOUT_MS);
+  if (!output) {
+    // Fallback: try wmic (deprecated but still available on most Windows versions)
+    const wmicPath = executablePath.replace(/\\/g, "\\\\");
+    const wmicOutput = execText("wmic", ["datafile", "where", `name="${wmicPath}"`, "get", "Version", "/value"], BROWSER_VERSION_TIMEOUT_MS);
+    if (!wmicOutput) {
+      return null;
+    }
+    const match = wmicOutput.match(/Version=(.+)/i);
+    return match?.[1]?.trim() ?? null;
+  }
+
+  const trimmed = output.replace(/\s+/g, " ").trim();
+  return trimmed || null;
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {
