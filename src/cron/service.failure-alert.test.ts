@@ -539,7 +539,7 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(alertText).toBe(
-      'Cron job "skipped timeout" skipped 1 times\n' + "Skip reason: cron: job execution timed out",
+      'Cron job "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
     );
 
     cron.stop();

@@ -43,7 +43,7 @@ function addCronRunCauseFields(value: unknown): unknown {
       return item;
     }
     const cause = item.errorReason.trim();
-    return cause ? { ...item, cause } : item;
+    return cause ? Object.assign({}, item, { cause }) : item;
   });
   return { ...record, entries: nextEntries };
 }
