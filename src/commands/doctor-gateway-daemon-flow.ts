@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { repairLoadedGatewayServiceForStart } from "../cli/daemon-cli/start-repair.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,7 +13,13 @@ import {
   launchAgentPlistExists,
   repairLaunchAgentBootstrap,
 } from "../daemon/launchd.js";
-import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
+import {
+  collectGatewayServiceStartRepairIssues,
+  describeGatewayServiceRestart,
+  formatGatewayServiceStartRepairIssues,
+  readGatewayServiceState,
+  resolveGatewayService,
+} from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import {
@@ -154,6 +161,7 @@ export async function maybeRepairGatewayDaemon(params: {
   options: DoctorOptions;
   gatewayDetailsMessage: string;
   healthOk: boolean;
+  protocolMismatch?: boolean;
 }) {
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients({
@@ -166,6 +174,13 @@ export async function maybeRepairGatewayDaemon(params: {
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
   const service = resolveGatewayService();
+
+  const serviceState = await readGatewayServiceState(service, { env: process.env }).catch(
+    () => null,
+  );
+
+  const repairIssues = serviceState ? collectGatewayServiceStartRepairIssues(serviceState) : [];
+
   // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
   let loaded = false;
   try {
@@ -186,6 +201,42 @@ export async function maybeRepairGatewayDaemon(params: {
   if (loaded) {
     serviceRuntime = await service.readRuntime(serviceEnv).catch(() => undefined);
   }
+
+  if (loaded && serviceState && repairIssues.length > 0) {
+    note(formatGatewayServiceStartRepairIssues(repairIssues), "Gateway service definition");
+
+    if (serviceRepairExternal) {
+      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      return;
+    }
+
+    const repair = await confirmDoctorServiceRepair(
+      params.prompter,
+      {
+        message: "Repair gateway service definition now?",
+        initialValue: true,
+      },
+      serviceRepairPolicy,
+    );
+
+    if (repair) {
+      await repairLoadedGatewayServiceForStart({
+        service,
+        json: false,
+        stdout: process.stdout,
+        state: serviceState,
+        issues: repairIssues,
+      });
+      return;
+    }
+  }
+
+  // Gateway is alive but speaks an incompatible protocol version.
+  // Do not attempt service repair — the daemon is not stale/dead.
+  if (params.protocolMismatch) {
+    return;
+  }
+
   if (params.options.deep) {
     const handoff = readGatewayRestartHandoffSync(serviceEnv);
     if (handoff) {
@@ -426,7 +477,13 @@ export async function maybeRepairGatewayDaemon(params: {
         await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
       } catch (err) {
         const message = String(err);
-        if (message.includes("gateway closed")) {
+        if (/protocol mismatch/i.test(message)) {
+          note(
+            "Gateway restarted but speaks an incompatible protocol.\nReinstall the gateway service from the current build.",
+            "Gateway protocol mismatch",
+          );
+          note(params.gatewayDetailsMessage, "Gateway connection");
+        } else if (message.includes("gateway closed")) {
           note("Gateway not running.", "Gateway");
           note(params.gatewayDetailsMessage, "Gateway connection");
         } else {

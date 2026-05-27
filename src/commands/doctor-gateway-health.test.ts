@@ -85,6 +85,21 @@ describe("checkGatewayHealth", () => {
       expect.stringContaining("gateway timeout after 3000ms"),
     );
   });
+
+  it("returns protocolMismatch when callGateway throws a protocol mismatch error", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed (1002): protocol mismatch"));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const result = await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(result).toEqual({ healthOk: false, protocolMismatch: true });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway is running but speaks an incompatible protocol"),
+      "Gateway protocol mismatch",
+    );
+    expect(note).not.toHaveBeenCalledWith("Gateway not running.", expect.anything());
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 });
 
 describe("probeGatewayMemoryStatus", () => {

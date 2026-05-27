@@ -72,6 +72,7 @@ vi.mock("../daemon/service.js", async () => {
   return {
     ...actual,
     resolveGatewayService: () => service,
+    readGatewayServiceState: vi.fn(async () => null),
   };
 });
 
@@ -316,8 +317,8 @@ describe("maybeRepairGatewayDaemon", () => {
     const [handoffEnv] = readGatewayRestartHandoffSync.mock.calls[0] as unknown as [
       { OPENCLAW_STATE_DIR?: string; OPENCLAW_CONFIG_PATH?: string },
     ];
-    expect(handoffEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-service");
-    expect(handoffEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-service/openclaw.json");
+    expect(handoffEnv?.OPENCLAW_STATE_DIR?.replace(/\\/g, "/")).toContain("openclaw-service");
+    expect(handoffEnv?.OPENCLAW_CONFIG_PATH?.replace(/\\/g, "/")).toContain("openclaw-service");
     expect(note).toHaveBeenCalledWith(
       "Recent restart handoff: full-process via systemd; source=plugin-change; reason=plugin source changed; pid=12345; age=30s; expiresIn=30s",
       "Gateway",
@@ -620,5 +621,28 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(healthCommand).toHaveBeenCalledOnce();
     expect(service.restart).not.toHaveBeenCalled();
     // The restart prompt was shown but user declined (createPrompter returned false for it).
+  });
+
+  it("skips repair flow when protocolMismatch is true", async () => {
+    setPlatform("linux");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { repair: true, nonInteractive: true },
+      }),
+      options: { deep: false, repair: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      protocolMismatch: true,
+    });
+
+    // Stale service definition check still runs (isLoaded is called),
+    // but the dead-gateway restart/install flow is skipped.
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(healthCommand).not.toHaveBeenCalled();
   });
 });

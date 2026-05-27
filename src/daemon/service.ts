@@ -120,7 +120,7 @@ function isMissingProgramPath(value: string | undefined): boolean {
   return !fs.existsSync(value);
 }
 
-function collectGatewayServiceStartRepairIssues(
+export function collectGatewayServiceStartRepairIssues(
   state: GatewayServiceState,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
