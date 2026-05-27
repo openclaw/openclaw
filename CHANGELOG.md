@@ -8,8 +8,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Browser/snapshot: enforce SSRF policy for all browser profile types before snapshot content is read, fixing a security advisory (GHSA-2x93-h3hg-2xfp) where local-managed CDP profiles could bypass the configured browser navigation policy. The current-tab URL guard now applies unconditionally before both ChromeMCP and direct CDP snapshot branches. Also rejects existing-session snapshot selectors before checking the current URL, fetches full git history for opengrep CI, and stabilizes plugin activation normalization tests. Thanks @zsxsoft.
-
 - Crabbox: bootstrap raw AWS macOS JavaScript commands launched through `/usr/bin/env` so native mac runners without preinstalled Node, Corepack, or pnpm can still run wrapped Node and pnpm proof.
 - macOS: let app packaging fall back to `corepack pnpm` when a fresh native runner has Node/Corepack but no pnpm shim on `PATH`.
 - E2E: keep package/onboarding/plugin smoke commands bounded on macOS shells that have Node but no GNU `timeout` or `gtimeout` binary.
