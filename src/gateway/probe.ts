@@ -56,6 +56,10 @@ export type GatewayProbeResult = {
 };
 
 export const MIN_PROBE_TIMEOUT_MS = 250;
+// Bound how long settle() waits for the probe's WebSocket close to drain so a
+// wedged gateway cannot delay CLI exit indefinitely after status output
+// (issue #87210).
+export const PROBE_STOP_DRAIN_TIMEOUT_MS = 500;
 export const MAX_TIMER_DELAY_MS = MAX_SAFE_TIMEOUT_DELAY_MS;
 const PAIRING_REQUIRED_PATTERN = /\bpairing required\b/i;
 const OPERATOR_READ_SCOPE = "operator.read";
@@ -299,7 +303,15 @@ export async function probeGateway(opts: {
       settled = true;
       startAbort.abort();
       clearProbeTimer();
-      client.stop();
+      // Drain the WebSocket close before resolving so the CLI process can
+      // exit promptly instead of holding an active socket handle past the
+      // last rendered line (issue #87210). Bound the wait so a wedged
+      // gateway cannot delay status output indefinitely.
+      void client.stopAndWait({ timeoutMs: PROBE_STOP_DRAIN_TIMEOUT_MS }).catch(() => {
+        try {
+          client.stop();
+        } catch {}
+      });
       if (result.ok) {
         clearDeviceRequiredProbeFailures(cacheKey);
       } else if (cacheEligible && isDeviceIdentityRequiredClose(result.close)) {

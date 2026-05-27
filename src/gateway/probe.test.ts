@@ -4,6 +4,9 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
   startCalls: 0,
+  stopCalls: 0,
+  stopAndWaitCalls: 0,
+  stopAndWaitArgs: [] as Array<unknown>,
   startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
@@ -114,7 +117,14 @@ class MockGatewayClient {
       .catch(() => {});
   }
 
-  stop(): void {}
+  stop(): void {
+    gatewayClientState.stopCalls += 1;
+  }
+
+  async stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
+    gatewayClientState.stopAndWaitCalls += 1;
+    gatewayClientState.stopAndWaitArgs.push(opts);
+  }
 
   async request(method: string): Promise<unknown> {
     gatewayClientState.requests.push(method);
@@ -220,6 +230,9 @@ describe("probeGateway", () => {
     gatewayClientState.options = null;
     gatewayClientState.requests = [];
     gatewayClientState.startCalls = 0;
+    gatewayClientState.stopCalls = 0;
+    gatewayClientState.stopAndWaitCalls = 0;
+    gatewayClientState.stopAndWaitArgs = [];
     gatewayClientState.close = { code: 1008, reason: "pairing required" };
     gatewayClientState.helloAuth = {
       role: "operator",
@@ -315,6 +328,23 @@ describe("probeGateway", () => {
       version: "2026.4.24",
       connId: "conn-test",
     });
+  });
+
+  it("drains gateway WebSocket close via stopAndWait so the CLI exits promptly (#87210)", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+    });
+    // settle() must use stopAndWait so the socket close is drained before the
+    // probe promise resolves. The raw client.stop() should not run on the
+    // happy path because it leaves an unreferenced WebSocket handle that has
+    // historically kept the Node process alive past the printed status
+    // output.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(gatewayClientState.stopAndWaitCalls).toBeGreaterThanOrEqual(1);
+    expect(gatewayClientState.stopAndWaitArgs[0]).toEqual({ timeoutMs: 500 });
+    expect(gatewayClientState.stopCalls).toBe(0);
   });
 
   it("loads probe identity and cached device auth from the provided env", async () => {
