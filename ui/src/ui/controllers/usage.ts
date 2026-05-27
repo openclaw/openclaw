@@ -283,6 +283,7 @@ export async function loadUsage(
         client.request("usage.cost", {
           startDate,
           endDate,
+          ...(includeAgentScope && agentId ? { agentId } : undefined),
           ...dateInterpretation,
         }),
       ]);

@@ -101,7 +101,7 @@ describe("usage controller date interpretation params", () => {
     });
   });
 
-  it("passes a single selected agent query as sessions.usage agentId", async () => {
+  it("passes a single selected agent query as sessions and cost agentId", async () => {
     const request = vi.fn(async () => ({}));
     const state = createState(request, {
       usageQuery: "provider:openai agent:research ",
@@ -119,6 +119,12 @@ describe("usage controller date interpretation params", () => {
       includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "research",
+      mode: "utc",
     });
   });
 
@@ -300,6 +306,12 @@ describe("usage controller date interpretation params", () => {
       limit: 1000,
       includeContextWeight: true,
     });
+    expect(request).toHaveBeenNthCalledWith(2, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "research",
+      mode: "utc",
+    });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
@@ -308,6 +320,11 @@ describe("usage controller date interpretation params", () => {
       includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "utc",
     });
 
     await loadUsage(state);
@@ -320,6 +337,11 @@ describe("usage controller date interpretation params", () => {
       includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(6, "usage.cost", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "utc",
     });
 
     testApi.resetLegacyUsageDateParamsCache();
