@@ -639,8 +639,8 @@ export async function sendMessageTelegram(
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
 
   // Resolve link preview setting from config (default: enabled).
-  const linkPreviewEnabled = account.config.linkPreview ?? true;
-  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
+  const linkPreviewOptions =
+    account.config.linkPreview === false ? { is_disabled: true } : undefined;
 
   type TelegramTextChunk = {
     plainText: string;
