@@ -594,7 +594,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
-  it("keeps static Anthropic PI auth on the no-external auth profile store", async () => {
+  it("keeps static Anthropic auth on the no-external auth profile store", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedAgent({
