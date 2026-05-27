@@ -62,6 +62,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
+import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -91,6 +92,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { resolveProcessToolScopeKey } from "../pi-tools.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -205,6 +207,7 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function resolveAttemptDispatchApiKey(params: {
@@ -300,6 +303,205 @@ function createEmptyAuthProfileStore(): AuthProfileStore {
   return {
     version: 1,
     profiles: {},
+  };
+}
+
+function resolvePiExternalCliAuthProviderIds(params: {
+  provider: string;
+  cfg?: RunEmbeddedPiAgentParams["config"];
+  agentId?: string;
+  modelId?: string;
+  workspaceDir?: string;
+  store?: AuthProfileStore;
+  userLockedAuthProfileId?: string;
+}): {
+  providerIds?: readonly string[];
+  ignoreAutoPreferredProfile: boolean;
+} {
+  const authScope = resolvePiExternalCliAuthScopeFromAuthSelection({
+    provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    store: params.store,
+    userLockedAuthProfileId: params.userLockedAuthProfileId,
+  });
+  const selectedRuntimeProvider =
+    resolveCliRuntimeExecutionProvider({
+      provider: params.provider,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      modelId: params.modelId,
+      authProfileId: params.userLockedAuthProfileId,
+    }) || (params.provider === CLAUDE_CLI_PROVIDER_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
+  const selectedProvider =
+    authScope.selectedProviderId ??
+    (selectedRuntimeProvider === CLAUDE_CLI_PROVIDER_ID ? CLAUDE_CLI_PROVIDER_ID : undefined);
+  const providerIds = [
+    ...new Set([
+      ...authScope.providerIds,
+      ...(selectedRuntimeProvider === CLAUDE_CLI_PROVIDER_ID ? [CLAUDE_CLI_PROVIDER_ID] : []),
+    ]),
+  ];
+  return {
+    ...(providerIds.length > 0 ? { providerIds } : {}),
+    ignoreAutoPreferredProfile:
+      !params.userLockedAuthProfileId && selectedProvider === CLAUDE_CLI_PROVIDER_ID,
+  };
+}
+
+function resolvePiExternalCliAuthScopeFromAuthSelection(params: {
+  provider: string;
+  cfg?: RunEmbeddedPiAgentParams["config"];
+  workspaceDir?: string;
+  store?: AuthProfileStore;
+  userLockedAuthProfileId?: string;
+}): {
+  providerIds: string[];
+  selectedProviderId?: string;
+} {
+  if (params.userLockedAuthProfileId) {
+    const providerId = resolveExternalCliProviderIdForCompatibleAuthProfile({
+      ...params,
+      profileId: params.userLockedAuthProfileId,
+    })?.externalCliProviderId;
+    return {
+      providerIds: providerId ? [providerId] : [],
+      ...(providerId ? { selectedProviderId: providerId } : {}),
+    };
+  }
+
+  const providerIds: string[] = [];
+  let sawCompatibleOrderedProfile = false;
+  let selectedProviderId: string | undefined;
+  for (const profileId of resolveConfiguredAuthProfileOrder(params)) {
+    const resolved = resolveExternalCliProviderIdForCompatibleAuthProfile({
+      ...params,
+      profileId,
+    });
+    if (!resolved.compatible) {
+      continue;
+    }
+    if (!sawCompatibleOrderedProfile) {
+      selectedProviderId = resolved.externalCliProviderId;
+      sawCompatibleOrderedProfile = true;
+    }
+    if (resolved.externalCliProviderId) {
+      providerIds.push(resolved.externalCliProviderId);
+    }
+  }
+  if (sawCompatibleOrderedProfile) {
+    return {
+      providerIds: [...new Set(providerIds)],
+      ...(selectedProviderId ? { selectedProviderId } : {}),
+    };
+  }
+
+  let compatibleProfileCount = 0;
+  const profileIds = [
+    ...new Set([
+      ...Object.keys(params.cfg?.auth?.profiles ?? {}),
+      ...Object.keys(params.store?.profiles ?? {}),
+    ]),
+  ];
+  for (const profileId of profileIds) {
+    const resolved = resolveExternalCliProviderIdForCompatibleAuthProfile({
+      ...params,
+      profileId,
+    });
+    if (!resolved.compatible) {
+      continue;
+    }
+    compatibleProfileCount += 1;
+    if (resolved.externalCliProviderId) {
+      providerIds.push(resolved.externalCliProviderId);
+    }
+  }
+  const uniqueProviderIds = [...new Set(providerIds)];
+  return {
+    providerIds: uniqueProviderIds,
+    ...(compatibleProfileCount === 1 && uniqueProviderIds[0]
+      ? { selectedProviderId: uniqueProviderIds[0] }
+      : {}),
+  };
+}
+
+function resolveConfiguredAuthProfileOrder(params: {
+  provider: string;
+  cfg?: RunEmbeddedPiAgentParams["config"];
+  workspaceDir?: string;
+  store?: AuthProfileStore;
+}): string[] {
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const orderedProfileIds =
+    resolveAuthProfileOrderEntries({
+      order: params.store?.order,
+      provider: params.provider,
+      providerAuthKey,
+    }) ??
+    resolveAuthProfileOrderEntries({
+      order: params.cfg?.auth?.order,
+      provider: params.provider,
+      providerAuthKey,
+    }) ??
+    [];
+  return [
+    ...new Set(
+      orderedProfileIds
+        .map((profileId) => profileId?.trim())
+        .filter((profileId): profileId is string => !!profileId),
+    ),
+  ];
+}
+
+function resolveAuthProfileOrderEntries(params: {
+  order?: Record<string, string[]>;
+  provider: string;
+  providerAuthKey: string;
+}): string[] | undefined {
+  return (
+    findNormalizedProviderValue(params.order, params.providerAuthKey) ??
+    (normalizeProviderId(params.providerAuthKey) === normalizeProviderId(params.provider)
+      ? undefined
+      : findNormalizedProviderValue(params.order, params.provider))
+  );
+}
+
+function resolveExternalCliProviderIdForCompatibleAuthProfile(params: {
+  provider: string;
+  cfg?: RunEmbeddedPiAgentParams["config"];
+  workspaceDir?: string;
+  store?: AuthProfileStore;
+  profileId: string;
+}): {
+  compatible: boolean;
+  externalCliProviderId?: string;
+} {
+  const profile = params.cfg?.auth?.profiles?.[params.profileId];
+  const credential = params.store?.profiles?.[params.profileId];
+  const profileProvider =
+    profile?.provider ??
+    credential?.provider ??
+    (params.profileId === "anthropic:claude-cli" ? CLAUDE_CLI_PROVIDER_ID : undefined);
+  if (!profileProvider) {
+    return { compatible: false };
+  }
+  const authAliasParams = {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  };
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, authAliasParams);
+  const profileAuthKey = resolveProviderIdForAuth(profileProvider, authAliasParams);
+  if (!providerAuthKey || profileAuthKey !== providerAuthKey) {
+    return { compatible: false };
+  }
+  return {
+    compatible: true,
+    ...(normalizeProviderId(profileProvider) === CLAUDE_CLI_PROVIDER_ID
+      ? { externalCliProviderId: CLAUDE_CLI_PROVIDER_ID }
+      : {}),
   };
 }
 
@@ -708,6 +910,37 @@ export async function runEmbeddedPiAgent(
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
+      let piExternalCliAuthScope = pluginHarnessOwnsTransport
+        ? { ignoreAutoPreferredProfile: false }
+        : resolvePiExternalCliAuthProviderIds({
+            provider,
+            cfg: params.config,
+            agentId: params.agentId,
+            modelId,
+            workspaceDir: resolvedWorkspace,
+            userLockedAuthProfileId:
+              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+          });
+      let noExternalAuthStore: AuthProfileStore | undefined;
+      if (
+        !pluginHarnessOwnsTransport &&
+        !pluginHarnessNeedsOpenClawAuthBootstrap &&
+        !piExternalCliAuthScope.providerIds
+      ) {
+        noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        });
+        piExternalCliAuthScope = resolvePiExternalCliAuthProviderIds({
+          provider,
+          cfg: params.config,
+          agentId: params.agentId,
+          modelId,
+          workspaceDir: resolvedWorkspace,
+          store: noExternalAuthStore,
+          userLockedAuthProfileId:
+            params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+        });
+      }
       const authStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? createEmptyAuthProfileStore()
@@ -716,9 +949,15 @@ export async function runEmbeddedPiAgent(
                 externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
                 allowKeychainPrompt: false,
               })
-            : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                allowKeychainPrompt: false,
-              });
+            : piExternalCliAuthScope.providerIds
+              ? ensureAuthProfileStore(agentDir, {
+                  externalCliProviderIds: piExternalCliAuthScope.providerIds,
+                  allowKeychainPrompt: false,
+                })
+              : (noExternalAuthStore ??
+                ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                  allowKeychainPrompt: false,
+                }));
       const attemptAuthProfileStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
@@ -788,7 +1027,9 @@ export async function runEmbeddedPiAgent(
         pluginHarnessProfileOrder[0];
       const preferredProfileId = pluginHarnessOwnsTransport
         ? resolvePluginHarnessPreferredProfileId()
-        : requestedProfileId;
+        : piExternalCliAuthScope.ignoreAutoPreferredProfile && !requestedProfileIsUserLocked
+          ? undefined
+          : requestedProfileId;
       let lockedProfileId = requestedProfileIsUserLocked ? preferredProfileId : undefined;
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
