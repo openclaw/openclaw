@@ -282,10 +282,10 @@ export function resolveHookIdempotencyKey(params: {
 export function resolveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
-): string | undefined {
+): string {
   const raw = normalizeOptionalString(agentId);
   if (!raw) {
-    return undefined;
+    return hooksConfig.agentPolicy.defaultAgentId;
   }
   const normalized = normalizeAgentId(raw);
   if (hooksConfig.agentPolicy.knownAgentIds.has(normalized)) {
@@ -302,13 +302,9 @@ export function isHookAgentAllowed(
   if (allowed === undefined) {
     return true;
   }
-  const raw = normalizeOptionalString(agentId);
   // Omitted agentId still dispatches to the default agent downstream, so the
   // allowlist must authorize that effective target before dispatch.
-  const targetAgentId = raw
-    ? resolveHookTargetAgentId(hooksConfig, raw)
-    : hooksConfig.agentPolicy.defaultAgentId;
-  return targetAgentId ? allowed.has(targetAgentId) : false;
+  return allowed.has(resolveHookTargetAgentId(hooksConfig, agentId));
 }
 
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";

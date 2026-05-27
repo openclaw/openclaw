@@ -181,7 +181,7 @@ describe("gateway hooks helpers", () => {
     }
   });
 
-  test("resolveHookTargetAgentId falls back to default for unknown agent ids", () => {
+  test("resolveHookTargetAgentId resolves effective hook target agent ids", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
@@ -191,7 +191,8 @@ describe("gateway hooks helpers", () => {
     const resolved = resolveHooksConfigOrThrow(cfg);
     expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
     expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBe("main");
-    expect(resolveHookTargetAgentId(resolved, undefined)).toBeUndefined();
+    expect(resolveHookTargetAgentId(resolved, undefined)).toBe("main");
+    expect(resolveHookTargetAgentId(resolved, " ")).toBe("main");
   });
 
   test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {

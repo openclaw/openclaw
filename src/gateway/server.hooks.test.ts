@@ -861,6 +861,41 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("allows omitted agentId when the default target is allowlisted", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+      allowedAgentIds: ["main"],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const resNoAgent = await postHook(port, "/hooks/agent", {
+        message: "Default target",
+        sessionKey: "agent:hooks:slack:channel:c123",
+      });
+      expect(resNoAgent.status).toBe(200);
+      await waitForSystemEventTexts(resolveMainKey());
+      const noAgentCall = cronRunCall();
+      expect(noAgentCall?.job?.agentId).toBe("main");
+      expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const resBlankAgent = await postHook(port, "/hooks/agent", {
+        message: "Blank target",
+        agentId: " ",
+      });
+      expect(resBlankAgent.status).toBe(200);
+      await waitForSystemEventTexts(resolveMainKey());
+      const blankAgentCall = cronRunCall();
+      expect(blankAgentCall?.job?.agentId).toBe("main");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("denies explicit agentId when hooks.allowedAgentIds is empty", async () => {
     testState.hooksConfig = {
       enabled: true,
