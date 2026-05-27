@@ -155,6 +155,7 @@ function canonicalizeLegacyResolvedModel(params: {
 }): Model<Api> {
   if (
     normalizeProviderId(params.provider) !== "openai-codex" ||
+    typeof params.model.id !== "string" ||
     params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
   ) {
     return params.model;
@@ -163,7 +164,10 @@ function canonicalizeLegacyResolvedModel(params: {
     ...params.model,
     id: "gpt-5.4",
     name:
-      params.model.name.trim().toLowerCase() === "gpt-5.4-codex" ? "gpt-5.4" : params.model.name,
+      typeof params.model.name === "string" &&
+      params.model.name.trim().toLowerCase() === "gpt-5.4-codex"
+        ? "gpt-5.4"
+        : params.model.name,
   };
 }
 
