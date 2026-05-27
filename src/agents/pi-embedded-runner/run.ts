@@ -170,6 +170,7 @@ import {
   resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
+  shouldPromoteTrailingToolResultPayload,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
@@ -2920,8 +2921,14 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          const allowTrailingToolResultPayload = shouldPromoteTrailingToolResultPayload({
+            prompt: params.prompt,
+            toolsAllow: params.toolsAllow,
+            attempt,
+          });
           const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
             isCronTrigger: params.trigger === "cron",
+            allowTrailingToolResultPayload,
             payloadCount: payloadsWithToolMedia?.length ?? 0,
             aborted,
             timedOut,

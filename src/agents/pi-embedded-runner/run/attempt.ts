@@ -398,6 +398,7 @@ import { detectAndLoadPromptImages } from "./images.js";
 import {
   buildAttemptReplayMetadata,
   resolveSilentToolResultReplyPayload,
+  shouldPromoteTrailingToolResultPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
@@ -5032,19 +5033,28 @@ export async function runEmbeddedAttempt(
         ? 1
         : 0;
       const visibleBlockReplyCount = getVisibleBlockReplyCount();
+      const silentToolResultAttempt = {
+        clientToolCalls: completedClientToolCallsForAttempt,
+        assistantTexts,
+        yieldDetected,
+        didSendViaMessagingTool: didSendViaMessagingTool(),
+        didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
+        lastToolError,
+        messagesSnapshot,
+        toolMetas: toolMetasNormalized,
+      };
+      const allowTrailingToolResultPayload = shouldPromoteTrailingToolResultPayload({
+        prompt: params.prompt,
+        toolsAllow: params.toolsAllow,
+        attempt: silentToolResultAttempt,
+      });
       const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
         isCronTrigger: params.trigger === "cron",
+        allowTrailingToolResultPayload,
         payloadCount: pendingToolMediaPayloadCount,
         aborted,
         timedOut,
-        attempt: {
-          clientToolCalls: completedClientToolCallsForAttempt,
-          yieldDetected,
-          didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
-          lastToolError,
-          messagesSnapshot,
-          toolMetas: toolMetasNormalized,
-        },
+        attempt: silentToolResultAttempt,
       });
       const synthesizedPayloadCount =
         visibleBlockReplyCount +

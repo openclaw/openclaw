@@ -1858,6 +1858,8 @@ export async function runCodexAppServerAttempt(
     resolveCompletion = resolve;
   });
   let notificationQueue: Promise<void> = Promise.resolve();
+  let deferredTerminalTurnNotification: CodexServerNotification | undefined;
+  let replayingPendingNotifications = false;
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
@@ -2401,6 +2403,31 @@ export async function runCodexAppServerAttempt(
     );
   };
 
+  const completeDeferredTerminalTurn = async (): Promise<void> => {
+    if (!deferredTerminalTurnNotification || completed || !projector) {
+      return;
+    }
+    const terminalNotification = deferredTerminalTurnNotification;
+    deferredTerminalTurnNotification = undefined;
+    try {
+      await waitForCodexNotificationDispatchTurn();
+      await projector.handleNotification(terminalNotification);
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server deferred terminal projector notification threw", {
+        method: terminalNotification.method,
+        error,
+      });
+    }
+    if (!timedOut && !runAbortController.signal.aborted) {
+      await steeringQueue?.flushPending();
+    }
+    completed = true;
+    clearTurnCompletionIdleTimer();
+    clearTurnAssistantCompletionIdleTimer();
+    clearTurnTerminalIdleTimer();
+    resolveCompletion?.();
+  };
+
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
@@ -2550,6 +2577,26 @@ export async function runCodexAppServerAttempt(
     if (isTurnTerminal) {
       terminalTurnNotificationQueued = true;
     }
+    const shouldDeferTerminalForActiveNativeTools =
+      isTurnTerminal &&
+      notification.method === "turn/completed" &&
+      !isTurnAbortMarker &&
+      activeTurnItemIds.size > 0 &&
+      turnCrossedToolHandoff &&
+      !replayingPendingNotifications;
+    if (shouldDeferTerminalForActiveNativeTools) {
+      deferredTerminalTurnNotification = notification;
+      armTurnCompletionIdleWatch();
+      embeddedAgentLog.warn(
+        "codex app-server turn/completed arrived while native tools are still active; waiting for tool completion",
+        {
+          threadId: thread.threadId,
+          turnId,
+          activeItems: activeTurnItemIds.size,
+        },
+      );
+      return;
+    }
     try {
       await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
@@ -2571,6 +2618,14 @@ export async function runCodexAppServerAttempt(
         clearTurnAssistantCompletionIdleTimer();
         clearTurnTerminalIdleTimer();
         resolveCompletion?.();
+      } else if (
+        deferredTerminalTurnNotification &&
+        isCurrentTurnNotification &&
+        notification.method === "item/completed" &&
+        activeTurnItemIds.size === 0 &&
+        !completed
+      ) {
+        await completeDeferredTerminalTurn();
       }
     }
   };
@@ -3217,6 +3272,17 @@ export async function runCodexAppServerAttempt(
       addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
     }
   ).addCloseHandler?.(() => {
+    if (!completed && terminalTurnNotificationQueued && !runAbortController.signal.aborted) {
+      notificationQueue = notificationQueue.then(
+        async () => {
+          await completeDeferredTerminalTurn();
+        },
+        async () => {
+          await completeDeferredTerminalTurn();
+        },
+      );
+      return;
+    }
     if (completed || terminalTurnNotificationQueued || runAbortController.signal.aborted) {
       return;
     }
@@ -3242,8 +3308,13 @@ export async function runCodexAppServerAttempt(
   const activeProjector = projector;
   turnTerminalIdleWatchArmed = true;
   touchTurnCompletionActivity("turn:start", { arm: true });
-  for (const notification of pendingNotifications.splice(0)) {
-    await enqueueNotification(notification);
+  replayingPendingNotifications = true;
+  try {
+    for (const notification of pendingNotifications.splice(0)) {
+      await enqueueNotification(notification);
+    }
+  } finally {
+    replayingPendingNotifications = false;
   }
   if (!completed && isTerminalTurnStatus(turn.turn.status)) {
     await enqueueNotification({

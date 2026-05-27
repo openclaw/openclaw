@@ -74,9 +74,22 @@ type SilentToolResultAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "clientToolCalls"
   | "yieldDetected"
+  | "assistantTexts"
+  | "didSendViaMessagingTool"
   | "didSendDeterministicApprovalPrompt"
   | "lastToolError"
   | "messagesSnapshot"
+  | "toolMetas"
+>;
+
+type TrailingToolResultPromotionAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "assistantTexts"
+  | "clientToolCalls"
+  | "yieldDetected"
+  | "didSendViaMessagingTool"
+  | "didSendDeterministicApprovalPrompt"
+  | "lastToolError"
   | "toolMetas"
 >;
 
@@ -199,6 +212,7 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
   /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare)\b/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
+const EXEC_LIKE_TOOL_NAMES = new Set(["bash", "exec"]);
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
@@ -348,7 +362,56 @@ function readToolResultAggregatedText(message: AgentMessage): string | undefined
   return trimmed || undefined;
 }
 
-function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean {
+function readToolResultBlockText(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const rec = block as { type?: unknown; text?: unknown; content?: unknown };
+  if (rec.type !== "toolResult") {
+    return undefined;
+  }
+  if (typeof rec.text === "string") {
+    const text = rec.text.trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  if (typeof rec.content === "string") {
+    const text = rec.content.trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  const text = collectTextContentBlocks(rec.content)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .join("\n");
+  return text || undefined;
+}
+
+function readToolResultContentText(message: AgentMessage): string | undefined {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .map((block) => readToolResultBlockText(block))
+    .filter((item): item is string => typeof item === "string" && item.length > 0)
+    .join("\n");
+  return text || undefined;
+}
+
+function readToolResultText(message: AgentMessage): string | undefined {
+  return (
+    readMessageTextContent(message) ??
+    readToolResultContentText(message) ??
+    readToolResultAggregatedText(message)
+  );
+}
+
+function readTrailingSuccessfulToolResultText(
+  messages: readonly AgentMessage[],
+): string | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (!message) {
@@ -357,34 +420,102 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
     const role = normalizeLowercaseStringOrEmpty(message?.role);
     if (isToolResultRole(role)) {
       if ((message as { isError?: boolean }).isError === true) {
-        return false;
+        return undefined;
       }
-      const text = readMessageTextContent(message) ?? readToolResultAggregatedText(message);
-      return isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      return readToolResultText(message);
     }
     if (role === "assistant" && !readMessageTextContent(message)) {
       continue;
     }
+    return undefined;
+  }
+  return undefined;
+}
+
+function isExecLikeToolName(toolName: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(toolName ?? "");
+  return EXEC_LIKE_TOOL_NAMES.has(normalized);
+}
+
+function isExecOnlyToolsAllow(toolsAllow?: readonly string[]): boolean {
+  const normalized = (toolsAllow ?? [])
+    .map((toolName) => normalizeLowercaseStringOrEmpty(toolName))
+    .filter((toolName) => toolName.length > 0);
+  return (
+    normalized.length > 0 && normalized.every((toolName) => EXEC_LIKE_TOOL_NAMES.has(toolName))
+  );
+}
+
+function attemptUsedOnlyExecLikeTools(attempt: TrailingToolResultPromotionAttempt): boolean {
+  const toolNames = (attempt.toolMetas ?? [])
+    .map((toolMeta) => normalizeLowercaseStringOrEmpty(toolMeta.toolName))
+    .filter((toolName) => toolName.length > 0);
+  return toolNames.length > 0 && toolNames.every((toolName) => isExecLikeToolName(toolName));
+}
+
+function promptRequestsStdoutFinalReply(prompt?: string): boolean {
+  if (typeof prompt !== "string") {
     return false;
   }
-  return false;
+  const normalized = normalizeLowercaseStringOrEmpty(prompt);
+  if (!normalized.includes("stdout")) {
+    return false;
+  }
+  const requestsReply =
+    normalized.includes("reply") ||
+    normalized.includes("respond") ||
+    normalized.includes("answer") ||
+    prompt.includes("回复");
+  const requestsExactStdoutOnly =
+    requestsReply && (normalized.includes("exact stdout") || normalized.includes("stdout only"));
+  return (
+    normalized.includes("final reply") ||
+    normalized.includes("final response") ||
+    requestsExactStdoutOnly ||
+    prompt.includes("最终回复") ||
+    prompt.includes("原样")
+  );
+}
+
+export function shouldPromoteTrailingToolResultPayload(params: {
+  prompt?: string;
+  toolsAllow?: readonly string[];
+  attempt: TrailingToolResultPromotionAttempt;
+}): boolean {
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendViaMessagingTool ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    !promptRequestsStdoutFinalReply(params.prompt)
+  ) {
+    return false;
+  }
+  return isExecOnlyToolsAllow(params.toolsAllow) || attemptUsedOnlyExecLikeTools(params.attempt);
 }
 
 export function resolveSilentToolResultReplyPayload(params: {
   isCronTrigger: boolean;
+  allowTrailingToolResultPayload?: boolean;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: SilentToolResultAttempt;
-}): { text: typeof SILENT_REPLY_TOKEN } | null {
+}): { text: string } | null {
+  const canUseTrailingToolResult =
+    params.isCronTrigger || params.allowTrailingToolResultPayload === true;
   if (
-    !params.isCronTrigger ||
+    !canUseTrailingToolResult ||
     params.payloadCount !== 0 ||
     params.aborted ||
     params.timedOut ||
     (params.attempt.toolMetas?.length ?? 0) === 0 ||
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
+    params.attempt.didSendViaMessagingTool ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     (params.attempt.messagesSnapshot?.length ?? 0) === 0
@@ -392,9 +523,16 @@ export function resolveSilentToolResultReplyPayload(params: {
     return null;
   }
 
-  return hasTrailingSilentToolResult(params.attempt.messagesSnapshot)
-    ? { text: SILENT_REPLY_TOKEN }
-    : null;
+  const trailingToolResultText = readTrailingSuccessfulToolResultText(
+    params.attempt.messagesSnapshot,
+  );
+  if (isSilentReplyText(trailingToolResultText, SILENT_REPLY_TOKEN)) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
+  if (params.allowTrailingToolResultPayload === true && trailingToolResultText) {
+    return { text: trailingToolResultText };
+  }
+  return null;
 }
 
 export function resolveReplayInvalidFlag(params: {

@@ -36,6 +36,7 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
+  shouldPromoteTrailingToolResultPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -155,6 +156,125 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(payload).toEqual({ text: "NO_REPLY" });
+  });
+
+  it("promotes a trailing app-server exec stdout tool result when explicitly allowed", () => {
+    const payload = resolveSilentToolResultReplyPayload({
+      isCronTrigger: false,
+      allowTrailingToolResultPayload: true,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [
+              {
+                type: "toolResult",
+                toolCallId: "call-1",
+                content: "STDOUT_OK",
+                text: "STDOUT_OK",
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toEqual({ text: "STDOUT_OK" });
+  });
+
+  it("does not promote a trailing stdout tool result unless explicitly allowed", () => {
+    const payload = resolveSilentToolResultReplyPayload({
+      isCronTrigger: false,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "STDOUT_OK" }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
+  it("does not promote failed trailing tool results", () => {
+    const payload = resolveSilentToolResultReplyPayload({
+      isCronTrigger: false,
+      allowTrailingToolResultPayload: true,
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            isError: true,
+            content: [{ type: "text", text: "STDOUT_OK" }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
+  it("only allows trailing stdout promotion for explicit exec-only stdout prompts", () => {
+    const execAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "bash" }],
+    });
+    expect(
+      shouldPromoteTrailingToolResultPayload({
+        prompt: "Run this command and use stdout as the final reply.",
+        toolsAllow: ["bash"],
+        attempt: execAttempt,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPromoteTrailingToolResultPayload({
+        prompt:
+          "Use the exec tool to run this command: hostname. Reply with the exact stdout only (trim trailing newline).",
+        toolsAllow: ["exec"],
+        attempt: execAttempt,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPromoteTrailingToolResultPayload({
+        prompt: "Run this command and summarize it.",
+        toolsAllow: ["bash"],
+        attempt: execAttempt,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPromoteTrailingToolResultPayload({
+        prompt: "Run this command and use stdout as the final reply.",
+        toolsAllow: ["message"],
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "message" }],
+        }),
+      }),
+    ).toBe(false);
   });
 
   it("does not reuse an older NO_REPLY tool result without current-attempt tool activity", () => {
