@@ -246,6 +246,94 @@ describe("models-config", () => {
     ]);
   });
 
+  it("omits provider apiKey fields from serialized models.json plans", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              "custom-proxy": {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-custom-config-secret", // pragma: allowlist secret
+                models: [
+                  {
+                    id: "custom-model",
+                    name: "Custom Model",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            legacy: {
+              baseUrl: "https://legacy.example/v1",
+              api: "openai-completions",
+              apiKey: "sk-existing-models-json-secret", // pragma: allowlist secret
+              models: [
+                {
+                  id: "legacy-model",
+                  name: "Legacy Model",
+                  input: ["text"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-responses",
+            apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                input: ["text"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 400000,
+                maxTokens: 128000,
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; baseUrl?: string; models?: unknown[] }>;
+    };
+    expect(plan.contents).not.toContain("apiKey");
+    expect(plan.contents).not.toContain("OPENAI_API_KEY");
+    expect(plan.contents).not.toContain("sk-custom-config-secret");
+    expect(plan.contents).not.toContain("sk-existing-models-json-secret");
+    expect(parsed.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(parsed.providers?.["custom-proxy"]?.models).toHaveLength(1);
+    expect(parsed.providers?.legacy?.baseUrl).toBe("https://legacy.example/v1");
+  });
+
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);

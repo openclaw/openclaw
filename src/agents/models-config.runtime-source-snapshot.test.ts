@@ -209,15 +209,12 @@ function withGatewayTokenMode(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
-async function expectGeneratedProviderApiKey(
-  agentDir: string,
-  providerId: string,
-  expected: string,
-) {
+async function expectGeneratedProviderOmitsApiKey(agentDir: string, providerId: string) {
   const parsed = await readGeneratedModelsJson<{
     providers: Record<string, { apiKey?: string }>;
   }>(agentDir);
-  expect(parsed.providers[providerId]?.apiKey).toBe(expected);
+  expect(parsed.providers[providerId]).toBeDefined();
+  expect(parsed.providers[providerId]).not.toHaveProperty("apiKey");
 }
 
 async function planGeneratedProviders(params: {
@@ -310,7 +307,7 @@ describe("models-config runtime source snapshot", () => {
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(clonedRuntimeConfig, agentDir);
-        await expectGeneratedProviderApiKey(agentDir, "openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+        await expectGeneratedProviderOmitsApiKey(agentDir, "openai");
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();
@@ -381,7 +378,7 @@ describe("models-config runtime source snapshot", () => {
           >;
         }>(agentDir);
         expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
-        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+        expect(parsed.providers.openai).not.toHaveProperty("apiKey");
         expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("one");
 
         // Header changes still rewrite models.json, but merge mode preserves the existing baseUrl.
@@ -393,7 +390,7 @@ describe("models-config runtime source snapshot", () => {
           >;
         }>(agentDir);
         expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
-        expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+        expect(parsed.providers.openai).not.toHaveProperty("apiKey");
         expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("two");
       } finally {
         clearRuntimeConfigSnapshot();
@@ -410,12 +407,12 @@ describe("models-config runtime source snapshot", () => {
     expectOpenAiHeaderMarkers(providers);
   });
 
-  it("keeps source markers when runtime projection is skipped for incompatible top-level shape", async () => {
+  it("keeps header source markers but omits provider apiKey markers in models.json plans", async () => {
     const providers = await planGeneratedProviders({
       config: createOpenAiRuntimeConfigWithHeadersAndApiKey(),
       sourceConfigForSecrets: withGatewayTokenMode(createOpenAiSourceConfigWithHeadersAndApiKey()),
     });
-    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expect(providers.openai).not.toHaveProperty("apiKey");
     expectOpenAiHeaderMarkers(providers);
   });
 });
