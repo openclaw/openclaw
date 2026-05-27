@@ -100,6 +100,30 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("does not map legacy cacheControlTtl for openai-completions prompt-cache-key providers", () => {
+    // Legacy TTL aliases were Anthropic/Google semantics; OpenAI-compatible
+    // completions providers need an explicit cacheRetention value before the
+    // wrapper forwards retention to the transport.
+    expect(
+      resolveCacheRetention(
+        { cacheControlTtl: "1h" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+        true,
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveCacheRetention(
+        { cacheControlTtl: "5m" },
+        "omlx-local",
+        "openai-completions",
+        "local_model",
+        true,
+      ),
+    ).toBeUndefined();
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({
