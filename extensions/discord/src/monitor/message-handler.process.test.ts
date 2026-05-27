@@ -3123,6 +3123,37 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates.join("\n")).not.toContain("Thinking\n");
   });
 
+  it("accumulates reasoning deltas in Discord progress drafts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      for (const text of ["Considering", " plugin", " installation", "!"]) {
+        await params?.replyOptions?.onReasoningStream?.({ text });
+      }
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n• _Considering plugin installation!_",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.join("\n")).not.toContain("• _!_");
+  });
+
   it("replaces reasoning snapshots instead of appending duplicates", async () => {
     const draftStream = createMockDraftStreamForTest();
 
@@ -3152,9 +3183,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n• _Reading _ _Checking_",
-    );
+    expect(draftStream.update.mock.calls.at(-1)?.[0]).toContain("_Reading Checking_");
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("_Checking Reading");
   });

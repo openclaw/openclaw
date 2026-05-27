@@ -1,4 +1,4 @@
-import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
+import { EmbeddedBlockChunker, formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -281,6 +281,10 @@ export function createDiscordDraftPreviewController(params: {
       if (!normalized) {
         return;
       }
+      const displayLine = normalizeReasoningProgressLine(formatReasoningMessage(normalized));
+      if (!displayLine) {
+        return;
+      }
       if (previewToolProgressEnabled && !previewToolProgressSuppressed) {
         const priorIndex =
           lastReasoningProgressLine === undefined
@@ -288,13 +292,13 @@ export function createDiscordDraftPreviewController(params: {
             : previewToolProgressLines.lastIndexOf(lastReasoningProgressLine);
         if (priorIndex >= 0) {
           previewToolProgressLines = [...previewToolProgressLines];
-          previewToolProgressLines[priorIndex] = normalized;
+          previewToolProgressLines[priorIndex] = displayLine;
         } else {
-          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+          previewToolProgressLines = [...previewToolProgressLines, displayLine].slice(
             -resolveChannelProgressDraftMaxLines(params.discordConfig),
           );
         }
-        lastReasoningProgressLine = normalized;
+        lastReasoningProgressLine = displayLine;
       }
       const progressActive = await progressDraftGate.noteWork();
       if (progressActive && progressDraftGate.hasStarted) {
