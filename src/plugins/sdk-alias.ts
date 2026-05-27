@@ -174,6 +174,20 @@ function appendPluginRuntimeModuleCandidates(
   }
 }
 
+function appendSiblingPluginRuntimeModuleCandidates(
+  candidates: string[],
+  runtimeDir: string,
+  orderedKinds: readonly PluginSdkAliasCandidateKind[],
+): void {
+  const candidateMap = {
+    src: path.join(runtimeDir, "index.ts"),
+    dist: path.join(runtimeDir, "index.js"),
+  } as const;
+  for (const kind of orderedKinds) {
+    candidates.push(candidateMap[kind]);
+  }
+}
+
 function dedupeResolvedPaths(paths: readonly string[]): string[] {
   const seen = new Set<string>();
   const deduped: string[] = [];
@@ -1049,9 +1063,14 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       const argv1 = params.argv1 ?? process.argv[1];
       candidates.push(
         ...listAncestorPluginRuntimeModuleCandidates({
-          starts: [path.dirname(modulePath), params.cwd, argv1 ? path.dirname(argv1) : undefined],
+          starts: [argv1 ? path.dirname(argv1) : undefined, params.cwd],
           orderedKinds,
         }),
+      );
+      appendSiblingPluginRuntimeModuleCandidates(
+        candidates,
+        path.join(path.dirname(modulePath), "runtime"),
+        orderedKinds,
       );
     }
     const dedupedCandidates = dedupeResolvedPaths(candidates);

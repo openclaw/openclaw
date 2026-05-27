@@ -1849,6 +1849,29 @@ export const syntheticRuntimeMarker = {
     }
   });
 
+  it("prefers startup argv runtime candidates over cache ancestor fallbacks", () => {
+    const root = makeTempDir();
+    const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const loaderCacheRoot = makeTempDir();
+    const cacheDistFile = path.join(loaderCacheRoot, "dist", "plugins", "runtime", "index.js");
+    const loaderCachePath = path.join(loaderCacheRoot, "tsx", "openclaw-loader.js");
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(cacheDistFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    mkdirSafeDir(path.join(root, "bin"));
+    fs.writeFileSync(distFile, "export const runtime = 'startup';\n", "utf-8");
+    fs.writeFileSync(cacheDistFile, "export const runtime = 'cache';\n", "utf-8");
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    expect(
+      resolvePluginRuntimeModulePath({
+        modulePath: loaderCachePath,
+        argv1: path.join(root, "bin", "openclaw"),
+        pluginSdkResolution: "dist",
+      }),
+    ).toBe(distFile);
+  });
+
   it("reports loader, package root, and candidate paths when runtime resolution fails", () => {
     const root = makeTempDir();
     const modulePath = path.join(root, "dist", "plugins", "loader.js");
