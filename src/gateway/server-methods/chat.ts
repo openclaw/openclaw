@@ -2253,7 +2253,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     if (sessionStartedAt !== undefined && historyMode !== "turns") {
       let dropCount = 0;
       for (const msg of trimmedMessages) {
-        if (msg.role !== "assistant") break;
+        if (msg.role !== "assistant") {
+          break;
+        }
         const meta = msg["__openclaw"] as Record<string, unknown> | undefined;
         const ts = typeof meta?.recordTimestampMs === "number" ? meta.recordTimestampMs : undefined;
         if (ts !== undefined && ts < sessionStartedAt) {
