@@ -32,12 +32,13 @@ function createAttemptParams(): EmbeddedRunAttemptParams {
   } as EmbeddedRunAttemptParams;
 }
 
-const pluginConfig = {
+const pluginConfig: CodexPluginConfig = {
   appServer: { command: "codex" },
-} satisfies CodexPluginConfig;
+};
 
 const bundleMcpThreadConfig = {
   configPatch: undefined,
+  diagnostics: [],
   evaluated: false,
   fingerprint: undefined,
 } satisfies CodexBundleMcpThreadConfig;
@@ -74,7 +75,7 @@ function startThreadWithHarness(
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
     sandboxExecServerEnabled: false,
-    sandbox: undefined,
+    sandbox: null,
     contextEngineProjection: undefined,
     startupTimeoutMs,
     signal,
