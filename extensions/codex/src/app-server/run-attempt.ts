@@ -1629,7 +1629,7 @@ export async function runCodexAppServerAttempt(
             const startupClient = useIsolatedStartupClient
               ? await createIsolatedCodexAppServerClient({
                   startOptions: appServer.start,
-                  timeoutMs: params.timeoutMs,
+                  timeoutMs: startupTimeoutMs,
                   authProfileId: startupAuthProfileId,
                   agentDir,
                   config: params.config,
