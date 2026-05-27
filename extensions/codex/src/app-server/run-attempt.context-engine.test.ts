@@ -1510,6 +1510,78 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
   });
 
+  it("defers provider-boundary compaction after a fresh semantic-reuse thread start", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":16000,"projectionMaxChars":32000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      },
+    });
+    const hugePayload = {
+      rows: Array.from({ length: 10 }, (_, index) => ({
+        id: index,
+        body: "0123456789abcdef".repeat(4000),
+      })),
+    };
+    const compact = vi.fn<ContextEngine["compact"]>(async () => {
+      throw new Error("post-start compaction should be handled by the outer retry loop");
+    });
+    const assemble = vi
+      .fn<ContextEngine["assemble"]>()
+      .mockResolvedValueOnce({
+        messages: [assistantMessage("already bootstrapped context", 10)],
+        estimatedTokens: 100,
+        systemPromptAddition: "bootstrapped context instructions",
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-1" },
+      })
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 8 }, (_, index) =>
+          toolResultMessage(hugePayload, index + 1),
+        ),
+        estimatedTokens: 100_000,
+        systemPromptAddition: "fresh thread context instructions",
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-1" },
+      });
+    const contextEngine = createContextEngine({ assemble, compact });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        throw new Error("stale Codex thread missing");
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-fresh");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 16_000;
+
+    const result = await runCodexAppServerAttempt(params);
+
+    expect(result.promptError).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery?.route).not.toBe("fits");
+    expect(compact).not.toHaveBeenCalled();
+    expect(assemble).toHaveBeenCalledTimes(2);
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "thread/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
   it("compacts over-budget rendered context-engine prompts before Codex turn/start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

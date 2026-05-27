@@ -1933,9 +1933,9 @@ export async function runCodexAppServerAttempt(
     promptError: undefined,
     promptErrorSource: null,
   });
-  const maybeCompactContextEngineForProviderBoundaryPrecheck = async (): Promise<
-    EmbeddedRunAttemptResult | undefined
-  > => {
+  const maybeCompactContextEngineForProviderBoundaryPrecheck = async (
+    options: { allowCompaction?: boolean } = {},
+  ): Promise<EmbeddedRunAttemptResult | undefined> => {
     if (!activeContextEngine?.info.ownsCompaction) {
       return undefined;
     }
@@ -1964,7 +1964,7 @@ export async function runCodexAppServerAttempt(
     if (!shouldHandleContextEngineProviderBoundaryOverflow(precheck)) {
       return undefined;
     }
-    if (!precheck.shouldCompact) {
+    if (!precheck.shouldCompact || options.allowCompaction === false) {
       return buildPreStartPromptErrorResult(PREEMPTIVE_OVERFLOW_ERROR_TEXT, {
         route: precheck.route,
       });
@@ -2345,8 +2345,12 @@ export async function runCodexAppServerAttempt(
       await rebuildPromptForFreshThreadAfterOptimisticSemanticReuse(thread);
     if (rebuiltForFreshThread) {
       try {
+        // The native thread already received developer instructions; compacting here could
+        // rebuild them without sending them to Codex. Let the outer loop compact and retry.
         const providerBoundaryPrecheckFailure =
-          await maybeCompactContextEngineForProviderBoundaryPrecheck();
+          await maybeCompactContextEngineForProviderBoundaryPrecheck({
+            allowCompaction: false,
+          });
         if (providerBoundaryPrecheckFailure) {
           await unsubscribeCodexThreadBestEffort(client, {
             threadId: thread.threadId,
