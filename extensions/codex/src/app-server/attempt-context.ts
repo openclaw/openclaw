@@ -220,7 +220,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       canRouteCodexWorkspaceMemoryThroughTools({
         config: params.params.config,
         agentId: params.params.agentId ?? params.sessionAgentId,
-        workspaceDir: params.resolvedWorkspace,
+        workspaceDir: params.effectiveWorkspace,
       });
     const bootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: params.resolvedWorkspace,

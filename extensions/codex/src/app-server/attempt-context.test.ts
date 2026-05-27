@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type {
   AgentMessage,
@@ -5,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   remapCodexContextFilePath,
@@ -76,6 +79,36 @@ describe("Codex app-server attempt context", () => {
     expect(webSearch?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(webSearch?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(report.tools.schemaChars).toBe(message?.schemaChars);
+  });
+
+  it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-workspace-"));
+    const sandboxWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-sandbox-"));
+    const memorySummary = "Sandboxed turns need bounded memory fallback.";
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+
+    const context = await buildCodexWorkspaceBootstrapContext({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        config: {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: sandboxWorkspaceDir,
+      sessionKey: "agent:main:session-1",
+      sessionAgentId: "main",
+      memoryToolNames: ["memory_search", "memory_get"],
+    });
+
+    expect(context.memoryReferenceFiles).toEqual([]);
+    expect(context.promptContext).toContain(memorySummary);
+    expect(context.memoryToolRouted).toBe(false);
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
