@@ -22,6 +22,7 @@ import {
 import { listAgentIds } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  type EmbeddedPiQueueMessageOptions,
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
@@ -187,16 +188,26 @@ async function startAgentRun(params: {
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && fallbackSessionKey && messageText) {
-      const queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+      const queueOptions: EmbeddedPiQueueMessageOptions = {
+        steeringMode: "all",
+        debounceMs: 0,
+        deliveryTimeoutMs: params.deliveryTimeoutMs,
+        waitForTranscriptCommit: true,
+      };
+      let queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
         activeRunSessionId,
         messageText,
-        {
-          steeringMode: "all",
-          debounceMs: 0,
-          deliveryTimeoutMs: params.deliveryTimeoutMs,
-          waitForTranscriptCommit: true,
-        },
+        queueOptions,
       );
+      if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+        const bestEffortQueueOptions = { ...queueOptions };
+        delete bestEffortQueueOptions.waitForTranscriptCommit;
+        queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+          activeRunSessionId,
+          messageText,
+          bestEffortQueueOptions,
+        );
+      }
       if (queueOutcome.queued) {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
