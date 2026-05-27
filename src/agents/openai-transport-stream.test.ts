@@ -2208,6 +2208,63 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(65_536);
   });
 
+  it("prefers promptCacheKey over sessionId for Responses prompt-cache affinity", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        sessionId: "run-session",
+        promptCacheKey: "cron-cache-key",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBe("cron-cache-key");
+  });
+
+  it("omits Responses prompt_cache_key when caching is disabled", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        sessionId: "run-session",
+        promptCacheKey: "cron-cache-key",
+        cacheRetention: "none",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBeUndefined();
+  });
+
   it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -4596,10 +4653,10 @@ describe("openai transport stream", () => {
         messages: [],
         tools: [],
       } as never,
-      { sessionId: "session-123" },
+      { sessionId: "session-123", promptCacheKey: "cron-cache-key" },
     ) as { prompt_cache_key?: string };
 
-    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.prompt_cache_key).toBe("cron-cache-key");
   });
 
   it("omits prompt_cache_key for completions when caching is disabled or not opted in", () => {
@@ -4627,7 +4684,7 @@ describe("openai transport stream", () => {
         compat: { supportsPromptCacheKey: true },
       } as unknown as Model<"openai-completions">,
       context,
-      { sessionId: "session-123", cacheRetention: "none" },
+      { sessionId: "session-123", promptCacheKey: "cron-cache-key", cacheRetention: "none" },
     ) as { prompt_cache_key?: string };
     const notOptedIn = buildOpenAICompletionsParams(baseModel, context, {
       sessionId: "session-123",

@@ -115,6 +115,7 @@ type BaseStreamOptions = {
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
   sessionId?: string;
+  promptCacheKey?: string;
   authProfileId?: string;
   onPayload?: (payload: unknown, model: Model) => unknown;
   headers?: Record<string, string>;
@@ -1843,6 +1844,16 @@ function resolveCacheRetention(cacheRetention: string | undefined): "short" | "l
   return "short";
 }
 
+function resolvePromptCacheKey(
+  options: Pick<BaseStreamOptions, "promptCacheKey" | "sessionId"> | undefined,
+  cacheRetention: "short" | "long" | "none",
+): string | undefined {
+  if (cacheRetention === "none") {
+    return undefined;
+  }
+  return options?.promptCacheKey ?? options?.sessionId;
+}
+
 function getPromptCacheRetention(
   baseUrl: string | undefined,
   cacheRetention: "short" | "long" | "none",
@@ -2041,6 +2052,7 @@ export function buildOpenAIResponsesParams(
     ensureOpenAICodexResponsesInput(messages, context);
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
@@ -2048,7 +2060,7 @@ export function buildOpenAIResponsesParams(
     model: model.id,
     input: messages,
     stream: true,
-    prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
+    prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
     ...(metadata ? { metadata } : {}),
@@ -3480,6 +3492,7 @@ export function buildOpenAICompletionsParams(
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -3493,8 +3506,8 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsStore) {
     params.store = false;
   }
-  if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
-    params.prompt_cache_key = options.sessionId;
+  if (compat.supportsPromptCacheKey && promptCacheKey) {
+    params.prompt_cache_key = promptCacheKey;
     // When the caller explicitly opted into long retention, forward the
     // canonical prompt_cache_retention value alongside the cache key so
     // OpenAI-compatible completions backends (oMLX, llama.cpp, official

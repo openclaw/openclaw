@@ -3007,6 +3007,7 @@ export async function runEmbeddedAttempt(
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
         sessionId: params.sessionId,
+        promptCacheKey: params.promptCacheKey,
         signal: runAbortController.signal,
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
@@ -3918,6 +3919,7 @@ export async function runEmbeddedAttempt(
         if (cacheObservabilityEnabled) {
           const cacheObservation = beginPromptCacheObservation({
             sessionId: params.sessionId,
+            promptCacheKey: params.promptCacheKey,
             sessionKey: params.sessionKey,
             provider: params.provider,
             modelId: params.modelId,
@@ -4675,6 +4677,7 @@ export async function runEmbeddedAttempt(
           cacheBreak = cacheObservabilityEnabled
             ? completePromptCacheObservation({
                 sessionId: params.sessionId,
+                promptCacheKey: params.promptCacheKey,
                 sessionKey: params.sessionKey,
                 usage: attemptUsage,
               })
