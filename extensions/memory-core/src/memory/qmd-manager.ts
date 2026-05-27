@@ -1928,8 +1928,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.isMissingCollectionSearchError(err) ||
       this.isUnsupportedQmdOptionError(err) ||
       this.isSqliteBusyError(err) ||
-      !isQmdNativeAbortAfterOutput(err) ||
-      !err.stdout.trim().startsWith("[")
+      !isQmdNativeAbortAfterOutput(err)
     ) {
       return null;
     }

@@ -1847,6 +1847,7 @@ describe("QmdMemoryManager", () => {
       if (args[0] === "query") {
         const child = createMockChild({ autoClose: false });
         queueMicrotask(() => {
+          child.stdout.emit("data", "initializing qmd reranker\n");
           child.stdout.emit(
             "data",
             JSON.stringify(
