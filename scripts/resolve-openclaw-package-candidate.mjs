@@ -110,9 +110,31 @@ export function validateOpenClawPackageSpec(spec) {
   }
 }
 
+export function resolveSpawnCommand(command) {
+  // Windows resolves bare command names against PATH using the PATHEXT shim
+  // table, but `child_process.spawn(name)` (no shell) does not consult
+  // PATHEXT, so `spawn("npm", ...)` fails with ENOENT even when `npm.cmd` is
+  // on PATH. Issue #87233 hit this against `scripts/resolve-openclaw-package-candidate.mjs --source npm`.
+  // Mirror the shim resolution explicitly for known JS-tool wrappers.
+  if (process.platform !== "win32") {
+    return command;
+  }
+  if (typeof command !== "string" || command.length === 0) {
+    return command;
+  }
+  if (/[\\/]/.test(command) || /\.(?:cmd|bat|exe|ps1)$/i.test(command)) {
+    return command;
+  }
+  if (/^(?:npm|npx|pnpm|pnpx|yarn|bun|node)$/i.test(command)) {
+    return `${command}.cmd`;
+  }
+  return command;
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const resolvedCommand = resolveSpawnCommand(command);
+    const child = spawn(resolvedCommand, args, {
       cwd: options.cwd ?? ROOT_DIR,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"],
     });

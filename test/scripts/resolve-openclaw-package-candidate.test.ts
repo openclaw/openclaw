@@ -9,6 +9,7 @@ import {
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
+  resolveSpawnCommand,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
@@ -458,5 +459,40 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(readPackageBuildSourceSha(tarball)).resolves.toBe(
       "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
     );
+  });
+
+  describe("resolveSpawnCommand (#87233)", () => {
+    const originalPlatform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    function setPlatform(value: string) {
+      Object.defineProperty(process, "platform", { value });
+    }
+
+    it("appends .cmd shim suffix for npm-family tools on Windows", () => {
+      setPlatform("win32");
+      expect(resolveSpawnCommand("npm")).toBe("npm.cmd");
+      expect(resolveSpawnCommand("npx")).toBe("npx.cmd");
+      expect(resolveSpawnCommand("pnpm")).toBe("pnpm.cmd");
+      expect(resolveSpawnCommand("yarn")).toBe("yarn.cmd");
+      expect(resolveSpawnCommand("bun")).toBe("bun.cmd");
+    });
+
+    it("leaves non-Windows platforms untouched", () => {
+      setPlatform("linux");
+      expect(resolveSpawnCommand("npm")).toBe("npm");
+      expect(resolveSpawnCommand("pnpm")).toBe("pnpm");
+    });
+
+    it("leaves absolute paths, explicit extensions, and unknown bins alone", () => {
+      setPlatform("win32");
+      expect(resolveSpawnCommand("C\\\\Program Files\\\\nodejs\\\\npm.cmd")).toBe(
+        "C\\\\Program Files\\\\nodejs\\\\npm.cmd",
+      );
+      expect(resolveSpawnCommand("npm.cmd")).toBe("npm.cmd");
+      expect(resolveSpawnCommand("my-tool")).toBe("my-tool");
+    });
   });
 });
