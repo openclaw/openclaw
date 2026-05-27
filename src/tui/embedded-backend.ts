@@ -379,7 +379,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!run || run.sessionKey !== opts.sessionKey) {
       return { ok: true, aborted: false };
     }
-    if (run.lifecycleEnded) {
+    if (!this.isAbortableRun(opts.runId, run)) {
       return { ok: true, aborted: false };
     }
     run.controller.abort();
@@ -546,20 +546,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private abortSessionRuns(sessionKey: string) {
-    for (const run of this.runs.values()) {
-      if (run.sessionKey === sessionKey && !run.isBtw && !run.lifecycleEnded) {
+    for (const [runId, run] of this.runs) {
+      if (run.sessionKey === sessionKey && !run.isBtw && this.isAbortableRun(runId, run)) {
         run.controller.abort();
       }
     }
   }
 
   private hasAbortableSessionRun(sessionKey: string): boolean {
-    for (const run of this.runs.values()) {
-      if (run.sessionKey === sessionKey && !run.isBtw && !run.lifecycleEnded) {
+    for (const [runId, run] of this.runs) {
+      if (run.sessionKey === sessionKey && !run.isBtw && this.isAbortableRun(runId, run)) {
         return true;
       }
     }
     return false;
+  }
+
+  private isAbortableRun(runId: string, run: LocalRunState): boolean {
+    return !run.lifecycleEnded || this.runPromises.has(runId);
   }
 
   private nextSeq() {
