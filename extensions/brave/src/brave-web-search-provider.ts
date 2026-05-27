@@ -9,6 +9,19 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
 
+const LEGACY_WEB_SEARCH_PROVIDER_KEYS: ReadonlySet<string> = new Set([
+  "brave",
+  "duckduckgo",
+  "exa",
+  "gemini",
+  "google",
+  "kimi",
+  "minimax",
+  "moonshot",
+  "perplexity",
+  "xai",
+]);
+
 type BraveWebSearchRuntime = typeof import("./brave-web-search-provider.runtime.js");
 
 let braveWebSearchRuntimePromise: Promise<BraveWebSearchRuntime> | undefined;
@@ -109,13 +122,21 @@ function mergeScopedSearchConfig(
   }
 
   const currentScoped = isRecord(searchConfig?.[key]) ? searchConfig?.[key] : {};
-  const next: Record<string, unknown> = {
-    ...searchConfig,
-    [key]: {
+  const next: Record<string, unknown> = { ...searchConfig };
+  const existingDescriptor = searchConfig
+    ? Object.getOwnPropertyDescriptor(searchConfig, key)
+    : undefined;
+  const shouldHide = LEGACY_WEB_SEARCH_PROVIDER_KEYS.has(key) && existingDescriptor === undefined;
+
+  Object.defineProperty(next, key, {
+    value: {
       ...currentScoped,
       ...pluginConfig,
     },
-  };
+    enumerable: !shouldHide,
+    configurable: true,
+    writable: true,
+  });
 
   if (options?.mirrorApiKeyToTopLevel && pluginConfig.apiKey !== undefined) {
     next.apiKey = pluginConfig.apiKey;
