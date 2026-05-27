@@ -2161,16 +2161,24 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     // `unsafeRawToolPayloads` is accepted in the params schema for backwards
-    // compatibility but intentionally not destructured here: the raw branch is
-    // now gated solely by `mode === "raw-messages"` (see docs/web/webchat.md
-    // and docs/gateway/protocol.md), so the flag has no effect on its own.
-    const { sessionKey, limit, maxChars, mode } = params as {
+    // compatibility but the raw branch is now gated solely by
+    // `mode === "raw-messages"` (see docs/web/webchat.md and
+    // docs/gateway/protocol.md), so the flag has no effect on its own. We
+    // still destructure it so we can surface a warn log when callers pass it
+    // without the matching mode, instead of silently ignoring intent.
+    const { sessionKey, limit, maxChars, mode, unsafeRawToolPayloads } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
       mode?: "messages" | "turns" | "raw-messages";
       unsafeRawToolPayloads?: boolean;
     };
+    if (unsafeRawToolPayloads === true && mode !== "raw-messages") {
+      context.logGateway.warn(
+        'chat.history unsafeRawToolPayloads flag ignored: requires mode === "raw-messages"',
+        { mode: mode ?? null },
+      );
+    }
     const historyMode =
       mode === "turns" ||
       (mode !== "messages" &&
