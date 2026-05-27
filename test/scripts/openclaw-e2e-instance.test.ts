@@ -327,6 +327,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             PATH: tempDir,
             OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+            OPENCLAW_E2E_NPM_BIN: path.join(tempDir, "npm"),
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
           }),
         },
@@ -539,6 +540,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           encoding: "utf8",
           env: shellTestEnv({
             PATH: `${tempDir}:${hostPath}`,
+            OPENCLAW_E2E_CLI_BIN: path.join(tempDir, "openclaw"),
             OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
