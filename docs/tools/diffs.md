@@ -206,9 +206,9 @@ All fields are optional unless noted.
 
 OpenClaw includes syntax highlighting for common source, config, and documentation languages:
 
-`javascript`, `typescript`, `tsx`, `jsx`, `json`, `markdown`, `yaml`, `css`, `html`, `sh`, `python`, `go`, `rust`, `java`, `c`, `cpp`, `csharp`, `php`, `sql`, and `docker`.
+`javascript`, `typescript`, `tsx`, `jsx`, `json`, `markdown`, `yaml`, `css`, `html`, `sh`, `python`, `go`, `rust`, `java`, `c`, `cpp`, `csharp`, `php`, `sql`, `docker`, `ruby`, `swift`, `kotlin`, `r`, `dart`, `lua`, `powershell`, `xml`, and `toml`.
 
-Common aliases such as `js`, `ts`, `bash`, `md`, `yml`, `c++`, and `dockerfile` are normalized to those default languages.
+Common aliases such as `js`, `ts`, `bash`, `md`, `yml`, `c++`, `dockerfile`, `rb`, `kt`, and `ps1` are normalized to those default languages.
 
 Install the Diff Viewer Language Pack plugin to highlight other languages:
 
