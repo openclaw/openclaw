@@ -2746,8 +2746,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         CommandBody: commandBody,
         InputProvenance: systemInputProvenance,
         SessionKey: sessionKey,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
+        Provider:
+          (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) ||
+          INTERNAL_MESSAGE_CHANNEL,
+        Surface:
+          (canInjectSystemProvenance(client) && systemInputProvenance?.sourceChannel) ||
+          INTERNAL_MESSAGE_CHANNEL,
         OriginatingChannel: originatingChannel,
         OriginatingTo: originatingTo,
         ExplicitDeliverRoute: explicitDeliverRoute,
@@ -2770,13 +2774,19 @@ export const chatHandlers: GatewayRequestHandlers = {
               body: commandBody,
             },
         MessageSid: clientRunId,
-        ...(!isOperatorUiClient(clientInfo)
+        ...(canInjectSystemProvenance(client) && systemInputProvenance?.senderId
           ? {
-              SenderId: clientInfo?.id,
-              SenderName: clientInfo?.displayName,
-              SenderUsername: clientInfo?.displayName,
+              SenderId: systemInputProvenance.senderId,
+              SenderName: systemInputProvenance.senderName || clientInfo?.displayName,
+              SenderUsername: systemInputProvenance.senderName || clientInfo?.displayName,
             }
-          : {}),
+          : !isOperatorUiClient(clientInfo)
+            ? {
+                SenderId: clientInfo?.id,
+                SenderName: clientInfo?.displayName,
+                SenderUsername: clientInfo?.displayName,
+              }
+            : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
       };
       if (mediaPathOffloadPaths.length > 0) {
