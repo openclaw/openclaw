@@ -13,6 +13,7 @@ const ROOM_MIXED_KEY = "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org";
 const ROOM_LOWER_KEY = "agent:main:matrix:channel:!mixedroomabcdef:example.org";
 const ROOM_MIXED_THREAD_KEY = `${ROOM_MIXED_KEY}:thread:$ThreadRootAbC`;
 const ROOM_LOWER_THREAD_KEY = `${ROOM_LOWER_KEY}:thread:$threadrootabc`;
+const ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY = `${ROOM_LOWER_KEY}:thread:$ThreadRootAbC`;
 const entry = (to: string, updatedAt: number): SessionEntry =>
   ({ updatedAt, deliveryContext: { channel: "matrix", to } }) as unknown as SessionEntry;
 
@@ -336,6 +337,24 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
 
     expect(r.legacyKeys).toContain(ROOM_LOWER_THREAD_KEY);
     expect(r.existing).toBe(store[ROOM_LOWER_THREAD_KEY]);
+  });
+
+  it("collapses Matrix thread artifacts with legacy lowercased room and preserved event id", () => {
+    const store: Record<string, SessionEntry> = {
+      [ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY]: {
+        updatedAt: 50,
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!MixedRoomAbCdEf:example.org",
+          threadId: "$ThreadRootAbC",
+        },
+      } as unknown as SessionEntry,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_THREAD_KEY });
+
+    expect(r.legacyKeys).toContain(ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY);
+    expect(r.existing).toBe(store[ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY]);
   });
 
   it("keeps legacy lowercase Signal group fallback without delivery metadata", () => {

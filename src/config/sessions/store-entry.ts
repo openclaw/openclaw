@@ -10,6 +10,22 @@ export function normalizeStoreSessionKey(sessionKey: string): string {
   return normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
 }
 
+export function foldedSessionKeyAliasCandidates(normalizedKey: string): string[] {
+  const aliases = new Set<string>();
+  const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalizedKey);
+  if (foldedLegacyKey !== normalizedKey) {
+    aliases.add(foldedLegacyKey);
+  }
+  if (requiresFoldedSessionKeyAliasProof(normalizedKey)) {
+    const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
+    const foldedBaseKey = normalizeLowercaseStringOrEmpty(baseSessionKey);
+    if (baseSessionKey && threadId && foldedBaseKey !== baseSessionKey) {
+      aliases.add(`${foldedBaseKey}:thread:${threadId}`);
+    }
+  }
+  return [...aliases];
+}
+
 /** The case-sensitive room/peer target an entry actually delivers to. Delivery
  *  metadata preserves the real opaque id even when the session KEY was lowercased
  *  by the bug, so it distinguishes a lowercased artifact from a distinct room. */
@@ -108,7 +124,7 @@ export function resolveSessionStoreEntry(params: {
 } {
   const trimmedKey = params.sessionKey.trim();
   const normalizedKey = normalizeStoreSessionKey(trimmedKey);
-  const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalizedKey);
+  const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalizedKey);
   const legacyKeySet = new Set<string>();
   if (
     trimmedKey !== normalizedKey &&
@@ -120,14 +136,22 @@ export function resolveSessionStoreEntry(params: {
   // Matrix folded aliases need proof they still deliver to this room. Otherwise a
   // genuinely case-distinct sibling that merely folds to the same lowercase could
   // be deleted or returned as this room's existing session.
-  const foldedLegacyEntry =
-    foldedLegacyKey !== normalizedKey &&
-    Object.prototype.hasOwnProperty.call(params.store, foldedLegacyKey) &&
-    isConfirmedLowercasedLegacyAlias(params.store[foldedLegacyKey], normalizedKey)
-      ? params.store[foldedLegacyKey]
-      : undefined;
-  if (foldedLegacyEntry) {
+  let foldedLegacyEntry: SessionEntry | undefined;
+  let foldedLegacyUpdatedAt = 0;
+  for (const foldedLegacyKey of foldedLegacyKeys) {
+    if (
+      !Object.prototype.hasOwnProperty.call(params.store, foldedLegacyKey) ||
+      !isConfirmedLowercasedLegacyAlias(params.store[foldedLegacyKey], normalizedKey)
+    ) {
+      continue;
+    }
     legacyKeySet.add(foldedLegacyKey);
+    const entry = params.store[foldedLegacyKey];
+    const updatedAt = entry?.updatedAt ?? 0;
+    if (!foldedLegacyEntry || updatedAt > foldedLegacyUpdatedAt) {
+      foldedLegacyEntry = entry;
+      foldedLegacyUpdatedAt = updatedAt;
+    }
   }
   // An exact (opaque-preserving-normalized) entry always wins over any folded
   // legacy alias, regardless of freshness (openclaw#75670). Only when no exact

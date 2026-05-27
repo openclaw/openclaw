@@ -490,6 +490,35 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("finds Matrix thread entries with a legacy lowercased room and preserved event id", () => {
+    const queriedKey =
+      "agent:main:matrix:channel:!MixedCase:Example.Org:thread:$RootEvent:Example.Org";
+    const legacyThreadKey =
+      "agent:main:matrix:channel:!mixedcase:example.org:thread:$RootEvent:Example.Org";
+    storeState.store[legacyThreadKey] = {
+      sessionId: "legacy-thread-session",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+        threadId: "$RootEvent:Example.Org",
+      },
+    };
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+        threadId: "$RootEvent:Example.Org",
+      },
+      threadId: "$RootEvent:Example.Org",
+    });
+  });
+
   it("does not return a case-distinct lowercase Matrix sibling when the mixed-case key has no exact entry", () => {
     const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
     const lowercaseSiblingKey = "agent:main:matrix:channel:!mixedcase:example.org";

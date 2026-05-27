@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import {
+  foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
   isConfirmedLowercasedLegacyAlias,
   normalizeStoreSessionKey,
@@ -124,7 +125,7 @@ function findSessionEntryInStore(
   for (const key of keys) {
     const trimmed = key.trim();
     const normalized = normalizeStoreSessionKey(key);
-    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalized);
     const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
     if (
@@ -136,15 +137,18 @@ function findSessionEntryInStore(
       );
       acceptCandidate(store[normalized], exactKeyWins);
     }
-    if (
-      foldedLegacyKey !== normalized &&
-      Object.prototype.hasOwnProperty.call(store, foldedLegacyKey) &&
-      isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
-    ) {
+    for (const foldedLegacyKey of foldedLegacyKeys) {
+      if (
+        !Object.prototype.hasOwnProperty.call(store, foldedLegacyKey) ||
+        !isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
+      ) {
+        continue;
+      }
+      const foldedLegacyEntry = asSessionEntry(store[foldedLegacyKey]);
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[foldedLegacyKey])),
+        deliveryContextFromSession(foldedLegacyEntry),
       );
-      acceptCandidate(store[foldedLegacyKey]);
+      acceptCandidate(foldedLegacyEntry);
     }
     if (
       trimmed !== normalized &&
@@ -162,7 +166,7 @@ function findSessionEntryInStore(
       if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
         acceptCandidate(freshest);
       }
-      if (foldedLegacyKey !== normalized) {
+      for (const foldedLegacyKey of foldedLegacyKeys) {
         const foldedFreshest = normalizedIndex.get(foldedLegacyKey);
         if (isConfirmedLowercasedLegacyAlias(foldedFreshest, normalized)) {
           acceptCandidate(foldedFreshest);
