@@ -17,6 +17,7 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
@@ -197,12 +198,12 @@ export async function resolvePromptBuildHookResult(params: {
       beforeAgentStartResult?.appendContext,
     ]),
     prependSystemContext: joinPresentTextSegments([
-      promptBuildResult?.prependSystemContext,
-      beforeAgentStartResult?.prependSystemContext,
+      wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
+      wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
     ]),
     appendSystemContext: joinPresentTextSegments([
-      promptBuildResult?.appendSystemContext,
-      beforeAgentStartResult?.appendSystemContext,
+      wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
+      wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
     ]),
   };
 }

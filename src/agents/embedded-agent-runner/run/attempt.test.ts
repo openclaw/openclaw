@@ -7,6 +7,7 @@ vi.mock("../context-engine-capabilities.js", () => ({
 import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
@@ -86,6 +87,10 @@ function requireContentItem(
   index = 0,
 ) {
   return requireRecord(content[index], `content item ${index}`);
+}
+
+function wrappedPluginSystemContext(text: string): string {
+  return wrapPluginSystemContextSection(text) ?? "";
 }
 
 function expectSingleTextContent(
@@ -715,8 +720,12 @@ describe("resolvePromptBuildHookResult", () => {
 
     expect(result.prependContext).toBe("prompt context\n\nagent start context");
     expect(result.appendContext).toBe("prompt append context\n\nagent start append context");
-    expect(result.prependSystemContext).toBe("prompt prepend\n\nagent start prepend");
-    expect(result.appendSystemContext).toBe("prompt append\n\nagent start append");
+    expect(result.prependSystemContext).toBe(
+      `${wrappedPluginSystemContext("prompt prepend")}\n\n${wrappedPluginSystemContext("agent start prepend")}`,
+    );
+    expect(result.appendSystemContext).toBe(
+      `${wrappedPluginSystemContext("prompt append")}\n\n${wrappedPluginSystemContext("agent start append")}`,
+    );
   });
 
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
@@ -766,29 +775,33 @@ describe("composeSystemPromptWithHookContext", () => {
     expect(
       composeSystemPromptWithHookContext({
         baseSystemPrompt: "  base system  ",
-        prependSystemContext: "  prepend  ",
-        appendSystemContext: "  append  ",
+        prependSystemContext: wrappedPluginSystemContext("  prepend  "),
+        appendSystemContext: wrappedPluginSystemContext("  append  "),
       }),
-    ).toBe("prepend\n\nbase system\n\nappend");
+    ).toBe(
+      `${wrappedPluginSystemContext("prepend")}\n\nbase system\n\n${wrappedPluginSystemContext("append")}`,
+    );
   });
 
   it("normalizes hook system context line endings and trailing whitespace", () => {
     expect(
       composeSystemPromptWithHookContext({
         baseSystemPrompt: "  base system  ",
-        prependSystemContext: "  prepend line  \r\nsecond line\t\r\n",
-        appendSystemContext: "  append  \t\r\n",
+        prependSystemContext: wrappedPluginSystemContext("  prepend line  \r\nsecond line\t\r\n"),
+        appendSystemContext: wrappedPluginSystemContext("  append  \t\r\n"),
       }),
-    ).toBe("prepend line\nsecond line\n\nbase system\n\nappend");
+    ).toBe(
+      `${wrappedPluginSystemContext("prepend line\nsecond line")}\n\nbase system\n\n${wrappedPluginSystemContext("append")}`,
+    );
   });
 
   it("avoids blank separators when base system prompt is empty", () => {
     expect(
       composeSystemPromptWithHookContext({
         baseSystemPrompt: "   ",
-        appendSystemContext: "  append only  ",
+        appendSystemContext: wrappedPluginSystemContext("  append only  "),
       }),
-    ).toBe("append only");
+    ).toBe(wrappedPluginSystemContext("append only"));
   });
 
   it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {
