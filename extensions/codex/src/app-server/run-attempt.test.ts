@@ -5618,6 +5618,70 @@ describe("runCodexAppServerAttempt", () => {
     await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
   });
 
+  it("does not idle-timeout when terminal completion queues behind projection", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 120;
+    const turnStartProgressEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress" && event.reason === "codex_app_server:turn:start") {
+        turnStartProgressEvents.push(event);
+      }
+    });
+    let resolveReasoningStarted!: () => void;
+    const reasoningStarted = new Promise<void>((resolve) => {
+      resolveReasoningStarted = resolve;
+    });
+    let releaseProjection!: () => void;
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    params.onReasoningStream = async () => {
+      resolveReasoningStarted();
+      await projectionGate;
+    };
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 5,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
+    stopDiagnostics();
+
+    const blockedProjection = harness.notify({
+      method: "item/reasoning/textDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "thinking",
+      },
+    });
+    void blockedProjection.catch(() => undefined);
+    await reasoningStarted;
+
+    const queuedTerminal = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    void queuedTerminal.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+
+    releaseProjection();
+    await queuedTerminal;
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+  });
+
   it("releases the session when a completed agent message item goes quiet", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {

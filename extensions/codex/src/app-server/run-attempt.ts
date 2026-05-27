@@ -2014,6 +2014,7 @@ export async function runCodexAppServerAttempt(
   const fireTurnCompletionIdleTimeout = () => {
     if (
       completed ||
+      terminalTurnNotificationQueued ||
       runAbortController.signal.aborted ||
       !turnCompletionIdleWatchArmed ||
       activeAppServerTurnRequests > 0
@@ -2053,6 +2054,7 @@ export async function runCodexAppServerAttempt(
   const fireTurnTerminalIdleTimeout = () => {
     if (
       completed ||
+      terminalTurnNotificationQueued ||
       runAbortController.signal.aborted ||
       !turnTerminalIdleWatchArmed ||
       activeAppServerTurnRequests > 0
@@ -2580,6 +2582,16 @@ export async function runCodexAppServerAttempt(
     }
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
       terminalTurnNotificationQueued = true;
+    }
+    // Touch idle-watch timestamps at receive time, not just after queued
+    // projection.  A queued terminal event should suppress short false-idle
+    // guards, while the full attempt watchdog still releases a wedged queue.
+    if (correlation.matchesActiveTurn !== false) {
+      const now = Date.now();
+      turnCompletionLastActivityAt = now;
+      turnCompletionLastActivityReason = `notification:${notification.method}`;
+      turnAttemptLastProgressAt = now;
+      turnAttemptLastProgressReason = `notification:${notification.method}`;
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
