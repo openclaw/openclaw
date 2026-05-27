@@ -221,11 +221,15 @@ function hasFailedDispatchCounts(result: unknown): boolean {
 }
 
 function isPluginRuntime(value: unknown): value is PluginRuntime {
+  const channel = (
+    value as { channel?: { inbound?: { buildContext?: unknown; run?: unknown } } } | null
+  )?.channel;
   return Boolean(
     value &&
     typeof value === "object" &&
     "channel" in value &&
-    typeof (value as { channel?: { turn?: { run?: unknown } } }).channel?.turn?.run === "function",
+    typeof channel?.inbound?.run === "function" &&
+    typeof channel.inbound.buildContext === "function",
   );
 }
 
@@ -519,7 +523,7 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
           return brokerIngress;
         };
 
-        const turnResult = await pluginRuntime.channel.turn.run({
+        const turnResult = await pluginRuntime.channel.inbound.run({
           channel: "channel-broker",
           accountId: account.providerId,
           raw: event,
@@ -553,7 +557,7 @@ function createRuntimeFromPluginRuntime(pluginRuntime: PluginRuntime): ChannelBr
             },
             resolveTurn: (input) => {
               const ingress = brokerIngress;
-              const ctxPayload = pluginRuntime.channel.turn.buildContext({
+              const ctxPayload = pluginRuntime.channel.inbound.buildContext({
                 channel: "channel-broker",
                 accountId: account.providerId,
                 provider: account.providerId,

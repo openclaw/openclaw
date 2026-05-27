@@ -372,7 +372,7 @@ describe("channel-broker HTTP routes", () => {
     });
 
     expect(res.statusCode).toBe(202);
-    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+    expect(pluginRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         access: expect.objectContaining({
           group: expect.objectContaining({ requireMention: true, senderAllowed: true }),
@@ -421,7 +421,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(res.statusCode).toBe(202);
     expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
-    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+    expect(pluginRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         access: expect.objectContaining({
           group: expect.objectContaining({ senderAllowed: true }),
@@ -456,7 +456,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(res.statusCode).toBe(202);
     expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
-    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+    expect(pluginRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         access: expect.objectContaining({
           group: expect.objectContaining({ senderAllowed: true }),
@@ -507,14 +507,14 @@ describe("channel-broker HTTP routes", () => {
         parentPeer: { kind: "channel", id: "telegram:-100123" },
       }),
     );
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledWith(
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "channel-broker",
         accountId: "acme",
         raw: expect.objectContaining({ eventId: "evt-1", platform: "telegram" }),
       }),
     );
-    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+    expect(pluginRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "channel-broker",
         accountId: "acme",
@@ -740,7 +740,7 @@ describe("channel-broker HTTP routes", () => {
     });
 
     expect(res.statusCode).toBe(202);
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
     expect(sendOutboundRequest).toHaveBeenNthCalledWith(1, {
       account: expect.objectContaining({ providerId: "acme" }),
       request: expect.objectContaining({ mode: "preview_update" }),
@@ -901,7 +901,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(redelivery.statusCode).toBe(200);
     expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
     expect(sendOutboundRequest).toHaveBeenCalledTimes(2);
   });
 
@@ -950,7 +950,7 @@ describe("channel-broker HTTP routes", () => {
         ackPolicy: "after_agent_dispatch",
       }),
     ).resolves.toMatchObject({ status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates after agent dispatch when the final-only durable hook fails", async () => {
@@ -963,7 +963,7 @@ describe("channel-broker HTTP routes", () => {
       },
       state: { openKeyedStore: createOpenKeyedStoreMock() },
     });
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(async (params) => {
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(async (params) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
         throw new Error("missing broker input");
@@ -1009,7 +1009,7 @@ describe("channel-broker HTTP routes", () => {
         ackPolicy: "after_agent_dispatch",
       }),
     ).resolves.toMatchObject({ status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("deduplicates broker webhook redeliveries before dispatching another turn", async () => {
@@ -1040,7 +1040,7 @@ describe("channel-broker HTTP routes", () => {
     expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
     expect(second.statusCode).toBe(200);
     expect(JSON.parse(second.body)).toMatchObject({ ok: true, status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("returns a retryable response for redelivery while durable send is still pending", async () => {
@@ -1053,7 +1053,7 @@ describe("channel-broker HTTP routes", () => {
       state: { openKeyedStore: createOpenKeyedStoreMock() },
     });
     let rejectFirstTurn!: (error: Error) => void;
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(
       async () =>
         await new Promise<never>((_resolve, reject) => {
           rejectFirstTurn = reject;
@@ -1066,7 +1066,7 @@ describe("channel-broker HTTP routes", () => {
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res: createResponse(),
     });
-    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1));
 
     const redelivery = createResponse();
     await handleChannelBrokerInboundHttpRequest({
@@ -1081,7 +1081,7 @@ describe("channel-broker HTTP routes", () => {
       status: "pending",
       message: "delivery pending",
     });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
 
     rejectFirstTurn(new Error("stop first turn"));
     await expect(first).rejects.toThrow("stop first turn");
@@ -1098,7 +1098,7 @@ describe("channel-broker HTTP routes", () => {
       state: { openKeyedStore },
     });
     let rejectFirstTurn!: (error: Error) => void;
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(
       async () =>
         await new Promise<never>((_resolve, reject) => {
           rejectFirstTurn = reject;
@@ -1111,7 +1111,7 @@ describe("channel-broker HTTP routes", () => {
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res: createResponse(),
     });
-    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1));
 
     resetChannelBrokerRuntimeForTest();
     setChannelBrokerRuntime(pluginRuntime);
@@ -1128,7 +1128,7 @@ describe("channel-broker HTTP routes", () => {
       status: "pending",
       message: "delivery pending",
     });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
 
     rejectFirstTurn(new Error("stop first turn"));
     await expect(first).rejects.toThrow("stop first turn");
@@ -1145,7 +1145,7 @@ describe("channel-broker HTTP routes", () => {
       state: { openKeyedStore },
     });
     let rejectFirstTurn!: (error: Error) => void;
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(
       async () =>
         await new Promise<never>((_resolve, reject) => {
           rejectFirstTurn = reject;
@@ -1158,7 +1158,7 @@ describe("channel-broker HTTP routes", () => {
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res: createResponse(),
     });
-    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1));
 
     openKeyedStore.ageRecords(11 * 60 * 1000);
     const redelivery = createResponse();
@@ -1174,7 +1174,7 @@ describe("channel-broker HTTP routes", () => {
       status: "pending",
       message: "delivery pending",
     });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
 
     rejectFirstTurn(new Error("stop first turn"));
     await expect(first).rejects.toThrow("stop first turn");
@@ -1191,7 +1191,7 @@ describe("channel-broker HTTP routes", () => {
       state: { openKeyedStore },
     });
     let rejectFirstTurn!: (error: Error) => void;
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(
       async () =>
         await new Promise<never>((_resolve, reject) => {
           rejectFirstTurn = reject;
@@ -1204,7 +1204,7 @@ describe("channel-broker HTTP routes", () => {
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res: createResponse(),
     });
-    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1));
 
     resetChannelBrokerRuntimeForTest();
     openKeyedStore.ageRecords(11 * 60 * 1000);
@@ -1218,7 +1218,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(retry.statusCode).toBe(202);
     expect(JSON.parse(retry.body)).toMatchObject({ ok: true, status: "accepted" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(2);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(2);
 
     rejectFirstTurn(new Error("stale process stopped"));
     await expect(first).rejects.toThrow("stale process stopped");
@@ -1236,7 +1236,7 @@ describe("channel-broker HTTP routes", () => {
       },
       state: { openKeyedStore: createOpenKeyedStoreMock() },
     });
-    vi.mocked(pluginRuntime.channel.turn.run).mockRejectedValueOnce(visibleError);
+    vi.mocked(pluginRuntime.channel.inbound.run).mockRejectedValueOnce(visibleError);
     setChannelBrokerRuntime(pluginRuntime);
 
     await expect(
@@ -1256,7 +1256,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(redelivery.statusCode).toBe(200);
     expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("completes dedupe when failed preview counts are followed by visible final delivery", async () => {
@@ -1312,7 +1312,7 @@ describe("channel-broker HTTP routes", () => {
     expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
     expect(redelivery.statusCode).toBe(200);
     expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("completes dedupe when failed preview counts are followed by durable final delivery", async () => {
@@ -1325,7 +1325,7 @@ describe("channel-broker HTTP routes", () => {
       },
       state: { openKeyedStore: createOpenKeyedStoreMock() },
     });
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(async (params) => {
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(async (params) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
         throw new Error("missing broker input");
@@ -1385,7 +1385,7 @@ describe("channel-broker HTTP routes", () => {
         ackPolicy: "after_durable_send",
       }),
     ).resolves.toMatchObject({ status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("completes dedupe when dispatcher failed counts hide visible final delivery errors", async () => {
@@ -1440,7 +1440,7 @@ describe("channel-broker HTTP routes", () => {
     expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
     expect(redelivery.statusCode).toBe(200);
     expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("does not complete dedupe for dispatcher-side delivery failures", async () => {
@@ -1488,7 +1488,7 @@ describe("channel-broker HTTP routes", () => {
       status: "rejected",
       message: "delivery_failed",
     });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(2);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(2);
   });
 
   it("rejects stale inbound signatures before runtime dispatch", async () => {
