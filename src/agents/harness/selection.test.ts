@@ -280,12 +280,29 @@ describe("runAgentHarnessAttempt", () => {
     );
     params.provider = "9router";
     params.modelId = "cc/claude-opus-4-6";
+    params.agentHarnessRuntimeOverride = "codex";
 
     await expect(runAgentHarnessAttempt(params)).rejects.toThrow(
       /Requested agent harness "codex" does not support 9router\/cc\/claude-opus-4-6/,
     );
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
+
+  it.each(["openai", "openai-codex"])(
+    "does not override forced Codex harness support rejection for %s",
+    (provider) => {
+      registerFailingCodexHarness();
+
+      expect(() =>
+        selectAgentHarness({
+          provider,
+          modelId: "gpt-5.4",
+          agentHarnessRuntimeOverride: "codex",
+        }),
+      ).toThrow(`Requested agent harness "codex" does not support ${provider}/gpt-5.4`);
+      expect(piRunAttempt).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses the Codex harness by default for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();

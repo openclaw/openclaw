@@ -37,4 +37,10 @@ describe("Codex agent harness supports()", () => {
       priority: 100,
     });
   });
+
+  it("honors explicit provider id overrides", () => {
+    const narrowHarness = createCodexAppServerAgentHarness({ providerIds: ["codex"] });
+    const result = narrowHarness.supports({ provider: "openai", requestedRuntime: "codex" });
+    expect(result.supported).toBe(false);
+  });
 });
