@@ -15,6 +15,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -308,6 +309,13 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     parsedAccount: parsed.account,
     ctxAccountId: params.ctx.AccountId,
   });
+  const originChannelId =
+    params.command.channelId ?? normalizeChannelId(resolveCommandSurfaceChannel(params));
+  const originAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
   const plugin = getChannelPlugin(channelId);
 
   if (parsed.action === "list") {
@@ -491,10 +499,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
       channel: params.command.channel,
-      channelId,
-      accountId,
+      originChannelId,
+      originAccountId,
       gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: editResult.writeTarget,
+      fallbackChannelId: channelId,
     });
     if (deniedText) {
       return {
@@ -566,10 +575,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const storeDeniedText = resolveConfigWriteDeniedText({
     cfg: params.cfg,
     channel: params.command.channel,
-    channelId,
-    accountId,
+    originChannelId,
+    originAccountId,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     target: resolveExplicitConfigWriteTarget({ channelId, accountId }),
+    fallbackChannelId: channelId,
   });
   if (storeDeniedText) {
     return {
