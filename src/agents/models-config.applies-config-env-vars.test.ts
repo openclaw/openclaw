@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -186,6 +187,126 @@ describe("models-config", () => {
     );
 
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
+  it("replaces resolved plaintext apiKey values with a non-secret marker in planned models.json contents", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "replace", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-resolved-runtime-key", // pragma: allowlist secret
+            models: [{ id: "custom-model", name: "Custom model", input: ["text"] }],
+          } as ProviderConfig,
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(plan.contents).not.toContain("sk-resolved-runtime-key");
+  });
+
+  it("does not preserve old plaintext apiKey values in replace mode", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "replace", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example/v1",
+              api: "openai-completions",
+              apiKey: "sk-resolved-runtime-key", // pragma: allowlist secret
+              models: [{ id: "old-model", name: "Old model", input: ["text"] }],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-resolved-runtime-key", // pragma: allowlist secret
+            models: [{ id: "custom-model", name: "Custom model", input: ["text"] }],
+          } as ProviderConfig,
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(plan.contents).not.toContain("sk-resolved-runtime-key");
+  });
+
+  it("preserves merge-mode user-authored models.json apiKey values while stripping new plaintext", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "merge", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            kept: {
+              baseUrl: "https://kept.example/v1",
+              api: "openai-completions",
+              apiKey: "sk-user-authored-key", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          kept: {
+            baseUrl: "https://kept.example/v1",
+            api: "openai-completions",
+            models: [{ id: "kept-model", name: "Kept model", input: ["text"] }],
+          } as ProviderConfig,
+          newprov: {
+            baseUrl: "https://newprov.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-resolved-new-provider-key", // pragma: allowlist secret
+            models: [{ id: "new-model", name: "New model", input: ["text"] }],
+          } as ProviderConfig,
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.kept?.apiKey).toBe("sk-user-authored-key");
+    expect(parsed.providers?.newprov?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(plan.contents).not.toContain("sk-resolved-new-provider-key");
   });
 
   it("normalizes retired Gemini ids preserved from existing models.json rows", async () => {
