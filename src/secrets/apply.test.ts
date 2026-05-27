@@ -607,7 +607,7 @@ describe("secrets apply", () => {
       order?: Record<string, string[]>;
       lastGood?: Record<string, string>;
     };
-    expect(Object.keys(nextAuthStore.profiles).sort()).toEqual([
+    expect(Object.keys(nextAuthStore.profiles).toSorted()).toEqual([
       "anthropic:claude-cli",
       "openai-codex:sidecar",
       "openai:static",
