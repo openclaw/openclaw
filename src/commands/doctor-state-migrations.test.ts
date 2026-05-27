@@ -752,8 +752,10 @@ describe("doctor legacy state migrations", () => {
     });
     const result = await runLegacyStateMigrations({ detected });
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Migrated 2 Test capped cache entries → plugin state");
+    expect(result.warnings).toStrictEqual([
+      "Stopped migrating Test capped cache because plugin state cap evicted scope:first; left legacy source in place",
+    ]);
+    expect(result.changes).not.toContain("Migrated 2 Test capped cache entries → plugin state");
     expect(result.changes).not.toContain(
       `Archived Test capped cache legacy source → ${sourcePath}.migrated`,
     );
@@ -769,7 +771,7 @@ describe("doctor legacy state migrations", () => {
         (await store.entries()).map(({ key, value }) => [key, value.body]),
       );
       expect(valuesByKey.has("scope:first")).toBe(false);
-      expect(valuesByKey.get("scope:second")).toBe("second");
+      expect(valuesByKey.has("scope:second")).toBe(false);
     });
   });
 

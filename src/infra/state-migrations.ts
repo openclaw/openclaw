@@ -127,6 +127,15 @@ function resolvePluginStateImportTargetKey(scopeKey: string, key: string): strin
   return scopeKey ? `${scopeKey}:${key}` : key;
 }
 
+function findMissingKey(expected: Set<string>, actual: Set<string>): string | undefined {
+  for (const key of expected) {
+    if (!actual.has(key)) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
 async function withPluginStateImportEnv<T>(
   plan: Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>,
   run: () => Promise<T>,
@@ -169,9 +178,11 @@ async function runLegacyMigrationPlans(
           return;
         }
         const existingKeys = new Set(storeEntries.map(({ key }) => key));
+        const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
         const entries = await plan.readEntries();
         let imported = 0;
+        const importedKeys: string[] = [];
         for (const entry of entries) {
           const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
           if (existingKeys.has(targetKey)) {
@@ -182,7 +193,23 @@ async function runLegacyMigrationPlans(
           }
           try {
             await store.register(targetKey, entry.value);
+            const nextExpectedKeys = new Set(expectedKeys);
+            nextExpectedKeys.add(targetKey);
+            const liveKeys = new Set((await store.entries()).map(({ key }) => key));
+            const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
+            if (missingKey) {
+              for (const importedKey of importedKeys.toReversed()) {
+                await store.delete(importedKey);
+              }
+              await store.delete(targetKey);
+              warnings.push(
+                `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
+              );
+              return;
+            }
+            expectedKeys.add(targetKey);
             existingKeys.add(targetKey);
+            importedKeys.push(targetKey);
             remainingCapacity--;
             imported++;
           } catch (err) {
@@ -196,14 +223,7 @@ async function runLegacyMigrationPlans(
         }
         let cleanupKeys = existingKeys;
         if (plan.cleanupSource === "rename") {
-          try {
-            cleanupKeys = new Set((await store.entries()).map(({ key }) => key));
-          } catch (err) {
-            warnings.push(
-              `Left migrated ${plan.label} source in place because plugin state could not be verified: ${String(err)}`,
-            );
-            return;
-          }
+          cleanupKeys = expectedKeys;
         }
         const allEntriesCovered =
           entries.length > 0 &&
