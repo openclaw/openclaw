@@ -432,6 +432,23 @@ export async function resolveMattermostSendChannelId(
   return (await resolveMattermostSendContext(to, opts)).channelId;
 }
 
+async function resolveMattermostReplyRootForPost(
+  client: Awaited<ReturnType<typeof createMattermostClient>>,
+  replyToId?: string,
+): Promise<string | undefined> {
+  const rootId = normalizeOptionalString(replyToId);
+  if (!rootId) return;
+  try {
+    const post = await client.request<Record<string, unknown>>(
+      `/posts/${encodeURIComponent(rootId)}`,
+    );
+    const parentRoot = normalizeOptionalString(post?.root_id as string | undefined);
+    return parentRoot || rootId;
+  } catch {
+    return rootId;
+  }
+}
+
 export async function sendMessageMattermost(
   to: string,
   text: string,
@@ -504,10 +521,11 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
+  const replyRootId = await resolveMattermostReplyRootForPost(client, opts.replyToId);
   const post = await createMattermostPost(client, {
     channelId,
     message,
-    rootId: opts.replyToId,
+    rootId: replyRootId,
     fileIds,
     props,
   });
