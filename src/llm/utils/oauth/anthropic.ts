@@ -112,6 +112,10 @@ function formatErrorDetails(error: unknown): string {
   return String(error);
 }
 
+function formatTokenResponseParseContext(responseBody: string): string {
+  return `bodyBytes=${Buffer.byteLength(responseBody, "utf8")}`;
+}
+
 async function startCallbackServer(expectedState: string): Promise<CallbackServerInfo> {
   const { createServer } = await getNodeApis();
 
@@ -241,7 +245,7 @@ async function exchangeAuthorizationCode(
     };
   } catch (error) {
     throw new Error(
-      `Token exchange returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
+      `Token exchange returned invalid JSON. url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
       { cause: error },
     );
   }
@@ -400,7 +404,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
     };
   } catch (error) {
     throw new Error(
-      `Anthropic token refresh returned invalid JSON. url=${TOKEN_URL}; body=${responseBody}; details=${formatErrorDetails(error)}`,
+      `Anthropic token refresh returned invalid JSON. url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
       { cause: error },
     );
   }
