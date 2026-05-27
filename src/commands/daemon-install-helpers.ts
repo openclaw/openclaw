@@ -646,7 +646,7 @@ export async function buildGatewayInstallPlan(params: {
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
     : wrapperPointsAtWindowsTaskScript
       ? omitEnvKey(params.env, OPENCLAW_WRAPPER_ENV_KEY)
-      : params.env;
+      : { ...params.env };
   const configuredNodeExtraCaCerts = resolveConfiguredNodeExtraCaCerts(params.config);
   if (configuredNodeExtraCaCerts) {
     serviceInputEnv.NODE_EXTRA_CA_CERTS = configuredNodeExtraCaCerts;

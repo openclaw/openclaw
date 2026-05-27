@@ -234,9 +234,10 @@ describe("buildGatewayInstallPlan", () => {
 
   it("passes configured gateway TLS extra CA bundle to the managed service env", async () => {
     mockNodeGatewayPlanFixture();
+    const callerEnv = { HOME: isolatedHome };
 
     await buildGatewayInstallPlan({
-      env: { HOME: isolatedHome },
+      env: callerEnv,
       port: 3000,
       runtime: "node",
       nodePath: "/opt/homebrew/opt/node/bin/node",
@@ -257,6 +258,7 @@ describe("buildGatewayInstallPlan", () => {
       HOME: isolatedHome,
       NODE_EXTRA_CA_CERTS: "/Users/me/.openclaw/gateway/tls/combined-ca.pem",
     });
+    expect(callerEnv).toStrictEqual({ HOME: isolatedHome });
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
