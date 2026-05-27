@@ -19,7 +19,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - QA-Lab/WhatsApp: keep GitHub live lanes on CI Convex leases and exclude/quarantine logged-out WhatsApp leases during a run so retries do not immediately reacquire the same bad account.
-- QA-Lab/WhatsApp: keep RTT canaries on the lightweight Pi runtime, prewarm the canary agent before the measured reply, and keep live RSS sampling outside the send/reply window so harness work does not inflate canary latency.
+- QA-Lab/WhatsApp: prewarm the configured RTT canary runtime before the measured reply and keep live RSS sampling outside the send/reply window so harness work does not inflate canary latency.
 - Logging: exit cleanly on broken stdout/stderr pipes without masking existing failure exit codes. (#80059) Thanks @pavelzak.
 - Gateway/security: escape transcript metadata field names while extracting oversized session line prefixes. (#85934) Thanks @SebTardif.
 - Plugins/security: validate manifest model pattern regexes with the safe-regex compiler so unsafe patterns are ignored before matching. (#86046) Thanks @SebTardif.
