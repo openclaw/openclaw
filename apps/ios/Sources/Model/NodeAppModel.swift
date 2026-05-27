@@ -295,7 +295,8 @@ final class NodeAppModel {
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
         self.refreshLastShareEventFromRelay()
-        UserDefaults.standard.set(false, forKey: "talk.enabled")
+        let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
+        self.setTalkEnabled(talkEnabled)
 
         // Wire up deep links from canvas taps
         self.screen.onDeepLink = { [weak self] url in

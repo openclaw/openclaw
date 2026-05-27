@@ -306,10 +306,7 @@ final class RealtimeTalkRelaySession {
                   let data = Data(base64Encoded: base64)
             else { return }
             self.recordOutputAudioChunk(byteCount: data.count)
-            if self.outputStartedAtMs == nil {
-                self.outputStartedAtMs = ProcessInfo.processInfo.systemUptime * 1000
-            }
-            self.isOutputPlaying = true
+            self.markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
             self.onSpeakingChanged(true)
             self.outputContinuation?.yield(data)
         case "clear":
@@ -338,6 +335,13 @@ final class RealtimeTalkRelaySession {
         guard self.outputAudioChunkCount == 1 || self.outputAudioChunkCount % 20 == 0 else { return }
         GatewayDiagnostics.log(
             "talk realtime audio: chunks=\(self.outputAudioChunkCount) bytes=\(self.outputAudioByteCount)")
+    }
+
+    private func markOutputAudioStarted(nowMs: Double) {
+        if !self.isOutputPlaying {
+            self.outputStartedAtMs = nowMs
+        }
+        self.isOutputPlaying = true
     }
 
     private func handleInputLevelDuringOutput(_ rms: Float, timestampMs: Double) {
@@ -589,10 +593,15 @@ final class RealtimeTalkRelaySession {
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.logger.info("realtime output interrupted at \(interruptedAt, privacy: .public)s")
                 }
-                self.isOutputPlaying = false
-                self.onSpeakingChanged(false)
+                self.markOutputPlaybackFinished()
             }
         }
+    }
+
+    private func markOutputPlaybackFinished() {
+        self.isOutputPlaying = false
+        self.outputStartedAtMs = nil
+        self.onSpeakingChanged(false)
     }
 
     private func stopOutputPlayback() {
@@ -670,5 +679,23 @@ final class RealtimeTalkRelaySession {
     private func nonEmpty(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+}
+
+extension RealtimeTalkRelaySession {
+    func _test_markOutputAudioStarted(nowMs: Double) {
+        self.markOutputAudioStarted(nowMs: nowMs)
+    }
+
+    func _test_markOutputPlaybackFinished() {
+        self.markOutputPlaybackFinished()
+    }
+
+    func _test_outputStartedAtMs() -> Double? {
+        self.outputStartedAtMs
+    }
+
+    func _test_isOutputPlaying() -> Bool {
+        self.isOutputPlaying
     }
 }

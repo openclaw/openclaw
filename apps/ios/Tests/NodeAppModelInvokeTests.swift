@@ -196,6 +196,16 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel.chatSessionKey == "main")
     }
 
+    @Test @MainActor func initPreservesSavedTalkModePreference() {
+        withUserDefaults(["talk.enabled": true]) {
+            let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            let appModel = NodeAppModel(talkMode: talkMode)
+
+            #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
+            #expect(appModel.talkMode.isEnabled)
+        }
+    }
+
     @Test @MainActor func chatSessionKeyUsesAgentScopedKeyForNonDefaultAgent() {
         let appModel = NodeAppModel()
         appModel.gatewayDefaultAgentId = "main"
