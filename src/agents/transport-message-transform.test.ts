@@ -294,3 +294,151 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(bedrockCanonical.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
   });
 });
+
+describe("transformTransportMessages thinking block replay", () => {
+  function assistantWithThinking(
+    thinkingBlocks: Array<{
+      thinking: string;
+      thinkingSignature?: string;
+      redacted?: boolean;
+    }>,
+    provider = "anthropic",
+    api: Api = "anthropic-messages",
+    model = "claude-opus-4-6",
+  ): Extract<Context["messages"][number], { role: "assistant" }> {
+    return {
+      role: "assistant",
+      provider,
+      api,
+      model,
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: thinkingBlocks.map((b) =>
+        b.redacted
+          ? {
+              type: "thinking",
+              thinking: b.thinking,
+              redacted: true,
+              thinkingSignature: b.thinkingSignature,
+            }
+          : { type: "thinking", thinking: b.thinking, thinkingSignature: b.thinkingSignature },
+      ),
+    } as Extract<Context["messages"][number], { role: "assistant" }>;
+  }
+
+  it("preserves signed thinking blocks on same-model replay", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking([{ thinking: "analysis", thinkingSignature: "sig_abc" }]),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "analysis", thinkingSignature: "sig_abc" }],
+    });
+  });
+
+  it("downgrades thinking blocks with empty signatures to text on same-model replay", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking([{ thinking: "analysis", thinkingSignature: "" }]),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "analysis" }],
+    });
+  });
+
+  it("downgrades thinking blocks with missing signatures to text on same-model replay", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking([{ thinking: "analysis" }]),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "analysis" }],
+    });
+  });
+
+  it("downgrades thinking blocks to text on cross-model replay", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking(
+        [{ thinking: "analysis", thinkingSignature: "sig_abc" }],
+        "anthropic",
+        "anthropic-messages",
+        "claude-opus-4-6",
+      ),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "analysis" }],
+    });
+  });
+
+  it("preserves redacted thinking blocks on same-model replay", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking([
+        { thinking: "redacted", redacted: true, thinkingSignature: "enc_xyz" },
+      ]),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "redacted", redacted: true, thinkingSignature: "enc_xyz" },
+      ],
+    });
+  });
+
+  it("drops redacted thinking blocks on cross-model replay", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking([
+        { thinking: "redacted", redacted: true, thinkingSignature: "enc_xyz" },
+      ]),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [],
+    });
+  });
+
+  it("skips thinking blocks with only whitespace content", () => {
+    const messages: Context["messages"] = [
+      assistantWithThinking([{ thinking: "   " }]),
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ];
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-opus-4-6"),
+    );
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [],
+    });
+  });
+});

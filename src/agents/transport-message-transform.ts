@@ -91,7 +91,7 @@ export function transformTransportMessages(
         if (!block.thinking.trim()) {
           continue;
         }
-        content.push(isSameModel ? block : { type: "text", text: block.thinking });
+        content.push({ type: "text", text: block.thinking });
         continue;
       }
       if (block.type === "text") {
