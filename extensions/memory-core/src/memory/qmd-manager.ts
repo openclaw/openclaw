@@ -1928,6 +1928,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       !isCliCommandError(err) ||
       this.isMissingCollectionSearchError(err) ||
       this.isUnsupportedQmdOptionError(err) ||
+      this.isSqliteBusyError(err) ||
+      !isQmdNativeAbortAfterOutput(err) ||
       !hasQmdJsonArrayPayload(err.stdout)
     ) {
       return null;
@@ -3198,6 +3200,25 @@ function formatQmdSearchExit(err: { code: number | null; signal: NodeJS.Signals 
     return `signal ${err.signal ?? "unknown"}`;
   }
   return `code ${err.code}`;
+}
+
+function isQmdNativeAbortAfterOutput(err: {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+}): boolean {
+  const aborted = err.code === 134 || err.signal === "SIGABRT";
+  if (!aborted) {
+    return false;
+  }
+  const stderr = normalizeLowercaseStringOrEmpty(err.stderr);
+  return (
+    stderr.includes("ggml-metal") ||
+    stderr.includes("node-llama-cpp") ||
+    stderr.includes("llama.cpp") ||
+    stderr.includes("abort trap") ||
+    stderr.includes("assertion failed")
+  );
 }
 
 function hasQmdJsonArrayPayload(raw: string): boolean {
