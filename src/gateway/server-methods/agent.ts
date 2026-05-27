@@ -704,7 +704,7 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
-      const aborted = isAbortError(err);
+      const aborted = isAbortError(err) || isTimeoutError(err);
       const renderedErr = formatForLog(err);
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({

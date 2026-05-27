@@ -2722,6 +2722,44 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("classifies timeout async gateway agent rejections as timed out", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      const timeoutError = new Error("chat run timed out");
+      timeoutError.name = "TimeoutError";
+      mocks.agentCommand.mockRejectedValueOnce(timeoutError);
+      const context = makeContext();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-timeout-error",
+        },
+        { context, reqId: "task-registry-agent-run-timeout-error" },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId("task-registry-agent-run-timeout-error"), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "timed_out",
+          error: "TimeoutError: chat run timed out",
+        });
+        expectRecordFields(
+          context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
+          {
+            runId: "task-registry-agent-run-timeout-error",
+            status: "timeout",
+            summary: "aborted",
+          },
+        );
+      });
+    });
+  });
+
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
