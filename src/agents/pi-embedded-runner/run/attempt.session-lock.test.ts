@@ -128,6 +128,26 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(events).toEqual(["prep-release", "yield-cleanup-write", "cleanup-release"]);
   });
 
+  it("keeps the session fence active after releasing for sessions_yield abort cleanup", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseHeldLockForAbort();
+    await fs.appendFile(sessionFile, '{"type":"message","id":"abort-takeover"}\n', "utf8");
+
+    await expect(controller.withSessionWriteLock(() => "yield-cleanup")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
   it("runs post-prompt transcript writes under a short reacquired lock", async () => {
     const events: string[] = [];
     const acquireSessionWriteLock = vi

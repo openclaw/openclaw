@@ -749,32 +749,31 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   const noopLock: SessionLock = { release: async () => {} };
 
+  async function releaseHeldLockWithFence(): Promise<void> {
+    if (!heldLock) {
+      return;
+    }
+    const lock = heldLock;
+    heldLock = undefined;
+    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+    const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+    const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+    fenceFingerprint = fingerprint;
+    fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+    fenceGeneration =
+      ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+        ? ownedWrite.generation
+        : (trustedGeneration ?? fenceGeneration);
+    fenceActive = true;
+    await lock.release();
+  }
+
   return {
     async releaseForPrompt(): Promise<void> {
-      if (!heldLock) {
-        return;
-      }
-      const lock = heldLock;
-      heldLock = undefined;
-      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-      fenceFingerprint = fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration =
-        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-          ? ownedWrite.generation
-          : (trustedGeneration ?? fenceGeneration);
-      fenceActive = true;
-      await lock.release();
+      await releaseHeldLockWithFence();
     },
     async releaseHeldLockForAbort(): Promise<void> {
-      if (!heldLock) {
-        return;
-      }
-      const lock = heldLock;
-      heldLock = undefined;
-      await lock.release();
+      await releaseHeldLockWithFence();
     },
     refreshAfterOwnedSessionWrite(): void {
       if (fenceActive && !takeoverDetected) {
