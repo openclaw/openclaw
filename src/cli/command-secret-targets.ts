@@ -14,7 +14,9 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -134,26 +136,22 @@ function isPluginWebFetchCredentialTargetId(id: string): boolean {
 }
 
 function getCapabilityWebSearchTargetIds(): string[] {
-  cachedCapabilityWebSearchTargetIds ??= [
-    ...new Set([
-      ...STATIC_CAPABILITY_WEB_SEARCH_TARGET_IDS,
-      ...listSecretTargetRegistryEntries()
-        .map((entry) => entry.id)
-        .filter(isPluginWebSearchCredentialTargetId),
-    ]),
-  ].toSorted();
+  cachedCapabilityWebSearchTargetIds ??= sortUniqueStrings([
+    ...STATIC_CAPABILITY_WEB_SEARCH_TARGET_IDS,
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebSearchCredentialTargetId),
+  ]);
   return cachedCapabilityWebSearchTargetIds;
 }
 
 function getCapabilityWebFetchTargetIds(): string[] {
-  cachedCapabilityWebFetchTargetIds ??= [
-    ...new Set([
-      ...STATIC_CAPABILITY_WEB_FETCH_TARGET_IDS,
-      ...listSecretTargetRegistryEntries()
-        .map((entry) => entry.id)
-        .filter(isPluginWebFetchCredentialTargetId),
-    ]),
-  ].toSorted();
+  cachedCapabilityWebFetchTargetIds ??= sortUniqueStrings([
+    ...STATIC_CAPABILITY_WEB_FETCH_TARGET_IDS,
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebFetchCredentialTargetId),
+  ]);
   return cachedCapabilityWebFetchTargetIds;
 }
 
@@ -176,10 +174,6 @@ function resolveSearchConfig(config: OpenClawConfig): Record<string, unknown> | 
   return search && typeof search === "object" && !Array.isArray(search)
     ? (search as Record<string, unknown>)
     : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function pathPatternMatchesConcretePath(pathPattern: string, path: string): boolean {
@@ -460,7 +454,6 @@ function getCapabilityWebSearchSelectedProviderTargetIds(
   );
   const providers = resolvePluginWebSearchProviders({
     config: providerDiscoveryConfig,
-    bundledAllowlistCompat: true,
   }).filter((provider) => provider.id === selectedProviderId);
   for (const provider of providers) {
     if (provider.credentialPath.trim()) {
@@ -557,7 +550,6 @@ function getCapabilityWebFetchSelectedProviderTargetIds(
   );
   const providers = resolvePluginWebFetchProviders({
     config: providerDiscoveryConfig,
-    bundledAllowlistCompat: true,
   }).filter((provider) => provider.id === selectedProviderId);
   for (const provider of providers) {
     if (provider.credentialPath.trim()) {
@@ -615,7 +607,6 @@ function getCapabilityWebSearchAutoDetectTargets(config: OpenClawConfig): Comman
   const providers = sortWebSearchProvidersForAutoDetect(
     resolvePluginWebSearchProviders({
       config,
-      bundledAllowlistCompat: true,
     }),
   );
   for (const provider of providers) {
@@ -658,7 +649,6 @@ function getCapabilityWebFetchAutoDetectTargets(config: OpenClawConfig): Command
   const providers = sortWebFetchProvidersForAutoDetect(
     resolvePluginWebFetchProviders({
       config,
-      bundledAllowlistCompat: true,
     }),
   );
   for (const provider of providers) {
@@ -955,10 +945,14 @@ export function getCapabilityWebSearchCommandSecretTargets(
 export function getStatusCommandSecretTargetIds(
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  options?: { includeChannelTargets?: boolean },
 ): Set<string> {
-  const channelTargetIds = config
-    ? getConfiguredChannelSecretTargetIds(config, env)
-    : getChannelSecretTargetIds();
+  const channelTargetIds =
+    options?.includeChannelTargets === false
+      ? []
+      : config
+        ? getConfiguredChannelSecretTargetIds(config, env)
+        : getChannelSecretTargetIds();
   return toTargetIdSet([...STATIC_STATUS_TARGET_IDS, ...channelTargetIds]);
 }
 

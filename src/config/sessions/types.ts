@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Skill } from "@earendil-works/pi-coding-agent";
+import type { Skill } from "../../agents/skills/skill-contract.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -80,6 +80,7 @@ export type CliSessionBinding = {
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
   promptToolNamesHash?: string;
+  cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
 };
@@ -109,6 +110,33 @@ export type SessionCompactionCheckpoint = {
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
   postCompaction: SessionCompactionTranscriptReference;
+};
+
+export type SessionContextBudgetStatusRoute =
+  | "fits"
+  | "compact_only"
+  | "truncate_tool_results_only"
+  | "compact_then_truncate";
+
+export type SessionContextBudgetStatus = {
+  schemaVersion: 1;
+  source: "pre-prompt-estimate";
+  updatedAt: number;
+  provider: string;
+  model: string;
+  route: SessionContextBudgetStatusRoute;
+  shouldCompact: boolean;
+  estimatedPromptTokens: number;
+  contextTokenBudget: number;
+  promptBudgetBeforeReserve: number;
+  reserveTokens: number;
+  effectiveReserveTokens: number;
+  remainingPromptBudgetTokens: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
+  messageCount: number;
+  unwindowedMessageCount: number;
+  sessionId?: string;
 };
 
 export type SessionPluginDebugEntry = {
@@ -202,6 +230,8 @@ export type SessionEntry = {
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
   spawnedWorkspaceDir?: string;
+  /** Task working directory inherited by spawned sessions and reused on later turns. */
+  spawnedCwd?: string;
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -336,6 +366,7 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
@@ -582,7 +613,7 @@ export type SessionSkillSnapshot = {
    * each SKILL.md body) so the embedded runner can skip a workspace skill
    * scan within a turn. Stripped from sessions.json on every read and write
    * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/agents/pi-embedded-runner/skills-runtime.ts
+   * this is undefined and src/agents/embedded-agent-runner/skills-runtime.ts
    * rebuilds it by reloading skill entries from disk.
    */
   resolvedSkills?: Skill[];
@@ -616,6 +647,7 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+    hash?: string;
   };
   currentTurn?: {
     kind?: "user_request" | "room_event";
@@ -632,6 +664,7 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
+    hash?: string;
     entries: Array<{ name: string; blockChars: number }>;
   };
   tools: {
@@ -640,7 +673,9 @@ export type SessionSystemPromptReport = {
     entries: Array<{
       name: string;
       summaryChars: number;
+      summaryHash?: string;
       schemaChars: number;
+      schemaHash?: string;
       propertiesCount?: number | null;
     }>;
   };

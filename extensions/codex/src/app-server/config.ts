@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
@@ -19,6 +20,7 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy =
   | CodexAppServerApprovalPolicy
   | {
@@ -111,6 +113,7 @@ export type CodexAppServerRuntimeOptions = {
   turnCompletionIdleTimeoutMs: number;
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
+  approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
@@ -146,6 +149,12 @@ export type CodexPluginConfig = {
     experimental?: CodexAppServerExperimentalConfig;
   };
 };
+
+export function shouldAutoApproveCodexAppServerApprovals(
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+): boolean {
+  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+}
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
@@ -407,6 +416,21 @@ export function resolveCodexAppServerRuntimeOptions(
     );
   }
 
+  const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
+  const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
+  const approvalPolicy =
+    configApprovalPolicy ??
+    envApprovalPolicy ??
+    defaultPolicy?.approvalPolicy ??
+    (policyMode === "guardian" ? "on-request" : "never");
+  const approvalPolicySource: CodexAppServerApprovalPolicySource = configApprovalPolicy
+    ? "config"
+    : envApprovalPolicy
+      ? "env"
+      : defaultPolicy?.approvalPolicy
+        ? "requirements"
+        : "implicit";
+
   return {
     start: {
       transport,
@@ -432,11 +456,8 @@ export function resolveCodexAppServerRuntimeOptions(
           ),
         }
       : {}),
-    approvalPolicy:
-      resolveApprovalPolicy(config.approvalPolicy) ??
-      resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      defaultPolicy?.approvalPolicy ??
-      (policyMode === "guardian" ? "on-request" : "never"),
+    approvalPolicy,
+    approvalPolicySource,
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
@@ -528,7 +549,11 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string; agentDir?: string } = {},
+  params: {
+    authProfileId?: string;
+    agentDir?: string;
+    fallbackApiKeyCacheKey?: string;
+  } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -546,6 +571,7 @@ export function codexAppServerStartOptionsKey(
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
     agentDir: params.agentDir ?? null,
+    fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
   });
 }
 
@@ -991,12 +1017,7 @@ function normalizeHeaders(value: unknown): Record<string, string> {
 }
 
 function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => readNonEmptyString(entry))
-    .filter((entry): entry is string => entry !== undefined);
+  return normalizeTrimmedStringList(value);
 }
 
 function readBooleanEnv(value: string | undefined): boolean | undefined {

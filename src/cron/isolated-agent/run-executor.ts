@@ -190,6 +190,7 @@ export function createCronPromptExecutor(params: {
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
+            sessionEntry: params.cronSession.sessionEntry,
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
@@ -220,13 +221,13 @@ export function createCronPromptExecutor(params: {
           );
           return result;
         }
-        const { resolveFastModeState, runEmbeddedPiAgent } = await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: messageChannel,
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
-        const result = await runEmbeddedPiAgent({
+        const result = await runEmbeddedAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
           agentId: params.agentId,

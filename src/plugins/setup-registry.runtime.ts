@@ -1,10 +1,9 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -31,17 +30,19 @@ type SetupCliBackendRuntimeLookupParams = {
 const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
-type BundledSetupCliBackendCache = {
+type SetupCliBackendDescriptorCache = {
   configFingerprint: string;
   entries: SetupCliBackendRuntimeEntry[];
 };
 
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
-let cachedBundledSetupCliBackends: BundledSetupCliBackendCache | undefined;
+let cachedSetupCliBackendDescriptors: SetupCliBackendDescriptorCache | undefined;
+let cachedBundledSetupCliBackends: SetupCliBackendDescriptorCache | undefined;
 
 export const testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
+    cachedSetupCliBackendDescriptors = undefined;
     cachedBundledSetupCliBackends = undefined;
   },
   setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void {
@@ -57,21 +58,19 @@ function resolveMetadataSnapshotForSetupCliBackends(
 } {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params.config ?? {},
     env,
-    workspaceDir,
+    ...(workspaceDir !== undefined
+      ? {
+          workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        }
+      : {}),
   });
-  if (current) {
-    return { snapshot: current, cacheable: true };
-  }
   return {
-    snapshot: loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      env,
-      workspaceDir,
-    }),
-    cacheable: false,
+    snapshot,
+    cacheable: true,
   };
 }
 
@@ -105,6 +104,36 @@ function resolveBundledSetupCliBackends(
   return entries;
 }
 
+function resolveSetupCliBackendDescriptors(
+  params: Omit<SetupCliBackendRuntimeLookupParams, "backend"> = {},
+): SetupCliBackendRuntimeEntry[] {
+  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends(params);
+  const configFingerprint = snapshot.configFingerprint;
+  if (
+    cacheable &&
+    configFingerprint &&
+    cachedSetupCliBackendDescriptors?.configFingerprint === configFingerprint
+  ) {
+    return cachedSetupCliBackendDescriptors.entries;
+  }
+  const entries = snapshot.plugins.flatMap((plugin) => {
+    if (!isInstalledPluginEnabled(snapshot.index, plugin.id)) {
+      return [];
+    }
+    return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
+      (backendId) =>
+        ({
+          pluginId: plugin.id,
+          backend: { id: backendId },
+        }) satisfies SetupCliBackendRuntimeEntry,
+    );
+  });
+  if (cacheable && configFingerprint) {
+    cachedSetupCliBackendDescriptors = { configFingerprint, entries };
+  }
+  return entries;
+}
+
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
   if (setupRegistryRuntimeModule !== undefined) {
     return setupRegistryRuntimeModule;
@@ -119,6 +148,13 @@ function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
   }
   setupRegistryRuntimeModule = null;
   return null;
+}
+
+export function resolvePluginSetupCliBackendDescriptor(params: SetupCliBackendRuntimeLookupParams) {
+  const normalized = normalizeProviderId(params.backend);
+  return resolveSetupCliBackendDescriptors(params).find(
+    (entry) => normalizeProviderId(entry.backend.id) === normalized,
+  );
 }
 
 export function resolvePluginSetupCliBackendRuntime(params: SetupCliBackendRuntimeLookupParams) {

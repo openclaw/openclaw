@@ -107,28 +107,6 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
-  it("uses image model fallback overrides for model fallback options", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: ["openai/gpt-4o-mini"],
-    });
-
-    const resolved = resolveModelFallbackOptions(run);
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.fallbacksOverride).toEqual(["openai/gpt-4o-mini"]);
-  });
-
-  it("preserves empty image model fallback overrides for model fallback options", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: [],
-    });
-
-    const resolved = resolveModelFallbackOptions(run);
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.fallbacksOverride).toEqual([]);
-  });
-
   it("passes through missing agentId for helper-based fallback resolution", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
@@ -147,7 +125,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -165,6 +143,7 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.sessionFile).toBe(run.sessionFile);
     expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.cwd).toBe("/tmp/task-repo");
     expect(resolved.agentDir).toBe(run.agentDir);
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
@@ -211,48 +190,6 @@ describe("agent-runner-utils", () => {
       hasAutoFallbackProvenance: true,
     });
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
-  });
-
-  it("uses image model fallback overrides for embedded run params", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: ["openai/gpt-4o-mini"],
-    });
-    const authProfile = resolveProviderScopedAuthProfile({
-      provider: "openai",
-      primaryProvider: "openai",
-    });
-
-    const resolved = buildEmbeddedRunBaseParams({
-      run,
-      provider: "openai",
-      model: "gpt-4o",
-      runId: "run-1",
-      authProfile,
-    });
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.modelFallbacksOverride).toEqual(["openai/gpt-4o-mini"]);
-  });
-
-  it("preserves empty image model fallback overrides for embedded run params", () => {
-    const run = makeRun({
-      imageModelFallbacksOverride: [],
-    });
-    const authProfile = resolveProviderScopedAuthProfile({
-      provider: "openai",
-      primaryProvider: "openai",
-    });
-
-    const resolved = buildEmbeddedRunBaseParams({
-      run,
-      provider: "openai",
-      model: "gpt-4o",
-      runId: "run-1",
-      authProfile,
-    });
-
-    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
-    expect(resolved.modelFallbacksOverride).toEqual([]);
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {

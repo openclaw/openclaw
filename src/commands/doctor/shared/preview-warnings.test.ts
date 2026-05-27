@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
   collectDoctorPreviewWarnings,
+  collectProfileConfiguredToolSectionWarnings,
   collectVisibleReplyToolPolicyWarnings,
 } from "./preview-warnings.js";
 
@@ -26,6 +30,12 @@ const manifestState = vi.hoisted(
 const staleOAuthShadowState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
+
+const activeToolSchemaState = vi.hoisted(() => ({
+  warnings: [] as string[],
+}));
+
+const tempRoots = new Set<string>();
 
 vi.mock("../channel-capabilities.js", () => {
   const fallback = {
@@ -168,6 +178,10 @@ vi.mock("./stale-oauth-profile-shadows.js", () => ({
     hits.map((hit) => hit.warning),
 }));
 
+vi.mock("./active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
+}));
+
 function manifest(id: string): TestManifestRecord {
   return {
     id,
@@ -212,10 +226,48 @@ describe("doctor preview warnings", () => {
     manifestState.plugins = [manifest("discord")];
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
+    activeToolSchemaState.warnings = [];
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(async () => {
+    for (const root of tempRoots) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
+  });
+
+  it("routes personal Codex asset notices to info instead of warnings", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preview-codex-assets-"));
+    tempRoots.add(root);
+    const codexHome = path.join(root, ".codex");
+    await fs.mkdir(path.join(root, ".agents", "skills", "agent-helper"), { recursive: true });
+    await fs.writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"), "");
+
+    const notes = await collectDoctorPreviewNotes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "codex",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: { CODEX_HOME: codexHome, HOME: root },
+    });
+
+    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets were found");
+    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets were found");
   });
 
   it("collects provider and shared preview warnings", async () => {
@@ -334,6 +386,21 @@ describe("doctor preview warnings", () => {
     expectSingleWarningContaining(warnings, "stale OAuth auth profile openai-codex:default");
   });
 
+  it("includes active tool schema projection warnings", async () => {
+    activeToolSchemaState.warnings = [
+      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+    ];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: { tools: { allow: ["dofbot_move_angles"] } },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings.some((warning) => warning.includes('active tool "dofbot_move_angles"'))).toBe(
+      true,
+    );
+  });
+
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
     manifestState.plugins = [];
     manifestState.diagnostics = [
@@ -434,6 +501,201 @@ describe("doctor preview warnings", () => {
       "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
     );
     expect(warnings.join("\n")).not.toContain("stale plugin reference");
+  });
+
+  it("warns without suggesting fix when configured tool sections need explicit profile grants", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        tools: {
+          profile: "messaging",
+          exec: {
+            security: "allowlist",
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    const warning = expectSingleWarningContaining(warnings, 'tools.profile is "messaging"');
+    expect(warning).toContain("tools.exec is configured");
+    expect(warning).toContain('tools.alsoAllow: ["exec", "process"]');
+    expect(warning).not.toContain("doctor --fix");
+  });
+
+  it("does not suggest alsoAllow when configured section warnings already have allow", () => {
+    const warnings = collectProfileConfiguredToolSectionWarnings({
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              allow: ["message"],
+              exec: {
+                security: "allowlist",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(warnings, "agents.list[0].tools.profile");
+    expect(warning).toContain("Add these grants to agents.list[0].tools.allow");
+    expect(warning).toContain('set agents.list[0].tools.profile to "full"');
+    expect(warning).not.toContain("agents.list[0].tools.alsoAllow");
+  });
+
+  it("warns when an agent tool section inherits a restrictive provider profile", () => {
+    const warnings = collectProfileConfiguredToolSectionWarnings({
+      tools: {
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: {
+                security: "allowlist",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.byProvider.openai.profile is "messaging"',
+    );
+    expect(warning).toContain("agents.list[0].tools.exec is configured");
+    expect(warning).toContain(
+      'agents.list[0].tools.byProvider.openai.alsoAllow: ["exec", "process"]',
+    );
+  });
+
+  it("uses inherited provider alsoAllow for agent provider profile warnings", () => {
+    const warnings = collectProfileConfiguredToolSectionWarnings({
+      tools: {
+        byProvider: {
+          openai: {
+            alsoAllow: ["exec", "process"],
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: {
+                security: "allowlist",
+              },
+              byProvider: {
+                "openai/gpt-5": {
+                  profile: "messaging",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("uses model-scoped agent provider overrides for inherited provider warnings", () => {
+    const warnings = collectProfileConfiguredToolSectionWarnings({
+      tools: {
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            model: {
+              primary: "openai/gpt-5",
+            },
+            tools: {
+              exec: {
+                security: "allowlist",
+              },
+              byProvider: {
+                "openai/gpt-5": {
+                  alsoAllow: ["exec", "process"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("treats empty provider alsoAllow as an explicit inherited-profile override", () => {
+    const warnings = collectProfileConfiguredToolSectionWarnings({
+      tools: {
+        byProvider: {
+          openai: {
+            profile: "messaging",
+            alsoAllow: ["exec", "process"],
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: {
+                security: "allowlist",
+              },
+              byProvider: {
+                openai: {
+                  alsoAllow: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const warning = expectSingleWarningContaining(
+      warnings,
+      'tools.byProvider.openai.profile is "messaging"',
+    );
+    expect(warning).toContain(
+      'agents.list[0].tools.byProvider.openai.alsoAllow: ["exec", "process"]',
+    );
+  });
+
+  it("does not warn for configured tool sections already granted by explicit alsoAllow", () => {
+    const warnings = collectProfileConfiguredToolSectionWarnings({
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["exec", "process"],
+        exec: {
+          security: "allowlist",
+        },
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
   });
 
   it("does not warn when default group visible replies are automatic", () => {

@@ -1,3 +1,9 @@
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "../../agents/run-timeout-attribution.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../../shared/agent-liveness.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -33,6 +39,9 @@ type AgentRunSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   ts: number;
 };
 
@@ -129,6 +138,22 @@ function getPendingAgentRunTimeout(runId: string) {
   };
 }
 
+function createPendingErrorTimeoutSnapshot(snapshot: AgentRunSnapshot): AgentRunSnapshot {
+  // Keep this non-terminal: the retry grace can still be canceled by a later
+  // lifecycle start, so omit terminal fields such as endedAt and stopReason.
+  return {
+    runId: snapshot.runId,
+    status: "timeout",
+    startedAt: snapshot.startedAt,
+    error: snapshot.error,
+    pendingError: true,
+    ...(snapshot.providerStarted !== undefined
+      ? { providerStarted: snapshot.providerStarted }
+      : {}),
+    ts: Date.now(),
+  };
+}
+
 function createSnapshotFromLifecycleEvent(params: {
   runId: string;
   phase: "end" | "error";
@@ -142,16 +167,24 @@ function createSnapshotFromLifecycleEvent(params: {
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   const blocked = isBlockedLivenessState(livenessState);
-  const status = phase === "error" || blocked ? "error" : data?.aborted ? "timeout" : "ok";
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const status =
+    phase === "error" || blocked || abortedStopReason ? "error" : data?.aborted ? "timeout" : "ok";
+  const resolvedError = abortedStopReason && !error ? AGENT_RUN_ABORTED_ERROR : error;
+  const timeoutPhase =
+    status === "timeout" ? normalizeAgentRunTimeoutPhase(data?.timeoutPhase) : undefined;
+  const providerStarted = normalizeProviderStarted(data?.providerStarted);
   return {
     runId,
     status,
     startedAt,
     endedAt,
-    error: blocked ? formatBlockedLivenessError(error) : error,
+    error: blocked ? formatBlockedLivenessError(resolvedError) : resolvedError,
     stopReason,
     livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
+    ...(timeoutPhase ? { timeoutPhase } : {}),
+    ...(providerStarted !== undefined ? { providerStarted } : {}),
     ts: Date.now(),
   };
 }
@@ -367,7 +400,10 @@ export async function waitForAgentJob(params: {
     });
     removeWaiter = addAgentRunWaiter(runId);
 
-    const timer = setSafeTimeout(() => finish(null), timeoutMs);
+    const timer = setSafeTimeout(() => {
+      const pendingError = getPendingAgentRunError(runId);
+      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+    }, timeoutMs);
     onAbort = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
   });

@@ -65,6 +65,15 @@ type QaSuiteStep = {
   run: () => Promise<string | void>;
 };
 
+function resolveQaSuiteControlUiEnabled(params: {
+  explicit?: boolean;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  return (
+    params.explicit ?? params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario))
+  );
+}
+
 export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail";
@@ -362,18 +371,17 @@ function buildRuntimeParityScenarioResult(params: {
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
   const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
+  const openclawCell = params.result.cells.openclaw;
   return {
     name: params.scenarioName,
     status: driftStepStatus,
     details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
     steps: [
       {
-        name: params.result.cells.pi.runtime,
+        name: openclawCell.runtime,
         status:
-          params.result.cells.pi.runtimeErrorClass || params.result.cells.pi.transportErrorClass
-            ? "fail"
-            : "pass",
-        details: formatRuntimeParityCellDetails(params.result.cells.pi),
+          openclawCell.runtimeErrorClass || openclawCell.transportErrorClass ? "fail" : "pass",
+        details: formatRuntimeParityCellDetails(openclawCell),
       },
       {
         name: params.result.cells.codex.runtime,
@@ -1015,7 +1023,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
       ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
-      ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
+      ...(params?.forcedRuntime && params.forcedRuntime !== "openclaw"
+        ? [params.forcedRuntime]
+        : []),
     ]),
   ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
@@ -1579,6 +1589,8 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  resolveQaSuiteControlUiEnabled,
+  scenarioRequiresControlUi,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,

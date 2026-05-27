@@ -59,8 +59,8 @@ function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams(params.cfg ?? {}, {
       bot: botHarness.bot,
-      ...params.registerOverrides,
     }),
+    ...params.registerOverrides,
   });
   const handler = botHarness.commandHandlers.get("plug");
   if (!handler) {
@@ -371,6 +371,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
+    const mediaMaxBytes = 50 * 1024 * 1024;
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
@@ -384,11 +385,15 @@ describe("registerTelegramNativeCommands", () => {
         text: "with media",
         mediaUrl: "/tmp/workspace-work/render.png",
       },
+      registerOverrides: {
+        mediaMaxBytes,
+      } as Partial<Parameters<typeof registerTelegramNativeCommands>[0]>,
     });
 
     await handler(createPrivateCommandContext());
 
     const deliverParams = firstDeliverRepliesParams();
+    expect(deliverParams.mediaMaxBytes).toBe(mediaMaxBytes);
     const mediaLocalRoots = deliverParams.mediaLocalRoots as Array<string> | undefined;
     expect(mediaLocalRoots?.some((root) => /[\\/]\.openclaw[\\/]workspace-work$/.test(root))).toBe(
       true,
@@ -722,5 +727,19 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandParams.from).toBe("telegram:100");
     expect(commandParams.to).toBe("telegram:100");
     expect(commandParams.messageThreadId).toBeUndefined();
+  });
+
+  it("uses bot topic capability for Telegram plugin command DM topic session keys", async () => {
+    const { handler } = registerPlugCommand();
+
+    await handler({
+      ...createPrivateCommandContext({ chatId: 100, userId: 200, threadId: 77 }),
+      me: { has_topics_enabled: true },
+    });
+
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.sessionKey).toBe("agent:main:main:thread:100:77");
+    const deliveryParams = firstDeliverRepliesParams();
+    expect(deliveryParams.sessionKeyForInternalHooks).toBe("agent:main:main:thread:100:77");
   });
 });

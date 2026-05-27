@@ -17,6 +17,7 @@ const PNPM_STEP_NODE_FALLBACKS = new Map([
     ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
   ],
   ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
+  ["ui:build", ["scripts/ui.js", "build"]],
 ]);
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
@@ -81,8 +82,18 @@ export const BUILD_ALL_STEPS = [
         "scripts/lib/copy-assets.ts",
         "src/auto-reply/reply/export-html",
       ],
-      outputs: ["dist/export-html"],
+      outputs: ["dist/auto-reply/reply/export-html"],
     },
+  },
+  {
+    label: "ui:build",
+    kind: "pnpm",
+    pnpmArgs: ["ui:build"],
+    // No build-all cache: ui/vite.config.ts derives the Control UI build ID
+    // from package.json, git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a
+    // file-input signature cannot exactly invalidate generated assets and a
+    // warm hit could restore stale service-worker/app cache metadata.
+    cache: undefined,
   },
   {
     label: "write-build-info",
@@ -116,6 +127,7 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
+    "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
@@ -246,6 +258,14 @@ function listCacheFiles(rootDir, entries, fsImpl) {
     .toSorted();
 }
 
+function portableRelativePath(rootDir, filePath) {
+  return path.relative(rootDir, filePath).split(path.sep).join("/");
+}
+
+function normalizePortablePath(filePath) {
+  return filePath.replaceAll("\\", "/");
+}
+
 function resolveCachePaths(rootDir, step) {
   const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
   const cacheDir = path.resolve(rootDir, ".artifacts/build-all-cache", safeLabel);
@@ -260,7 +280,7 @@ function hashInputFiles(rootDir, files, fsImpl) {
   const hash = createHash("sha256");
   hash.update(`v${BUILD_CACHE_VERSION}\0`);
   for (const file of files) {
-    hash.update(path.relative(rootDir, file));
+    hash.update(portableRelativePath(rootDir, file));
     hash.update("\0");
     hash.update(fsImpl.readFileSync(file));
     hash.update("\0");
@@ -305,8 +325,10 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-  const relativeOutputFiles = outputFiles.map((file) => path.relative(rootDir, file));
-  const stampedOutputs = Array.isArray(stamp?.outputs) ? stamp.outputs : [];
+  const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
+  const stampedOutputs = Array.isArray(stamp?.outputs)
+    ? stamp.outputs.map((entry) => normalizePortablePath(entry))
+    : [];
   const stampMatches = stamp?.version === BUILD_CACHE_VERSION && stamp.signature === signature;
   const actualOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);

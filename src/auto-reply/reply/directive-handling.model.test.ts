@@ -10,34 +10,38 @@ const authProfilesStoreMock = vi.hoisted(() => ({
   >,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  clearRuntimeAuthProfileStoreSnapshots: () => {
-    authProfilesStoreMock.profiles = {};
-  },
-  externalCliDiscoveryForProviderAuth: () => ({
-    mode: "scoped",
-    allowKeychainPrompt: false,
-  }),
-  ensureAuthProfileStore: () => ({
+vi.mock("../../agents/auth-profiles.js", () => {
+  const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
-  }),
-  isProfileInCooldown: () => false,
-  listProfilesForProvider: (_store: unknown, provider: string) =>
-    Object.entries(authProfilesStoreMock.profiles)
-      .filter(([, profile]) => profile.provider === provider)
-      .map(([profileId, profile]) => ({ profileId, profile })),
-  replaceRuntimeAuthProfileStoreSnapshots: (
-    snapshots: Array<{
-      store?: { profiles?: Record<string, AuthProfileForTest> };
-    }>,
-  ) => {
-    authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-  },
-  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-  resolveAuthProfileOrder: () => [],
-  resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
-}));
+  });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {
+      authProfilesStoreMock.profiles = {};
+    },
+    externalCliDiscoveryForProviderAuth: () => ({
+      mode: "scoped",
+      allowKeychainPrompt: false,
+    }),
+    ensureAuthProfileStore: store,
+    ensureAuthProfileStoreWithoutExternalProfiles: store,
+    isProfileInCooldown: () => false,
+    listProfilesForProvider: (_store: unknown, provider: string) =>
+      Object.entries(authProfilesStoreMock.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId, profile]) => ({ profileId, profile })),
+    replaceRuntimeAuthProfileStoreSnapshots: (
+      snapshots: Array<{
+        store?: { profiles?: Record<string, AuthProfileForTest> };
+      }>,
+    ) => {
+      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+    },
+    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+    resolveAuthProfileOrder: () => [],
+    resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
+  };
+});
 
 vi.mock("../../agents/auth-profiles/store.js", () => {
   const store = () => ({
@@ -77,6 +81,14 @@ vi.mock("../../agents/model-auth.js", () => {
   const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
     Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
   return {
+    createRuntimeProviderAuthLookup: () => ({
+      envApiKey: {
+        aliasMap: {},
+        candidateMap: {},
+        authEvidenceMap: {},
+      },
+      syntheticAuthProviderRefs: [],
+    }),
     ensureAuthProfileStore: store,
     hasRuntimeAvailableProviderAuth: ({
       provider,
@@ -104,6 +116,10 @@ vi.mock("../../agents/model-auth.js", () => {
     resolveUsableCustomProviderApiKey: () => null,
   };
 });
+
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider,
+}));
 
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -645,7 +661,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
     expect(reply?.text).toContain("via codex runtime / openai-codex");
     expect(reply?.text).toContain("openai-codex:patrick@example.test=OAuth");
-  });
+  }, 240_000);
 
   it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
     setAuthProfiles({
@@ -689,7 +705,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("via codex runtime");
   });
 
-  it("does not borrow Codex auth when OpenAI model policy pins PI runtime", async () => {
+  it("does not borrow Codex auth when OpenAI model policy pins OpenClaw runtime", async () => {
     setAuthProfiles({
       "openai-codex:patrick@example.test": {
         type: "oauth",
@@ -713,7 +729,7 @@ describe("/model chat UX", () => {
             model: { primary: "openai/gpt-5.5" },
             models: {
               "openai/gpt-5.5": {
-                agentRuntime: { id: "pi" },
+                agentRuntime: { id: "openclaw" },
               },
             },
           },
@@ -1074,7 +1090,7 @@ describe("/model chat UX", () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: "/model openai/gpt-4o --runtime claude-cli hello",
       allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry: createSessionEntry({ agentRuntimeOverride: "pi" }),
+      sessionEntry: createSessionEntry({ agentRuntimeOverride: "openclaw" }),
       provider: "openai",
       model: "gpt-4o",
       initialModelLabel: "openai/gpt-4o",

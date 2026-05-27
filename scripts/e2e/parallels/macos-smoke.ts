@@ -12,6 +12,7 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixProviderOnlyPluginIsolationScript,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
@@ -93,11 +94,12 @@ interface MacosSummary {
 }
 
 const guestPath =
-  "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
-const guestOpenClaw = "/opt/homebrew/bin/openclaw";
-const guestOpenClawEntry = "/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs";
-const guestNode = "/opt/homebrew/bin/node";
-const guestNpm = "/opt/homebrew/bin/npm";
+  "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+const guestOpenClaw = "openclaw";
+const guestOpenClawEntry = '"$(npm root -g)/openclaw/openclaw.mjs"';
+const guestOpenClawEntryRunner = `node ${guestOpenClawEntry}`;
+const guestNode = "node";
+const guestNpm = "npm";
 
 const defaultOptions = (): MacosOptions => ({
   discordChannelId: undefined,
@@ -115,7 +117,7 @@ const defaultOptions = (): MacosOptions => ({
   modelId: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
-  snapshotHint: "macOS 26.3.1 latest",
+  snapshotHint: "macOS 26.5 latest",
   targetPackageSpec: "",
   vmName: "macOS Tahoe",
 });
@@ -126,7 +128,7 @@ function usage(): string {
 Options:
   --vm <name>                Parallels VM name. Default: "macOS Tahoe"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "macOS 26.3.1 latest"
+                             Default: "macOS 26.5 latest"
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for the agent-turn smoke.
@@ -575,6 +577,19 @@ class MacosSmoke {
     return this.guest.exec(args, options);
   }
 
+  private guestOpenClawEntryExec(
+    args: string[],
+    options: { check?: boolean; env?: Record<string, string> } = {},
+  ): string {
+    const argv = args.map((arg) => shellQuote(arg)).join(" ");
+    return this.guestSh(
+      `set -e
+entry="$(npm root -g)/openclaw/openclaw.mjs"
+exec node "$entry" ${argv}`,
+      options.env,
+    );
+  }
+
   private guestSh(script: string, env: Record<string, string> = {}): string {
     return this.guest.sh(script, env);
   }
@@ -789,7 +804,7 @@ ${guestOpenClaw} --version`);
 
   private verifyBundlePermissions(): void {
     this.guestSh(String.raw`set -eu
-root=$(/opt/homebrew/bin/npm root -g)
+root=$(npm root -g)
 check_path() {
   path="$1"
   [ -e "$path" ] || return 0
@@ -851,7 +866,7 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-/opt/homebrew/bin/node /opt/homebrew/bin/npm install --prefix "$bootstrap_root" --no-save pnpm@11
+npm install --prefix "$bootstrap_root" --no-save pnpm@11
 "$bootstrap_bin/pnpm" --version`);
   }
 
@@ -870,14 +885,14 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 config.update = { ...(config.update || {}), channel: "dev" };
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
-${guestNode} ${guestOpenClawEntry} --version
-${guestNode} ${guestOpenClawEntry} update status --json`,
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestOpenClawEntryRunner} update --channel dev --yes --json
+${guestOpenClawEntryRunner} --version
+${guestOpenClawEntryRunner} update status --json`,
     );
   }
 
   private verifyDevChannelUpdate(): void {
-    const status = this.guestExec([guestNode, guestOpenClawEntry, "update", "status", "--json"]);
+    const status = this.guestOpenClawEntryExec(["update", "status", "--json"]);
     for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
@@ -900,7 +915,7 @@ trap '' HUP
         `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
       )} OPENCLAW_HOME=${shellQuote(home)} OPENCLAW_STATE_DIR=${shellQuote(`${home}/.openclaw`)} OPENCLAW_CONFIG_PATH=${shellQuote(
         `${home}/.openclaw/openclaw.json`,
-      )} ${guestNode} ${guestOpenClawEntry} gateway run --bind loopback --port 18789 --force </dev/null >/tmp/openclaw-parallels-macos-gateway.log 2>&1 &
+      )} ${guestOpenClawEntryRunner} gateway run --bind loopback --port 18789 --force </dev/null >/tmp/openclaw-parallels-macos-gateway.log 2>&1 &
 sleep 1`,
     );
   }
@@ -977,29 +992,37 @@ echo "dashboard HTML did not become ready" >&2
 exit 1`);
   }
 
+  private restrictAgentTurnPlugins(): void {
+    this.guestSh(
+      posixProviderOnlyPluginIsolationScript({
+        fallbackPluginId: this.options.provider,
+        homeFallback: this.guestHome(),
+        modelId: this.auth.modelId,
+        nodeCommand: guestNode,
+      }),
+    );
+  }
+
   private verifyTurn(): void {
-    this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
+    this.guestOpenClawEntryExec(["models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
     if (modelProviderConfigBatch) {
       this.guestSh(`provider_config_batch="$(mktemp)"
 cat >"$provider_config_batch" <<'JSON'
 ${modelProviderConfigBatch}
 JSON
-${shellQuote(guestNode)} ${shellQuote(
-        guestOpenClawEntry,
-      )} config set --batch-file "$provider_config_batch" --strict-json
+${guestOpenClawEntryRunner} config set --batch-file "$provider_config_batch" --strict-json
 rm -f "$provider_config_batch"`);
     }
-    this.guestExec([
-      guestNode,
-      guestOpenClawEntry,
+    this.guestOpenClawEntryExec([
       "config",
       "set",
       "agents.defaults.skipBootstrap",
       "true",
       "--strict-json",
     ]);
-    this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
+    this.guestOpenClawEntryExec(["config", "set", "tools.profile", "minimal"]);
+    this.restrictAgentTurnPlugins();
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 agent_ok=false
@@ -1009,7 +1032,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
+  /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestOpenClawEntryRunner} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
   )} --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
   rc=$?

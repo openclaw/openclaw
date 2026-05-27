@@ -337,7 +337,7 @@ function renderRealtimeTalkConversation(props: ChatProps) {
     return nothing;
   }
   return html`
-    <div class="agent-chat__voice-turns" role="log" aria-label="Talk transcript">
+    <div class="agent-chat__voice-turns" role="log" aria-label=${t("chat.composer.talkTranscript")}>
       ${repeat(
         entries,
         (entry) => entry.id,
@@ -354,7 +354,7 @@ function renderRealtimeTalkConversation(props: ChatProps) {
               ${entry.isStreaming
                 ? html`<span
                     class="agent-chat__voice-turn-stream"
-                    aria-label="Still listening"
+                    aria-label=${t("chat.composer.stillListening")}
                   ></span>`
                 : nothing}
             </div>
@@ -427,6 +427,17 @@ function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
     ?.focus({ preventScroll: true });
 }
 
+function clickComposerFileInput(event: MouseEvent) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  target
+    .closest(".agent-chat__input")
+    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
+    ?.click();
+}
+
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
   requestAnimationFrame(() => {
     if (document.activeElement !== target) {
@@ -453,6 +464,32 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
+function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
+  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const mimeType = match[1].toLowerCase();
+  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
+    return null;
+  }
+  const base64 = match[2].replace(/\s+/g, "");
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
+    return {
+      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
+      dataUrl: `data:${mimeType};base64,${base64}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isImageAttachment(att: ChatAttachment): boolean {
   return att.mimeType.startsWith("image/");
 }
@@ -470,6 +507,16 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     }
   }
   if (imageItems.length === 0) {
+    const text = e.clipboardData?.getData("text/plain");
+    const pasted = text ? dataImageClipboardFile(text) : null;
+    if (!pasted) {
+      return;
+    }
+    e.preventDefault();
+    props.onAttachmentsChange([
+      ...(props.attachments ?? []),
+      chatAttachmentFromFile(pasted.file, pasted.dataUrl),
+    ]);
     return;
   }
   e.preventDefault();
@@ -1526,10 +1573,9 @@ export function renderChat(props: ChatProps) {
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">
             <button
+              type="button"
               class="agent-chat__input-btn"
-              @click=${() => {
-                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-              }}
+              @click=${clickComposerFileInput}
               title=${t("chat.composer.attachFile")}
               aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}

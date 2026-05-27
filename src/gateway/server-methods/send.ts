@@ -3,7 +3,6 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -37,6 +36,7 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../protocol/index.js";
+import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -131,10 +131,10 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = applyPluginAutoEnable({
-    config: params.context.getRuntimeConfig(),
-    env: process.env,
-  }).config;
+  const runtimeConfig = params.context.getRuntimeConfig();
+  const cfg = resolveGatewayPluginConfig({
+    config: runtimeConfig,
+  });
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -280,6 +280,37 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   }
 }
 
+const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
+
+function resolveSourceReplyTranscriptMirrorQueueKey(
+  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
+): string {
+  return mirror.sessionKey?.trim() || "__global__";
+}
+
+function scheduleDeliveredSourceReplyTranscriptMirror(params: {
+  context: GatewayRequestContext;
+  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
+}): Promise<void> {
+  const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
+  const previous = sourceReplyTranscriptMirrorQueues.get(queueKey);
+  // Queue per session so current-conversation source replies are visible before
+  // a following turn can read the transcript.
+  const queued = (async () => {
+    await previous?.catch(() => undefined);
+    await mirrorDeliveredSourceReplyToTranscriptBestEffort(params);
+  })();
+  sourceReplyTranscriptMirrorQueues.set(queueKey, queued);
+  void queued
+    .finally(() => {
+      if (sourceReplyTranscriptMirrorQueues.get(queueKey) === queued) {
+        sourceReplyTranscriptMirrorQueues.delete(queueKey);
+      }
+    })
+    .catch(() => undefined);
+  return queued;
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({ params, respond, context, client }) => {
     const p = params;
@@ -391,7 +422,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const agentId =
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
-        await mirrorDeliveredSourceReplyToTranscriptBestEffort({
+        await scheduleDeliveredSourceReplyTranscriptMirror({
           context,
           mirror: {
             action: request.action,

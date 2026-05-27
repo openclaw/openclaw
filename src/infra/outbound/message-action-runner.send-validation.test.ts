@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -116,6 +116,29 @@ describe("runMessageAction send validation", () => {
         },
       },
     });
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.toolResult?.content).toEqual([
+      {
+        type: "text",
+        text: "Sent visible reply to the current webchat conversation via internal-ui.",
+      },
+    ]);
+    expect(result.toolResult?.details).toEqual({
+      status: "ok",
+      deliveryStatus: "sent",
+      channel: "webchat",
+      target: "current-run",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "hello from codex",
+      },
+      message: "hello from codex",
+      dryRun: false,
+    });
+    expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
   });
 
   it("strips unsupported citation control markers from internal UI source replies", async () => {
@@ -227,6 +250,20 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
   });
 
+  it("rejects message sends whose body is only leaked plain-text tool calls", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/send requires text or media/i);
+  });
+
   it.each([
     {
       name: "structured poll params",
@@ -276,5 +313,121 @@ describe("runMessageAction send validation", () => {
         toolContext: { currentChannelId: "C12345678" },
       }),
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+});
+
+describe("message body alias normalization", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: workspaceTestPlugin,
+        },
+      ]),
+    );
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { alias: "SendMessage", value: "hello from alias" },
+    { alias: "content", value: "hello from content" },
+    { alias: "text", value: "hello from text" },
+  ])("normalizes $alias alias to message for send", async ({ alias, value }) => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        [alias]: value,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("does not overwrite an explicit message with an alias", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "explicit",
+        SendMessage: "alias value",
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("emits a diagnostic warning when normalizing an alias", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        SendMessage: "alias body",
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[message-tool] normalized alias "SendMessage" to "message"'),
+    );
+  });
+
+  it.each([
+    {
+      name: "reasoning tag",
+      SendMessage: "<think>internal reasoning</think>Visible answer",
+    },
+    {
+      name: "formatted reasoning prefix",
+      SendMessage: "Reasoning:\n_internal plan_\n\nVisible answer",
+    },
+  ])("sanitizes SendMessage alias $name before delivery", async ({ SendMessage }) => {
+    const result = await runMessageAction({
+      cfg: emptyConfig,
+      action: "send",
+      params: {
+        SendMessage,
+      },
+      toolContext: {
+        currentChannelProvider: "webchat",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      payload: {
+        sourceReply: {
+          text: "Visible answer",
+        },
+      },
+    });
+  });
+
+  it("still rejects send with no message and no alias", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/message required/i);
   });
 });

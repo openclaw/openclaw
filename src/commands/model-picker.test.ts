@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import {
@@ -61,6 +62,7 @@ const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
     }: {
       provider: string;
       cfg?: OpenClawConfig;
+      workspaceDir?: string;
       env?: NodeJS.ProcessEnv;
     }) => {
       if (provider === "amazon-bedrock") {
@@ -83,10 +85,37 @@ const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
     },
   ),
 );
+const createRuntimeProviderAuthLookup = vi.hoisted(() =>
+  vi.fn(() => ({
+    envApiKey: {
+      aliasMap: {},
+      candidateMap: {},
+      authEvidenceMap: {},
+    },
+    syntheticAuthProviderRefs: [],
+  })),
+);
 vi.mock("../agents/model-auth.js", () => ({
+  createRuntimeProviderAuthLookup,
   resolveEnvApiKey,
   hasUsableCustomProviderApiKey,
   hasRuntimeAvailableProviderAuth,
+}));
+
+const createProviderAuthChecker = vi.hoisted(() =>
+  vi.fn(
+    (params: { cfg?: OpenClawConfig; workspaceDir?: string; env?: NodeJS.ProcessEnv }) =>
+      async (provider: string) =>
+        hasRuntimeAvailableProviderAuth({
+          provider,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        }),
+  ),
+);
+vi.mock("../agents/model-provider-auth.js", () => ({
+  createProviderAuthChecker,
 }));
 
 const resolveOwningPluginIdsForProvider = vi.hoisted(() =>
@@ -101,7 +130,7 @@ const resolveOwningPluginIdsForProvider = vi.hoisted(() =>
   }),
 );
 vi.mock("../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: resolveOwningPluginIdsForProvider,
 }));
 
 const providerModelPickerContributionRuntime = vi.hoisted(() => ({
@@ -113,7 +142,7 @@ const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 const runProviderPluginAuthMethod = vi.hoisted(() => vi.fn());
-vi.mock("./model-picker.runtime.js", () => ({
+vi.mock("../commands/model-picker.runtime.js", () => ({
   modelPickerRuntime: {
     get resolveProviderModelPickerContributions() {
       return providerModelPickerContributionRuntime.enabled
@@ -220,6 +249,46 @@ function providerCallProviders() {
 beforeEach(() => {
   delete process.env.OPENCLAW_LOCALE;
   vi.clearAllMocks();
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+      {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        pluginId: "google",
+        config: { command: "gemini" },
+      },
+    ],
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [
+        {
+          pluginId: "anthropic",
+          backend: {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            config: { command: "claude" },
+          },
+        },
+        {
+          pluginId: "google",
+          backend: {
+            id: "google-gemini-cli",
+            modelProvider: "google",
+            config: { command: "gemini" },
+          },
+        },
+      ],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+  });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   listProfilesForProvider.mockReturnValue([]);
   resolveEnvApiKey.mockImplementation((_provider: string) => ({
@@ -237,6 +306,10 @@ beforeEach(() => {
     }
     return undefined;
   });
+});
+
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
 });
 
 describe("promptDefaultModel", () => {

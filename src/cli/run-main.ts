@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -12,6 +12,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { normalizeGeneratedHelpCommandArgv, normalizeRootHelpTargetArgv } from "./argv.js";
 import {
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
@@ -229,6 +230,31 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
+const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+
+function isUnconfiguredConfigSnapshot(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
+): boolean {
+  if (!snapshot.exists) {
+    return true;
+  }
+  if (!snapshot.valid) {
+    return false;
+  }
+  return Object.keys(snapshot.sourceConfig).every((key) =>
+    UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key),
+  );
+}
+
+export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return false;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  return isUnconfiguredConfigSnapshot(snapshot);
+}
+
 function pauseNonTtyStdinForCliExit(): void {
   const stdin = process.stdin;
   if (stdin.isTTY) {
@@ -365,19 +391,26 @@ async function resolveCliCommandSurfaceOwner(params: {
   }
 }
 
-async function resolveUnownedCliPrimary(params: {
-  argv: string[];
-  config: OpenClawConfig;
-}): Promise<string | null> {
-  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(params.argv));
+function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(argv));
   const { primary } = invocation;
   if (
-    invocation.hasHelpOrVersion ||
     !primary ||
     primary === "help" ||
     isReservedNonPluginCommandRoot(primary) ||
     isKnownBuiltInCommandRoot(primary)
   ) {
+    return null;
+  }
+  return primary;
+}
+
+async function resolveUnownedCliPrimary(params: {
+  argv: string[];
+  config: OpenClawConfig;
+}): Promise<string | null> {
+  const primary = resolveUnownedCliPrimaryCandidate(params.argv);
+  if (!primary) {
     return null;
   }
   const pluginRoot = await isPluginCliRoot({ primary, config: params.config });
@@ -451,7 +484,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return;
   }
-  let normalizedArgv = parsedProfile.argv;
+  let normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   startupTrace.mark("argv");
@@ -591,6 +624,24 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
+    // Reject unowned command roots before help/version routing, so that
+    // `openclaw <typo> --help` surfaces the same Unknown command error as
+    // `openclaw <typo>` instead of silently showing generic top-level help.
+    // Runs after legitimate precomputed help fast paths so known help commands
+    // still dispatch normally. See #81077.
+    {
+      const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
+      if (unownedPrimaryCandidate) {
+        const config = await readBestEffortCliConfig();
+        const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+        if (unownedPrimary) {
+          throw new Error(
+            await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }),
+          );
+        }
+      }
+    }
+
     const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
     if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
@@ -598,6 +649,18 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunBareRootCrestodian) {
+      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { setupWizardCommand } = await import("../commands/onboard.js");
+        await setupWizardCommand({});
+        return;
+      }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
@@ -742,7 +805,7 @@ export async function runCli(argv: string[] = process.argv) {
         process.exit(1);
       });
 
-      const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+      const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.

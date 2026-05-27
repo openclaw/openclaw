@@ -14,7 +14,9 @@ import {
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
+  recordRemConsideredPhaseSignals,
   recordShortTermRecalls,
+  readLightStagedKeys,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   resolveShortTermRecallLockPath,
@@ -489,6 +491,83 @@ describe("short-term promotion", () => {
       expect(ranked[0]?.uniqueQueries).toBe(3);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+    });
+  });
+
+  it("reads only light-staged keys that have not already gone through REM", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "phase pipeline",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.91,
+            snippet: "Document the Ollama setup.",
+            source: "memory",
+          },
+        ],
+      });
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      const staleKey = requireCandidateKey(
+        ranked.find((entry) => entry.path === "memory/2026-04-01.md"),
+        "stale candidate",
+      );
+      const pendingKey = requireCandidateKey(
+        ranked.find((entry) => entry.path === "memory/2026-04-02.md"),
+        "pending candidate",
+      );
+
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "light",
+        keys: [staleKey],
+        nowMs: nowMs - 60_000,
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [staleKey],
+        nowMs,
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "light",
+        keys: [pendingKey],
+        nowMs: nowMs + 60_000,
+      });
+
+      await expect(readLightStagedKeys({ workspaceDir, nowMs: nowMs + 120_000 })).resolves.toEqual(
+        new Set([pendingKey]),
+      );
+
+      await recordRemConsideredPhaseSignals({
+        workspaceDir,
+        keys: [pendingKey],
+        nowMs: nowMs + 180_000,
+      });
+
+      await expect(readLightStagedKeys({ workspaceDir, nowMs: nowMs + 240_000 })).resolves.toEqual(
+        new Set(),
+      );
     });
   });
 
@@ -1414,6 +1493,48 @@ describe("short-term promotion", () => {
       expect(requirePromotedAt(rankedIncludingPromoted[0], "promoted candidate")).toMatch(
         /^\d{4}-\d{2}-\d{2}T/,
       );
+    });
+  });
+
+  it("does not double-prefix promoted snippets that are already markdown bullets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "alpha",
+        "- Gateway binds loopback and port 18789",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "gateway host",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.92,
+            snippet: "- Gateway binds loopback and port 18789",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("- Gateway binds loopback and port 18789");
+      expect(memoryText).not.toContain("- - Gateway binds loopback and port 18789");
     });
   });
 

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -22,7 +22,7 @@ import {
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
 
-const baseModel = (): Model<Api> =>
+const baseModel = (): Model =>
   ({
     id: "glm-4.7",
     name: "GLM-4.7",
@@ -34,46 +34,46 @@ const baseModel = (): Model<Api> =>
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 1024,
-  }) as Model<Api>;
+  }) as Model;
 
-function supportsDeveloperRole(model: Model<Api>): boolean | undefined {
+function supportsDeveloperRole(model: Model): boolean | undefined {
   return (model.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole;
 }
 
-function supportsUsageInStreaming(model: Model<Api>): boolean | undefined {
+function supportsUsageInStreaming(model: Model): boolean | undefined {
   return (model.compat as { supportsUsageInStreaming?: boolean } | undefined)
     ?.supportsUsageInStreaming;
 }
 
-function supportsStrictMode(model: Model<Api>): boolean | undefined {
+function supportsStrictMode(model: Model): boolean | undefined {
   return (model.compat as { supportsStrictMode?: boolean } | undefined)?.supportsStrictMode;
 }
 
-function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsUsageInStreaming(normalized)).toBe(false);
 }
 
-function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
+function expectSupportsStrictModeForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
-function expectNativeStreamingSupported(overrides: Partial<Model<Api>>): void {
+function expectNativeStreamingSupported(overrides: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model<Api>);
+  const normalized = normalizeModelCompat(model as Model);
   expect(supportsDeveloperRole(normalized)).toBe(false);
   expect(supportsUsageInStreaming(normalized)).toBe(true);
   expect(supportsStrictMode(normalized)).toBe(false);
@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
-  const anthropicBase = (): Model<Api> =>
+  const anthropicBase = (): Model =>
     ({
       id: "claude-opus-4-6",
       name: "claude-opus-4-6",
@@ -96,7 +96,7 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 8_192,
-    }) as Model<Api>;
+    }) as Model;
 
   it("strips /v1 suffix from anthropic-messages baseUrl", () => {
     const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1" };
@@ -253,7 +253,7 @@ describe("normalizeModelCompat", () => {
     };
     delete (model as { baseUrl?: unknown }).baseUrl;
     delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model as Model<Api>);
+    const normalized = normalizeModelCompat(model as Model);
     expect(normalized.compat).toBeUndefined();
   });
 
@@ -422,13 +422,13 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
   });
 
-  it("matches plugin-advertised modern models across canonical provider aliases", () => {
+  it("matches plugin-advertised modern models only for exact provider ids", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
-      provider === "zai" && context.modelId === "glm-5" ? true : undefined,
+      provider === "z.ai" && context.modelId === "glm-5" ? true : undefined,
     );
 
     expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
-    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(false);
   });
 
   it("excludes provider-declined modern models", () => {
@@ -489,7 +489,7 @@ describe("isHighSignalLiveModelRef", () => {
     );
   });
 
-  it("keeps only GPT-5.2 OpenAI-family models in the default live matrix", () => {
+  it("keeps only the current direct OpenAI-family model in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-3.5-turbo" })).toBe(
@@ -504,7 +504,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.1" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-chat-latest" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.1-chat" })).toBe(
@@ -513,8 +513,9 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "opencode", id: "gpt-5.1-codex-mini" })).toBe(
       false,
     );
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2-codex" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
       true,
@@ -655,16 +656,16 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
-      { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
+      { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },
-      { provider: "openai", id: "gpt-5.2" },
-      { provider: "openai-codex", id: "gpt-5.2" },
+      { provider: "openai", id: "gpt-5.5" },
+      { provider: "openai-codex", id: "gpt-5.5" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },
@@ -681,12 +682,13 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 describe("selectHighSignalLiveItems", () => {
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
-      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai", id: "gpt-5.5" },
       { provider: "opencode", id: "big-pickle" },
     ];
 
@@ -698,8 +700,8 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item.provider,
       ),
     ).toEqual([
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
     ]);
@@ -707,7 +709,7 @@ describe("selectHighSignalLiveItems", () => {
 
   it("prioritizes DeepSeek V4 before later fallback providers", () => {
     const items = [
-      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai", id: "gpt-5.5" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },

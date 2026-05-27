@@ -11,17 +11,17 @@ import {
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
+  recordDroppedChannelInboundHistory,
   resolveEnvelopeFormatOptions,
   resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -29,6 +29,7 @@ import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -70,7 +71,7 @@ import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
+import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -82,12 +83,6 @@ const SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const SLACK_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function recordString(
   record: Record<string, unknown> | undefined,
@@ -366,7 +361,7 @@ function collectUniqueSlackMentionIds(text: string, regex: RegExp): string[] {
   const ids: string[] = [];
   regex.lastIndex = 0;
   for (const match of text.matchAll(regex)) {
-    const id = normalizeOptionalString(match[1]);
+    const id = normalizeSlackId(match[1]);
     if (id && !ids.includes(id)) {
       ids.push(id);
     }
@@ -390,8 +385,9 @@ async function resolveSlackExplicitMentionState(params: {
   hasSubteamMention: boolean;
   source: "message" | "app_mention";
 }): Promise<SlackExplicitMentionState> {
+  const normalizedBotUserId = normalizeSlackId(params.ctx.botUserId);
   const explicitlyMentionedBotUser = Boolean(
-    params.ctx.botUserId && params.mentionedUserIds.includes(params.ctx.botUserId),
+    normalizedBotUserId && params.mentionedUserIds.includes(normalizedBotUserId),
   );
   const explicitlyMentionedBotSubteam =
     Boolean(params.ctx.botUserId && params.hasSubteamMention) &&
@@ -975,7 +971,7 @@ export async function prepareSlackMessage(params: {
         : null;
     const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
     const senderName = pendingBody ? await resolveSenderName() : undefined;
-    await recordDroppedChannelTurnHistory({
+    await recordDroppedChannelInboundHistory({
       input: {
         id: message.ts ?? `${message.channel}:${Date.now()}`,
         timestamp,
@@ -1240,8 +1236,6 @@ export async function prepareSlackMessage(params: {
 
   const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
-    provider: "slack",
-    surface: "slack",
     accountId: route.accountId,
     messageId: message.ts,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
@@ -1258,10 +1252,6 @@ export async function prepareSlackMessage(params: {
       spaceId: ctx.teamId || undefined,
       threadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
-      routePeer: {
-        kind: chatType,
-        id: message.channel,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -1271,7 +1261,6 @@ export async function prepareSlackMessage(params: {
     },
     reply: {
       to: slackTo,
-      originatingTo: slackTo,
       replyToId: threadContext.replyToId,
       messageThreadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
@@ -1282,7 +1271,6 @@ export async function prepareSlackMessage(params: {
       bodyForAgent: rawBody,
       rawBody,
       commandBody,
-      envelopeFrom,
       inboundHistory,
     },
     access: {
@@ -1298,9 +1286,6 @@ export async function prepareSlackMessage(params: {
       },
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands,
-        useAccessGroups: false,
-        authorizers: [],
       },
     },
     media: toInboundMediaFacts(effectiveMedia),
