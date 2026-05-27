@@ -88,7 +88,9 @@ Welcome to the lobster tank! 🦞
 
 - **Maurice Niu** - ClawHub, Security, Stability, Data integrity
   - GitHub: [@momothemage](https://github.com/momothemage) · X: [@MomoPsicasso](https://x.com/MomoPsicasso)
-
+  
+- **Wahyu Maulana Ishaq** - ClawHub, Security, Stability, Bug reporter
+  - GitHub: [@wmaulanaaishq](https://github.com/wmaulanaaishq) · X: [@wmaulanaaishaq](https://x.com/wmaulanaaishaq)
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
