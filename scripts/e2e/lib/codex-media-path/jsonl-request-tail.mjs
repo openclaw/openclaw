@@ -33,7 +33,7 @@ export function createJsonlRequestTailer(filePath, options = {}) {
       return JSON.parse(line);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`invalid app-server JSONL at ${filePath}: ${message}`);
+      throw new Error(`invalid app-server JSONL at ${filePath}: ${message}`, { cause: error });
     }
   }
 
