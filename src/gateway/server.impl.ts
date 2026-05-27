@@ -859,10 +859,12 @@ export async function startGatewayServer(
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
   });
+  const deferStartupSidecars = opts.deferStartupSidecars === true;
+  const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
-    getStartupPending: () => !startupSidecarsReady,
+    getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupPendingReason,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
@@ -1498,7 +1500,7 @@ export async function startGatewayServer(
         rateLimiter: authRateLimiter,
         browserRateLimiter: browserAuthRateLimiter,
         preauthHandshakeTimeoutMs,
-        isStartupPending: () => !startupSidecarsReady,
+        isStartupPending: isGatewayStartupPending,
         gatewayMethods: runtimeState.gatewayMethods,
         events: GATEWAY_EVENTS,
         logGateway: log,
@@ -1641,13 +1643,17 @@ export async function startGatewayServer(
             },
             isClosing: () => closePreludeStarted,
             startupTrace,
-            deferSidecars: opts.deferStartupSidecars === true,
+            deferSidecars: deferStartupSidecars,
+            logReadyOnSidecars: !deferStartupSidecars,
             providerAuthPrewarm: { getConfig: getRuntimeConfig },
           }),
       ),
     ));
     startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
     startupTrace.mark("ready");
+    if (deferStartupSidecars) {
+      log.info("gateway ready");
+    }
     finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();

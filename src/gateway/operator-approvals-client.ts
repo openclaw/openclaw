@@ -25,6 +25,13 @@ function shouldOmitOperatorApprovalDeviceIdentity(params: {
   return Boolean((params.token || params.password) && isLoopbackGatewayUrl(params.url));
 }
 
+function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
+  // This token is process-local authority; loopback alone may be a tunnel or another gateway.
+  return (
+    urlSource === "local loopback" || urlSource === "missing gateway.remote.url (fallback local)"
+  );
+}
+
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
@@ -44,13 +51,12 @@ export async function createOperatorApprovalsGatewayClient(
     gatewayUrl: params.gatewayUrl,
     env: process.env,
   });
-  const shouldSendApprovalRuntimeToken = !params.gatewayUrl || isLoopbackGatewayUrl(bootstrap.url);
 
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
-    ...(shouldSendApprovalRuntimeToken
+    ...(shouldSendApprovalRuntimeToken(bootstrap.urlSource)
       ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
       : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
