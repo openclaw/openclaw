@@ -26,6 +26,7 @@ const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const CALLBACK_HOST = resolveCallbackHost();
 const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
+const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const SCOPE = "openid profile email offline_access";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
@@ -39,6 +40,9 @@ type TokenResponseJson = {
 type NodeOAuthRuntime = {
   randomBytes: typeof import("node:crypto").randomBytes;
   http: typeof import("node:http");
+};
+type TokenRequestOptions = {
+  timeoutMs?: number;
 };
 
 let nodeOAuthRuntimePromise: Promise<NodeOAuthRuntime> | null = null;
@@ -144,7 +148,22 @@ function formatMissingTokenResponseFields(json: TokenResponseJson): string {
   return missing.join(", ");
 }
 
-async function postTokenForm(body: URLSearchParams): Promise<Response> {
+function formatTokenRequestError(
+  operation: "exchange" | "refresh",
+  error: unknown,
+  timeoutMs: number,
+): string {
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    return `OpenAI Codex token ${operation} timed out after ${timeoutMs}ms`;
+  }
+  return `OpenAI Codex token ${operation} error: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+async function postTokenForm(
+  body: URLSearchParams,
+  options: TokenRequestOptions = {},
+): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
   const { response, release } = await fetchWithSsrFGuard({
     url: TOKEN_URL,
     init: {
@@ -152,6 +171,7 @@ async function postTokenForm(body: URLSearchParams): Promise<Response> {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     },
+    timeoutMs,
     auditContext: "openai-codex-oauth-token",
   });
   try {
@@ -170,16 +190,27 @@ async function exchangeAuthorizationCode(
   code: string,
   verifier: string,
   redirectUri: string = REDIRECT_URI,
+  options: TokenRequestOptions = {},
 ): Promise<TokenResult> {
-  const response = await postTokenForm(
-    new URLSearchParams({
-      grant_type: "authorization_code",
-      client_id: CLIENT_ID,
-      code,
-      code_verifier: verifier,
-      redirect_uri: redirectUri,
-    }),
-  );
+  const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
+  let response: Response;
+  try {
+    response = await postTokenForm(
+      new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        code,
+        code_verifier: verifier,
+        redirect_uri: redirectUri,
+      }),
+      { timeoutMs },
+    );
+  } catch (error) {
+    return {
+      type: "failed",
+      message: formatTokenRequestError("exchange", error, timeoutMs),
+    };
+  }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -207,14 +238,19 @@ async function exchangeAuthorizationCode(
   };
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
+async function refreshAccessToken(
+  refreshToken: string,
+  options: TokenRequestOptions = {},
+): Promise<TokenResult> {
   try {
+    const timeoutMs = options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS;
     const response = await postTokenForm(
       new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: refreshToken,
         client_id: CLIENT_ID,
       }),
+      { timeoutMs },
     );
 
     if (!response.ok) {
@@ -244,7 +280,11 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
   } catch (error) {
     return {
       type: "failed",
-      message: `OpenAI Codex token refresh error: ${error instanceof Error ? error.message : String(error)}`,
+      message: formatTokenRequestError(
+        "refresh",
+        error,
+        options.timeoutMs ?? TOKEN_REQUEST_TIMEOUT_MS,
+      ),
     };
   }
 }

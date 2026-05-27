@@ -177,6 +177,7 @@ export type ToolsCatalogResult = SchemaType<"ToolsCatalogResult">;
 export type ToolsEffectiveParams = SchemaType<"ToolsEffectiveParams">;
 export type ToolsEffectiveEntry = SchemaType<"ToolsEffectiveEntry">;
 export type ToolsEffectiveGroup = SchemaType<"ToolsEffectiveGroup">;
+export type ToolsEffectiveNotice = SchemaType<"ToolsEffectiveNotice">;
 export type ToolsEffectiveResult = SchemaType<"ToolsEffectiveResult">;
 export type ToolsInvokeParams = SchemaType<"ToolsInvokeParams">;
 export type ToolsInvokeResult = SchemaType<"ToolsInvokeResult">;

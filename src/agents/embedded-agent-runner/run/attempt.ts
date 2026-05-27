@@ -346,8 +346,6 @@ import {
   type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
-  installSessionExternalHookWriteLock,
-  installSessionEventWriteLock,
 } from "./attempt.session-lock.js";
 import {
   createYieldAbortedResponse,
@@ -1391,6 +1389,13 @@ export async function runEmbeddedAttempt(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed embedded agent runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -1703,13 +1708,17 @@ export async function runEmbeddedAttempt(
             runId: params.runId,
             toolSearchCatalogRef,
             agentDir,
+            cwd: effectiveCwd,
             workspaceDir: effectiveWorkspace,
-            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
-              sandbox,
-              resolvedWorkspace,
-            }),
+            // Runtime cwd can point at a task repo while bootstrap/persona files stay in the
+            // agent workspace. Spawned subagents inherit the real agent workspace, not task cwd.
+            spawnWorkspaceDir:
+              effectiveCwd !== effectiveWorkspace
+                ? resolvedWorkspace
+                : resolveAttemptSpawnWorkspaceDir({
+                    sandbox,
+                    resolvedWorkspace,
+                  }),
             config: params.config,
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
@@ -2023,7 +2032,7 @@ export async function runEmbeddedAttempt(
     const catalogToolHookContext = {
       agentId: sessionAgentId,
       config: params.config,
-      cwd: effectiveWorkspace,
+      cwd: effectiveCwd,
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
       runId: params.runId,
@@ -2214,7 +2223,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
       workspaceDir: effectiveWorkspace,
-      cwd: effectiveWorkspace,
+      cwd: effectiveCwd,
       runtime: {
         host: machineName,
         os: `${os.type()} ${os.release()}`,
@@ -2241,7 +2250,7 @@ export async function runEmbeddedAttempt(
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
-      cwd: effectiveWorkspace,
+      cwd: effectiveCwd,
       moduleUrl: import.meta.url,
     });
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
@@ -2468,6 +2477,7 @@ export async function runEmbeddedAttempt(
         runtimeContext: buildAfterTurnRuntimeContext({
           attempt: params,
           workspaceDir: effectiveWorkspace,
+          cwd: effectiveCwd,
           agentDir,
           tokenBudget: params.contextTokenBudget,
           activeAgentId: sessionAgentId,
@@ -2493,11 +2503,11 @@ export async function runEmbeddedAttempt(
         sessionFile: params.sessionFile,
         hadSessionFile,
         sessionId: params.sessionId,
-        cwd: effectiveWorkspace,
+        cwd: effectiveCwd,
       });
 
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-        cwd: effectiveWorkspace,
+        cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
         pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
@@ -2529,7 +2539,7 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
-        cwd: resolvedWorkspace,
+        cwd: effectiveCwd,
         agentDir,
         settingsManager,
         extensionFactories,
@@ -2692,7 +2702,7 @@ export async function runEmbeddedAttempt(
         createAgentSession: async (options) =>
           await createAgentSession(options as unknown as Parameters<typeof createAgentSession>[0]),
         options: {
-          cwd: resolvedWorkspace,
+          cwd: effectiveCwd,
           agentDir,
           authStorage: params.authStorage,
           modelRegistry: params.modelRegistry,
@@ -2703,6 +2713,8 @@ export async function runEmbeddedAttempt(
           sessionManager,
           settingsManager,
           resourceLoader,
+          withSessionWriteLock: (operation) =>
+            sessionLockController.withSessionWriteLock(operation),
         },
       });
       session = createdSession.session;
@@ -2712,14 +2724,6 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
-      installSessionEventWriteLock({
-        session: activeSession,
-        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
-      });
-      installSessionExternalHookWriteLock({
-        session: activeSession,
-        withSessionWriteLock: (operation) => sessionLockController.withSessionWriteLock(operation),
-      });
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -2831,6 +2835,7 @@ export async function runEmbeddedAttempt(
             buildAfterTurnRuntimeContext({
               attempt: params,
               workspaceDir: effectiveWorkspace,
+              cwd: effectiveCwd,
               agentDir,
               tokenBudget: params.contextTokenBudget,
               promptCache:

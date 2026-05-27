@@ -234,8 +234,9 @@ async function requestBodyHasStreamTrue(
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = Number.parseFloat(retryAfterMs);
-    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
+    const trimmedRetryAfterMs = retryAfterMs.trim();
+    const milliseconds = Number(trimmedRetryAfterMs);
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(milliseconds)) {
       return milliseconds / 1000;
     }
   }
@@ -245,8 +246,8 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
+  const seconds = Number(retryAfter.trim());
+  if (/^\d+$/.test(retryAfter.trim()) && Number.isFinite(seconds) && seconds >= 0) {
     return seconds;
   }
 
@@ -268,7 +269,7 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(raw);
+  const seconds = Number(raw);
   if (Number.isFinite(seconds) && seconds > 0) {
     return seconds;
   }

@@ -65,6 +65,7 @@ export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 export type RuntimeProviderAuthLookup = {
   envApiKey: Pick<EnvApiKeyLookupOptions, "aliasMap" | "candidateMap" | "authEvidenceMap">;
   syntheticAuthProviderRefs?: readonly string[];
+  syntheticAuthProviderRefsComplete?: boolean;
 };
 
 const log = createSubsystemLogger("model-auth");
@@ -125,6 +126,7 @@ export function createRuntimeProviderAuthLookup(params: {
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
+    syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
   };
 }
 

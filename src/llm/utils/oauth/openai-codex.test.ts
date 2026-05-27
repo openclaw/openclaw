@@ -14,7 +14,46 @@ function stubTokenResponse(body: Record<string, unknown>): void {
   );
 }
 
+function stubHangingTokenRequest(timeoutMs: number): void {
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((actualTimeoutMs) => {
+    expect(actualTimeoutMs).toBe(timeoutMs);
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      controller.abort(new DOMException("timed out", "TimeoutError"));
+    });
+    return controller.signal;
+  });
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing abort signal"));
+            return;
+          }
+
+          const abort = () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new DOMException("aborted", "AbortError"),
+            );
+          };
+          if (signal.aborted) {
+            abort();
+            return;
+          }
+          signal.addEventListener("abort", abort, { once: true });
+        }),
+    ),
+  );
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -33,15 +72,13 @@ describe("OpenAI Codex OAuth token responses", () => {
   });
 
   it("builds callback redirect URIs from the configured loopback host", () => {
-    expect(testing.resolveRedirectUri("127.0.0.1")).toBe(
-      "http://127.0.0.1:1455/auth/callback",
-    );
+    expect(testing.resolveRedirectUri("127.0.0.1")).toBe("http://127.0.0.1:1455/auth/callback");
   });
 
   it("rejects non-loopback callback bind hosts", () => {
-    expect(() =>
-      testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" }),
-    ).toThrow("callback host must be localhost, 127.0.0.1, or ::1");
+    expect(() => testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
+      "callback host must be localhost, 127.0.0.1, or ::1",
+    );
   });
 
   it("does not echo token payload values when the exchange response is malformed", async () => {
@@ -62,6 +99,22 @@ describe("OpenAI Codex OAuth token responses", () => {
     }
   });
 
+  it("times out token exchange requests", async () => {
+    stubHangingTokenRequest(5);
+
+    const result = await testing.exchangeAuthorizationCode(
+      "code",
+      "verifier",
+      testing.resolveRedirectUri("localhost"),
+      { timeoutMs: 5 },
+    );
+
+    expect(result).toMatchObject({
+      type: "failed",
+      message: "OpenAI Codex token exchange timed out after 5ms",
+    });
+  });
+
   it("does not echo token payload values when the refresh response is malformed", async () => {
     stubTokenResponse({
       access_token: "new-secret-access-token",
@@ -80,6 +133,17 @@ describe("OpenAI Codex OAuth token responses", () => {
       expect(result.message).not.toContain("access_token");
       expect(result.message).not.toContain("refresh_token");
     }
+  });
+
+  it("times out token refresh requests", async () => {
+    stubHangingTokenRequest(5);
+
+    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+
+    expect(result).toMatchObject({
+      type: "failed",
+      message: "OpenAI Codex token refresh timed out after 5ms",
+    });
   });
 
   it("extracts the account id from URL-safe base64 JWT payloads", async () => {

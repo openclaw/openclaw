@@ -22,6 +22,7 @@ const COPILOT_HEADERS = {
 const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
+const COPILOT_REQUEST_TIMEOUT_MS = 30_000;
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -49,6 +50,10 @@ type CopilotModelListEntry = {
   capabilities?: {
     type?: unknown;
   };
+};
+type CopilotRequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export function normalizeDomain(input: string): string | null {
@@ -107,8 +112,59 @@ export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: strin
   return "https://api.individual.githubcopilot.com";
 }
 
-async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
-  const response = await fetch(url, init);
+function formatCopilotRequestError(
+  operation: string,
+  error: unknown,
+  options: Required<Pick<CopilotRequestOptions, "timeoutMs">> & {
+    signal?: AbortSignal;
+  },
+): Error {
+  if (options.signal?.aborted) {
+    return new Error("Login cancelled");
+  }
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    return new Error(`GitHub Copilot ${operation} timed out after ${options.timeoutMs}ms`);
+  }
+  return error instanceof Error
+    ? error
+    : new Error(`GitHub Copilot ${operation} failed: ${String(error)}`);
+}
+
+function buildCopilotRequestSignal(options: CopilotRequestOptions): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS);
+  if (!options.signal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([options.signal, timeoutSignal]);
+}
+
+async function fetchResponse(
+  url: string,
+  init: RequestInit,
+  operation: string,
+  options: CopilotRequestOptions = {},
+): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS;
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: buildCopilotRequestSignal({ ...options, timeoutMs }),
+    });
+  } catch (error) {
+    throw formatCopilotRequestError(operation, error, {
+      signal: options.signal,
+      timeoutMs,
+    });
+  }
+}
+
+async function fetchJson(
+  url: string,
+  init: RequestInit,
+  operation: string,
+  options: CopilotRequestOptions = {},
+): Promise<unknown> {
+  const response = await fetchResponse(url, init, operation, options);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`${response.status} ${response.statusText}: ${text}`);
@@ -116,20 +172,28 @@ async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
   return response.json();
 }
 
-async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
+async function startDeviceFlow(
+  domain: string,
+  options: CopilotRequestOptions = {},
+): Promise<DeviceCodeResponse> {
   const urls = getUrls(domain);
-  const data = await fetchJson(urls.deviceCodeUrl, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "GitHubCopilotChat/0.35.0",
+  const data = await fetchJson(
+    urls.deviceCodeUrl,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "GitHubCopilotChat/0.35.0",
+      },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        scope: "read:user",
+      }),
     },
-    body: new URLSearchParams({
-      client_id: CLIENT_ID,
-      scope: "read:user",
-    }),
-  });
+    "device code request",
+    options,
+  );
 
   if (!data || typeof data !== "object") {
     throw new Error("Invalid device code response");
@@ -205,19 +269,24 @@ async function pollForGitHubAccessToken(
     const waitMs = Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs);
     await abortableSleep(waitMs, signal);
 
-    const raw = await fetchJson(urls.accessTokenUrl, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "GitHubCopilotChat/0.35.0",
+    const raw = await fetchJson(
+      urls.accessTokenUrl,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "GitHubCopilotChat/0.35.0",
+        },
+        body: new URLSearchParams({
+          client_id: CLIENT_ID,
+          device_code: deviceCode,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
       },
-      body: new URLSearchParams({
-        client_id: CLIENT_ID,
-        device_code: deviceCode,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      }),
-    });
+      "device token request",
+      { signal },
+    );
 
     if (
       raw &&
@@ -267,17 +336,23 @@ async function pollForGitHubAccessToken(
 export async function refreshGitHubCopilotToken(
   refreshToken: string,
   enterpriseDomain?: string,
+  options: CopilotRequestOptions = {},
 ): Promise<OAuthCredentials> {
   const domain = enterpriseDomain || "github.com";
   const urls = getUrls(domain);
 
-  const raw = await fetchJson(urls.copilotTokenUrl, {
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${refreshToken}`,
-      ...COPILOT_HEADERS,
+  const raw = await fetchJson(
+    urls.copilotTokenUrl,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${refreshToken}`,
+        ...COPILOT_HEADERS,
+      },
     },
-  });
+    "token refresh request",
+    options,
+  );
 
   if (!raw || typeof raw !== "object") {
     throw new Error("Invalid Copilot token response");
@@ -306,22 +381,28 @@ async function enableGitHubCopilotModel(
   token: string,
   modelId: string,
   enterpriseDomain?: string,
+  options: CopilotRequestOptions = {},
 ): Promise<boolean> {
   const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
   const url = `${baseUrl}/models/${modelId}/policy`;
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        ...COPILOT_HEADERS,
-        "openai-intent": "chat-policy",
-        "x-interaction-type": "chat-policy",
+    const response = await fetchResponse(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          ...COPILOT_HEADERS,
+          "openai-intent": "chat-policy",
+          "x-interaction-type": "chat-policy",
+        },
+        body: JSON.stringify({ state: "enabled" }),
       },
-      body: JSON.stringify({ state: "enabled" }),
-    });
+      "model policy request",
+      options,
+    );
     return response.ok;
   } catch {
     return false;
@@ -331,21 +412,23 @@ async function enableGitHubCopilotModel(
 async function listGitHubCopilotModelIds(
   token: string,
   enterpriseDomain?: string,
+  options: CopilotRequestOptions = {},
 ): Promise<string[]> {
   const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
   const url = `${baseUrl}/models`;
   try {
-    const response = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`,
-        ...COPILOT_HEADERS,
+    const raw = await fetchJson(
+      url,
+      {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+          ...COPILOT_HEADERS,
+        },
       },
-    });
-    if (!response.ok) {
-      return [];
-    }
-    const raw = await response.json();
+      "model list request",
+      options,
+    );
     const data = raw && typeof raw === "object" ? (raw as { data?: unknown }).data : undefined;
     if (!Array.isArray(data)) {
       return [];
@@ -425,7 +508,7 @@ export async function loginGitHubCopilot(options: {
   }
   const domain = enterpriseDomain || "github.com";
 
-  const device = await startDeviceFlow(domain);
+  const device = await startDeviceFlow(domain, { signal: options.signal });
   options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
 
   const githubAccessToken = await pollForGitHubAccessToken(
@@ -479,5 +562,7 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 };
 
 export const testing = {
+  enableGitHubCopilotModel,
   listGitHubCopilotModelIds,
+  startDeviceFlow,
 };

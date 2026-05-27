@@ -50,6 +50,18 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("No OpenClaw tool list is injected");
   });
 
+  it("uses cwd, not bootstrap workspace, for CLI workspace guidance", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw-agent",
+      cwd: "/tmp/task-repo",
+      tools: [],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("Your working directory is: /tmp/task-repo");
+    expect(prompt).not.toContain("Your working directory is: /tmp/openclaw-agent");
+  });
+
   it("includes CLI-scoped plugin command guidance", () => {
     registerPluginCommand("demo-plugin", {
       name: "demo_cli",

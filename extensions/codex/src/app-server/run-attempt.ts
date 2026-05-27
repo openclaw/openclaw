@@ -362,6 +362,13 @@ export async function runCodexAppServerAttempt(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed Codex app-server runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   preDynamicStartupStages.mark("effective-workspace");
   const appServer = resolveCodexAppServerForOpenClawToolPolicy({
@@ -518,6 +525,7 @@ export async function runCodexAppServerAttempt(
     params,
     resolvedWorkspace,
     effectiveWorkspace,
+    effectiveCwd,
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
@@ -534,6 +542,7 @@ export async function runCodexAppServerAttempt(
     params,
     resolvedWorkspace,
     effectiveWorkspace,
+    effectiveCwd,
     sandboxSessionKey,
     sandbox,
     nativeToolSurfaceEnabled,
@@ -597,6 +606,7 @@ export async function runCodexAppServerAttempt(
     buildHarnessContextEngineRuntimeContext({
       attempt: buildActiveRunAttemptParams(),
       workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
       agentDir,
       activeAgentId: sessionAgentId,
       contextEnginePluginId: activeContextEnginePluginId,
@@ -777,7 +787,7 @@ export async function runCodexAppServerAttempt(
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
-    cwd: effectiveWorkspace,
+    cwd: effectiveCwd,
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
     tools: toolBridge.availableSpecs,
@@ -795,7 +805,7 @@ export async function runCodexAppServerAttempt(
     }
   };
   let codexEnvironmentSelection: CodexTurnEnvironmentParams[] | undefined;
-  let codexExecutionCwd = effectiveWorkspace;
+  let codexExecutionCwd = effectiveCwd;
   let codexSandboxPolicy: CodexSandboxPolicy | undefined;
   let restartContextEngineCodexThread:
     | (() => Promise<CodexAppServerThreadLifecycleBinding>)
@@ -859,6 +869,7 @@ export async function runCodexAppServerAttempt(
       buildAttemptParams: buildActiveRunAttemptParams,
       sessionAgentId,
       effectiveWorkspace,
+      effectiveCwd,
       dynamicTools: toolBridge.specs,
       developerInstructions: promptBuild.developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
@@ -902,7 +913,7 @@ export async function runCodexAppServerAttempt(
   });
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
-    cwd: effectiveWorkspace,
+    cwd: effectiveCwd,
     developerInstructions: promptBuild.developerInstructions,
     prompt: codexTurnPromptText,
     tools: toolBridge.availableSpecs,
@@ -1846,6 +1857,7 @@ export async function runCodexAppServerAttempt(
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
     sessionKey: sandboxSessionKey,
+    cwd: effectiveCwd,
     threadId: thread.threadId,
     turnId: activeTurnId,
   });
@@ -1970,6 +1982,7 @@ export async function runCodexAppServerAttempt(
       notifyUserMessagePersisted,
       result,
       sessionKey: contextSessionKey,
+      cwd: effectiveCwd,
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
@@ -2010,6 +2023,7 @@ export async function runCodexAppServerAttempt(
         runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
           attempt: buildActiveRunAttemptParams(),
           workspaceDir: effectiveWorkspace,
+          cwd: effectiveCwd,
           agentDir,
           activeAgentId: sessionAgentId,
           contextEnginePluginId: activeContextEnginePluginId,

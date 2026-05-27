@@ -4,8 +4,11 @@ import {
   accessSync,
   chmodSync,
   constants,
+  cpSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -583,6 +586,42 @@ function absolutizeLocalRunPaths(commandArgs) {
     }
   }
   return normalizedArgs;
+}
+
+function pathExists(path) {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function preserveTemporaryCrabboxRuns() {
+  if (childCwd === repoRoot) {
+    return;
+  }
+
+  const sourceRuns = resolve(childCwd, ".crabbox", "runs");
+  if (!pathExists(sourceRuns)) {
+    return;
+  }
+
+  const targetRuns = resolve(repoRoot, ".crabbox", "runs");
+  mkdirSync(targetRuns, { recursive: true });
+  let preserved = 0;
+  for (const entry of readdirSync(sourceRuns)) {
+    cpSync(resolve(sourceRuns, entry), resolve(targetRuns, entry), {
+      recursive: true,
+      force: true,
+    });
+    preserved += 1;
+  }
+  if (preserved > 0) {
+    console.error(
+      `[crabbox] preserved ${preserved} temporary run artifact ${preserved === 1 ? "directory" : "directories"} under ${relative(repoRoot, targetRuns)}`,
+    );
+  }
 }
 
 function shellQuote(value) {
@@ -1861,6 +1900,7 @@ function cleanupOnce() {
   }
   cleanupDone = true;
   scriptBootstrap.cleanup();
+  preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
 }
 

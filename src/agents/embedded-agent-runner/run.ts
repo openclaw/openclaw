@@ -639,46 +639,68 @@ export async function runEmbeddedAgent(
         config: params.config,
         workspaceDir: resolvedWorkspace,
       });
-      const dynamicModelResolution = await resolveModelAsync(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-        {
-          // Plugin dynamic model hooks can resolve explicit model refs without
-          // first generating OpenClaw models.json. This keeps one-shot model runs from
-          // blocking on unrelated provider discovery.
-          skipAgentDiscovery: true,
-          workspaceDir: resolvedWorkspace,
-        },
-      );
-      let modelResolution =
-        dynamicModelResolution.model || pluginHarnessOwnsTransport
-          ? dynamicModelResolution
-          : await (async () => {
-              await ensureOpenClawModelsJson(params.config, agentDir, {
-                workspaceDir: resolvedWorkspace,
-              });
-              return await resolveModelAsync(provider, modelId, agentDir, params.config, {
-                workspaceDir: resolvedWorkspace,
-              });
-            })();
-      if (selectedRuntimeProvider !== provider && modelResolution.model) {
-        const runtimeModelResolution = await resolveModelAsync(
-          selectedRuntimeProvider,
+      const modelResolutionProviders =
+        selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
+      let resolvedModelProvider = provider;
+      let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+      let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+      for (const candidateProvider of modelResolutionProviders) {
+        const candidateResolution = await resolveModelAsync(
+          candidateProvider,
           modelId,
           agentDir,
           params.config,
           {
+            // Plugin dynamic model hooks can resolve explicit model refs without
+            // first generating OpenClaw models.json. This keeps one-shot model runs from
+            // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
             workspaceDir: resolvedWorkspace,
           },
         );
-        if (runtimeModelResolution.model) {
-          provider = selectedRuntimeProvider;
-          modelResolution = runtimeModelResolution;
+        firstModelResolution ??= candidateResolution;
+        if (candidateResolution.model) {
+          resolvedModelProvider = candidateProvider;
+          modelResolution = candidateResolution;
+          break;
         }
       }
+      if (!modelResolution && pluginHarnessOwnsTransport) {
+        modelResolution = firstModelResolution;
+      }
+      if (!modelResolution) {
+        await ensureOpenClawModelsJson(params.config, agentDir, {
+          workspaceDir: resolvedWorkspace,
+        });
+        for (const candidateProvider of modelResolutionProviders) {
+          const candidateResolution = await resolveModelAsync(
+            candidateProvider,
+            modelId,
+            agentDir,
+            params.config,
+            {
+              workspaceDir: resolvedWorkspace,
+            },
+          );
+          firstModelResolution ??= candidateResolution;
+          if (candidateResolution.model) {
+            resolvedModelProvider = candidateProvider;
+            modelResolution = candidateResolution;
+            break;
+          }
+        }
+      }
+      modelResolution ??= firstModelResolution;
+      if (!modelResolution) {
+        throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
+          reason: "model_not_found",
+          provider,
+          model: modelId,
+          sessionId: params.sessionId,
+          lane: globalLane,
+        });
+      }
+      provider = resolvedModelProvider;
       const { model, error, authStorage, modelRegistry } = modelResolution;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
@@ -1476,6 +1498,7 @@ export async function runEmbeddedAgent(
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
             workspaceDir: resolvedWorkspace,
+            cwd: params.cwd,
             agentDir,
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,

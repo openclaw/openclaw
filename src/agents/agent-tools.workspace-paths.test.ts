@@ -59,6 +59,23 @@ async function expectExecCwdResolvesTo(
 }
 
 describe("workspace path resolution", () => {
+  it("uses cwd for coding filesystem tools while workspaceDir remains the agent workspace", async () => {
+    await withTempDir("openclaw-agent-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-task-cwd-", async (cwd) => {
+        const tools = createOpenClawCodingTools({ workspaceDir, cwd });
+        const { readTool, writeTool } = expectReadWriteEditTools(tools);
+
+        await fs.writeFile(path.join(cwd, "task.txt"), "task cwd read ok", "utf8");
+        const readResult = await readTool.execute("cwd-read", { path: "task.txt" });
+        expect(getTextContent(readResult)).toContain("task cwd read ok");
+
+        await writeTool.execute("cwd-write", { path: "created.txt", content: "task cwd write ok" });
+        expect(await fs.readFile(path.join(cwd, "created.txt"), "utf8")).toBe("task cwd write ok");
+        await expect(fs.access(path.join(workspaceDir, "created.txt"))).rejects.toThrow();
+      });
+    });
+  });
+
   it("resolves relative read/write/edit paths against workspaceDir even after cwd changes", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {

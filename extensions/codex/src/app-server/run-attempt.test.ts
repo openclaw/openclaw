@@ -209,6 +209,7 @@ async function buildDynamicToolsForTest(
     params,
     resolvedWorkspace: workspaceDir,
     effectiveWorkspace: workspaceDir,
+    effectiveCwd: params.cwd ?? workspaceDir,
     sandboxSessionKey,
     sandbox: { enabled: false, backendId: "docker" } as never,
     nativeToolSurfaceEnabled: true,
@@ -897,6 +898,46 @@ describe("runCodexAppServerAttempt", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(binding.threadId).toBe("new-thread");
     expect(binding.mcpServersFingerprint).toBe("mcp-v2");
+  });
+
+  it("uses task cwd for Codex app-server requests while keeping bootstrap workspace separate", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const taskCwd = path.join(tempDir, "task-repo");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(taskCwd, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "workspace bootstrap", "utf8");
+    await fs.writeFile(path.join(taskCwd, "task-marker.txt"), "task marker", "utf8");
+    const appServer = createThreadLifecycleAppServerOptions();
+    const params = createParams(sessionFile, workspaceDir);
+    const requests: Array<{ method: string; params: unknown }> = [];
+
+    await startOrResumeThread({
+      client: {
+        getServerVersion: () => "0.132.0",
+        request: async (method: string, requestParams?: unknown) => {
+          requests.push({ method, params: requestParams });
+          if (method === "thread/start") {
+            return threadStartResult();
+          }
+          return {};
+        },
+      } as never,
+      params,
+      cwd: taskCwd,
+      dynamicTools: [],
+      appServer,
+      developerInstructions: "workspace bootstrap",
+    });
+    const threadStart = requests.find((request) => request.method === "thread/start");
+    expect((threadStart?.params as { cwd?: string } | undefined)?.cwd).toBe(taskCwd);
+
+    const turnStart = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: taskCwd,
+      appServer,
+    });
+    expect(turnStart.cwd).toBe(taskCwd);
   });
 
   it("starts a no-MCP Codex thread when MCP config is evaluated empty", async () => {

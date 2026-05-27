@@ -295,6 +295,7 @@ function emitSessionsChanged(
             origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
             spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            spawnedCwd: sessionRow.spawnedCwd,
             forkedFromParent: sessionRow.forkedFromParent,
             spawnDepth: sessionRow.spawnDepth,
             subagentRole: sessionRow.subagentRole,
@@ -2311,6 +2312,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const workspaceDir =
         normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
         resolveAgentWorkspaceDir(cfg, target.agentId);
+      const cwd = normalizeOptionalString(entry?.spawnedCwd);
       const operationId = randomUUID();
       emitSessionOperation(context, {
         operationId,
@@ -2326,6 +2328,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           allowGatewaySubagentBinding: true,
           sessionFile: filePath,
           workspaceDir,
+          cwd,
           config: cfg,
           provider: resolvedModel.provider,
           model: resolvedModel.model,

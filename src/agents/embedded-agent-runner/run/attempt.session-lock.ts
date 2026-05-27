@@ -26,128 +26,15 @@ type SessionWriteLockRunOptions = {
   publishOwnedWrite?: boolean;
 };
 
-type SessionEventProcessor = {
-  _handleAgentEvent?: AwaitableSessionEventHandler;
-  _disconnectFromAgent?: () => void;
-  _reconnectToAgent?: () => void;
-  _extensionRunner?: {
-    hasHandlers?: (eventType: string) => boolean;
-  };
-  __openclawSessionEventWriteLockInstalled?: boolean;
-};
-
-type SessionEventQueueOwner = {
-  _agentEventQueue?: PromiseLike<unknown>;
-};
-
-type SessionEventQueueBridge = SessionEventQueueOwner & {
-  _handleAgentEvent?: AwaitableSessionEventHandler;
-  _disconnectFromAgent?: () => void;
-  _reconnectToAgent?: () => void;
-};
-
-type AwaitableSessionEventHandler = ((event: unknown, signal?: unknown) => unknown) & {
-  __openclawSessionEventQueueAwaitInstalled?: boolean;
-};
-
 type SessionWithAgentPrompt = {
   agent?: {
     streamFn?: PromptReleaseStreamFn;
   };
 };
 
-type SessionWithExternalHooks = SessionEventProcessor & {
-  compact?: LockableFunction;
-  agent?: {
-    beforeToolCall?: LockableFunction;
-    afterToolCall?: LockableFunction;
-    onPayload?: LockableFunction;
-    onResponse?: LockableFunction;
-  };
-};
-
 type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
 };
-
-type LockableFunction = ((...args: unknown[]) => unknown) & {
-  __openclawSessionWriteLockInstalled?: boolean;
-};
-
-type SessionEventHookContext = {
-  session: unknown;
-  active: boolean;
-};
-
-const sessionEventHookContext = new AsyncLocalStorage<SessionEventHookContext>();
-
-function isProcessingAgentEventInCurrentChain(session: unknown): boolean {
-  const context = sessionEventHookContext.getStore();
-  return context?.active === true && context.session === session;
-}
-
-async function withProcessingAgentEvent<T>(
-  session: unknown,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const context: SessionEventHookContext = { session, active: true };
-  return await sessionEventHookContext.run(context, async () => {
-    try {
-      return await run();
-    } finally {
-      context.active = false;
-    }
-  });
-}
-
-function sessionHasExtensionHandlers(session: SessionEventProcessor, eventType: string): boolean {
-  const extensionRunner = session["_extensionRunner"];
-  const hasHandlers = extensionRunner?.hasHandlers;
-  if (typeof hasHandlers !== "function") {
-    return false;
-  }
-  try {
-    return hasHandlers.call(extensionRunner, eventType);
-  } catch {
-    return true;
-  }
-}
-
-function eventMayReachTranscriptWriters(session: SessionEventProcessor, event: unknown): boolean {
-  const type = (event as { type?: unknown } | null)?.type;
-  if (type === "message_update" || type === "message_end" || type === "agent_end") {
-    return true;
-  }
-  if (typeof type !== "string") {
-    return false;
-  }
-  return sessionHasExtensionHandlers(session, type);
-}
-
-function installLockableFunction(params: {
-  owner: Record<string, unknown>;
-  key: string;
-  shouldLock: () => boolean;
-  waitBeforeLock?: () => Promise<void>;
-  withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
-}): void {
-  const current = params.owner[params.key] as LockableFunction | undefined;
-  if (typeof current !== "function" || current["__openclawSessionWriteLockInstalled"] === true) {
-    return;
-  }
-  const wrapped: LockableFunction = async function lockedExternalHook(
-    this: unknown,
-    ...args: unknown[]
-  ) {
-    if (!params.shouldLock()) {
-      return await current.apply(this, args);
-    }
-    await params.waitBeforeLock?.();
-    return await params.withSessionWriteLock(async () => await current.apply(this, args));
-  };
-  wrapped["__openclawSessionWriteLockInstalled"] = true;
-  params.owner[params.key] = wrapped;
-}
 
 type SessionFileFingerprint =
   | { exists: false }
@@ -670,163 +557,13 @@ function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerp
   }
 }
 
-async function waitForSessionEventQueue(session: unknown): Promise<void> {
-  const owner = session as SessionEventQueueOwner;
-  for (let attempts = 0; attempts < 5; attempts += 1) {
-    const queue = owner?.["_agentEventQueue"];
-    if (!queue || typeof queue.then !== "function") {
-      return;
-    }
-    await Promise.resolve(queue).catch(() => {});
-    if (owner?.["_agentEventQueue"] === queue) {
-      return;
-    }
-  }
-  const queue = owner?.["_agentEventQueue"];
-  if (queue && typeof queue.then === "function") {
-    await Promise.resolve(queue).catch(() => {});
-  }
-}
-
-async function waitForSessionEventQueueBeforeHook(session: unknown): Promise<void> {
-  // Hook calls made by _handleAgentEvent are already inside the current queue
-  // entry. Draining there waits on itself; detached/external hook work still drains.
-  if (isProcessingAgentEventInCurrentChain(session)) {
-    return;
-  }
-  await waitForSessionEventQueue(session);
-}
-
-function installAwaitableSessionEventQueue(session: unknown): void {
-  const owner = session as SessionEventQueueBridge;
-  const original = owner["_handleAgentEvent"];
-  if (
-    typeof original !== "function" ||
-    original["__openclawSessionEventQueueAwaitInstalled"] === true
-  ) {
-    return;
-  }
-
-  const canReconnect =
-    typeof owner["_disconnectFromAgent"] === "function" &&
-    typeof owner["_reconnectToAgent"] === "function";
-  if (canReconnect) {
-    owner["_disconnectFromAgent"]?.();
-  }
-
-  const wrapped: AwaitableSessionEventHandler = function awaitableSessionEventQueue(
-    ...args: [event: unknown, signal?: unknown]
-  ) {
-    const result = original(...args);
-    const queue = owner["_agentEventQueue"];
-    if (queue && typeof queue.then === "function") {
-      return Promise.resolve(queue);
-    }
-    return result;
-  };
-  wrapped["__openclawSessionEventQueueAwaitInstalled"] = true;
-  owner["_handleAgentEvent"] = wrapped;
-
-  if (canReconnect) {
-    owner["_reconnectToAgent"]?.();
-  }
-}
+async function waitForSessionEventQueue(_session: unknown): Promise<void> {}
 
 export class EmbeddedAttemptSessionTakeoverError extends Error {
   constructor(sessionFile: string) {
     super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
     this.name = "EmbeddedAttemptSessionTakeoverError";
   }
-}
-
-export function installSessionEventWriteLock(params: {
-  session: unknown;
-  withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
-}): void {
-  installAwaitableSessionEventQueue(params.session);
-  const session = params.session as SessionEventProcessor;
-  const original = session["_handleAgentEvent"];
-  if (
-    typeof original !== "function" ||
-    session["__openclawSessionEventWriteLockInstalled"] === true
-  ) {
-    return;
-  }
-
-  const canReconnect =
-    typeof session["_disconnectFromAgent"] === "function" &&
-    typeof session["_reconnectToAgent"] === "function";
-  if (canReconnect) {
-    session["_disconnectFromAgent"]?.();
-  }
-
-  session["__openclawSessionEventWriteLockInstalled"] = true;
-  const wrapped: AwaitableSessionEventHandler = async function lockedSessionEventHandler(
-    this: unknown,
-    event: unknown,
-    signal?: unknown,
-  ) {
-    return await withProcessingAgentEvent(session, async () => {
-      if (!eventMayReachTranscriptWriters(session, event)) {
-        return await original.call(this, event, signal);
-      }
-      return await params.withSessionWriteLock(
-        async () => await original.call(this, event, signal),
-      );
-    });
-  };
-  wrapped["__openclawSessionEventQueueAwaitInstalled"] =
-    original["__openclawSessionEventQueueAwaitInstalled"];
-  session["_handleAgentEvent"] = wrapped;
-
-  if (canReconnect) {
-    session["_reconnectToAgent"]?.();
-  }
-}
-
-export function installSessionExternalHookWriteLock(params: {
-  session: unknown;
-  withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
-}): void {
-  const session = params.session as SessionWithExternalHooks;
-  const agent = session.agent;
-  if (agent) {
-    installLockableFunction({
-      owner: agent as Record<string, unknown>,
-      key: "beforeToolCall",
-      shouldLock: () => true,
-      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
-      withSessionWriteLock: params.withSessionWriteLock,
-    });
-    installLockableFunction({
-      owner: agent as Record<string, unknown>,
-      key: "afterToolCall",
-      shouldLock: () => sessionHasExtensionHandlers(session, "tool_result"),
-      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
-      withSessionWriteLock: params.withSessionWriteLock,
-    });
-    installLockableFunction({
-      owner: agent as Record<string, unknown>,
-      key: "onPayload",
-      shouldLock: () => sessionHasExtensionHandlers(session, "before_provider_request"),
-      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
-      withSessionWriteLock: params.withSessionWriteLock,
-    });
-    installLockableFunction({
-      owner: agent as Record<string, unknown>,
-      key: "onResponse",
-      shouldLock: () => sessionHasExtensionHandlers(session, "after_provider_response"),
-      waitBeforeLock: () => waitForSessionEventQueueBeforeHook(session),
-      withSessionWriteLock: params.withSessionWriteLock,
-    });
-  }
-  installLockableFunction({
-    owner: session as Record<string, unknown>,
-    key: "compact",
-    shouldLock: () => true,
-    waitBeforeLock: () => waitForSessionEventQueue(session),
-    withSessionWriteLock: params.withSessionWriteLock,
-  });
 }
 
 export type EmbeddedAttemptSessionLockController = {

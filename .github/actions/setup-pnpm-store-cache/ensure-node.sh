@@ -51,20 +51,13 @@ openclaw_active_node_version() {
   node -p 'process.versions.node' 2>/dev/null || true
 }
 
-openclaw_shell_path() {
-  local path_value="$1"
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -u "$path_value" 2>/dev/null || printf '%s' "$path_value"
-  else
-    printf '%s' "$path_value"
-  fi
-}
-
 openclaw_prepend_node_bin() {
   local node_bin_dir="$1"
   local github_path_dir="${2:-$node_bin_dir}"
-  local shell_node_bin_dir
-  shell_node_bin_dir="$(openclaw_shell_path "$node_bin_dir")"
+  local shell_node_bin_dir="$node_bin_dir"
+  if command -v cygpath >/dev/null 2>&1; then
+    shell_node_bin_dir="$(cygpath -u "$node_bin_dir" 2>/dev/null || printf '%s' "$node_bin_dir")"
+  fi
   export PATH="$shell_node_bin_dir:$PATH"
   if [[ -n "${GITHUB_PATH:-}" ]]; then
     local github_node_bin_dir="$github_path_dir"
@@ -91,8 +84,9 @@ openclaw_find_toolcache_node() {
     "/Users/runner/hostedtoolcache" \
     "/c/hostedtoolcache/windows"
   do
-    [[ -n "$root" ]] || continue
-    root="$(openclaw_shell_path "$root")"
+    if [[ ! -d "$root" && "$root" == *\\* ]] && command -v cygpath >/dev/null 2>&1; then
+      root="$(cygpath -u "$root" 2>/dev/null || printf '%s' "$root")"
+    fi
     if [[ -d "$root/node" ]]; then
       roots+=("$root/node")
     elif [[ "$(basename "$root")" == "node" && -d "$root" ]]; then
@@ -120,41 +114,19 @@ openclaw_resolve_node_download_version() {
     return 0
   fi
 
-  local prefix index_json resolved
-  prefix="${requested_node#v}"
+  local prefix="${requested_node#v}"
   prefix="${prefix%%[xX]*}"
   prefix="v${prefix}"
   [[ "$prefix" == *. ]] || prefix="${prefix}."
-
-  index_json="$(curl -fsSL https://nodejs.org/dist/index.json)" || return 1
-
-  if command -v node >/dev/null 2>&1; then
-    resolved="$(
-      OPENCLAW_NODE_PREFIX="$prefix" node -e '
-const fs = require("node:fs");
-const prefix = process.env.OPENCLAW_NODE_PREFIX;
-const versions = JSON.parse(fs.readFileSync(0, "utf8"));
-const match = versions.find((item) => (item.version || "").startsWith(prefix));
-if (match) console.log(match.version);
-' <<< "$index_json"
-    )" || resolved=""
-  fi
-
-  if [[ -z "$resolved" ]] && command -v python3 >/dev/null 2>&1; then
-    resolved="$(
-      OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
+  curl -fsSL https://nodejs.org/dist/index.json |
+    OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
 prefix = os.environ["OPENCLAW_NODE_PREFIX"]
 for item in json.load(sys.stdin):
     version = item.get("version", "")
     if version.startswith(prefix):
         print(version)
         break
-' <<< "$index_json"
-    )" || resolved=""
-  fi
-
-  [[ -n "$resolved" ]] || return 1
-  printf '%s\n' "$resolved"
+'
 }
 
 openclaw_node_download_platform() {
@@ -179,13 +151,16 @@ openclaw_node_download_platform() {
 openclaw_download_node() {
   local requested_node="$1"
   local version platform archive_url install_root temp_root
-  version="$(openclaw_resolve_node_download_version "$requested_node")" || return 1
+  version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
-  temp_root="$(openclaw_shell_path "${RUNNER_TEMP:-/tmp}")"
+  temp_root="${RUNNER_TEMP:-/tmp}"
+  if command -v cygpath >/dev/null 2>&1; then
+    temp_root="$(cygpath -u "$temp_root" 2>/dev/null || printf '%s\n' "$temp_root")"
+  fi
   install_root="${temp_root}/openclaw-node-${version}-${platform}"
   if [[ "$platform" == win-* ]]; then
     local archive_path ps_archive_path ps_install_root ps_bin_dir node_bin_dir
-    archive_path="${install_root}.zip"
+    archive_path="${temp_root}/node-${version}-${platform}.zip"
     archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
     rm -rf "$install_root"
     mkdir -p "$install_root"
@@ -200,16 +175,10 @@ openclaw_download_node() {
     ps_bin_dir="$ps_install_root\\node-${version}-${platform}"
     node_bin_dir="$install_root/node-${version}-${platform}"
     if command -v pwsh >/dev/null 2>&1; then
-      OPENCLAW_NODE_ARCHIVE="$ps_archive_path" \
-        OPENCLAW_NODE_INSTALL_ROOT="$ps_install_root" \
-        pwsh -NoLogo -NoProfile -NonInteractive -Command \
-          'Expand-Archive -LiteralPath $env:OPENCLAW_NODE_ARCHIVE -DestinationPath $env:OPENCLAW_NODE_INSTALL_ROOT -Force'
+      pwsh -NoLogo -NoProfile -Command "Expand-Archive -LiteralPath '${ps_archive_path}' -DestinationPath '${ps_install_root}' -Force"
       openclaw_prepend_node_bin "$node_bin_dir" "$ps_bin_dir"
     elif command -v powershell.exe >/dev/null 2>&1; then
-      OPENCLAW_NODE_ARCHIVE="$ps_archive_path" \
-        OPENCLAW_NODE_INSTALL_ROOT="$ps_install_root" \
-        powershell.exe -NoLogo -NoProfile -NonInteractive -Command \
-          'Expand-Archive -LiteralPath $env:OPENCLAW_NODE_ARCHIVE -DestinationPath $env:OPENCLAW_NODE_INSTALL_ROOT -Force'
+      powershell.exe -NoLogo -NoProfile -Command "Expand-Archive -LiteralPath '${ps_archive_path}' -DestinationPath '${ps_install_root}' -Force"
       openclaw_prepend_node_bin "$node_bin_dir" "$ps_bin_dir"
     else
       unzip -q "$archive_path" -d "$install_root"

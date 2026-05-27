@@ -37,6 +37,8 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
   workspaceDir: string;
+  /** Optional task working directory; workspaceDir remains the agent bootstrap workspace. */
+  cwd?: string;
   agentDir?: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;

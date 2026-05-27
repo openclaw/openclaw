@@ -287,6 +287,8 @@ describeLive("openai plugin live", () => {
       fileName: "openai-plugin-live.mp3",
       mime: "audio/mpeg",
       apiKey: OPENAI_API_KEY,
+      language: "en",
+      prompt: "Speech transcription check okay.",
       timeoutMs: 30_000,
     });
 

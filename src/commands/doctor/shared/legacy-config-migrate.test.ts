@@ -62,6 +62,75 @@ describe("compatibility binding repair migrate", () => {
   });
 });
 
+describe("legacy memory search config migrate", () => {
+  it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
+    const raw = {
+      memorySearch: {
+        provider: "auto",
+        model: "text-embedding-3-small",
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "memorySearch",
+      "memorySearch.provider",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+      provider: "openai",
+      model: "text-embedding-3-small",
+    });
+    expect(res.config).not.toHaveProperty("memorySearch");
+    expect(res.changes).toEqual([
+      "Moved memorySearch → agents.defaults.memorySearch.",
+      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+    ]);
+  });
+
+  it("rewrites default and per-agent legacy auto memory providers", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "auto",
+          },
+        },
+        list: [
+          {
+            id: "local",
+            memorySearch: {
+              provider: " auto ",
+            },
+          },
+          {
+            id: "custom",
+            memorySearch: {
+              provider: "openai-compatible",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.memorySearch.provider",
+      "agents.list",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[1]?.memorySearch?.provider).toBe("openai-compatible");
+    expect(res.changes).toEqual([
+      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+      'Moved agents.list.0.memorySearch.provider from legacy "auto" to "openai".',
+    ]);
+  });
+});
+
 describe("legacy silent reply config migrate", () => {
   it("removes silent reply rewrite and direct-chat silent reply config", () => {
     const res = migrateLegacyConfigForTest({

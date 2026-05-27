@@ -1018,6 +1018,57 @@ describe("sessions tools", () => {
     expect(sendCallCount).toBe(0);
   });
 
+  it("sessions_send returns pending agent error diagnostics on timeout", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        return {
+          runId: "run-pending-model-error",
+          status: "accepted",
+          acceptedAt: 1234,
+        };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-pending-model-error",
+          status: "timeout",
+          error: "429 RESOURCE_EXHAUSTED",
+          pendingError: true,
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-pending-error", {
+      sessionKey: "main",
+      message: "check status",
+      timeoutSeconds: 1,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("timeout");
+    expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
+    expect(details.runId).toBe("run-pending-model-error");
+    expect(details.delivery?.status).toBe("pending");
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "agent.wait").length).toBeGreaterThanOrEqual(2),
+    );
+  });
+
   it("sessions_send resolves sessionId inputs", async () => {
     const sessionId = "sess-send";
     const targetKey = "agent:main:discord:channel:123";

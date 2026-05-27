@@ -79,6 +79,7 @@ type CliCompactionRuntimeContextParams = {
   messageChannel?: string;
   agentAccountId?: string;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   cfg: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
@@ -197,6 +198,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       agentAccountId: params.agentAccountId,
       authProfileId: undefined,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       config: params.cfg,
       skillsSnapshot: params.skillsSnapshot,
@@ -220,6 +222,7 @@ async function compactCliTranscript(params: {
   sessionManager: SessionManagerLike;
   cfg: OpenClawConfig;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -238,6 +241,7 @@ async function compactCliTranscript(params: {
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
     agentDir: params.agentDir,
     cfg: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
@@ -316,6 +320,7 @@ async function compactNativeHarnessCliTranscript(params: {
   sessionFile: string;
   sessionEntry: SessionEntry;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -349,6 +354,7 @@ async function compactNativeHarnessCliTranscript(params: {
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
           workspaceDir: params.workspaceDir,
+          cwd: params.cwd,
           agentDir: params.agentDir,
           config: params.cfg,
           skillsSnapshot: params.skillsSnapshot,
@@ -372,6 +378,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
                   workspaceDir: params.workspaceDir,
+                  cwd: params.cwd,
                   agentDir: params.agentDir,
                   cfg: params.cfg,
                   skillsSnapshot: params.skillsSnapshot,
@@ -427,6 +434,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   storePath?: string;
   sessionAgentId: string;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -445,7 +453,7 @@ export async function runCliTurnCompactionLifecycle(params: {
 
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedAgentSettingsManager({
-    cwd: params.workspaceDir,
+    cwd: params.cwd ?? params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
     contextTokenBudget,
@@ -503,6 +511,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       sessionFile,
       sessionEntry: params.sessionEntry,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       provider: params.provider,
       model: params.model,
@@ -547,6 +556,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       sessionManager,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       provider: params.provider,
       model: params.model,

@@ -4,7 +4,7 @@ import { streamSimple } from "../../llm/stream.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
 import { Agent, type AgentMessage, type ThinkingLevel } from "../runtime/index.js";
-import { AgentSession } from "./agent-session.js";
+import { AgentSession, type AgentSessionWriteLockRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
@@ -84,6 +84,8 @@ export interface CreateAgentSessionOptions {
   settingsManager?: SettingsManager;
   /** Session start event metadata for extension runtime startup. */
   sessionStartEvent?: SessionStartEvent;
+  /** Optional lock used before session-file writes or write-capable extension hooks. */
+  withSessionWriteLock?: AgentSessionWriteLockRunner;
 }
 
 /** Result from createAgentSession */
@@ -337,6 +339,8 @@ export async function createAgentSession(
   };
 
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
+  const runWithSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> =>
+    options.withSessionWriteLock ? await options.withSessionWriteLock(run) : await run();
 
   agent = new Agent({
     initialState: {
@@ -371,7 +375,9 @@ export async function createAgentSession(
       if (!runner?.hasHandlers("before_provider_request")) {
         return payload;
       }
-      return runner.emitBeforeProviderRequest(payload);
+      return await runWithSessionWriteLock(
+        async () => await runner.emitBeforeProviderRequest(payload),
+      );
     },
     onResponse: async (response, model) => {
       void model;
@@ -379,11 +385,14 @@ export async function createAgentSession(
       if (!runner?.hasHandlers("after_provider_response")) {
         return;
       }
-      await runner.emit({
-        type: "after_provider_response",
-        status: response.status,
-        headers: response.headers,
-      });
+      await runWithSessionWriteLock(
+        async () =>
+          await runner.emit({
+            type: "after_provider_response",
+            status: response.status,
+            headers: response.headers,
+          }),
+      );
     },
     sessionId: sessionManager.getSessionId(),
     transformContext: async (messages) => {
@@ -428,6 +437,7 @@ export async function createAgentSession(
     disableBuiltInTools,
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
+    withSessionWriteLock: options.withSessionWriteLock,
   });
   const extensionsResult = resourceLoader.getExtensions();
 

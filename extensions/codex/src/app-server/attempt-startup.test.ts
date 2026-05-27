@@ -69,6 +69,7 @@ function startThreadWithHarness(
     buildAttemptParams: createAttemptParams,
     sessionAgentId: "agent-1",
     effectiveWorkspace: "/tmp",
+    effectiveCwd: "/tmp",
     dynamicTools: [],
     developerInstructions: undefined,
     finalConfigPatch: undefined,
@@ -130,7 +131,7 @@ describe("startCodexAttemptThread", () => {
     vi.unstubAllEnvs();
   });
 
-  it("keeps the shared app-server when thread startup fails with an app error", async () => {
+  it("clears the shared app-server when top-level thread startup fails with an app error", async () => {
     const { harness, run } = startThreadWithHarness(5_000);
     await answerInitialize(harness);
     const threadStart = await waitForThreadStart(harness);
@@ -140,9 +141,6 @@ describe("startCodexAttemptThread", () => {
     });
 
     await expect(run).rejects.toThrow("Invalid bearer token");
-    expect(harness.process.stdin.destroyed).toBe(false);
-
-    clearSharedCodexAppServerClient();
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 

@@ -45,6 +45,7 @@ type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
   | "system-prompt"
+  | "cwd"
   | "mcp"
   | "missing-transcript"
   | "session-expired";
@@ -52,6 +53,7 @@ type RawTranscriptReseedReason =
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
   "missing-transcript",
   "system-prompt",
+  "cwd",
   "mcp",
   "session-expired",
 ]);

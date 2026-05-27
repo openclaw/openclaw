@@ -61,6 +61,7 @@ type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
   createAgentSessionMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
+  defaultResourceLoaderInitMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciDispatcherStreamTimeoutsMock: UnknownMock;
@@ -131,6 +132,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
+  const defaultResourceLoaderInitMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
@@ -199,6 +201,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     spawnSubagentDirectMock,
     createAgentSessionMock,
     sessionManagerOpenMock,
+    defaultResourceLoaderInitMock,
     resolveSandboxContextMock,
     ensureGlobalUndiciEnvProxyDispatcherMock,
     ensureGlobalUndiciDispatcherStreamTimeoutsMock,
@@ -287,6 +290,9 @@ vi.mock("../../../trajectory/metadata.js", () => ({
 vi.mock("../../sessions/index.js", () => {
   function AuthStorage() {}
   class DefaultResourceLoader {
+    constructor(...args: unknown[]) {
+      hoisted.defaultResourceLoaderInitMock(...args);
+    }
     async reload() {}
   }
   function ModelRegistry() {}

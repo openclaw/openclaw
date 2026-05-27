@@ -45,6 +45,27 @@ const MEMORY_SEARCH_RULE: LegacyConfigRule = {
     'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
 };
 
+const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
+  {
+    path: ["memorySearch", "provider"],
+    message:
+      'memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+    match: isLegacyMemorySearchAutoProvider,
+  },
+  {
+    path: ["agents", "defaults", "memorySearch", "provider"],
+    message:
+      'agents.defaults.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+    match: isLegacyMemorySearchAutoProvider,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
+    match: hasAgentListLegacyMemorySearchAutoProvider,
+  },
+];
+
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
   message:
@@ -333,6 +354,31 @@ function migrateLegacyEmbeddedAgentKey(
     );
   }
   delete container.embeddedPi;
+}
+
+function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "auto";
+}
+
+function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) =>
+    isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
+  );
+}
+
+function rewriteLegacyMemorySearchAutoProvider(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!memorySearch || !isLegacyMemorySearchAutoProvider(memorySearch.provider)) {
+    return;
+  }
+  memorySearch.provider = "openai";
+  changes.push(`Moved ${pathLabel}.provider from legacy "auto" to "openai".`);
 }
 
 function migrateLegacySandboxPerSession(
@@ -1243,6 +1289,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
       });
       delete raw.memorySearch;
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch.provider-auto->openai",
+    describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
+    legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      rewriteLegacyMemorySearchAutoProvider(
+        getRecord(getRecord(agents?.defaults)?.memorySearch),
+        "agents.defaults.memorySearch",
+        changes,
+      );
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        rewriteLegacyMemorySearchAutoProvider(
+          getRecord(getRecord(agent)?.memorySearch),
+          `agents.list.${index}.memorySearch`,
+          changes,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

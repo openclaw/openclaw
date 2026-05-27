@@ -18,14 +18,24 @@ import {
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
+type EmbeddedRunnerModelResolution =
+  | ReturnType<typeof createResolvedEmbeddedRunnerModel>
+  | {
+      model?: undefined;
+      error: string;
+      authStorage: { setRuntimeApiKey: () => undefined };
+      modelRegistry: Record<string, never>;
+    };
+
 const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
   return undefined;
 });
 const resolveSessionKeyForRequestMock = vi.fn();
 const resolveStoredSessionKeyForSessionIdMock = vi.fn();
-const resolveModelAsyncMock = vi.fn(async (provider: string, modelId: string) =>
-  createResolvedEmbeddedRunnerModel(provider, modelId),
+const resolveModelAsyncMock = vi.fn(
+  async (provider: string, modelId: string): Promise<EmbeddedRunnerModelResolution> =>
+    createResolvedEmbeddedRunnerModel(provider, modelId),
 );
 const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
@@ -400,20 +410,92 @@ describe("runEmbeddedAgent", () => {
 
     expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
       1,
-      "openai",
-      "mock-1",
-      agentDir,
-      cfg,
-      expect.objectContaining({ skipAgentDiscovery: true }),
-    );
-    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
-      2,
       "openai-codex",
       "mock-1",
       agentDir,
       cfg,
       expect.objectContaining({ skipAgentDiscovery: true }),
     );
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
+    expect(
+      (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
+    ).toBe("openai-codex");
+  });
+
+  it("resolves transport-owned OpenAI Codex runs against the runtime provider first", async () => {
+    const sessionFile = nextSessionFile();
+    const baseConfig = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const openAIProvider = baseConfig.models?.providers?.openai;
+    if (!openAIProvider) {
+      throw new Error("expected OpenAI provider test config");
+    }
+    const cfg = {
+      ...baseConfig,
+      models: {
+        providers: {
+          openai: {
+            ...openAIProvider,
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) => {
+      if (provider === "openai-codex" && modelId === "gpt-5.5") {
+        return createResolvedEmbeddedRunnerModel(provider, modelId);
+      }
+      return {
+        error: `Unknown model: ${provider}/${modelId}`,
+        authStorage: {
+          setRuntimeApiKey: () => undefined,
+        },
+        modelRegistry: {},
+      };
+    });
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "codex-runtime-model",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "gpt-5.5",
+      timeoutMs: 5_000,
+      agentDir,
+      agentHarnessId: "codex",
+      runId: nextRunId("codex-runtime-model"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openai-codex",
+      "gpt-5.5",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipAgentDiscovery: true }),
+    );
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai-codex");

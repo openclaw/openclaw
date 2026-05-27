@@ -1256,6 +1256,40 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("roots memory flush append-only writes in the workspace when cwd differs", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-workspace-"));
+    const taskCwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-cwd-"));
+    const memoryRelativePath = "memory/2026-03-24.md";
+    const workspaceMemoryFile = path.join(workspaceDir, memoryRelativePath);
+    const taskMemoryFile = path.join(taskCwd, memoryRelativePath);
+
+    try {
+      await fs.mkdir(path.dirname(workspaceMemoryFile), { recursive: true });
+      await fs.writeFile(workspaceMemoryFile, "seed", "utf8");
+
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        cwd: taskCwd,
+        trigger: "memory",
+        memoryFlushWritePath: memoryRelativePath,
+      });
+      const writeExecute = requireToolExecute(requireTool(tools, "write"));
+
+      await writeExecute("tool-memory-flush-workspace", {
+        path: memoryRelativePath,
+        content: "new durable note",
+      });
+
+      await expect(fs.readFile(workspaceMemoryFile, "utf8")).resolves.toBe(
+        "seed\nnew durable note",
+      );
+      await expect(fs.stat(taskMemoryFile)).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(taskCwd, { recursive: true, force: true });
+    }
+  });
+
   it("rejects legacy alias parameters", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-alias-"));
     try {

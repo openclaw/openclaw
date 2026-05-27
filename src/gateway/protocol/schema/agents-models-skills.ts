@@ -593,11 +593,21 @@ export const ToolsEffectiveGroupSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ToolsEffectiveNoticeSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
+    message: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
 export const ToolsEffectiveResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
     profile: NonEmptyString,
     groups: Type.Array(ToolsEffectiveGroupSchema),
+    notices: Type.Optional(Type.Array(ToolsEffectiveNoticeSchema)),
   },
   { additionalProperties: false },
 );

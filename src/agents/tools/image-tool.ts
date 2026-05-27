@@ -18,7 +18,11 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../../media/web-media.js";
+import type {
+  ImageCompressionModelPolicy,
+  ImageCompressionPolicy,
+  WebMediaResult,
+} from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -76,10 +80,23 @@ import {
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
-type ImageWebMediaRuntime = Pick<
-  typeof import("../../media/web-media.js"),
-  "loadWebMedia" | "optimizeImageBufferForWebMedia"
->;
+type ImageToolLoadWebMediaOptions = {
+  maxBytes?: number;
+  sandboxValidated?: boolean;
+  readFile?: (filePath: string) => Promise<Buffer>;
+  imageCompression?: ImageCompressionPolicy;
+  localRoots?: readonly string[] | "any";
+  inboundRoots?: readonly string[];
+  ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
+};
+
+type ImageWebMediaRuntime = {
+  loadWebMedia: (
+    mediaUrl: string,
+    options?: ImageToolLoadWebMediaOptions,
+  ) => Promise<WebMediaResult>;
+  optimizeImageBufferForWebMedia: (typeof import("../../media/web-media.js"))["optimizeImageBufferForWebMedia"];
+};
 
 async function loadImageWebMediaRuntime(): Promise<ImageWebMediaRuntime> {
   return await import("../../media/web-media.js");

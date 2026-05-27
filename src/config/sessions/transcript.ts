@@ -30,12 +30,13 @@ import type { SessionEntry } from "./types.js";
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  cwd?: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  const header = createSessionTranscriptHeader({ sessionId: params.sessionId });
+  const header = createSessionTranscriptHeader({ sessionId: params.sessionId, cwd: params.cwd });
   await writeJsonlEntry(params.sessionFile, header, { mode: 0o600 });
 }
 
@@ -319,7 +320,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       } = await runWithOwnedSessionTranscriptWritePublication(
         { sessionFile, sessionKey: resolved.normalizedKey },
         async () => {
-          await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+          await ensureSessionHeader({
+            sessionFile,
+            sessionId: entry.sessionId,
+            cwd: entry.spawnedCwd,
+          });
           return await appendSessionTranscriptMessage({
             transcriptPath: sessionFile,
             message,

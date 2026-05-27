@@ -209,10 +209,11 @@ export function clampWithDefault(
 
 export function readEnvInt(key: string, legacyKey?: string) {
   const raw = process.env[key] || (legacyKey ? process.env[legacyKey] : undefined);
-  if (!raw) {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^[+-]?\d+$/.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

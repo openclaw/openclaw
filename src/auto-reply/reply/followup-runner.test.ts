@@ -583,12 +583,14 @@ describe("createFollowupRunner reply-lane admission", () => {
         run: {
           provider: "anthropic",
           model: "claude",
+          cwd: "/tmp/task-repo",
         },
       }),
     );
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
     const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.cwd).toBe("/tmp/task-repo");
     const recorder = requireRecord(call.userTurnTranscriptRecorder, "embedded user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });
@@ -850,6 +852,7 @@ describe("createFollowupRunner runtime config", () => {
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          cwd: "/tmp/task-repo",
         },
       }),
     );
@@ -867,6 +870,7 @@ describe("createFollowupRunner runtime config", () => {
       sessionKey: "main",
       agentId: "agent",
       workspaceDir: "/tmp",
+      cwd: "/tmp/task-repo",
       config: runtimeConfig,
       suppressNextUserMessagePersistence: false,
     });

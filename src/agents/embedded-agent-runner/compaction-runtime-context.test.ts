@@ -23,6 +23,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       currentMessageId: "msg-42",
       authProfileId: "openai:p1",
       workspaceDir: "/tmp/workspace",
+      cwd: "/tmp/task-repo",
       agentDir: "/tmp/agent",
       config: {} as OpenClawConfig,
       senderIsOwner: true,
@@ -43,6 +44,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.currentMessageId).toBe("msg-42");
     expect(result.authProfileId).toBe("openai:p1");
     expect(result.workspaceDir).toBe("/tmp/workspace");
+    expect(result.cwd).toBe("/tmp/task-repo");
     expect(result.agentDir).toBe("/tmp/agent");
     expect(result.senderIsOwner).toBe(true);
     expect(result.senderId).toBe("user-123");
