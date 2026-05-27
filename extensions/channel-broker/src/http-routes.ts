@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   buildBrokerInboundDedupeKey,
   normalizeBrokerPlatformId,
@@ -135,9 +135,6 @@ function hasExplicitSenderAllowance(params: {
   event: BrokerInboundEventV1;
 }): boolean {
   const allowed = params.account.allowFrom.map((value) => String(value).trim()).filter(Boolean);
-  if (allowed.some((entry) => parseAccessGroupAllowFromEntry(entry) !== null)) {
-    return true;
-  }
   const normalizedAllowed = new Set([
     ...allowed.filter((entry) => entry !== "*"),
     ...allowed
@@ -228,6 +225,32 @@ function inboundReceiveStatusCode(result: Awaited<ReturnType<typeof receiveBroke
   return unreachableStatus;
 }
 
+function verifySignedInboundBodyOrReject(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  body: string;
+  account: ResolvedChannelBrokerAccount;
+}): "ok" | true {
+  if (!params.account.signingSecret) {
+    return sendJson(params.res, 401, { ok: false, error: "missing_signing_secret" });
+  }
+  const signatureTimestamp = parseSignatureTimestamp(getHeader(params.req, TIMESTAMP_HEADER));
+  if (signatureTimestamp === null) {
+    return sendJson(params.res, 401, { ok: false, error: "invalid_signature_timestamp" });
+  }
+  if (
+    !verifySignature({
+      body: params.body,
+      secret: params.account.signingSecret,
+      signature: getHeader(params.req, SIGNATURE_HEADER) ?? "",
+      timestamp: signatureTimestamp,
+    })
+  ) {
+    return sendJson(params.res, 401, { ok: false, error: "invalid_signature" });
+  }
+  return "ok";
+}
+
 export async function handleChannelBrokerInboundHttpRequest(params: {
   cfg: CoreConfig;
   req: IncomingMessage;
@@ -271,6 +294,24 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
       return true;
     }
 
+    let account = providerIdHint
+      ? resolveChannelBrokerAccount({ cfg: params.cfg, accountId: providerIdHint })
+      : undefined;
+    if (account && (!account.enabled || !account.configured)) {
+      return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
+    }
+    if (account) {
+      const signatureResult = verifySignedInboundBodyOrReject({
+        req: params.req,
+        res: params.res,
+        body: body.value,
+        account,
+      });
+      if (signatureResult !== "ok") {
+        return signatureResult;
+      }
+    }
+
     let parsedBody: unknown;
     try {
       parsedBody = JSON.parse(body.value);
@@ -302,26 +343,20 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     if (!isListedChannelBrokerProviderId(params.cfg, providerId)) {
       return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
     }
-    const account = resolveChannelBrokerAccount({ cfg: params.cfg, accountId: providerId });
+    account ??= resolveChannelBrokerAccount({ cfg: params.cfg, accountId: providerId });
     if (!account.enabled || !account.configured) {
       return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
     }
-    if (!account.signingSecret) {
-      return sendJson(params.res, 401, { ok: false, error: "missing_signing_secret" });
-    }
-    const signatureTimestamp = parseSignatureTimestamp(getHeader(params.req, TIMESTAMP_HEADER));
-    if (signatureTimestamp === null) {
-      return sendJson(params.res, 401, { ok: false, error: "invalid_signature_timestamp" });
-    }
-    if (
-      !verifySignature({
+    if (!providerIdHint) {
+      const signatureResult = verifySignedInboundBodyOrReject({
+        req: params.req,
+        res: params.res,
         body: body.value,
-        secret: account.signingSecret,
-        signature: getHeader(params.req, SIGNATURE_HEADER) ?? "",
-        timestamp: signatureTimestamp,
-      })
-    ) {
-      return sendJson(params.res, 401, { ok: false, error: "invalid_signature" });
+        account,
+      });
+      if (signatureResult !== "ok") {
+        return signatureResult;
+      }
     }
     releaseRequestLifecycle();
 

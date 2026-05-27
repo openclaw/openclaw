@@ -1840,6 +1840,27 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it("rejects provider-header signature failures before parsing the broker body", async () => {
+    const body = '{"providerId":"acme",';
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({
+        body,
+        providerIdHeader: "acme",
+        signature: sign(body, "wrong-secret"),
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "invalid_signature" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("rejects stale inbound signatures before runtime dispatch", async () => {
     const body = inboundBody();
     const receiveInboundEvent = vi.fn();
@@ -2053,26 +2074,29 @@ describe("channel-broker HTTP routes", () => {
   it.each([
     ["missing", { providerId: undefined }],
     ["malformed", { providerId: "!!!" }],
-  ])("rejects %s payload provider ids when a provider header is present", async (_name, override) => {
-    const body = inboundBody("user-1", override);
-    const receiveInboundEvent = vi.fn();
-    setChannelBrokerRuntime({ receiveInboundEvent });
-    const res = createResponse();
+  ])(
+    "rejects %s payload provider ids when a provider header is present",
+    async (_name, override) => {
+      const body = inboundBody("user-1", override);
+      const receiveInboundEvent = vi.fn();
+      setChannelBrokerRuntime({ receiveInboundEvent });
+      const res = createResponse();
 
-    await handleChannelBrokerInboundHttpRequest({
-      cfg: brokerConfig(),
-      req: createRequest({
-        body,
-        providerIdHeader: "acme",
-        signature: sign(body, "broker-secret"),
-      }),
-      res,
-    });
+      await handleChannelBrokerInboundHttpRequest({
+        cfg: brokerConfig(),
+        req: createRequest({
+          body,
+          providerIdHeader: "acme",
+          signature: sign(body, "broker-secret"),
+        }),
+        res,
+      });
 
-    expect(res.statusCode).toBe(400);
-    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "provider_id_mismatch" });
-    expect(receiveInboundEvent).not.toHaveBeenCalled();
-  });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "provider_id_mismatch" });
+      expect(receiveInboundEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it("matches provider headers and payload ids after account normalization", async () => {
     const body = inboundBody("user-1", { providerId: "ACME" });
@@ -2186,6 +2210,34 @@ describe("channel-broker HTTP routes", () => {
 
     await handleChannelBrokerInboundHttpRequest({
       cfg: brokerConfig("broker-secret", { allowFrom: ["*"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true, status: "ignored", reason: "bot_sender" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps wildcard bot suppression when unrelated access groups are configured", async () => {
+    const body = inboundBody("integration-bot", {
+      sender: { id: "integration-bot", handle: "acme-bot", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const config = {
+      ...brokerConfig("broker-secret", { allowFrom: ["*", "accessGroup:humans"] }),
+      accessGroups: {
+        humans: {
+          type: "message.senders" as const,
+          members: { "channel-broker": ["telegram:user-1"] },
+        },
+      },
+    };
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res,
     });
