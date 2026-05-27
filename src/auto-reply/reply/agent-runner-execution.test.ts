@@ -5271,34 +5271,12 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("points stale openai-codex missing-key failures at doctor repair with re-auth fallback", async () => {
-    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error('No API key found for provider "openai-codex".'),
     );
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
