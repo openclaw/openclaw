@@ -241,6 +241,18 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/bundled-plugin-load-paths.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-bundled-provider-discovery-allowlist",
+    owner: "plugin",
+    introduced: "2026-04-25",
+    source: "plugins.allow configs created before bundled provider discovery was explicit",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.providers.ts",
+    replacement: "plugins.bundledDiscovery allowlist mode plus explicit plugin/provider entries",
+    docsPath: "/cli/plugins#registry",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "Doctor preserves the shipped upgrade path only; runtime compatibility should stay behind explicit bundledDiscovery config.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-web-search-plugin-config",
     owner: "provider",
     introduced: "2026-04-26",
