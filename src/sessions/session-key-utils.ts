@@ -47,7 +47,7 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   // #82853 — Signal group IDs (opaque). Encoded to match prior behavior exactly.
   { channel: "signal", peerKinds: new Set(["group"]), span: "segment", unscoped: true },
   // #75670 — Matrix room IDs (opaque, embedded `:server`) plus thread event suffix.
-  { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: false },
+  { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
@@ -118,24 +118,37 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
           spans.push({ start: segStart, end: segStart + segment.length, trim: true });
         }
       } else {
-        // Tail: anchored to the real agent-scoped head; preserve through key end.
-        const re = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
-        const match = re.exec(raw);
-        if (match && match[0].length < raw.length) {
+        const collectTailSpan = (tailStart: number): void => {
+          if (tailStart >= raw.length) {
+            return;
+          }
           // Preserve Matrix room/event IDs, but keep structural thread marker
           // casing canonical so `:Thread:` cannot fork a session key.
-          const tailStart = match[0].length;
           const tail = raw.slice(tailStart);
           const threadMarker = ":thread:";
           const markerIndex = normalizeLowercaseStringOrEmpty(tail).lastIndexOf(threadMarker);
           if (markerIndex === -1) {
             spans.push({ start: tailStart, end: raw.length, trim: false });
-            continue;
+            return;
           }
           spans.push({ start: tailStart, end: tailStart + markerIndex, trim: false });
           const threadIdStart = tailStart + markerIndex + threadMarker.length;
           if (threadIdStart < raw.length) {
             spans.push({ start: threadIdStart, end: raw.length, trim: false });
+          }
+        };
+        // Tail: anchored to the real agent-scoped head; preserve through key end.
+        const scopedRe = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
+        const scopedMatch = scopedRe.exec(raw);
+        if (scopedMatch) {
+          collectTailSpan(scopedMatch[0].length);
+          continue;
+        }
+        if (descriptor.unscoped) {
+          const unscopedRe = new RegExp(`^${channel}:${kind}:`, "i");
+          const unscopedMatch = unscopedRe.exec(raw);
+          if (unscopedMatch) {
+            collectTailSpan(unscopedMatch[0].length);
           }
         }
       }

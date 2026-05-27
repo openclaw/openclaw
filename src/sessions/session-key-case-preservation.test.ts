@@ -138,6 +138,15 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     );
   });
 
+  it("preserves unscoped Matrix room and thread ids before agent scoping", () => {
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(`Matrix:Channel:${ROOM_A}`)).toBe(
+      `matrix:channel:${ROOM_A}`,
+    );
+    expect(
+      normalizeSessionKeyPreservingOpaquePeerIds(`Matrix:Channel:${ROOM_A}:Thread:${EVENT}`),
+    ).toBe(`matrix:channel:${ROOM_A}:thread:${EVENT}`);
+  });
+
   it("lowercases Matrix DM (direct) keys — out of scope by decision", () => {
     expect(
       normalizeSessionKeyPreservingOpaquePeerIds("agent:main:matrix:direct:@Bob:Example.Org"),
