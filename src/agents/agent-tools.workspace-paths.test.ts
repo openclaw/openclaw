@@ -118,6 +118,62 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("reads managed inbound media URIs from custom workspaces when workspaceOnly is enabled", async () => {
+    await withTempDir("openclaw-managed-media-", async (rootDir) => {
+      const stateDir = path.join(rootDir, "state");
+      const workspaceDir = path.join(rootDir, "workspace-regi");
+      const inboundDir = path.join(stateDir, "media", "inbound");
+      const inboundId = "telegram-note.txt";
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(inboundDir, { recursive: true });
+      await fs.writeFile(path.join(inboundDir, inboundId), "managed inbound read ok", "utf8");
+
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+        const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+        const { readTool } = expectReadWriteEditTools(tools);
+
+        const result = await readTool.execute("ws-read-managed-media", {
+          path: `media://inbound/${inboundId}`,
+        });
+
+        expect(getTextContent(result)).toContain("managed inbound read ok");
+        await expect(
+          fs.access(path.join(workspaceDir, "media:", "inbound", inboundId)),
+        ).rejects.toThrow();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
+  it("reads managed inbound media URIs from custom workspaces without workspaceOnly", async () => {
+    await withTempDir("openclaw-managed-media-", async (rootDir) => {
+      const stateDir = path.join(rootDir, "state");
+      const workspaceDir = path.join(rootDir, "workspace-regi");
+      const inboundDir = path.join(stateDir, "media", "inbound");
+      const inboundId = "telegram-note.txt";
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(inboundDir, { recursive: true });
+      await fs.writeFile(path.join(inboundDir, inboundId), "managed inbound read ok", "utf8");
+
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      try {
+        const tools = createOpenClawCodingTools({ workspaceDir });
+        const { readTool } = expectReadWriteEditTools(tools);
+
+        const result = await readTool.execute("ws-read-managed-media-no-guard", {
+          path: `media://inbound/${inboundId}`,
+        });
+
+        expect(getTextContent(result)).toContain("managed inbound read ok");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   it("allows deletion edits with empty newText", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
