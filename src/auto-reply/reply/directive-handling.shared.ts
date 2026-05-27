@@ -27,14 +27,12 @@ function canPersistInternalDirective(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
-  commandAuthorized?: boolean;
-  senderIsOwner?: boolean;
 }): boolean {
   if (params.gatewayClientScopes === undefined) {
     const hasChannelContext =
       normalizeOptionalString(params.messageProvider) !== undefined ||
       normalizeOptionalString(params.surface) !== undefined;
-    return !hasChannelContext || params.commandAuthorized === true || params.senderIsOwner === true;
+    return !hasChannelContext;
   }
   return params.gatewayClientScopes.includes("operator.admin");
 }

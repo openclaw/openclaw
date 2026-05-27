@@ -43,7 +43,6 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   workspaceDir?: string;
   surface?: string;
   gatewayClientScopes?: string[];
-  commandAuthorized?: boolean;
   senderIsOwner?: boolean;
 };
 
