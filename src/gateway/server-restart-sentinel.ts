@@ -255,46 +255,27 @@ async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
 }) {
-  const { cfg, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
-    enqueueSystemEvent(params.entry.text, {
+    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
+    return;
+  }
+
+  if (hasTerminalSessionLifecycle(entry)) {
+    log.warn("restart continuation skipped: session is terminal", {
       sessionKey: canonicalKey,
-      ...(queuedDeliveryContext
-        ? {
-            deliveryContext: {
-              ...queuedDeliveryContext,
-            },
-          }
-        : {}),
+      queueId: params.entry.id,
+      status: entry?.status ?? null,
+      endedAt: entry?.endedAt ?? null,
     });
-    requestHeartbeat({
-      source: "restart-sentinel",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: canonicalKey,
-    });
+    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
 
   if (!params.entry.route) {
-    enqueueSystemEvent(params.entry.message, {
-      sessionKey: canonicalKey,
-      ...(queuedDeliveryContext
-        ? {
-            deliveryContext: {
-              ...queuedDeliveryContext,
-            },
-          }
-        : {}),
-    });
-    requestHeartbeat({
-      source: "restart-sentinel",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: canonicalKey,
-    });
+    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
 
@@ -610,7 +591,9 @@ async function loadRestartSentinelStartupTask(params: {
       }
     }
 
-    if (payload.continuation && !terminalSessionEntry) {
+    const terminalAgentTurnContinuation =
+      payload.continuation?.kind === "agentTurn" && terminalSessionEntry;
+    if (payload.continuation && !terminalAgentTurnContinuation) {
       continuationRoute = resolveRestartContinuationRoute({
         channel: channel ?? undefined,
         to: resolvedTo,
@@ -636,10 +619,10 @@ async function loadRestartSentinelStartupTask(params: {
               : wakeDeliveryContext,
         }),
       );
-    } else if (payload.continuation) {
+    } else if (terminalAgentTurnContinuation) {
       log.warn(`${summary}: continuation skipped: session is terminal`, {
         sessionKey: canonicalKey,
-        continuationKind: payload.continuation.kind,
+        continuationKind: "agentTurn",
         status: entry?.status ?? null,
         endedAt: entry?.endedAt ?? null,
       });
