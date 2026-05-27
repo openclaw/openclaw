@@ -134,7 +134,7 @@ jobs:
 
       - name: Setup pnpm and dependencies (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         env:
           CI: "true"
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"

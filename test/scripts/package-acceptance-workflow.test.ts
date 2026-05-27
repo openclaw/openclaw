@@ -135,7 +135,7 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
     expect(hydrateWindowsPnpm.if).toBe("runner.os == 'Windows'");
-    expect(hydrateWindowsPnpm.shell).toBe("pwsh");
+    expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
       '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
     );
