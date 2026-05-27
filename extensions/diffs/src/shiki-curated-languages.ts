@@ -43,7 +43,7 @@ export const bundledLanguagesInfo = [
   { id: "java", name: "Java", import: java },
   { id: "c", name: "C", import: c },
   { id: "cpp", name: "C++", aliases: ["c++"], import: cpp },
-  { id: "csharp", name: "C#", aliases: ["cs"], import: csharp },
+  { id: "csharp", name: "C#", aliases: ["c#", "cs"], import: csharp },
   { id: "php", name: "PHP", import: php },
   { id: "sql", name: "SQL", import: sql },
   { id: "docker", name: "Docker", aliases: ["dockerfile"], import: docker },
