@@ -538,4 +538,24 @@ describe("channel-streaming", () => {
     expect(isChannelProgressDraftWorkToolName("web_search")).toBe(true);
     expect(isChannelProgressDraftWorkToolName("exec")).toBe(true);
   });
+
+  it("resets started flag when onStart rejects so the gate can be retried", async () => {
+    let callCount = 0;
+    const onStart = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        throw new Error("transient start failure");
+      }
+    });
+    const gate = createChannelProgressDraftGate({ onStart });
+
+    // First startNow call — onStart rejects; started must be reset to false
+    await expect(gate.startNow()).rejects.toThrow("transient start failure");
+    expect(gate.hasStarted).toBe(false);
+
+    // Second startNow call — onStart succeeds; started must be true
+    await gate.startNow();
+    expect(gate.hasStarted).toBe(true);
+    expect(onStart).toHaveBeenCalledTimes(2);
+  });
 });
