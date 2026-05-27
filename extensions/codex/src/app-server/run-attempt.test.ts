@@ -27,6 +27,7 @@ import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import * as authBridge from "./auth-bridge.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
+import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
@@ -3498,7 +3499,10 @@ describe("runCodexAppServerAttempt", () => {
       const c = {
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("401 authentication_error: Invalid bearer token");
+            throw new CodexAppServerRpcError(
+              { message: "401 authentication_error: Invalid bearer token" },
+              "thread/start",
+            );
           }
           return {};
         }),
@@ -3553,6 +3557,36 @@ describe("runCodexAppServerAttempt", () => {
     clearSpy.mockRestore();
   });
 
+  it("retires the shared Codex client when a spawned helper hits a thread/start write failure", async () => {
+    const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
+    clearSpy.mockClear();
+    let failedClient: unknown;
+    setCodexAppServerClientFactoryForTest(async () => {
+      const c = {
+        request: vi.fn(async (method: string) => {
+          if (method === "thread/start") {
+            throw new Error("write EPIPE");
+          }
+          return {};
+        }),
+        addNotificationHandler: vi.fn(() => () => undefined),
+        addRequestHandler: vi.fn(() => () => undefined),
+      };
+      failedClient = c;
+      return c as never;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.spawnedBy = "agent:main:session-parent";
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("write EPIPE");
+    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === failedClient);
+    expect(calledWithFailedClient).toBe(true);
+    clearSpy.mockRestore();
+  });
+
   it("retires the shared Codex client when a top-level run fails with a logical thread/start error", async () => {
     const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
     clearSpy.mockClear();
@@ -3561,7 +3595,10 @@ describe("runCodexAppServerAttempt", () => {
       const c = {
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("401 authentication_error: Invalid bearer token");
+            throw new CodexAppServerRpcError(
+              { message: "401 authentication_error: Invalid bearer token" },
+              "thread/start",
+            );
           }
           return {};
         }),

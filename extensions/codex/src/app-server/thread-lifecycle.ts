@@ -8,7 +8,11 @@ import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/c
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -564,10 +568,10 @@ export async function startOrResumeThread(params: {
     try {
       return await params.client.request("thread/start", startParams);
     } catch (error) {
-      if (isCodexAppServerConnectionClosedError(error)) {
-        throw error;
+      if (error instanceof CodexAppServerRpcError) {
+        throw new CodexThreadStartRequestError(error);
       }
-      throw new CodexThreadStartRequestError(error);
+      throw error;
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
