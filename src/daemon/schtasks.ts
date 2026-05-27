@@ -11,7 +11,11 @@ import { uniqueStrings } from "../shared/string-normalization.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
-import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import {
+  NODE_SERVICE_KIND,
+  resolveGatewayServiceDescription,
+  resolveGatewayWindowsTaskName,
+} from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
@@ -245,6 +249,11 @@ const UNKNOWN_STATUS_DETAIL =
 const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
+type WindowsProcessSnapshotEntry = {
+  ProcessId?: number;
+  CommandLine?: string | null;
+};
+
 function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
@@ -429,6 +438,90 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
   return null;
 }
 
+function isNodeHostArgv(programArguments: string[]): boolean {
+  const normalized = programArguments.map((arg) =>
+    normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/")),
+  );
+  return normalized.some((arg, index) => arg === "node" && normalized[index + 1] === "run");
+}
+
+function normalizeProgramArguments(programArguments: string[]): string[] {
+  return programArguments.map((arg) => normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/")));
+}
+
+function matchesInstalledProgramArguments(
+  actualArguments: string[],
+  installedArguments: string[],
+): boolean {
+  const actual = normalizeProgramArguments(actualArguments);
+  const installed = normalizeProgramArguments(installedArguments);
+  return (
+    actual.length === installed.length && actual.every((arg, index) => arg === installed[index])
+  );
+}
+
+function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null {
+  const pid = entry.ProcessId;
+  return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function findNodeHostProcessPid(
+  entries: WindowsProcessSnapshotEntry[],
+  port: number,
+  installedArguments: string[],
+): number | null {
+  for (const entry of entries) {
+    const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
+    if (!commandLine) {
+      continue;
+    }
+    const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+    if (
+      !isNodeHostArgv(argv) ||
+      parsePortFromProgramArguments(argv) !== port ||
+      !matchesInstalledProgramArguments(argv, installedArguments)
+    ) {
+      continue;
+    }
+    const pid = getSnapshotProcessId(entry);
+    if (pid) {
+      return pid;
+    }
+  }
+  return null;
+}
+
+async function resolveScheduledTaskNodeHostProcess(env: GatewayServiceEnv): Promise<{
+  pid: number;
+  port: number;
+} | null> {
+  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const installedArguments = command?.programArguments;
+  if (!installedArguments?.length) {
+    return null;
+  }
+  const port =
+    parsePortFromProgramArguments(installedArguments) ??
+    parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
+    resolveConfiguredGatewayPort(env);
+  if (!port) {
+    return null;
+  }
+  const snapshot = readWindowsProcessSnapshot();
+  if (!snapshot) {
+    return null;
+  }
+  const pid = findNodeHostProcessPid(snapshot, port, installedArguments);
+  if (!pid) {
+    return null;
+  }
+  return { pid, port };
+}
+
+function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
+  return normalizeLowercaseStringOrEmpty(env.OPENCLAW_SERVICE_KIND) !== NODE_SERVICE_KIND;
+}
+
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   return (
@@ -479,6 +572,17 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
 async function resolveListenerBackedScheduledTaskRuntime(
   env: GatewayServiceEnv,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
+  if (!shouldManageGatewayListenerPort(env)) {
+    const matched = await resolveScheduledTaskNodeHostProcess(env);
+    if (!matched) {
+      return null;
+    }
+    return {
+      status: "running",
+      pid: matched.pid,
+      detail: `Node host process detected for gateway port ${matched.port}.`,
+    };
+  }
   const port = await resolveScheduledTaskPort(env);
   if (!port) {
     return null;
@@ -494,7 +598,19 @@ async function resolveListenerBackedScheduledTaskRuntime(
   };
 }
 
+async function terminateScheduledTaskNodeHost(env: GatewayServiceEnv): Promise<number[]> {
+  const matched = await resolveScheduledTaskNodeHostProcess(env);
+  if (!matched) {
+    return [];
+  }
+  await terminateGatewayProcessTree(matched.pid, 300);
+  return [matched.pid];
+}
+
 async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): Promise<number[]> {
+  if (!shouldManageGatewayListenerPort(env)) {
+    return [];
+  }
   const port = await resolveScheduledTaskPort(env);
   if (!port) {
     return [];
@@ -578,7 +694,76 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
   return pids;
 }
 
+function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+
+  const processSnapshot = spawnSync(
+    "powershell",
+    [
+      "-NoProfile",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    {
+      encoding: "utf8",
+      timeout: 1_500,
+      windowsHide: true,
+    },
+  );
+  if (processSnapshot.error || processSnapshot.status !== 0) {
+    return null;
+  }
+
+  let parsedSnapshot: unknown;
+  try {
+    parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
+  } catch {
+    return null;
+  }
+
+  return (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
+    (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
+  );
+}
+
 async function resolveFallbackRuntime(env: GatewayServiceEnv): Promise<GatewayServiceRuntime> {
+  if (!shouldManageGatewayListenerPort(env)) {
+    const command = await readScheduledTaskCommand(env).catch(() => null);
+    const installedArguments = command?.programArguments;
+    const port =
+      parsePortFromProgramArguments(installedArguments) ??
+      parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
+      resolveConfiguredGatewayPort(env);
+    if (!port) {
+      return {
+        status: "unknown",
+        detail: "Startup-folder login item installed; node gateway port unknown.",
+      };
+    }
+    const snapshot = readWindowsProcessSnapshot();
+    if (!snapshot) {
+      return {
+        status: "unknown",
+        detail: `Startup-folder login item installed; could not inspect node host process for gateway port ${port}.`,
+      };
+    }
+    const pid = installedArguments?.length
+      ? findNodeHostProcessPid(snapshot, port, installedArguments)
+      : null;
+    if (pid) {
+      return {
+        status: "running",
+        pid,
+        detail: `Startup-folder login item installed; node host process detected for gateway port ${port}.`,
+      };
+    }
+    return {
+      status: "stopped",
+      detail: `Startup-folder login item installed; no node host process detected for gateway port ${port}.`,
+    };
+  }
   const port = (await resolveScheduledTaskPort(env)) ?? resolveConfiguredGatewayPort(env);
   if (!port) {
     return {
@@ -753,16 +938,18 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
-    const port = await resolveScheduledTaskPort(params.env);
-    if (port) {
-      const listenerPids = await resolveScheduledTaskGatewayListenerPids(port);
+    const command = await readScheduledTaskCommand(params.env).catch(() => null);
+    const installedArguments = command?.programArguments;
+    const taskPort =
+      parsePortFromProgramArguments(installedArguments) ??
+      parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
+      resolveConfiguredGatewayPort(params.env);
+    const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
+    if (manageGatewayPort && taskPort) {
+      const listenerPids = await resolveScheduledTaskGatewayListenerPids(taskPort);
       if (listenerPids.length > 0) {
         return true;
       }
-    }
-
-    if (process.platform !== "win32") {
-      return false;
     }
 
     const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
@@ -772,38 +959,10 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return false;
     }
 
-    const processSnapshot = spawnSync(
-      "powershell",
-      [
-        "-NoProfile",
-        "-Command",
-        "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-      ],
-      {
-        encoding: "utf8",
-        timeout: 1_500,
-        windowsHide: true,
-      },
-    );
-    if (processSnapshot.error || processSnapshot.status !== 0) {
+    const entries = readWindowsProcessSnapshot();
+    if (!entries) {
       return false;
     }
-
-    type WindowsProcessSnapshotEntry = {
-      ProcessId?: number;
-      CommandLine?: string | null;
-    };
-
-    let parsedSnapshot: unknown;
-    try {
-      parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
-    } catch {
-      return false;
-    }
-
-    const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
-      (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
-    );
     const matchingTaskScriptProcess = entries.some((entry) =>
       normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
         .replaceAll("/", "\\")
@@ -813,8 +972,14 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return true;
     }
 
-    if (!port) {
+    if (!taskPort) {
       return false;
+    }
+
+    if (!manageGatewayPort) {
+      return installedArguments?.length
+        ? findNodeHostProcessPid(entries, taskPort, installedArguments) != null
+        : false;
     }
 
     return entries.some((entry) => {
@@ -823,10 +988,10 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         return false;
       }
       const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
-      if (!isGatewayArgv(argv, { allowGatewayBinary: true })) {
-        return false;
-      }
-      return parsePortFromProgramArguments(argv) === port;
+      return (
+        isGatewayArgv(argv, { allowGatewayBinary: true }) &&
+        parsePortFromProgramArguments(argv) === taskPort
+      );
     });
   };
 
@@ -1022,8 +1187,13 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
   }
-  const stopPort = await resolveScheduledTaskPort(effectiveEnv);
-  await terminateScheduledTaskGatewayListeners(effectiveEnv);
+  const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
+  const stopPort = manageGatewayPort ? await resolveScheduledTaskPort(effectiveEnv) : null;
+  if (manageGatewayPort) {
+    await terminateScheduledTaskGatewayListeners(effectiveEnv);
+  } else {
+    await terminateScheduledTaskNodeHost(effectiveEnv);
+  }
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (stopPort) {
     const released = await waitForGatewayPortRelease(stopPort);
@@ -1058,8 +1228,13 @@ export async function restartScheduledTask({
   }
   const taskName = resolveTaskName(effectiveEnv);
   await execSchtasks(["/End", "/TN", taskName]);
-  const restartPort = await resolveScheduledTaskPort(effectiveEnv);
-  await terminateScheduledTaskGatewayListeners(effectiveEnv);
+  const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
+  const restartPort = manageGatewayPort ? await resolveScheduledTaskPort(effectiveEnv) : null;
+  if (manageGatewayPort) {
+    await terminateScheduledTaskGatewayListeners(effectiveEnv);
+  } else {
+    await terminateScheduledTaskNodeHost(effectiveEnv);
+  }
   await terminateInstalledStartupRuntime(effectiveEnv);
   if (restartPort) {
     const released = await waitForGatewayPortRelease(restartPort);

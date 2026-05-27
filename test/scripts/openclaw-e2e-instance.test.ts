@@ -322,6 +322,52 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+  it("bounds HTTP readiness probes when a server accepts connections but never responds", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-http-probe-"));
+    try {
+      const portPath = path.join(tempDir, "port.txt");
+      const serverPath = path.join(tempDir, "stalling-server.cjs");
+      fs.writeFileSync(
+        serverPath,
+        [
+          "const fs = require('node:fs');",
+          "const net = require('node:net');",
+          "const server = net.createServer((socket) => socket.on('data', () => {}));",
+          "server.listen(0, '127.0.0.1', () => {",
+          "  fs.writeFileSync(process.argv[2], String(server.address().port));",
+          "});",
+          "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+          "",
+        ].join("\n"),
+      );
+
+      const startedAt = Date.now();
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `${shellQuote(process.execPath)} ${shellQuote(serverPath)} ${shellQuote(portPath)} & server_pid=$!`,
+            'trap \'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true\' EXIT',
+            `for _ in $(seq 1 50); do [ -s ${shellQuote(portPath)} ] && break; sleep 0.02; done`,
+            `port="$(cat ${shellQuote(portPath)})"`,
+            `source ${shellQuote(helperPath)}`,
+            'openclaw_e2e_probe_http_status "http://127.0.0.1:${port}/health" 200 100',
+          ].join("; "),
+        ],
+        { encoding: "utf8", timeout: 3_000 },
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(elapsedMs).toBeLessThan(2_500);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("wraps logged OpenClaw E2E commands with the configured timeout", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-run-logged-"));
     const logLabel = path.basename(tempDir);

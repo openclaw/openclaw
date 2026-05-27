@@ -6466,7 +6466,7 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(
       assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt + 2_000),
     );
-    const harness = createStartedThreadHarness();
+    const harness = createResumeHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "is the previous message trustworthy?";
 
@@ -8491,8 +8491,12 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueActiveRunMessageForTest("session-1", "first", { steeringMode: "all" })).toBe(true);
-    expect(queueActiveRunMessageForTest("session-1", "second", { steeringMode: "all" })).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session-1", "first", { debounceMs: 5, steeringMode: "all" }),
+    ).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session-1", "second", { debounceMs: 5, steeringMode: "all" }),
+    ).toBe(true);
 
     await vi.waitFor(
       () =>
