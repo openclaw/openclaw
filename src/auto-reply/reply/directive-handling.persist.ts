@@ -122,9 +122,13 @@ export async function persistInlineDirectives(params: {
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const thinkingCatalog =
