@@ -93,6 +93,8 @@ The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams Ap
       appId: "<CLIENT_ID>",
       appPassword: "<CLIENT_SECRET>",
       tenantId: "<TENANT_ID>",
+      // Optional: customer tenant for Graph/RSC calls when different from the bot tenant.
+      // graphTenantId: "<CUSTOMER_TENANT_ID>",
       webhook: { port: 3978, path: "/api/messages" },
     },
   },
@@ -272,6 +274,8 @@ Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single 
       appId: "<APP_ID>",
       appPassword: "<APP_PASSWORD>",
       tenantId: "<TENANT_ID>",
+      // Optional: customer tenant for Graph/RSC calls when different from the bot tenant.
+      // graphTenantId: "<CUSTOMER_TENANT_ID>",
       webhook: { port: 3978, path: "/api/messages" },
     },
   },
@@ -680,6 +684,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
+- `channels.msteams.graphTenantId`: optional Microsoft Graph tenant override for customer-tenant/RSC calls when different from the bot tenant.
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)

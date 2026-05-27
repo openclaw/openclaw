@@ -711,7 +711,7 @@ Microsoft Teams is plugin-backed and configured under `channels.msteams`.
     msteams: {
       enabled: true,
       configWrites: true,
-      // appId, appPassword, tenantId, webhook, team/channel policies:
+      // appId, appPassword, tenantId, optional graphTenantId, webhook, team/channel policies:
       // see /channels/msteams
     },
   },

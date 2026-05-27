@@ -36,6 +36,10 @@ export function escapeOData(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+function normalizeOptionalTenantId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 async function requestGraph(params: {
   token: string;
   path: string;
@@ -214,11 +218,14 @@ export async function resolveGraphToken(
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
+  const graphTenantId = normalizeOptionalTenantId(msteamsCfg?.graphTenantId) ?? creds.tenantId;
+  const graphCreds =
+    graphTenantId === creds.tenantId ? creds : { ...creds, tenantId: graphTenantId };
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
     const delegated = await resolveDelegatedAccessToken({
-      tenantId: creds.tenantId,
+      tenantId: graphTenantId,
       clientId: creds.appId,
       clientSecret: creds.appPassword,
     });
@@ -228,7 +235,7 @@ export async function resolveGraphToken(
     // Fall through to app-only token
   }
 
-  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const { app } = await loadMSTeamsSdkWithAuth(graphCreds);
   const tokenProvider = createMSTeamsTokenProvider(app);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(graphTokenValue);

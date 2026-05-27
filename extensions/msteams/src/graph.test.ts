@@ -300,6 +300,25 @@ describe("msteams graph helpers", () => {
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
   });
 
+  it("uses graphTenantId for Graph tokens without changing bot credentials", async () => {
+    mockGraphTokenResolution();
+
+    await expect(
+      resolveGraphToken({
+        channels: {
+          msteams: {
+            graphTenantId: "customer-tenant-id",
+          },
+        },
+      }),
+    ).resolves.toBe("resolved-token");
+
+    expect(loadMSTeamsSdkWithAuthMock).toHaveBeenCalledWith({
+      ...mockCredentials,
+      tenantId: "customer-tenant-id",
+    });
+  });
+
   it("fails when credentials or access tokens are unavailable", async () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
     await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");

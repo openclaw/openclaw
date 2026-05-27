@@ -95,6 +95,8 @@ export type MSTeamsConfig = {
   appPassword?: SecretInput;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
+  /** Optional customer tenant ID for Microsoft Graph app-only calls when it differs from the bot tenant. */
+  graphTenantId?: string;
   /**
    * Authentication type.
    * - `"secret"` (default): uses `appPassword` (client secret).

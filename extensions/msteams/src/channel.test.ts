@@ -75,6 +75,19 @@ describe("msteams config schema", () => {
     }
   });
 
+  it("accepts a separate Graph tenant id", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "bot-tenant-id",
+      graphTenantId: "customer-tenant-id",
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.tenantId).toBe("bot-tenant-id");
+      expect(res.data.graphTenantId).toBe("customer-tenant-id");
+    }
+  });
+
   it("accepts replyStyle at global/team/channel levels", () => {
     const res = MSTeamsConfigSchema.safeParse({
       replyStyle: "top-level",
