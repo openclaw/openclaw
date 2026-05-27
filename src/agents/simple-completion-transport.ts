@@ -37,7 +37,7 @@ function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
       return parsed.toString().replace(/\/$/u, "");
     }
   } catch {
-    // Keep non-URL custom values on the same suffix contract pi-ai accepts.
+    // Keep non-URL custom values on the same suffix contract transport callers accept.
   }
   if (normalized.endsWith("/codex/responses")) {
     return normalized.slice(0, -"/responses".length);

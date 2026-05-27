@@ -164,7 +164,7 @@ describe("runtime.llm.complete", () => {
       agentId: "ada",
       allowBundledStaticCatalogFallback: true,
       allowMissingApiKeyModes: ["aws-sdk"],
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
     });
     expect(result.agentId).toBe("ada");
     expectFields(requireRecord(result.audit, "audit"), {
@@ -192,7 +192,7 @@ describe("runtime.llm.complete", () => {
       preferredProfile: "openai-codex:claude@martian.engineering",
       allowBundledStaticCatalogFallback: true,
       allowMissingApiKeyModes: ["aws-sdk"],
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
     });
   });
 

@@ -2447,9 +2447,7 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
-      await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
       const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
-      await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,

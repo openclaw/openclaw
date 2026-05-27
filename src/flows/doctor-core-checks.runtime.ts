@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   findModelInCatalog,
@@ -7,10 +8,9 @@ import {
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
-import { createBundleMcpToolRuntime } from "../agents/pi-bundle-mcp-tools.js";
-import { applyFinalEffectiveToolPolicy } from "../agents/pi-embedded-runner/effective-tool-policy.js";
-import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/pi-embedded-runner/run/attempt-tool-construction-plan.js";
-import { createOpenClawCodingTools } from "../agents/pi-tools.js";
+import { createBundleMcpToolRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
 import {

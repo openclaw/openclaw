@@ -423,7 +423,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         preferredProfile,
         allowBundledStaticCatalogFallback: true,
         allowMissingApiKeyModes: ["aws-sdk"],
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       });
 
       if ("error" in prepared) {
