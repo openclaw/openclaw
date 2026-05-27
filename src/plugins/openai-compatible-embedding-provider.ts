@@ -9,7 +9,7 @@ import type {
   EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
-} from "./embedding-providers.js";
+} from "./embedding-provider-types.js";
 
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
@@ -199,7 +199,6 @@ function isOpenAICompatibleProviderConfig(
 ): boolean {
   return (
     normalizeProviderId(id) === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
-    normalizeProviderId(provider.api ?? "") === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID ||
     OPENAI_COMPATIBLE_MODEL_APIS.has(normalizeProviderId(provider.api ?? "")) ||
     (!provider.api && typeof provider.baseUrl === "string" && provider.baseUrl.trim().length > 0)
   );

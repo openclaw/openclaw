@@ -388,7 +388,6 @@ describe("openai-compatible generic embedding provider", () => {
           models: {
             providers: {
               "tenant-embeddings": {
-                api: "openai-compatible",
                 baseUrl: server.baseUrl,
                 apiKey: token,
                 headers: {
@@ -447,7 +446,6 @@ describe("openai-compatible generic embedding provider", () => {
           models: {
             providers: {
               "tenant-embeddings": {
-                api: "openai-compatible",
                 baseUrl: server.baseUrl,
                 apiKey: token,
                 models: [],
@@ -477,7 +475,6 @@ describe("openai-compatible generic embedding provider", () => {
           models: {
             providers: {
               "ollama-local": {
-                api: "openai-compatible",
                 baseUrl: server.baseUrl,
                 models: [],
               },
