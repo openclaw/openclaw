@@ -361,7 +361,7 @@ describe("live model switch", () => {
     expect(state.piEmbeddedModuleImported).toBe(false);
   });
 
-  it("treats openai-codex and openai as equivalent runtime providers", async () => {
+  it("treats active openai-codex as an already-applied openai runtime promotion", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
     expect(
@@ -376,6 +376,10 @@ describe("live model switch", () => {
         },
       ),
     ).toBe(false);
+  });
+
+  it("does not suppress explicit runtime provider switches with the same model", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
     expect(
       hasDifferentLiveSessionModelSelection(
@@ -388,7 +392,20 @@ describe("live model switch", () => {
           model: "gpt-5.5",
         },
       ),
-    ).toBe(false);
+    ).toBe(true);
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
+        {
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+        },
+      ),
+    ).toBe(true);
   });
 
   it("does not suppress switch when model actually differs across runtime alias", async () => {
