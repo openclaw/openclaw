@@ -122,7 +122,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Plugins/hooks: thread the canonical outbound session key into message delivery hook contexts and align routed native-command replies with the target session, so plugins can correlate agent_end with message_sending/message_sent for the same run. (#73706) Thanks @zeroaltitude.
 - Installer: let the local-prefix CLI installer use Alpine's `apk` Node.js, npm, and Git packages on musl Linux instead of downloading glibc Node tarballs that fail `node:sqlite`.
 - Checks: prefilter tracked conflict-marker scans so changed checks avoid reading every repository file on clean runs.
 - Plugins: allow linked local plugin paths to probe TypeScript source entries without requiring compiled package output, restoring source-checkout plugin development on native Windows.
