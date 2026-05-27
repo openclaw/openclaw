@@ -1,3 +1,4 @@
+import { modelKey as buildModelKey } from "../agents/model-selection-normalize.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   BASE_THINKING_LEVELS,
@@ -66,8 +67,12 @@ function resolveThinkingPolicyContext(params: {
   const normalizedProvider = providerRaw ? normalizeProviderId(providerRaw) : "";
   const modelId = normalizeOptionalString(params.model) ?? "";
   const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
+  const selectedCatalogKey =
+    normalizedProvider && modelId ? buildModelKey(normalizedProvider, modelId) : undefined;
   const candidate = params.catalog?.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+    (entry) =>
+      selectedCatalogKey !== undefined &&
+      buildModelKey(normalizeProviderId(entry.provider), entry.id) === selectedCatalogKey,
   );
   return {
     normalizedProvider,
@@ -165,6 +170,7 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     reasoning: context.reasoning,
+    compat: context.compat,
   };
   const pluginProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
