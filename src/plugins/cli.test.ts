@@ -319,6 +319,23 @@ describe("registerPluginCliCommands", () => {
     });
   });
 
+  it("keeps root-help descriptor load failures quiet", async () => {
+    const stderrWrite = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as unknown as typeof process.stderr.write);
+    mocks.loadOpenClawPluginCliRegistry.mockImplementationOnce((options: { logger?: unknown }) => {
+      const logger = options.logger as { error?: (message: string) => void };
+      logger.error?.("[plugins] stale failed to load from /tmp/stale: boom");
+      throw new Error("boom");
+    });
+
+    await expect(
+      getPluginCliCommandDescriptors({ plugins: { entries: { stale: {} } } } as OpenClawConfig),
+    ).resolves.toEqual([]);
+
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
   it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({
