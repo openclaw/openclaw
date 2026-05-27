@@ -177,6 +177,7 @@ function createQueuedRunReadiness() {
   if (!resolve) {
     throw new Error("Expected queue readiness resolver to be initialized");
   }
+  const resolveReady = resolve;
   let settled = false;
   return {
     promise,
@@ -185,7 +186,7 @@ function createQueuedRunReadiness() {
         return;
       }
       settled = true;
-      resolve();
+      resolveReady();
     },
   };
 }
