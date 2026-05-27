@@ -5,9 +5,11 @@ import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
   vi.fn<() => ImageGenerationProviderPlugin[]>(() => []),
 );
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
-}));
+function mockCapabilityProviderRuntime(): void {
+  vi.doMock("../plugins/capability-provider-runtime.js", () => ({
+    resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+  }));
+}
 
 function createProvider(
   params: Pick<ImageGenerationProviderPlugin, "id"> & Partial<ImageGenerationProviderPlugin>,
@@ -40,6 +42,7 @@ function requireImageProvider(
 
 async function loadProviderRegistry(): Promise<ImageProviderRegistry> {
   vi.resetModules();
+  mockCapabilityProviderRuntime();
   return await import("./provider-registry.js");
 }
 

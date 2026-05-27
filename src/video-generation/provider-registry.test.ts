@@ -4,9 +4,11 @@ import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
   vi.fn<() => VideoGenerationProviderPlugin[]>(() => []),
 );
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
-}));
+function mockCapabilityProviderRuntime(): void {
+  vi.doMock("../plugins/capability-provider-runtime.js", () => ({
+    resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+  }));
+}
 
 function createProvider(
   params: Pick<VideoGenerationProviderPlugin, "id"> & Partial<VideoGenerationProviderPlugin>,
@@ -36,6 +38,7 @@ function requireVideoProvider(
 
 async function loadProviderRegistry(): Promise<VideoProviderRegistry> {
   vi.resetModules();
+  mockCapabilityProviderRuntime();
   return await import("./provider-registry.js");
 }
 
