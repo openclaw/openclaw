@@ -1545,9 +1545,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("keeps Claude CLI prompt skills when plugin skills are unavailable", async () => {
+  it("keeps Claude CLI prompt skills when the snapshot has no materialized plugin skills", async () => {
     const { dir, sessionFile } = createSessionFile();
-    const missingSkillFilePath = path.join(dir, "skills", "missing", "SKILL.md");
 
     try {
       cliBackendsTesting.setDepsForTest({
@@ -1584,28 +1583,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             "  <skill>",
             "    <name>weather</name>",
             "    <description>Use weather tools for forecasts.</description>",
-            `    <location>${missingSkillFilePath}</location>`,
+            `    <location>${path.join(dir, "skills", "missing", "SKILL.md")}</location>`,
             "  </skill>",
             "</available_skills>",
           ].join("\n"),
           skills: [{ name: "weather" }],
-          resolvedSkills: [
-            {
-              name: "weather",
-              description: "Use weather tools for forecasts.",
-              filePath: missingSkillFilePath,
-              baseDir: path.dirname(missingSkillFilePath),
-              source: "test",
-              sourceInfo: {
-                path: path.dirname(missingSkillFilePath),
-                source: "test",
-                scope: "project",
-                origin: "top-level",
-                baseDir: path.dirname(missingSkillFilePath),
-              },
-              disableModelInvocation: false,
-            },
-          ],
+          resolvedSkills: [],
         },
       });
 

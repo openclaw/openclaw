@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assertContextEngineHostSupport,
@@ -131,10 +130,7 @@ function claudeCliSkillsPluginCanCarryPrompt(params: {
   }
   return (
     params.skillsSnapshot?.resolvedSkills?.some(
-      (skill) =>
-        Boolean(skill.name?.trim()) &&
-        Boolean(skill.filePath?.trim()) &&
-        fs.existsSync(skill.filePath),
+      (skill) => Boolean(skill.name?.trim()) && Boolean(skill.filePath?.trim()),
     ) ?? false
   );
 }

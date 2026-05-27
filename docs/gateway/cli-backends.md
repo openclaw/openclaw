@@ -162,12 +162,13 @@ a new policy.
 </Note>
 
 The bundled Anthropic `claude-cli` backend prefers Claude Code's native skill
-resolver for OpenClaw skills. When at least one selected skill can be
-materialized, OpenClaw passes a temporary Claude Code plugin with `--plugin-dir`
-and omits the duplicate OpenClaw skills catalog from the appended system prompt.
-If no plugin skill can be prepared, OpenClaw keeps the prompt catalog as a
-fallback. Skill env/API key overrides are still applied by OpenClaw to the child
-process environment for the run.
+resolver for OpenClaw skills. When the current skills snapshot includes at least
+one selected skill with a materialized path, OpenClaw passes a temporary Claude
+Code plugin with `--plugin-dir` and omits the duplicate OpenClaw skills catalog
+from the appended system prompt. If the snapshot has no materialized plugin
+skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key
+overrides are still applied by OpenClaw to the child process environment for the
+run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
 to the existing exec policy instead of adding Claude-specific policy config.
