@@ -96,11 +96,33 @@ export function formatNodeRunToolResult(params: {
 export async function resolveNodeExecutionTarget(
   params: ExecuteNodeHostCommandParams,
 ): Promise<NodeExecutionTarget> {
+  const nodes = await listNodes({});
   if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
-    throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
+    // Compare canonical node ids first — the raw selectors may be different
+    // supported forms (full id, display name, IP, id prefix) for the same
+    // physical node. Fall back to literal mismatch if either selector fails
+    // to resolve, so the previous error still surfaces in that case.
+    let boundCanonical: string | null = null;
+    let requestedCanonical: string | null = null;
+    try {
+      boundCanonical = resolveNodeIdFromList(nodes, params.boundNode);
+    } catch {
+      boundCanonical = null;
+    }
+    try {
+      requestedCanonical = resolveNodeIdFromList(nodes, params.requestedNode);
+    } catch {
+      requestedCanonical = null;
+    }
+    if (
+      boundCanonical === null ||
+      requestedCanonical === null ||
+      boundCanonical !== requestedCanonical
+    ) {
+      throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
+    }
   }
   const nodeQuery = params.boundNode || params.requestedNode;
-  const nodes = await listNodes({});
   if (nodes.length === 0) {
     throw new Error(
       "exec host=node requires a paired node (none available). This requires a companion app or node host.",
