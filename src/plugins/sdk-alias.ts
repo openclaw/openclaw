@@ -641,6 +641,42 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
 // loader.
 const PLUGIN_SDK_ROOT_DIST_BASENAME = "index";
 
+function resolveBackfillablePluginSdkSubpathTarget(params: {
+  packageRoot: string;
+  subpath: string;
+  orderedKinds: readonly PluginSdkAliasCandidateKind[];
+}): string | null {
+  for (const kind of params.orderedKinds) {
+    if (kind === "src") {
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(
+          params.packageRoot,
+          "src",
+          "plugin-sdk",
+          `${params.subpath}${ext}`,
+        );
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+      continue;
+    }
+    const candidate = path.join(
+      params.packageRoot,
+      "dist",
+      "plugin-sdk",
+      `${params.subpath}.js`,
+    );
+    // Mirror the health check used by the primary alias loop so we never
+    // publish a backfilled alias for an artifact whose transitive relative
+    // dependencies are missing on disk.
+    if (isUsableDistPluginSdkArtifact(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   try {
     const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
@@ -779,12 +815,17 @@ export function resolvePluginSdkScopedAliasMap(
       if (!isBackfillableDistPluginSdkArtifactSubpath({ packageRoot, modulePath, subpath })) {
         continue;
       }
-      const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
-      // Mirror the health check used by the primary alias loop so we never
-      // publish a backfilled alias for an artifact whose transitive relative
-      // dependencies are missing on disk. Doing otherwise would just swap one
-      // runtime failure for another instead of failing fast in the loader.
-      if (!isUsableDistPluginSdkArtifact(candidate)) {
+      // Honor the same src/dist resolution order the primary loop uses
+      // (orderedKinds). When src is preferred and a src artifact exists,
+      // backfilling to dist would silently make source-mode dev/test
+      // loaders run stale built SDK code for the same stale-export case
+      // this patch is meant to handle.
+      const candidate = resolveBackfillablePluginSdkSubpathTarget({
+        packageRoot,
+        subpath,
+        orderedKinds,
+      });
+      if (!candidate) {
         continue;
       }
       for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {

@@ -714,6 +714,46 @@ describe("plugin sdk alias helpers", () => {
     expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBeUndefined();
   });
 
+  it("backfills to source artifact when pluginSdkResolution=src and src exists", () => {
+    // P2-3 regression: when source mode is requested and a subpath is
+    // missing from package.json#exports but present in BOTH src and dist,
+    // the backfill must respect the src-first resolution order. Otherwise
+    // source-mode dev/test loaders would silently run stale built code for
+    // the same stale-export case this patch is meant to handle.
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    const srcTaskRuntimePath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "agent-harness-task-runtime.ts",
+    );
+    const distTaskRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "agent-harness-task-runtime.js",
+    );
+    fs.writeFileSync(srcTaskRuntimePath, 'export const marker = "src";\n', "utf-8");
+    fs.writeFileSync(distTaskRuntimePath, 'export const marker = "dist";\n', "utf-8");
+
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "extensions", "demo", "index.ts"),
+      pluginSdkResolution: "src",
+    });
+
+    expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(srcTaskRuntimePath);
+    expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(srcTaskRuntimePath);
+  });
+
   it("does not backfill openclaw/plugin-sdk/index (root-export dist artifact)", () => {
     // P2-2 regression: `dist/plugin-sdk/index.js` is the dist artifact for
     // the package's root `./plugin-sdk` export, not a scoped subpath. The
