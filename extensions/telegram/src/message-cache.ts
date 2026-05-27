@@ -83,6 +83,7 @@ type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
 
 const DEFAULT_MAX_MESSAGES = 5000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
+export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const COMPACT_THRESHOLD_RATIO = 2;
@@ -556,6 +557,7 @@ function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | 
     return runtime.state.openKeyedStore<PersistedTelegramMessageCacheValue>({
       namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
       maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+      defaultTtlMs: TELEGRAM_MESSAGE_CACHE_PERSISTENT_TTL_MS,
     });
   } catch (error) {
     logVerbose(`telegram: failed to open message cache plugin state: ${String(error)}`);
