@@ -92,6 +92,24 @@ describe("canSubmitTuiChatMessage", () => {
     expect(canSubmitTuiChatMessage({})).toBe(true);
   });
 
+  it("allows local submit while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks gateway submit while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(false);
+  });
+
   it("blocks submits with pending optimistic state", () => {
     expect(
       canSubmitTuiChatMessage({

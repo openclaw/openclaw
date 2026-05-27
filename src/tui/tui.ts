@@ -367,10 +367,15 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 }
 
 export function canSubmitTuiChatMessage(params: {
+  local?: boolean;
+  activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
 }): boolean {
   const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
+  if (!params.local && params.activeChatRunId) {
+    return false;
+  }
   return !pending;
 }
 
@@ -1315,6 +1320,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateAutocompleteProvider();
   const canSubmitChatMessage = () =>
     canSubmitTuiChatMessage({
+      local: opts.local,
+      activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
     });
