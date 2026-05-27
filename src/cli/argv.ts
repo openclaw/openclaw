@@ -167,6 +167,7 @@ export function isRootHelpInvocation(argv: string[]): boolean {
 
 export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   const positionals: Array<{ value: string; index: number }> = [];
+  const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
 
   for (let index = 2; index < argv.length; index += 1) {
@@ -174,12 +175,11 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
     if (!arg || arg === FLAG_TERMINATOR) {
       break;
     }
-    if (positionals.length === 0) {
-      const consumed = consumeRootOptionToken(argv, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
     }
     if (HELP_FLAGS.has(arg)) {
       helpFlagIndex = index;
@@ -212,8 +212,7 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
     return argv;
   }
 
-  const normalized = argv.toSpliced(secondary.index, 1);
-  return helpFlagIndex === null ? [...normalized, "--help"] : normalized;
+  return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {

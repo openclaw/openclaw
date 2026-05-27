@@ -106,6 +106,11 @@ describe("argv helpers", () => {
       expected: ["node", "openclaw", "external-plugin", "inspect", "--help"],
     },
     {
+      name: "generated help target with trailing root option",
+      argv: ["node", "openclaw", "memory", "help", "status", "--no-color"],
+      expected: ["node", "openclaw", "--no-color", "memory", "status", "--help"],
+    },
+    {
       name: "extra help positionals remain untouched",
       argv: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
       expected: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
