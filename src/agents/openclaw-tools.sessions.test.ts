@@ -33,7 +33,10 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { testing as embeddedRunsTesting, setActiveEmbeddedRun } from "./pi-embedded-runner/runs.js";
+import {
+  testing as embeddedRunsTesting,
+  setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.js";
 import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
