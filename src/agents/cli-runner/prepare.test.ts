@@ -1459,6 +1459,164 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("omits Claude CLI prompt skills when the native skills plugin can carry them", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const skillDir = path.join(dir, "skills", "weather");
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillFilePath = path.join(skillDir, "SKILL.md");
+    fs.writeFileSync(
+      skillFilePath,
+      [
+        "---",
+        "name: weather",
+        "description: Use weather tools for forecasts.",
+        "---",
+        "",
+        "Read forecast data before replying.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-plugin-skills-prompt",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>weather</name>",
+            "    <description>Use weather tools for forecasts.</description>",
+            `    <location>${skillFilePath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "weather" }],
+          resolvedSkills: [
+            {
+              name: "weather",
+              description: "Use weather tools for forecasts.",
+              filePath: skillFilePath,
+              baseDir: skillDir,
+              source: "test",
+              sourceInfo: {
+                path: skillDir,
+                source: "test",
+                scope: "project",
+                origin: "top-level",
+                baseDir: skillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(context.systemPrompt).not.toContain("<available_skills>");
+      expect(context.systemPrompt).not.toContain("<name>weather</name>");
+      expect(context.systemPromptReport.skills.promptChars).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Claude CLI prompt skills when plugin skills are unavailable", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const missingSkillFilePath = path.join(dir, "skills", "missing", "SKILL.md");
+
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-plugin-skills-prompt-fallback",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>weather</name>",
+            "    <description>Use weather tools for forecasts.</description>",
+            `    <location>${missingSkillFilePath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "weather" }],
+          resolvedSkills: [
+            {
+              name: "weather",
+              description: "Use weather tools for forecasts.",
+              filePath: missingSkillFilePath,
+              baseDir: path.dirname(missingSkillFilePath),
+              source: "test",
+              sourceInfo: {
+                path: path.dirname(missingSkillFilePath),
+                source: "test",
+                scope: "project",
+                origin: "top-level",
+                baseDir: path.dirname(missingSkillFilePath),
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(context.systemPrompt).toContain("<available_skills>");
+      expect(context.systemPrompt).toContain("<name>weather</name>");
+      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not probe the transcript for non-claude-cli providers", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

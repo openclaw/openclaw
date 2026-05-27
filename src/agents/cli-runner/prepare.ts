@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assertContextEngineHostSupport,
@@ -53,7 +54,7 @@ import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/at
 import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { buildCurrentInboundPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { resolveSkillsPromptForRun } from "../skills.js";
+import { resolveSkillsPromptForRun, type SkillSnapshot } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
@@ -118,6 +119,23 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
     params.authProfileId &&
     params.authCredential &&
     params.preparedExecution,
+  );
+}
+
+function claudeCliSkillsPluginCanCarryPrompt(params: {
+  provider: string;
+  skillsSnapshot?: SkillSnapshot;
+}): boolean {
+  if (!isClaudeCliProvider(params.provider)) {
+    return false;
+  }
+  return (
+    params.skillsSnapshot?.resolvedSkills?.some(
+      (skill) =>
+        Boolean(skill.name?.trim()) &&
+        Boolean(skill.filePath?.trim()) &&
+        fs.existsSync(skill.filePath),
+    ) ?? false
   );
 }
 
@@ -405,6 +423,12 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
+  const systemPromptSkillsPrompt = claudeCliSkillsPluginCanCarryPrompt({
+    provider: params.provider,
+    skillsSnapshot: params.skillsSnapshot,
+  })
+    ? ""
+    : skillsPrompt;
   const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -421,7 +445,7 @@ export async function prepareCliRunContext(
       heartbeatPrompt,
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
-      skillsPrompt,
+      skillsPrompt: systemPromptSkillsPrompt,
       tools: promptTools,
       contextFiles,
       modelDisplay,
@@ -531,7 +555,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt,
+    skillsPrompt: systemPromptSkillsPrompt,
     tools: promptTools,
     currentTurn: {
       ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
