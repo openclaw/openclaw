@@ -134,6 +134,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Filesystem path to the TLS private key file used by the gateway when TLS is enabled. Keep this key file permission-restricted and rotate per your security policy.",
   "gateway.tls.caPath":
     "Optional CA bundle path for client verification or custom trust-chain requirements at the gateway edge. Use this when private PKI or custom certificate chains are part of deployment.",
+  "gateway.tls.extraCaCerts":
+    "Optional PEM CA bundle path injected into NODE_EXTRA_CA_CERTS for the managed gateway service. Use this for private roots that Node.js must trust after gateway service reinstalls.",
   "gateway.http":
     "Gateway HTTP API configuration grouping endpoint toggles and transport-facing API exposure controls. Keep only required endpoints enabled to reduce attack surface.",
   "gateway.http.endpoints":

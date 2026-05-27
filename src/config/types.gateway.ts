@@ -15,6 +15,8 @@ export type GatewayTlsConfig = {
   keyPath?: string;
   /** Optional PEM CA bundle for TLS clients (mTLS or custom roots). */
   caPath?: string;
+  /** Optional PEM CA bundle path injected into NODE_EXTRA_CA_CERTS for the managed gateway service. */
+  extraCaCerts?: string;
 };
 
 export type WideAreaDiscoveryConfig = {

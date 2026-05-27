@@ -43,6 +43,7 @@ import {
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -480,6 +481,10 @@ export function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
+function resolveConfiguredNodeExtraCaCerts(config: OpenClawConfig | undefined): string | undefined {
+  return normalizeOptionalString(config?.gateway?.tls?.extraCaCerts);
+}
+
 function readExistingEnvironmentValueSource(params: {
   existingEnvironmentValueSources?: Record<
     string,
@@ -642,6 +647,10 @@ export async function buildGatewayInstallPlan(params: {
     : wrapperPointsAtWindowsTaskScript
       ? omitEnvKey(params.env, OPENCLAW_WRAPPER_ENV_KEY)
       : params.env;
+  const configuredNodeExtraCaCerts = resolveConfiguredNodeExtraCaCerts(params.config);
+  if (configuredNodeExtraCaCerts) {
+    serviceInputEnv.NODE_EXTRA_CA_CERTS = configuredNodeExtraCaCerts;
+  }
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
