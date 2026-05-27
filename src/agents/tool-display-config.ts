@@ -50,17 +50,17 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     read: {
       emoji: "📖",
       title: "Read",
-      detailKeys: ["path"],
+      detailKeys: ["path", "file", "filePath", "file_path"],
     },
     write: {
       emoji: "✍️",
       title: "Write",
-      detailKeys: ["path"],
+      detailKeys: ["path", "file", "filePath", "file_path"],
     },
     edit: {
       emoji: "📝",
       title: "Edit",
-      detailKeys: ["path"],
+      detailKeys: ["path", "file", "filePath", "file_path"],
     },
     attach: {
       emoji: "📎",
