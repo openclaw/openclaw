@@ -310,7 +310,7 @@ available timeout in this order:
   image-generation default.
 - For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
   converted to milliseconds, or the 60 second media default.
-- The 30 second dynamic-tool default.
+- The 90 second dynamic-tool default.
 
 Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
 tool signal where supported and returns a failed dynamic-tool response to Codex

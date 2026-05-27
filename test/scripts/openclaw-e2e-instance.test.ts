@@ -180,12 +180,74 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
-  it("runs package installs without a wrapper when timeout is unavailable", () => {
+  it("uses gtimeout when GNU timeout is not on PATH", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-gtimeout-"));
+    try {
+      const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
+      const npmArgsPath = path.join(tempDir, "npm-args.txt");
+      const logPath = path.join(tempDir, "install.log");
+      const packagePath = path.join(tempDir, "openclaw.tgz");
+      fs.writeFileSync(packagePath, "");
+      fs.writeFileSync(
+        path.join(tempDir, "gtimeout"),
+        [
+          "#!/bin/bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
+          'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "npm"),
+        ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
+      );
+      fs.chmodSync(path.join(tempDir, "gtimeout"), 0o755);
+      fs.chmodSync(path.join(tempDir, "npm"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")}`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: tempDir,
+            OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
+            OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
+            OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
+            OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+        `--kill-after=30s 42s npm install -g ${packagePath} --no-fund --no-audit`,
+      );
+      expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
+        `install -g ${packagePath} --no-fund --no-audit`,
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the Node watchdog when timeout is unavailable", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-no-timeout-"));
     try {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
+      const nodeBinDir = path.dirname(process.execPath);
       fs.writeFileSync(packagePath, "");
       fs.writeFileSync(
         path.join(tempDir, "npm"),
@@ -207,7 +269,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           encoding: "utf8",
           env: {
             ...process.env,
-            PATH: tempDir,
+            PATH: `${tempDir}:${nodeBinDir}`,
             OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
@@ -216,9 +278,235 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       );
 
       expect(result.status).toBe(0);
-      expect(fs.readFileSync(logPath, "utf8")).toContain("timeout command not found");
+      expect(fs.readFileSync(logPath, "utf8")).toContain("using Node watchdog");
       expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
         `install -g ${packagePath} --no-fund --no-audit`,
+      );
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds commands with the Node watchdog when timeout is unavailable", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-"));
+    try {
+      const nodeBinDir = path.dirname(process.execPath);
+      const startedAt = Date.now();
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_maybe_timeout 200ms ${shellQuote(process.execPath)} -e ${shellQuote("setInterval(() => {}, 1000)")}`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${tempDir}:${nodeBinDir}`,
+          },
+          timeout: 5_000,
+        },
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.status).toBe(124);
+      expect(elapsedMs).toBeLessThan(4_000);
+      expect(result.stderr).toContain("using Node watchdog");
+      expect(result.stderr).toContain("OpenClaw E2E command timed out after 200ms");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("wraps logged OpenClaw E2E commands with the configured timeout", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-run-logged-"));
+    const logLabel = path.basename(tempDir);
+    const logPath = `/tmp/openclaw-onboard-${logLabel}.log`;
+    try {
+      const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
+      const commandArgsPath = path.join(tempDir, "command-args.txt");
+      fs.writeFileSync(
+        path.join(tempDir, "timeout"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
+          'while [ "$#" -gt 0 ] && [ "$1" != "fixture-command" ]; do shift; done',
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "fixture-command"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_COMMAND_ARGS"',
+          'printf "fixture output\\n"',
+          "",
+        ].join("\n"),
+      );
+      fs.chmodSync(path.join(tempDir, "timeout"), 0o755);
+      fs.chmodSync(path.join(tempDir, "fixture-command"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_run_logged ${shellQuote(logLabel)} fixture-command one two`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            OPENCLAW_E2E_COMMAND_TIMEOUT: "17s",
+            OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
+            OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+        "--kill-after=30s 17s fixture-command one two",
+      );
+      expect(fs.readFileSync(commandArgsPath, "utf8").trim()).toBe("one two");
+      expect(fs.readFileSync(logPath, "utf8")).toContain("fixture output");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+      fs.rmSync(logPath, { force: true });
+    }
+  });
+
+  it("wraps package-installed OpenClaw CLI calls with the configured timeout", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-openclaw-cli-"));
+    try {
+      const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
+      const commandArgsPath = path.join(tempDir, "openclaw-args.txt");
+      fs.writeFileSync(
+        path.join(tempDir, "timeout"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
+          `while [ "$#" -gt 0 ] && [ "$1" != ${shellQuote(path.join(tempDir, "openclaw"))} ]; do shift; done`,
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "openclaw"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_COMMAND_ARGS"',
+          "",
+        ].join("\n"),
+      );
+      fs.chmodSync(path.join(tempDir, "timeout"), 0o755);
+      fs.chmodSync(path.join(tempDir, "openclaw"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            "openclaw_e2e_enable_openclaw_cli_timeout",
+            "openclaw_e2e_enable_openclaw_cli_timeout",
+            "openclaw plugins list --json",
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
+            OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
+            OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+        `--kill-after=30s 23s ${path.join(tempDir, "openclaw")} plugins list --json`,
+      );
+      expect(fs.readFileSync(commandArgsPath, "utf8").trim()).toBe("plugins list --json");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("wraps interactive PTY scripts with the configured timeout", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-pty-timeout-"));
+    try {
+      const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
+      const scriptArgsPath = path.join(tempDir, "script-args.txt");
+      const logPath = path.join(tempDir, "pty.log");
+      fs.writeFileSync(
+        path.join(tempDir, "timeout"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
+          'while [ "$#" -gt 0 ] && [ "$1" != "script" ]; do shift; done',
+          'exec "$@"',
+          "",
+        ].join("\n"),
+      );
+      fs.writeFileSync(
+        path.join(tempDir, "script"),
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'if [ "${1:-}" = "--version" ]; then exit 0; fi',
+          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_SCRIPT_ARGS"',
+          "",
+        ].join("\n"),
+      );
+      fs.chmodSync(path.join(tempDir, "timeout"), 0o755);
+      fs.chmodSync(path.join(tempDir, "script"), 0o755);
+
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source ${shellQuote(helperPath)}`,
+            `openclaw_e2e_run_script_with_pty ${shellQuote("node /tmp/entry onboard")} ${shellQuote(logPath)}`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            OPENCLAW_E2E_COMMAND_TIMEOUT: "31s",
+            OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
+            OPENCLAW_TEST_SCRIPT_ARGS: scriptArgsPath,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+        `--kill-after=30s 31s script -q -f -c node /tmp/entry onboard ${logPath}`,
+      );
+      expect(fs.readFileSync(scriptArgsPath, "utf8").trim()).toBe(
+        `-q -f -c node /tmp/entry onboard ${logPath}`,
       );
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });

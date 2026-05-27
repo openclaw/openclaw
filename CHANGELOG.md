@@ -8,7 +8,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Browser/snapshot: validate current tab URLs against the configured SSRF policy before ChromeMCP or direct CDP snapshot reads, closing the local-managed CDP bypass from GHSA-2x93-h3hg-2xfp while preserving existing-session coverage; the PR also rejects existing-session selectors before URL checks, adds focused route coverage, fetches full opengrep CI history, and stabilizes plugin activation normalization tests. Thanks @zsxsoft.
+
 - Crabbox: bootstrap raw AWS macOS JavaScript commands launched through `/usr/bin/env` so native mac runners without preinstalled Node, Corepack, or pnpm can still run wrapped Node and pnpm proof.
+- macOS: let app packaging fall back to `corepack pnpm` when a fresh native runner has Node/Corepack but no pnpm shim on `PATH`.
+- E2E: keep package/onboarding/plugin smoke commands bounded on macOS shells that have Node but no GNU `timeout` or `gtimeout` binary.
+- macOS: resolve Parallels npm-update smoke commands from the guest `PATH` so Intel Homebrew and other native mac layouts are not forced through `/opt/homebrew`.
+- Gateway: keep dev smoke scripts on the current protocol version and make the kitchen-sink RPC walk fail on dropped diagnostics or aggregate Gateway RSS spikes.
+- Gateway: make the CPU scenario checker fail when completed Gateway runs report hot CPU observations instead of only writing them to artifacts.
+- CLI: bound startup-memory probes so a hung startup command fails with timeout guidance instead of hanging the memory gate indefinitely.
+- File transfer: wrap fetched file text and metadata as external content so untrusted contents cannot inject prompt instructions or spoof external-content markers.
+- ClickClack: apply configured `allowFrom` sender allowlists before inbound agent dispatch so blocked senders cannot trigger model requests or command-authorized turns. Thanks @mmaps.
 
 ## 2026.5.26
 

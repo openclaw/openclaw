@@ -959,8 +959,50 @@ describe("runPreparedReply media-only handling", () => {
         mimeType: "image/png",
       },
     ]);
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "describe this",
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+  });
+
+  it("does not copy prior session media onto text-only followups", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "follow up without media",
+          RawBody: "follow up without media",
+          CommandBody: "follow up without media",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "follow up without media",
+          BodyStripped: "follow up without media",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+          MediaPath: "/tmp/previous-image.png",
+          MediaPaths: ["/tmp/previous-image.png"],
+          MediaTypes: ["image/png"],
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "follow up without media",
+    });
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
   });
 
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {

@@ -1109,6 +1109,7 @@ export async function runEmbeddedPiAgent(
         if (params.currentMessageId !== undefined) {
           lastPersistedCurrentMessageId = params.currentMessageId;
         }
+        params.userTurnTranscriptRecorder?.markRuntimePersisted(message);
         params.onUserMessagePersisted?.(message);
       };
       const continueFromCurrentTranscript = () => {
@@ -1443,6 +1444,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
+            userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             currentInboundEventKind: params.currentInboundEventKind,
             currentInboundContext: params.currentInboundContext,
             images: params.images,
