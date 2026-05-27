@@ -3124,7 +3124,8 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.previewEventId).toBe("$tool-progress-preview");
     expect(artifacts.reply?.eventId).toBe("$tool-progress-final");
     const prompt = mockMessageBody(sendTextMessage, "sendTextMessage");
-    expect(prompt).toContain("use the read tool exactly once on `QA_KICKOFF_TASK.md`");
+    expect(prompt).toContain("call the read tool exactly once on `QA_KICKOFF_TASK.md`");
+    expect(prompt).toContain("answering from memory or sending the marker before the tool result fails");
     expect(prompt).toContain("Do not read `HEARTBEAT.md`");
     expect(prompt).toContain("reply with only this exact marker and no other text");
   });
@@ -3226,6 +3227,32 @@ describe("matrix live qa scenarios", () => {
 
     await expect(runMatrixQaScenario(scenario, context)).rejects.toThrow(
       /observed preview candidates:[\s\S]*\$tool-progress-timeout-update/,
+    );
+  });
+
+  it("reports final-only Matrix message candidates when the initial preview wait times out", async () => {
+    const finalCandidate = matrixQaMessageEvent({
+      kind: "message",
+      eventId: "$tool-progress-final-only-candidate",
+      body: "MATRIX_QA_TOOL_PROGRESS_FINAL_ONLY",
+    });
+    const context = matrixQaScenarioContext();
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$tool-progress-final-only-trigger");
+    const waitForRoomEvent = vi.fn().mockImplementationOnce(async () => {
+      context.observedEvents.push(finalCandidate);
+      throw new Error("timed out after 8000ms waiting for Matrix room event");
+    });
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = requireMatrixQaScenario("matrix-room-tool-progress-preview");
+
+    await expect(runMatrixQaScenario(scenario, context)).rejects.toThrow(
+      /observed message candidates:[\s\S]*\$tool-progress-final-only-candidate/,
     );
   });
 

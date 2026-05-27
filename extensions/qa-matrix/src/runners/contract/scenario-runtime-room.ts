@@ -787,16 +787,37 @@ function buildMatrixQaToolProgressTimeoutMessage(params: {
       );
     })
     .slice(-8);
+  const messageCandidates =
+    candidates.length === 0
+      ? params.events
+          .slice(params.startIndex)
+          .filter(
+            (event) =>
+              event.roomId === params.roomId &&
+              event.sender === params.sutUserId &&
+              event.type === "m.room.message" &&
+              isMatrixQaMessageLikeKind(event.kind),
+          )
+          .slice(-8)
+      : [];
   const candidateDetails =
     candidates.length === 0
       ? ["observed preview candidates: <none>"]
       : ["observed preview candidates:", ...candidates.map(describeMatrixQaToolProgressCandidate)];
+  const messageCandidateDetails =
+    messageCandidates.length === 0
+      ? []
+      : [
+          "observed message candidates:",
+          ...messageCandidates.map(describeMatrixQaToolProgressCandidate),
+        ];
   return [
     params.cause instanceof Error
       ? params.cause.message
       : `Matrix tool progress wait failed: ${String(params.cause)}`,
     `preview event: ${params.previewEventId}`,
     ...candidateDetails,
+    ...messageCandidateDetails,
   ].join("\n");
 }
 

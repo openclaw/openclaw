@@ -204,10 +204,13 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
+  // Ordinary onboard reruns must preserve existing agents.list / bindings.
+  // Only explicit --reset is allowed to shrink the config — see openclaw#84692.
+  const allowConfigSizeDrop = opts.reset === true;
   await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
-    writeOptions: { allowConfigSizeDrop: true },
+    writeOptions: { allowConfigSizeDrop },
   });
   logConfigUpdated(runtime);
 

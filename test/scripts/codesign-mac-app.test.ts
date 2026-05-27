@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,6 +35,16 @@ afterEach(() => {
 });
 
 describe("codesign-mac-app temp file hygiene", () => {
+  it("does not generate unused entitlement plist files", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('ENT_TMP_APP="$ENT_TMP_DIR/app.plist"');
+    expect(script).not.toContain("ENT_TMP_BASE");
+    expect(script).not.toContain("ENT_TMP_RUNTIME");
+    expect(script).not.toContain("base.plist");
+    expect(script).not.toContain("runtime.plist");
+  });
+
   it("does not allocate entitlement temp files for help output", () => {
     const tempRoot = makeTempDir("openclaw-codesign-help-");
     const result = runCodesign(["--help"], tempRoot);

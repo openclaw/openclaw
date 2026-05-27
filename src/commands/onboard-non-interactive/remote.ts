@@ -41,10 +41,13 @@ export async function runNonInteractiveRemoteSetup(params: {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
+  // Ordinary remote onboard reruns must preserve existing agents.list /
+  // bindings the same way the local writer does — see openclaw#84692.
+  const allowConfigSizeDrop = opts.reset === true;
   await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
-    writeOptions: { allowConfigSizeDrop: true },
+    writeOptions: { allowConfigSizeDrop },
   });
   logConfigUpdated(runtime);
 

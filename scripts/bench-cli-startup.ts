@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 type CommandCase = {
   id: string;
@@ -398,6 +399,17 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
     return fallback;
   }
   const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 0) {
     return fallback;
   }
@@ -747,6 +759,25 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
   }
 }
 
+export function collectFailedSamples(result: SuiteResult): string[] {
+  const failures: string[] = [];
+  for (const commandCase of result.cases) {
+    if (commandCase.samples.length === 0) {
+      failures.push(`${result.entry} ${commandCase.id}: no measured samples`);
+      continue;
+    }
+    for (const [sampleIndex, sample] of commandCase.samples.entries()) {
+      const label = `${result.entry} ${commandCase.id} sample ${sampleIndex + 1}`;
+      if (sample.signal !== null) {
+        failures.push(`${label}: exited via signal ${sample.signal}`);
+      } else if (sample.exitCode !== 0) {
+        failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
+      }
+    }
+  }
+  return failures;
+}
+
 async function buildSuiteResult(params: {
   entry: string;
   options: CliOptions;
@@ -796,7 +827,7 @@ function parseOptions(): CliOptions {
     entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     entrySecondary: parseFlagValue("--entry-secondary"),
     runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
     timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
@@ -864,6 +895,10 @@ async function main(): Promise<void> {
       primary,
       secondary: secondary ?? null,
     };
+    const failures = [
+      ...collectFailedSamples(primary),
+      ...(secondary ? collectFailedSamples(secondary) : []),
+    ];
 
     if (options.output) {
       mkdirSync(path.dirname(options.output), { recursive: true });
@@ -872,6 +907,12 @@ async function main(): Promise<void> {
 
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
+      if (failures.length > 0) {
+        process.exitCode = 1;
+        for (const failure of failures) {
+          console.error(`[startup-bench] ${failure}`);
+        }
+      }
       return;
     }
 
@@ -894,9 +935,28 @@ async function main(): Promise<void> {
       printSuite(secondary);
       printDelta(primary, secondary);
     }
+
+    if (failures.length > 0) {
+      process.exitCode = 1;
+      console.error("\nFailed startup benchmark samples:");
+      for (const failure of failures) {
+        console.error(`- ${failure}`);
+      }
+    }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-await main();
+export const testing = {
+  collectFailedSamples,
+  parseNonNegativeInt,
+  parsePositiveInt,
+};
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
+}

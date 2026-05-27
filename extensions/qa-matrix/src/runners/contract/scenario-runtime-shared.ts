@@ -92,7 +92,8 @@ export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: strin
 
 export function buildMatrixToolProgressPrompt(sutUserId: string, text: string) {
   return [
-    `${sutUserId} Tool progress QA check: use the read tool exactly once on \`QA_KICKOFF_TASK.md\` before answering.`,
+    `${sutUserId} Tool progress QA check: call the read tool exactly once on \`QA_KICKOFF_TASK.md\` before answering.`,
+    `The QA harness must observe that read tool call; answering from memory or sending the marker before the tool result fails this check.`,
     `Do not read \`HEARTBEAT.md\` for this check.`,
     `After that read completes, reply with only this exact marker and no other text: \`${text}\`.`,
   ].join(" ");
