@@ -161,6 +161,7 @@ export async function maybeRepairGatewayDaemon(params: {
   options: DoctorOptions;
   gatewayDetailsMessage: string;
   healthOk: boolean;
+  protocolMismatch?: boolean;
 }) {
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients({
@@ -228,6 +229,12 @@ export async function maybeRepairGatewayDaemon(params: {
       });
       return;
     }
+  }
+
+  // Gateway is alive but speaks an incompatible protocol version.
+  // Do not attempt service repair — the daemon is not stale/dead.
+  if (params.protocolMismatch) {
+    return;
   }
 
   if (params.options.deep) {
@@ -470,7 +477,13 @@ export async function maybeRepairGatewayDaemon(params: {
         await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
       } catch (err) {
         const message = String(err);
-        if (message.includes("gateway closed")) {
+        if (/protocol mismatch/i.test(message)) {
+          note(
+            "Gateway restarted but speaks an incompatible protocol.\nReinstall the gateway service from the current build.",
+            "Gateway protocol mismatch",
+          );
+          note(params.gatewayDetailsMessage, "Gateway connection");
+        } else if (message.includes("gateway closed")) {
           note("Gateway not running.", "Gateway");
           note(params.gatewayDetailsMessage, "Gateway connection");
         } else {

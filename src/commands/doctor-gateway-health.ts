@@ -41,15 +41,21 @@ function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   );
 }
 
+function isProtocolMismatchError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /protocol mismatch/i.test(message);
+}
+
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
   timeoutMs?: number;
-}): Promise<{ healthOk: boolean; status?: StatusSummary }> {
+}): Promise<{ healthOk: boolean; protocolMismatch?: boolean; status?: StatusSummary }> {
   const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
   const timeoutMs =
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
+  let protocolMismatch = false;
   let status: StatusSummary | undefined;
   try {
     status = await callGateway<StatusSummary>({
@@ -62,7 +68,14 @@ export async function checkGatewayHealth(params: {
     noteCliGatewayVersionSkew(status);
   } catch (err) {
     const message = String(err);
-    if (message.includes("gateway closed")) {
+    if (isProtocolMismatchError(err)) {
+      protocolMismatch = true;
+      note(
+        "Gateway is running but speaks an incompatible protocol.\nStop the stale gateway and restart it with the current build.",
+        "Gateway protocol mismatch",
+      );
+      note(gatewayDetails.message, "Gateway connection");
+    } else if (message.includes("gateway closed")) {
       note("Gateway not running.", "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
@@ -96,7 +109,7 @@ export async function checkGatewayHealth(params: {
     }
   }
 
-  return { healthOk, status };
+  return { healthOk, ...(protocolMismatch ? { protocolMismatch } : {}), status };
 }
 
 export async function probeGatewayMemoryStatus(params: {

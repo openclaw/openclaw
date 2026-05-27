@@ -39,6 +39,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  protocolMismatch?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
@@ -667,12 +668,13 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk, status } = await checkGatewayHealth({
+  const { healthOk, protocolMismatch, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.healthOk = healthOk;
+  ctx.protocolMismatch = protocolMismatch;
   ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
     ? await probeGatewayMemoryStatus({
@@ -726,6 +728,7 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
     options: ctx.options,
     gatewayDetailsMessage: ctx.gatewayDetails?.message ?? "",
     healthOk: ctx.healthOk ?? false,
+    protocolMismatch: ctx.protocolMismatch ?? false,
   });
 }
 
