@@ -81,11 +81,11 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 }
 
 function shouldUseCard(text: string): boolean {
-  const hasCodeBlock = /```[\s\S]*?```/.test(text);
-  const hasTable = /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-  if (!hasCodeBlock && !hasTable) {
-    return false;
-  }
+  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
+/** Check whether the number of markdown tables is within Feishu card limits (≤5). */
+function withinCardTableLimit(text: string): boolean {
   const stripped = text.replace(/```[\s\S]*?```/g, "");
   const separators = stripped.match(/^[ \t]*\|[-:| \t]+\|[ \t]*$/gm);
   return (separators?.length ?? 0) <= 5;
@@ -454,7 +454,10 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  if (
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text)
+  ) {
     return sendMarkdownCardFeishu({
       cfg,
       to,
@@ -618,7 +621,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard =
+        (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+        withinCardTableLimit(text);
       if (useCard) {
         const header = identity
           ? {
