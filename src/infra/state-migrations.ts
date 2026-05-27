@@ -194,10 +194,21 @@ async function runLegacyMigrationPlans(
             `Migrated ${imported} ${plan.label} ${imported === 1 ? "entry" : "entries"} → plugin state`,
           );
         }
+        let cleanupKeys = existingKeys;
+        if (plan.cleanupSource === "rename") {
+          try {
+            cleanupKeys = new Set((await store.entries()).map(({ key }) => key));
+          } catch (err) {
+            warnings.push(
+              `Left migrated ${plan.label} source in place because plugin state could not be verified: ${String(err)}`,
+            );
+            return;
+          }
+        }
         const allEntriesCovered =
           entries.length > 0 &&
           entries.every(({ key }) =>
-            existingKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+            cleanupKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
           );
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
           const archivedPath = `${plan.sourcePath}.migrated`;

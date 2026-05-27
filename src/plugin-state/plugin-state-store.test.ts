@@ -210,7 +210,7 @@ describe("plugin state keyed store", () => {
       expect((await evicting.entries()).map((entry) => entry.key)).toEqual(["b", "c"]);
 
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 999 }, (_, entryIndex) => ({
+        ...Array.from({ length: 2_999 }, (_, entryIndex) => ({
           pluginId: "limited-plugin",
           namespace: "limit",
           key: `k-${entryIndex}`,
@@ -225,12 +225,16 @@ describe("plugin state keyed store", () => {
       ]);
       const limited = createPluginStateKeyedStore("limited-plugin", {
         namespace: "limit",
-        maxEntries: 1_001,
+        maxEntries: 3_001,
       });
-      await expectPluginStateStoreError(limited.registerIfAbsent("overflow", { overflow: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      const sibling = createPluginStateKeyedStore("limited-plugin", {
+        namespace: "sibling",
+        maxEntries: 10,
       });
-      await expect(limited.lookup("overflow")).resolves.toBeUndefined();
+      await expect(limited.registerIfAbsent("overflow", { overflow: true })).resolves.toBe(true);
+      await expect(limited.lookup("k-0")).resolves.toBeUndefined();
+      await expect(limited.lookup("overflow")).resolves.toEqual({ overflow: true });
+      await expect(sibling.lookup("k-0")).resolves.toEqual({ sibling: true });
     });
   });
 
@@ -335,40 +339,75 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("rejects when the per-plugin live row ceiling would be exceeded without evicting siblings", async () => {
+  it("evicts current namespace rows when sibling namespaces consume plugin row budget", async () => {
     await withPluginStateTestState(async () => {
       seedPluginStateEntriesForTests([
-        ...Array.from({ length: 999 }, (_, entryIndex) => ({
-          pluginId: "discord",
-          namespace: "limit",
+        ...Array.from({ length: 2_989 }, (_, entryIndex) => ({
+          pluginId: "telegram",
+          namespace: "telegram.message-cache",
           key: `k-${entryIndex}`,
-          value: { namespaceIndex: 0, entryIndex },
+          value: { kind: "message", entryIndex },
         })),
-        {
-          pluginId: "discord",
-          namespace: "sibling",
-          key: "k-0",
-          value: { namespaceIndex: 1, entryIndex: 0 },
-        },
+        ...Array.from({ length: 11 }, (_, entryIndex) => ({
+          pluginId: "telegram",
+          namespace: "telegram.topic-name-cache",
+          key: `topic-${entryIndex}`,
+          value: { kind: "topic", entryIndex },
+        })),
       ]);
 
-      const limitStore = createPluginStateKeyedStore("discord", {
-        namespace: "limit",
-        maxEntries: 1_001,
+      const messageStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.message-cache",
+        maxEntries: 3_000,
       });
-      const siblingStore = createPluginStateKeyedStore("discord", {
-        namespace: "sibling",
-        maxEntries: 10,
+      const topicStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.topic-name-cache",
+        maxEntries: 100,
       });
 
-      await expectPluginStateStoreError(limitStore.register("overflow", { overflow: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      await expect(
+        messageStore.register("new-message", { kind: "message", fresh: true }),
+      ).resolves.toBeUndefined();
+
+      await expect(messageStore.lookup("k-0")).resolves.toBeUndefined();
+      await expect(messageStore.lookup("new-message")).resolves.toEqual({
+        kind: "message",
+        fresh: true,
       });
-      await expect(siblingStore.lookup("k-0")).resolves.toEqual({
-        namespaceIndex: 1,
+      await expect(topicStore.lookup("topic-0")).resolves.toEqual({
+        kind: "topic",
         entryIndex: 0,
       });
-      await expect(limitStore.lookup("overflow")).resolves.toBeUndefined();
+      await expect(messageStore.entries()).resolves.toHaveLength(2_989);
+      await expect(topicStore.entries()).resolves.toHaveLength(11);
+    });
+  });
+
+  it("rejects plugin overflow when the current namespace cannot shed old rows", async () => {
+    await withPluginStateTestState(async () => {
+      seedPluginStateEntriesForTests(
+        Array.from({ length: 3_000 }, (_, entryIndex) => ({
+          pluginId: "telegram",
+          namespace: "telegram.topic-name-cache",
+          key: `topic-${entryIndex}`,
+          value: { entryIndex },
+        })),
+      );
+
+      const messageStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.message-cache",
+        maxEntries: 3_000,
+      });
+      const topicStore = createPluginStateKeyedStore("telegram", {
+        namespace: "telegram.topic-name-cache",
+        maxEntries: 3_000,
+      });
+
+      await expectPluginStateStoreError(messageStore.register("new-message", { fresh: true }), {
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(messageStore.lookup("new-message")).resolves.toBeUndefined();
+      await expect(topicStore.lookup("topic-0")).resolves.toEqual({ entryIndex: 0 });
     });
   });
 

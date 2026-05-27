@@ -711,6 +711,66 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test capped cache",
+        sourcePath,
+        targetPath: "plugin state:test.capped-cache",
+        pluginId: "telegram",
+        namespace: "test.capped-cache",
+        maxEntries: 3000,
+        scopeKey: "scope",
+        cleanupSource: "rename",
+        readEntries: () => [
+          { key: "first", value: { body: "first" } },
+          { key: "second", value: { body: "second" } },
+        ],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const siblingStore = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.sibling-cache",
+        maxEntries: 3000,
+      });
+      for (let index = 0; index < 2999; index++) {
+        await siblingStore.register(`sibling-${index}`, { body: "sibling" });
+      }
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 2 Test capped cache entries → plugin state");
+    expect(result.changes).not.toContain(
+      `Archived Test capped cache legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.capped-cache",
+        maxEntries: 3000,
+      });
+      const valuesByKey = new Map(
+        (await store.entries()).map(({ key, value }) => [key, value.body]),
+      );
+      expect(valuesByKey.has("scope:first")).toBe(false);
+      expect(valuesByKey.get("scope:second")).toBe("second");
+    });
+  });
+
   it("routes legacy state to the default agent entry", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {
