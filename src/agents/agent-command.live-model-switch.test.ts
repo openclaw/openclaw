@@ -203,7 +203,7 @@ vi.mock("../config/sessions.js", () => ({
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
   updateSessionStore: vi.fn(
     async (_path: string, fn: (store: Record<string, unknown>) => unknown) => {
-      const store: Record<string, unknown> = {};
+      const store = (state.sessionStoreMock ?? {}) as Record<string, unknown>;
       return fn(store);
     },
   ),
@@ -1023,7 +1023,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attemptCalls[0]?.sessionEntry).toStrictEqual(visibleEntry);
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
-    expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
+    expect(sessionStore["agent:main:main"]).toEqual(visibleEntry);
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {
