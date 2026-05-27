@@ -56,6 +56,15 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
   lifecycle: CodexAppServerThreadLifecycle;
 };
 
+export type CodexThreadFinalConfigPatchDecision =
+  | { action: "resume"; binding: CodexAppServerThreadBinding }
+  | { action: "start" };
+
+export type CodexThreadFinalConfigPatchResult = {
+  configPatch?: JsonObject;
+  nativeHookRelayGeneration?: string;
+};
+
 export type CodexContextEngineThreadBootstrapProjection = {
   mode: "thread_bootstrap";
   epoch: string;
@@ -67,11 +76,6 @@ export type CodexPluginThreadConfigProvider = {
   inputFingerprint?: string;
   enabledPluginConfigKeys?: readonly string[];
   build: () => Promise<CodexPluginThreadConfig>;
-};
-
-export type CodexNativeHookRelayBindingReuseDecision = {
-  canReuseBinding: boolean;
-  generation?: string;
 };
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
@@ -207,6 +211,9 @@ export async function startOrResumeThread(params: {
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
+  buildFinalConfigPatch?: (
+    decision: CodexThreadFinalConfigPatchDecision,
+  ) => CodexThreadFinalConfigPatchResult;
   nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
   nativeCodeModeOnlyEnabled?: boolean;
@@ -393,10 +400,17 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const finalConfigPatch = params.buildFinalConfigPatch?.({
+          action: "resume",
+          binding,
+        }) ?? {
+          configPatch: params.finalConfigPatch,
+          nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+        };
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
-          params.finalConfigPatch,
+          finalConfigPatch.configPatch,
         );
         const resumeParams = lifecycleTiming.measureSync("thread_resume_params", () =>
           buildThreadResumeParams(params.params, {
@@ -440,7 +454,7 @@ export async function startOrResumeThread(params: {
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               nativeHookRelayGeneration:
-                params.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
+                finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
               pluginAppsFingerprint: binding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -484,7 +498,7 @@ export async function startOrResumeThread(params: {
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration:
-            params.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
+            finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -510,12 +524,16 @@ export async function startOrResumeThread(params: {
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
+  const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
+    configPatch: params.finalConfigPatch,
+    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+  };
   const config = lifecycleTiming.measureSync("merge_thread_config", () =>
     mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
       pluginThreadConfig?.configPatch,
-      params.finalConfigPatch,
+      finalConfigPatch.configPatch,
     ),
   );
   const startParams = lifecycleTiming.measureSync("thread_start_params", () =>
@@ -558,7 +576,7 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
-          nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+          nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -603,7 +621,7 @@ export async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
-    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+    nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -616,94 +634,6 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
-}
-
-export function resolveCodexNativeHookRelayBindingReuse(params: {
-  binding: CodexAppServerThreadBinding | undefined;
-  attemptParams: EmbeddedRunAttemptParams;
-  agentId?: string;
-  dynamicTools: CodexDynamicToolSpec[];
-  nativeCodeModeEnabled?: boolean;
-  userMcpServersEnabled?: boolean;
-  mcpServersFingerprint?: string;
-  mcpServersFingerprintEvaluated?: boolean;
-  environmentSelection?: CodexTurnEnvironmentParams[];
-  pluginThreadConfig?: Pick<
-    CodexPluginThreadConfigProvider,
-    "enabled" | "inputFingerprint" | "enabledPluginConfigKeys"
-  >;
-  contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
-}): CodexNativeHookRelayBindingReuseDecision {
-  const binding = params.binding;
-  if (!binding?.threadId || params.nativeCodeModeEnabled === false) {
-    return { canReuseBinding: false };
-  }
-
-  const contextEngineBinding = buildContextEngineBinding(
-    params.attemptParams,
-    params.contextEngineProjection,
-  );
-  if (binding.contextEngine || contextEngineBinding) {
-    if (
-      !contextEngineBinding ||
-      !isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)
-    ) {
-      return { canReuseBinding: false };
-    }
-  }
-
-  const userMcpServersConfigPatch =
-    params.userMcpServersEnabled === false
-      ? undefined
-      : buildCodexUserMcpServersThreadConfigPatch(params.attemptParams.config, {
-          agentId: params.agentId ?? params.attemptParams.agentId,
-        });
-  if (
-    binding.userMcpServersFingerprint !==
-    fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch)
-  ) {
-    return { canReuseBinding: false };
-  }
-
-  if (
-    binding.environmentSelectionFingerprint !==
-    fingerprintEnvironmentSelection(params.environmentSelection)
-  ) {
-    return { canReuseBinding: false };
-  }
-
-  if (
-    params.mcpServersFingerprintEvaluated === true &&
-    binding.mcpServersFingerprint !== params.mcpServersFingerprint
-  ) {
-    return { canReuseBinding: false };
-  }
-
-  if (
-    isCodexPluginThreadBindingStale({
-      codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
-      bindingFingerprint: binding.pluginAppsFingerprint,
-      bindingInputFingerprint: binding.pluginAppsInputFingerprint,
-      currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
-      hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
-    }) ||
-    shouldRecheckRecoverablePluginBinding({
-      binding,
-      pluginThreadConfig: params.pluginThreadConfig as CodexPluginThreadConfigProvider | undefined,
-    })
-  ) {
-    return { canReuseBinding: false };
-  }
-
-  const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  if (
-    binding.dynamicToolsFingerprint &&
-    !areDynamicToolFingerprintsCompatible(binding.dynamicToolsFingerprint, dynamicToolsFingerprint)
-  ) {
-    return { canReuseBinding: false };
-  }
-
-  return { canReuseBinding: true, generation: binding.nativeHookRelayGeneration };
 }
 
 export function buildContextEngineBinding(

@@ -84,8 +84,9 @@ export async function startCodexAttemptThread(params: {
   effectiveWorkspace: string;
   dynamicTools: CodexDynamicToolSpec[];
   developerInstructions: string | undefined;
-  finalConfigPatch: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
-  nativeHookRelayGeneration: string | undefined;
+  finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
+  buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
+  nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
   sandboxExecServerEnabled: boolean;
@@ -254,6 +255,7 @@ export async function startCodexAttemptThread(params: {
                 developerInstructions: params.developerInstructions,
                 config: threadConfig,
                 finalConfigPatch: params.finalConfigPatch,
+                buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
