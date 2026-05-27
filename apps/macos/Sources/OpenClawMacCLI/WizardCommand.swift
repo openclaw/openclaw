@@ -12,8 +12,9 @@ struct WizardCliOptions {
     var json: Bool = false
     var help: Bool = false
 
-    static func parse(_ args: [String]) -> WizardCliOptions {
+    static func parse(_ args: [String]) throws -> WizardCliOptions {
         var opts = WizardCliOptions()
+        var passwordInput = CLISecretInputParser(name: "password")
         var i = 0
         while i < args.count {
             let arg = args[i]
@@ -27,7 +28,13 @@ struct WizardCliOptions {
             case "--token":
                 opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--password":
-                opts.password = CLIArgParsingSupport.nextValue(args, index: &i)
+                try passwordInput.parseInline(args, index: &i, flag: arg)
+            case "--password-stdin":
+                try passwordInput.parseStdin()
+            case "--password-file":
+                try passwordInput.parseFile(args, index: &i, flag: arg)
+            case "--password-env":
+                try passwordInput.parseEnvironment(args, index: &i, flag: arg)
             case "--mode":
                 if let value = CLIArgParsingSupport.nextValue(args, index: &i) {
                     opts.mode = value
@@ -39,6 +46,7 @@ struct WizardCliOptions {
             }
             i += 1
         }
+        opts.password = try passwordInput.resolve()
         return opts
     }
 }
@@ -62,19 +70,29 @@ enum WizardCliError: Error, CustomStringConvertible {
 }
 
 func runWizardCommand(_ args: [String]) async {
-    let opts = WizardCliOptions.parse(args)
+    let opts: WizardCliOptions
+    do {
+        opts = try WizardCliOptions.parse(args)
+    } catch {
+        fputs("wizard: \(error)\n", stderr)
+        exit(1)
+    }
     if opts.help {
         print("""
         openclaw-mac wizard
 
         Usage:
-          openclaw-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
+          openclaw-mac wizard [--url <ws://host:port>] [--token <token>] [--password-stdin]
+                              [--password-file <path>] [--password-env <name>] [--password <password>]
                               [--mode <local|remote>] [--workspace <path>] [--json]
 
         Options:
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
-          --password <pw>    Gateway password (if required)
+          --password-stdin   Read gateway password from stdin
+          --password-file <p> Read gateway password from a file
+          --password-env <n>  Read gateway password from an environment variable
+          --password <pw>    Gateway password; warning: exposes the value in process listings and shell history
           --mode <mode>      Wizard mode (local|remote). Default: local
           --workspace <path> Wizard workspace override
           --json             Print raw wizard responses

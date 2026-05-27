@@ -21,6 +21,7 @@ struct ConfigureRemoteOptions {
 
     static func parse(_ args: [String]) throws -> ConfigureRemoteOptions {
         var opts = ConfigureRemoteOptions()
+        var passwordInput = CLISecretInputParser(name: "password")
         var i = 0
         while i < args.count {
             let arg = args[i]
@@ -40,7 +41,13 @@ struct ConfigureRemoteOptions {
             case "--token":
                 opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--password":
-                opts.password = CLIArgParsingSupport.nextValue(args, index: &i)
+                try passwordInput.parseInline(args, index: &i, flag: arg)
+            case "--password-stdin":
+                try passwordInput.parseStdin()
+            case "--password-file":
+                try passwordInput.parseFile(args, index: &i, flag: arg)
+            case "--password-env":
+                try passwordInput.parseEnvironment(args, index: &i, flag: arg)
             case "--identity":
                 opts.identity = CLIArgParsingSupport.nextValue(args, index: &i)
             case "--project-root":
@@ -52,6 +59,7 @@ struct ConfigureRemoteOptions {
             }
             i += 1
         }
+        opts.password = try passwordInput.resolve()
         return opts
     }
 }
@@ -77,9 +85,11 @@ func runConfigureRemote(_ args: [String]) {
 
             Usage:
               openclaw-mac configure-remote --ssh-target <user@host[:port]> [--local-port <port>]
-                                          [--remote-port <port>] [--token <token>] [--password <password>]
+                                          [--remote-port <port>] [--token <token>] [--password-stdin]
+                                          [--password-file <path>] [--password-env <name>] [--password <password>]
                                           [--identity <path>] [--project-root <path>] [--cli-path <path>] [--json]
               openclaw-mac configure-remote --direct-url <ws://host:port|wss://host> [--token <token>]
+                                          [--password-stdin] [--password-file <path>] [--password-env <name>]
                                           [--password <password>] [--project-root <path>] [--cli-path <path>] [--json]
 
             Options:
@@ -88,7 +98,10 @@ func runConfigureRemote(_ args: [String]) {
               --local-port <p>    Local tunnel port for the mac app/UI. Default: 18789.
               --remote-port <p>   Gateway port on the remote host. Default: 18789.
               --token <token>     Remote gateway token.
-              --password <pw>     Remote gateway password.
+              --password-stdin    Read remote gateway password from stdin.
+              --password-file <p>  Read remote gateway password from a file.
+              --password-env <n>   Read remote gateway password from an environment variable.
+              --password <pw>     Remote gateway password; warning: exposes the value in process listings and shell history.
               --identity <path>   SSH identity file.
               --project-root <p>  Remote OpenClaw checkout for CLI commands.
               --cli-path <path>   Remote openclaw executable or entrypoint.
