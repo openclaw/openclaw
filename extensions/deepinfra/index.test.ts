@@ -200,12 +200,15 @@ describe("deepinfra capability registration", () => {
     const captured = createCapturedPluginRegistration();
     deepinfraPlugin.register(captured.api);
     const provider = captured.providers[0];
-    if (!provider) {
+    if (!provider?.catalog) {
       throw new Error("expected DeepInfra provider registration");
     }
 
     await withLiveDiscoveryTestEnv(mockFetch, async () => {
       const result = await provider.catalog.run(buildDeepInfraCatalogContext());
+      if (!result || !("provider" in result)) {
+        throw new Error("expected single-provider DeepInfra catalog result");
+      }
 
       expect(mockFetch).toHaveBeenCalledOnce();
       expect(mockFetch.mock.calls[0]?.[0]).toBe(DEEPINFRA_MODELS_URL);
