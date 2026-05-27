@@ -1970,6 +1970,69 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("keeps extra MEMORY.md bootstrap files in Codex workspace context", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const rootMemory = "Root memory should stay tool-routed.";
+    const nestedMemory = "Nested package memory remains prompt context.";
+    const nestedMemoryPath = path.join(workspaceDir, "packages/pkg/MEMORY.md");
+    await fs.mkdir(path.dirname(nestedMemoryPath), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), rootMemory);
+    await fs.writeFile(nestedMemoryPath, nestedMemory);
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as {
+        bootstrapFiles: Array<{ content: string; missing: boolean; name?: string; path: string }>;
+      };
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "MEMORY.md",
+          path: nestedMemoryPath,
+          content: nestedMemory,
+          missing: false,
+        },
+      ];
+    });
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("OpenClaw Workspace Memory");
+    expect(inputText).not.toContain(rootMemory);
+    expect(inputText).toContain(nestedMemory);
+
+    const files = result.systemPromptReport?.injectedWorkspaceFiles ?? [];
+    const rootMemoryStats = files.find(
+      (file) => file.path === path.join(workspaceDir, "MEMORY.md"),
+    );
+    const nestedMemoryStats = files.find((file) => file.path === nestedMemoryPath);
+    expect(rootMemoryStats).toMatchObject({
+      rawChars: rootMemory.length,
+      injectedChars: 0,
+      truncated: false,
+    });
+    expect(nestedMemoryStats).toMatchObject({
+      rawChars: nestedMemory.length,
+      injectedChars: nestedMemory.length,
+      truncated: false,
+    });
+  });
+
   it("reports hook-supplied bootstrap files that only expose path and content", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
