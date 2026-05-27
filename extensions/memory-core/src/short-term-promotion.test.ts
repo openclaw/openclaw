@@ -854,7 +854,9 @@ describe("short-term promotion", () => {
       const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const reads: string[] = [];
       const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
-        reads.push(String(target));
+        if (typeof target === "string") {
+          reads.push(target);
+        }
         if (typeof target === "string" && target === phaseStorePath) {
           throw Object.assign(new Error("phase store unavailable"), { code: "EACCES" });
         }
@@ -1989,7 +1991,7 @@ describe("short-term promotion", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const lockPath = path.join(workspaceDir, "memory", ".dreams", "short-term-promotion.lock");
       const stat = vi.spyOn(fs, "stat").mockImplementation(async (target) => {
-        if (String(target) === lockPath) {
+        if (typeof target === "string" && target === lockPath) {
           const error = Object.assign(new Error("no access"), { code: "EACCES" });
           throw error;
         }
