@@ -32,8 +32,14 @@ export function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean 
   return Object.keys(config.plugins?.installs ?? {}).length > 0;
 }
 
-export function pendingPluginInstallRecordIds(config: OpenClawConfig): string[] {
-  return Object.keys(config.plugins?.installs ?? {});
+export function unchangedPendingPluginInstallRecordIds(
+  config: OpenClawConfig,
+  baseConfig: OpenClawConfig,
+): string[] {
+  const pendingInstalls = config.plugins?.installs ?? {};
+  return Object.entries(baseConfig.plugins?.installs ?? {})
+    .filter(([pluginId, baseInstall]) => isDeepStrictEqual(pendingInstalls[pluginId], baseInstall))
+    .map(([pluginId]) => pluginId);
 }
 
 export function stripPendingPluginInstallRecords(

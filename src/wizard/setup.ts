@@ -3,8 +3,8 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
-  pendingPluginInstallRecordIds,
   stripPendingPluginInstallRecords,
+  unchangedPendingPluginInstallRecordIds,
 } from "../cli/plugins-install-record-commit.js";
 import type {
   AuthChoice,
@@ -85,7 +85,7 @@ async function writeWizardConfigFile(
       });
       config = stripPendingPluginInstallRecords(
         config,
-        pendingPluginInstallRecordIds(migrationBaseConfig),
+        unchangedPendingPluginInstallRecordIds(config, migrationBaseConfig),
       );
       opts.onPendingPluginInstallMigration?.();
     }

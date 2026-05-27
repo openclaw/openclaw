@@ -2,8 +2,8 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import {
   commitConfigWriteWithPendingPluginInstalls,
   hasPendingPluginInstallRecords,
-  pendingPluginInstallRecordIds,
   stripPendingPluginInstallRecords,
+  unchangedPendingPluginInstallRecordIds,
 } from "../../cli/plugins-install-record-commit.js";
 import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -229,7 +229,7 @@ export async function runNonInteractiveLocalSetup(params: {
     writeBaseHash = migrated.persistedHash ?? undefined;
     nextConfig = stripPendingPluginInstallRecords(
       nextConfig,
-      pendingPluginInstallRecordIds(baseConfig),
+      unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig),
     );
   }
   const committed = await commitConfigWriteWithPendingPluginInstalls({
