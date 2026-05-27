@@ -110,14 +110,14 @@ describe("scanStatus", () => {
       resolvedConfig,
       {
         showSecrets: true,
-        includeSetupFallbackPlugins: true,
+        includeSetupFallbackPlugins: false,
         sourceConfig,
         liveChannelStatus: null,
       },
     ]);
   });
 
-  it("keeps default text status off live channel status while keeping configured channel setup fallback", async () => {
+  it("keeps default text status off live channel status and channel setup fallback for fast path", async () => {
     const cfg = createStatusScanConfig();
     configureScanStatus({
       hasConfiguredChannels: true,
@@ -148,7 +148,7 @@ describe("scanStatus", () => {
       cfg,
       {
         showSecrets: true,
-        includeSetupFallbackPlugins: true,
+        includeSetupFallbackPlugins: false,
         sourceConfig: cfg,
         liveChannelStatus: null,
       },

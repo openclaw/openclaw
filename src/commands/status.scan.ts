@@ -47,13 +47,15 @@ export async function scanStatus(
       enabled: true,
     },
     async (progress) => {
-      const includeLiveChannelChecks = opts.all === true || opts.deep === true;
+      const isFullScan = opts.all === true || opts.deep === true;
       const overview = await collectStatusScanOverview({
         commandName: "status",
         opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
-        includeLiveChannelStatus: includeLiveChannelChecks,
-        includeChannelSetupRuntimeFallback: true,
+        includeLiveChannelStatus: isFullScan,
+        includeChannelSetupRuntimeFallback: isFullScan,
+        includeChannelSecretTargets: isFullScan ? undefined : false,
+        skipUpdateCheck: !isFullScan,
         progress,
         labels: {
           loadingConfig: "Loading config…",
