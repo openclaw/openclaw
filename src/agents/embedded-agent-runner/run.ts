@@ -1720,6 +1720,12 @@ export async function runEmbeddedAgent(
             currentAttemptAssistant,
           } = attempt;
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          // Optional in the public harness SDK contract; default to false. The
+          // embedded runner sets this explicitly when its run-budget timer
+          // fires. Used below by the failover-policy and model-fallback layer
+          // to skip the fallback chain when the whole-run deadline has elapsed
+          // (no other model can help). Closes #60388.
+          const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
             // Track the live session for lifecycle persistence identity (#88538).
@@ -1887,8 +1893,15 @@ export async function runEmbeddedAgent(
           }
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
-          // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
+          // retrying to break the death spiral of repeated timeouts. Skip when
+          // the run-budget timer fired (the whole-run deadline is already
+          // exhausted; compacting is wasted work). Closes #60388.
+          if (
+            timedOut &&
+            !timedOutDuringCompaction &&
+            !timedOutDuringToolExecution &&
+            !timedOutByRunBudget
+          ) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
@@ -2800,6 +2813,7 @@ export async function runEmbeddedAgent(
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             harnessOwnsTransport: pluginHarnessOwnsTransport,
+            timedOutByRunBudget,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -2813,6 +2827,7 @@ export async function runEmbeddedAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
+            timedOutByRunBudget,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&

@@ -62,6 +62,15 @@ type AssistantDecisionParams = {
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
   harnessOwnsTransport?: boolean;
+  /**
+   * True when the embedded run-budget timer fired (whole-run deadline
+   * exhausted). When set, no fallback model can help — the run is over
+   * regardless of which provider handles it. Optional (defaults to falsy =
+   * "not a run-budget timeout") so callers that predate this signal keep their
+   * existing rotation behavior; the embedded runner always passes it
+   * explicitly. Closes #60388.
+   */
+  timedOutByRunBudget?: boolean;
   profileRotated: boolean;
 };
 
@@ -113,6 +122,12 @@ function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): 
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
+    return false;
+  }
+  // Run-budget timeouts are terminal — the run is out of time regardless of
+  // which model handles it. Don't rotate to another profile/model just to have
+  // it time out again. (#62682, closes #60388.)
+  if (params.timedOutByRunBudget) {
     return false;
   }
   const timeoutFailure = isAssistantTimeoutFailure(params);
