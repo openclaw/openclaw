@@ -1434,6 +1434,14 @@ export async function runEmbeddedAttempt(
   let isCompactionPendingForExternalSignal: (() => boolean) | undefined;
   let isCompactionInFlightForExternalSignal: (() => boolean) | undefined;
   let removeExternalAbortSignalListener: (() => void) | undefined;
+  const createAttemptAbortError = (signal: AbortSignal): Error => {
+    if (signal.reason instanceof Error) {
+      return signal.reason;
+    }
+    const err = new Error("request aborted", { cause: signal.reason });
+    err.name = "AbortError";
+    return err;
+  };
   const getAbortReason = (signal: AbortSignal): unknown =>
     "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
   const makeTimeoutAbortReason = (): Error => {
@@ -2389,6 +2397,8 @@ export async function runEmbeddedAttempt(
         ...sessionWriteLockOptions,
       },
     });
+    releaseRetainedSessionLock = () => sessionLockController.dispose();
+    armExternalAbortSignal();
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;

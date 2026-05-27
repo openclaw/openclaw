@@ -4,7 +4,7 @@ import {
   testing as embeddedRunTesting,
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,

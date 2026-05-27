@@ -6,7 +6,7 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
-import { resolveSelectedOpenAIPiRuntimeProvider } from "../openai-codex-routing.js";
+import { resolveSelectedOpenAIRuntimeProvider } from "../openai-codex-routing.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
@@ -64,9 +64,9 @@ export function resolveEmbeddedCompactionTarget(params: {
     if (!targetProvider) {
       return undefined;
     }
-    const runtimeProvider = resolveSelectedOpenAIPiRuntimeProvider({
+    const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider: targetProvider,
-      harnessRuntime: "pi",
+      harnessRuntime: "openclaw",
       authProfileId,
       config: params.config,
     });
