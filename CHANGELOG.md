@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Cron: retry recurring jobs after transient model rate limits before waiting for the next scheduled slot.
 - Agents/Codex: keep live session locks during cleanup, recover interrupted CLI tool transcripts, preserve Codex auth and compaction session identity, clear orphan tool state, cap app-server idle timers, and keep media completion delivery retryable. (#88129, #88136, #88141, #88162, #88182)
 - Chat/UI: show Gateway chat failures as visible assistant messages in the Control UI instead of only setting an invisible error state.
+- Control UI/chat: keep manual chat scroll position from snapping back to the bottom while streaming until the user returns near the bottom. Thanks @enis-uys.
 - Channels: cap Telegram, Discord, WhatsApp, Signal, Feishu, Google Chat, Microsoft Teams, QQBot, Nostr, Zalo, Zalouser, and Nextcloud-style request/retry timers; preserve SMS approval reply routes; and retry WhatsApp QR login 408 timeouts. (#88183)
 - Security/config parsing: reject unsafe OAuth/token lifetimes, retry-after delays, inbound timestamps, response body sizes, command timeout config, sandbox observer token TTLs, and gateway WebSocket calls after close.
 - Providers/media: cap local service, model, usage, queue, generated media, TTS, music, workflow polling, and provider OAuth request timers across hosted and local providers.
