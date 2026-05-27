@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
@@ -43,6 +44,14 @@ export type ProviderAuthResolver = (
   source: "env" | "profile" | "none";
   profileId?: string;
 };
+
+type ProviderRequestConfig = NonNullable<ProviderConfig["request"]>;
+type ProviderRequestAuthConfig = NonNullable<ProviderRequestConfig["auth"]>;
+type ProviderRequestTlsConfig = NonNullable<ProviderRequestConfig["tls"]>;
+type ProviderRequestProxyConfig = NonNullable<ProviderRequestConfig["proxy"]>;
+type RequestTlsSecretKey = "ca" | "cert" | "key" | "passphrase";
+
+const REQUEST_TLS_SECRET_KEYS: readonly RequestTlsSecretKey[] = ["ca", "cert", "key", "passphrase"];
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -108,6 +117,364 @@ export function normalizeHeaderValues(params: {
     return { headers, mutated: false };
   }
   return { headers: nextHeaders, mutated: true };
+}
+
+function resolveSecretInputMarker(params: {
+  value: unknown;
+  secretDefaults: SecretDefaults | undefined;
+}): string | undefined {
+  const resolvedRef = resolveSecretInputRef({
+    value: params.value,
+    defaults: params.secretDefaults,
+  }).ref;
+  if (!resolvedRef || !resolvedRef.id.trim()) {
+    return undefined;
+  }
+  return resolvedRef.source === "env"
+    ? resolveEnvSecretRefHeaderValueMarker(resolvedRef.id)
+    : resolveNonEnvSecretRefHeaderValueMarker(resolvedRef.source);
+}
+
+function normalizeRequestHeaders(params: {
+  headers: ProviderRequestConfig["headers"] | undefined;
+  secretDefaults: SecretDefaults | undefined;
+  refsOnly?: boolean;
+}): {
+  headers: ProviderRequestConfig["headers"] | undefined;
+  mutated: boolean;
+  hasMarkers: boolean;
+} {
+  const { headers } = params;
+  if (!headers) {
+    return { headers, mutated: false, hasMarkers: false };
+  }
+  let mutated = false;
+  let hasMarkers = false;
+  const nextHeaders: Record<string, NonNullable<ProviderRequestConfig["headers"]>[string]> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    const marker = resolveSecretInputMarker({
+      value: headerValue,
+      secretDefaults: params.secretDefaults,
+    });
+    if (marker) {
+      hasMarkers = true;
+      mutated = mutated || marker !== headerValue;
+      nextHeaders[headerName] = marker;
+      continue;
+    }
+    if (!params.refsOnly) {
+      nextHeaders[headerName] = headerValue;
+    }
+  }
+  if (params.refsOnly && !hasMarkers) {
+    return { headers: undefined, mutated: false, hasMarkers: false };
+  }
+  if (!params.refsOnly && !mutated) {
+    return { headers, mutated: false, hasMarkers };
+  }
+  return { headers: nextHeaders, mutated: true, hasMarkers };
+}
+
+function normalizeRequestTlsSecrets(params: {
+  tls: ProviderRequestTlsConfig | undefined;
+  secretDefaults: SecretDefaults | undefined;
+  refsOnly?: boolean;
+}): { tls: ProviderRequestTlsConfig | undefined; mutated: boolean; hasMarkers: boolean } {
+  const { tls } = params;
+  if (!tls) {
+    return { tls, mutated: false, hasMarkers: false };
+  }
+  let mutated = false;
+  let hasMarkers = false;
+  const nextTls: ProviderRequestTlsConfig = params.refsOnly ? {} : { ...tls };
+  for (const key of REQUEST_TLS_SECRET_KEYS) {
+    const marker = resolveSecretInputMarker({
+      value: tls[key],
+      secretDefaults: params.secretDefaults,
+    });
+    if (!marker) {
+      continue;
+    }
+    hasMarkers = true;
+    mutated = mutated || tls[key] !== marker;
+    nextTls[key] = marker;
+  }
+  if (params.refsOnly && !hasMarkers) {
+    return { tls: undefined, mutated: false, hasMarkers: false };
+  }
+  if (!params.refsOnly && !mutated) {
+    return { tls, mutated: false, hasMarkers };
+  }
+  return { tls: nextTls, mutated: true, hasMarkers };
+}
+
+function normalizeRequestAuthSecrets(params: {
+  auth: ProviderRequestAuthConfig | undefined;
+  secretDefaults: SecretDefaults | undefined;
+  refsOnly?: boolean;
+}): { auth: ProviderRequestAuthConfig | undefined; mutated: boolean; hasMarkers: boolean } {
+  const { auth } = params;
+  if (!auth) {
+    return { auth, mutated: false, hasMarkers: false };
+  }
+  if (auth.mode === "authorization-bearer") {
+    const marker = resolveSecretInputMarker({
+      value: auth.token,
+      secretDefaults: params.secretDefaults,
+    });
+    if (!marker) {
+      return params.refsOnly
+        ? { auth: undefined, mutated: false, hasMarkers: false }
+        : { auth, mutated: false, hasMarkers: false };
+    }
+    return {
+      auth: { ...auth, token: marker },
+      mutated: auth.token !== marker,
+      hasMarkers: true,
+    };
+  }
+  if (auth.mode === "header") {
+    const marker = resolveSecretInputMarker({
+      value: auth.value,
+      secretDefaults: params.secretDefaults,
+    });
+    if (!marker) {
+      return params.refsOnly
+        ? { auth: undefined, mutated: false, hasMarkers: false }
+        : { auth, mutated: false, hasMarkers: false };
+    }
+    return {
+      auth: { ...auth, value: marker },
+      mutated: auth.value !== marker,
+      hasMarkers: true,
+    };
+  }
+  return params.refsOnly
+    ? { auth: undefined, mutated: false, hasMarkers: false }
+    : { auth, mutated: false, hasMarkers: false };
+}
+
+function normalizeRequestProxySecrets(params: {
+  proxy: ProviderRequestProxyConfig | undefined;
+  secretDefaults: SecretDefaults | undefined;
+  refsOnly?: boolean;
+}): { proxy: ProviderRequestProxyConfig | undefined; mutated: boolean; hasMarkers: boolean } {
+  const { proxy } = params;
+  if (!proxy) {
+    return { proxy, mutated: false, hasMarkers: false };
+  }
+  const tls = normalizeRequestTlsSecrets({
+    tls: proxy.tls,
+    secretDefaults: params.secretDefaults,
+    refsOnly: params.refsOnly,
+  });
+  if (!tls.hasMarkers) {
+    return params.refsOnly
+      ? { proxy: undefined, mutated: false, hasMarkers: false }
+      : { proxy, mutated: false, hasMarkers: false };
+  }
+  return {
+    proxy: { ...proxy, tls: tls.tls },
+    mutated: tls.mutated,
+    hasMarkers: true,
+  };
+}
+
+export function normalizeProviderRequestSecrets(params: {
+  request: ProviderConfig["request"] | undefined;
+  secretDefaults: SecretDefaults | undefined;
+}): { request: ProviderConfig["request"] | undefined; mutated: boolean; hasMarkers: boolean } {
+  const { request } = params;
+  if (!request) {
+    return { request, mutated: false, hasMarkers: false };
+  }
+  let mutated = false;
+  let hasMarkers = false;
+  const nextRequest: ProviderRequestConfig = { ...request };
+
+  const headers = normalizeRequestHeaders({
+    headers: request.headers,
+    secretDefaults: params.secretDefaults,
+  });
+  if (headers.mutated) {
+    mutated = true;
+    nextRequest.headers = headers.headers;
+  }
+  hasMarkers = hasMarkers || headers.hasMarkers;
+
+  const auth = normalizeRequestAuthSecrets({
+    auth: request.auth,
+    secretDefaults: params.secretDefaults,
+  });
+  if (auth.mutated) {
+    mutated = true;
+    nextRequest.auth = auth.auth;
+  }
+  hasMarkers = hasMarkers || auth.hasMarkers;
+
+  const proxy = normalizeRequestProxySecrets({
+    proxy: request.proxy,
+    secretDefaults: params.secretDefaults,
+  });
+  if (proxy.mutated) {
+    mutated = true;
+    nextRequest.proxy = proxy.proxy;
+  }
+  hasMarkers = hasMarkers || proxy.hasMarkers;
+
+  const tls = normalizeRequestTlsSecrets({
+    tls: request.tls,
+    secretDefaults: params.secretDefaults,
+  });
+  if (tls.mutated) {
+    mutated = true;
+    nextRequest.tls = tls.tls;
+  }
+  hasMarkers = hasMarkers || tls.hasMarkers;
+
+  return mutated ? { request: nextRequest, mutated, hasMarkers } : { request, mutated, hasMarkers };
+}
+
+export function collectProviderRequestSecretMarkerPatch(params: {
+  request: ProviderConfig["request"] | undefined;
+  secretDefaults: SecretDefaults | undefined;
+}): { request: ProviderConfig["request"] | undefined; hasMarkers: boolean } {
+  const { request } = params;
+  if (!request) {
+    return { request: undefined, hasMarkers: false };
+  }
+  let hasMarkers = false;
+  const patch: ProviderRequestConfig = {};
+
+  const headers = normalizeRequestHeaders({
+    headers: request.headers,
+    secretDefaults: params.secretDefaults,
+    refsOnly: true,
+  });
+  if (headers.hasMarkers) {
+    hasMarkers = true;
+    patch.headers = headers.headers;
+  }
+
+  const auth = normalizeRequestAuthSecrets({
+    auth: request.auth,
+    secretDefaults: params.secretDefaults,
+    refsOnly: true,
+  });
+  if (auth.hasMarkers) {
+    hasMarkers = true;
+    patch.auth = auth.auth;
+  }
+
+  const proxy = normalizeRequestProxySecrets({
+    proxy: request.proxy,
+    secretDefaults: params.secretDefaults,
+    refsOnly: true,
+  });
+  if (proxy.hasMarkers) {
+    hasMarkers = true;
+    patch.proxy = proxy.proxy;
+  }
+
+  const tls = normalizeRequestTlsSecrets({
+    tls: request.tls,
+    secretDefaults: params.secretDefaults,
+    refsOnly: true,
+  });
+  if (tls.hasMarkers) {
+    hasMarkers = true;
+    patch.tls = tls.tls;
+  }
+
+  return hasMarkers ? { request: patch, hasMarkers: true } : { request: undefined, hasMarkers };
+}
+
+function mergeTlsSecretMarkerPatch(params: {
+  current: ProviderRequestTlsConfig | undefined;
+  patch: ProviderRequestTlsConfig | undefined;
+}): { tls: ProviderRequestTlsConfig | undefined; mutated: boolean } {
+  if (!params.patch) {
+    return { tls: params.current, mutated: false };
+  }
+  const nextTls: ProviderRequestTlsConfig = isRecord(params.current) ? { ...params.current } : {};
+  let mutated = !params.current;
+  for (const key of REQUEST_TLS_SECRET_KEYS) {
+    const patchValue = params.patch[key];
+    if (patchValue === undefined || nextTls[key] === patchValue) {
+      continue;
+    }
+    mutated = true;
+    nextTls[key] = patchValue;
+  }
+  return { tls: mutated ? nextTls : params.current, mutated };
+}
+
+export function mergeProviderRequestSecretMarkerPatch(params: {
+  request: ProviderConfig["request"] | undefined;
+  markerPatch: ProviderConfig["request"] | undefined;
+}): { request: ProviderConfig["request"] | undefined; mutated: boolean } {
+  if (!params.markerPatch) {
+    return { request: params.request, mutated: false };
+  }
+  const nextRequest: ProviderRequestConfig = isRecord(params.request) ? { ...params.request } : {};
+  let mutated = !params.request;
+
+  if (params.markerPatch.headers) {
+    const nextHeaders: NonNullable<ProviderRequestConfig["headers"]> = isRecord(nextRequest.headers)
+      ? { ...nextRequest.headers }
+      : {};
+    let headersMutated = !nextRequest.headers;
+    for (const [headerName, marker] of Object.entries(params.markerPatch.headers)) {
+      if (nextHeaders[headerName] === marker) {
+        continue;
+      }
+      headersMutated = true;
+      nextHeaders[headerName] = marker;
+    }
+    if (headersMutated) {
+      mutated = true;
+      nextRequest.headers = nextHeaders;
+    }
+  }
+
+  if (params.markerPatch.auth && nextRequest.auth !== params.markerPatch.auth) {
+    mutated = true;
+    nextRequest.auth = params.markerPatch.auth;
+  }
+
+  if (params.markerPatch.proxy) {
+    const currentProxy = isRecord(nextRequest.proxy)
+      ? (nextRequest.proxy as ProviderRequestProxyConfig)
+      : undefined;
+    let nextProxy: ProviderRequestProxyConfig = {
+      ...params.markerPatch.proxy,
+      ...currentProxy,
+    };
+    let proxyMutated = !currentProxy;
+    const mergedProxyTls = mergeTlsSecretMarkerPatch({
+      current: currentProxy?.tls,
+      patch: params.markerPatch.proxy.tls,
+    });
+    if (mergedProxyTls.mutated) {
+      proxyMutated = true;
+      nextProxy = { ...nextProxy, tls: mergedProxyTls.tls };
+    }
+    if (proxyMutated) {
+      mutated = true;
+      nextRequest.proxy = nextProxy;
+    }
+  }
+
+  const mergedTls = mergeTlsSecretMarkerPatch({
+    current: nextRequest.tls,
+    patch: params.markerPatch.tls,
+  });
+  if (mergedTls.mutated) {
+    mutated = true;
+    nextRequest.tls = mergedTls.tls;
+  }
+
+  return { request: mutated ? nextRequest : params.request, mutated };
 }
 
 export function resolveApiKeyFromCredential(

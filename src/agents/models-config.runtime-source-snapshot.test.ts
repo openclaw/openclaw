@@ -182,6 +182,78 @@ function createOpenAiHeaderRuntimeConfig(): OpenClawConfig {
   };
 }
 
+function createOpenAiRequestSourceConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions" as const,
+          request: {
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_REQUEST_AUTH_HEADER", // pragma: allowlist secret
+              },
+              "X-Request-Secret": {
+                source: "file",
+                provider: "vault",
+                id: "/providers/openai/requestSecret",
+              },
+            },
+            auth: {
+              mode: "authorization-bearer" as const,
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_REQUEST_BEARER", // pragma: allowlist secret
+              },
+            },
+            tls: {
+              key: {
+                source: "file",
+                provider: "vault",
+                id: "/providers/openai/clientKey",
+              },
+              serverName: "api.openai.com",
+            },
+          },
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createOpenAiRequestRuntimeConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions" as const,
+          request: {
+            headers: {
+              Authorization: "Bearer runtime-request-header",
+              "X-Request-Secret": "runtime-request-secret",
+            },
+            auth: {
+              mode: "authorization-bearer" as const,
+              token: "runtime-bearer-token",
+            },
+            tls: {
+              key: "runtime-client-key",
+              serverName: "api.openai.com",
+            },
+          },
+          models: [],
+        },
+      },
+    },
+  };
+}
+
 function createOpenAiSourceConfigWithHeadersAndApiKey(): OpenClawConfig {
   const config = createOpenAiHeaderSourceConfig();
   config.models!.providers!.openai.apiKey = {
@@ -243,7 +315,15 @@ async function planGeneratedProviders(params: {
   }
   return JSON.parse(plan.contents).providers as Record<
     string,
-    { apiKey?: string; headers?: Record<string, string> }
+    {
+      apiKey?: string;
+      headers?: Record<string, string>;
+      request?: {
+        headers?: Record<string, string>;
+        auth?: { mode?: string; token?: string; value?: string };
+        tls?: { key?: string; serverName?: string };
+      };
+    }
   >;
 }
 
@@ -254,6 +334,29 @@ function expectOpenAiHeaderMarkers(
     "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
   );
   expect(providers.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
+}
+
+function expectOpenAiRequestMarkers(
+  providers: Record<
+    string,
+    {
+      request?: {
+        headers?: Record<string, string>;
+        auth?: { mode?: string; token?: string };
+        tls?: { key?: string; serverName?: string };
+      };
+    }
+  >,
+) {
+  expect(providers.openai?.request?.headers?.Authorization).toBe(
+    "secretref-env:OPENAI_REQUEST_AUTH_HEADER", // pragma: allowlist secret
+  );
+  expect(providers.openai?.request?.headers?.["X-Request-Secret"]).toBe(NON_ENV_SECRETREF_MARKER);
+  expect(providers.openai?.request?.auth?.token).toBe(
+    "secretref-env:OPENAI_REQUEST_BEARER", // pragma: allowlist secret
+  );
+  expect(providers.openai?.request?.tls?.key).toBe(NON_ENV_SECRETREF_MARKER);
+  expect(providers.openai?.request?.tls?.serverName).toBe("api.openai.com");
 }
 
 describe("models-config runtime source snapshot", () => {
@@ -408,6 +511,14 @@ describe("models-config runtime source snapshot", () => {
       sourceConfigForSecrets: createOpenAiHeaderSourceConfig(),
     });
     expectOpenAiHeaderMarkers(providers);
+  });
+
+  it("uses request secret markers from runtime source snapshot instead of resolved runtime values", async () => {
+    const providers = await planGeneratedProviders({
+      config: createOpenAiRequestRuntimeConfig(),
+      sourceConfigForSecrets: createOpenAiRequestSourceConfig(),
+    });
+    expectOpenAiRequestMarkers(providers);
   });
 
   it("keeps source markers when runtime projection is skipped for incompatible top-level shape", async () => {

@@ -18,6 +18,7 @@ import {
   resolveProviderRequestPolicy,
   type ProviderRequestPolicyResolution,
 } from "./provider-attribution.js";
+import { isSecretRefHeaderValueMarker } from "./secret-ref-auth-markers.js";
 
 type RequestApi = Api | ModelDefinitionConfig["api"];
 
@@ -195,6 +196,9 @@ function sanitizeConfiguredRequestString(value: unknown, path: string): string |
     return undefined;
   }
   const trimmed = value.trim();
+  if (isSecretRefHeaderValueMarker(trimmed)) {
+    return undefined;
+  }
   return trimmed ? trimmed : undefined;
 }
 

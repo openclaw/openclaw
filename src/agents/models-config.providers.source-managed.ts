@@ -6,6 +6,10 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
+import {
+  collectProviderRequestSecretMarkerPatch,
+  mergeProviderRequestSecretMarkerPatch,
+} from "./models-config.providers.secret-helpers.js";
 import type { ProviderConfig, SecretDefaults } from "./models-config.providers.secrets.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
@@ -136,6 +140,25 @@ export function enforceSourceManagedProviderSecrets(params: {
         nextProvider = {
           ...nextProvider,
           headers: nextHeaders,
+        };
+      }
+    }
+
+    const sourceRequestMarkerPatch = collectProviderRequestSecretMarkerPatch({
+      request: sourceProvider.request,
+      secretDefaults: params.sourceSecretDefaults,
+    });
+    if (sourceRequestMarkerPatch.hasMarkers) {
+      params.secretRefManagedProviders?.add(providerKey.trim());
+      const mergedRequest = mergeProviderRequestSecretMarkerPatch({
+        request: nextProvider.request,
+        markerPatch: sourceRequestMarkerPatch.request,
+      });
+      if (mergedRequest.mutated) {
+        providerMutated = true;
+        nextProvider = {
+          ...nextProvider,
+          request: mergedRequest.request,
         };
       }
     }

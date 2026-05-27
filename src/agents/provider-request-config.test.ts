@@ -296,6 +296,50 @@ describe("provider request config", () => {
     });
   });
 
+  it("drops SecretRef marker strings before request overrides become transport credentials", () => {
+    expect(
+      sanitizeConfiguredProviderRequest({
+        headers: {
+          Authorization: "secretref-env:OPENAI_REQUEST_AUTH_HEADER",
+          "X-Tenant": "acme",
+          "X-Managed": "secretref-managed",
+        },
+        auth: {
+          mode: "authorization-bearer",
+          token: "secretref-env:OPENAI_REQUEST_AUTH_TOKEN",
+        },
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+          tls: {
+            ca: "secretref-env:OPENAI_PROXY_CA",
+            cert: "proxy-cert",
+            key: "secretref-managed",
+          },
+        },
+        tls: {
+          cert: "secretref-env:OPENAI_REQUEST_CERT",
+          key: "client-key",
+          passphrase: "secretref-managed",
+        },
+      }),
+    ).toEqual({
+      headers: {
+        "X-Tenant": "acme",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.internal:8443",
+        tls: {
+          cert: "proxy-cert",
+        },
+      },
+      tls: {
+        key: "client-key",
+      },
+    });
+  });
+
   it("fails fast when configured request overrides still contain unresolved SecretRefs", () => {
     const tenantRef: SecretRef = {
       source: "env",
