@@ -6,6 +6,7 @@ import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+const MAX_COMPACTION_RESERVE_RATIO = 0.5;
 
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;
@@ -88,19 +89,26 @@ export function applyPiCompactionSettingsFromConfig(params: {
   // the entire context window, causing every prompt to be classified as an
   // overflow and triggering an infinite compaction loop.
   const ctxBudget = params.contextTokenBudget;
+  let maxSafeReserveTokens: number | undefined;
   if (typeof ctxBudget === "number" && Number.isFinite(ctxBudget) && ctxBudget > 0) {
     const minPromptBudget = Math.min(
       MIN_PROMPT_BUDGET_TOKENS,
       Math.max(1, Math.floor(ctxBudget * MIN_PROMPT_BUDGET_RATIO)),
     );
-    const maxReserve = Math.max(0, ctxBudget - minPromptBudget);
+    const ratioReserveCap = Math.max(0, Math.floor(ctxBudget * MAX_COMPACTION_RESERVE_RATIO));
+    const maxReserve = Math.min(ratioReserveCap, Math.max(0, ctxBudget - minPromptBudget));
+    maxSafeReserveTokens = maxReserve;
     reserveTokensFloor = Math.min(reserveTokensFloor, maxReserve);
   }
 
-  const targetReserveTokens = Math.max(
+  const unclampedTargetReserveTokens = Math.max(
     configuredReserveTokens ?? currentReserveTokens,
     reserveTokensFloor,
   );
+  const targetReserveTokens =
+    typeof maxSafeReserveTokens === "number"
+      ? Math.min(unclampedTargetReserveTokens, maxSafeReserveTokens)
+      : unclampedTargetReserveTokens;
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
