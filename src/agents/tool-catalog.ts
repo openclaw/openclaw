@@ -10,7 +10,7 @@ import {
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+export type ToolProfileId = "minimal" | "coding" | "messaging" | "text-only" | "full";
 
 type ToolProfilePolicy = {
   allow?: string[];
@@ -330,6 +330,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   messaging: {
     allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
+  "text-only": {
+    deny: ["*"],
+  },
   full: {
     allow: ["*"],
   },
@@ -358,6 +361,7 @@ export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
   { id: "coding", label: "Coding" },
   { id: "messaging", label: "Messaging" },
+  { id: "text-only", label: "Text only" },
   { id: "full", label: "Full" },
 ] as const;
 

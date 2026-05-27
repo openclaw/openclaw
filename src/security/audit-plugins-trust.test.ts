@@ -144,7 +144,7 @@ vi.mock("../agents/tool-policy-match.js", () => ({
 
 vi.mock("../agents/tool-policy.js", () => ({
   resolveToolProfilePolicy: (profile: unknown) =>
-    profile === "coding" || profile === "minimal" ? {} : undefined,
+    profile === "coding" || profile === "minimal" || profile === "text-only" ? {} : undefined,
 }));
 
 vi.mock("./audit-tool-policy.js", () => ({
@@ -546,6 +546,34 @@ describe("security audit extension tool reachability findings", () => {
               (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
             ),
           ).toBe(false);
+        },
+      },
+      {
+        name: "does not flag plugin tool reachability when profile is text-only",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "text-only" },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          expect(
+            findings.some(
+              (finding) => finding.checkId === "plugins.tools_reachable_permissive_policy",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not flag plugin tool reachability for a text-only agent context",
+        cfg: {
+          plugins: { allow: ["some-plugin"] },
+          tools: { profile: "full" },
+          agents: { list: [{ id: "reviewer", tools: { profile: "text-only" } }] },
+        } satisfies OpenClawConfig,
+        assert: (findings: Awaited<ReturnType<typeof runSharedExtensionsAudit>>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "plugins.tools_reachable_permissive_policy",
+          );
+          expect(finding?.detail).not.toContain("agents.list.reviewer");
         },
       },
       {

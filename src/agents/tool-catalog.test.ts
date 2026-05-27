@@ -67,4 +67,9 @@ describe("tool-catalog", () => {
     const policy = requireCoreToolProfilePolicy("full");
     expect(policy.allow).toEqual(["*"]);
   });
+
+  it("represents text-only as an explicit no-tool policy", () => {
+    const policy = resolveCoreToolProfilePolicy("text-only");
+    expect(policy).toEqual({ deny: ["*"] });
+  });
 });
