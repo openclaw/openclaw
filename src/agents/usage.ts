@@ -50,6 +50,14 @@ export type NormalizedUsage = {
   total?: number;
 };
 
+export type OpenAiChatCompletionsUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tokens_details?: { cached_tokens: number };
+  completion_tokens_details?: { reasoning_tokens: number };
+};
+
 export type AssistantUsageSnapshot = {
   input: number;
   output: number;
@@ -201,13 +209,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
  * cost. Field name and shape match OpenAI's documented usage breakdown:
  * https://platform.openai.com/docs/guides/prompt-caching
  */
-export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  prompt_tokens_details?: { cached_tokens: number };
-  completion_tokens_details?: { reasoning_tokens: number };
-} {
+export function toOpenAiChatCompletionsUsage(
+  usage: NormalizedUsage | undefined,
+): OpenAiChatCompletionsUsage {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
