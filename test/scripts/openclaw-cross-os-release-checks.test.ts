@@ -23,6 +23,7 @@ import {
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
+  buildGatewayStatusArgsFromHelpText,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
@@ -64,6 +65,7 @@ import {
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
+  startStaticFileServer,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
@@ -92,6 +94,25 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("keeps gateway status RPC probing when help probing is unavailable", () => {
+    expect(buildGatewayStatusArgsFromHelpText("--require-rpc")).toEqual([
+      "gateway",
+      "status",
+      "--require-rpc",
+      "--timeout",
+      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
+    ]);
+    expect(buildGatewayStatusArgsFromHelpText("Usage: openclaw gateway status")).toEqual([
+      "gateway",
+      "status",
+    ]);
+    expect(
+      buildGatewayStatusArgsFromHelpText("--require-rpc", {
+        requireRpc: false,
+      }),
+    ).toEqual(["gateway", "status"]);
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
@@ -181,9 +202,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "1" })).toBe(
       true,
     );
-    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" })).toBe(
-      false,
-    );
+    expect(
+      resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" }),
+    ).toBe(false);
   });
 
   it("detects embedded fallback agent turns as non-gateway proof", () => {
@@ -373,7 +394,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");
     expect(source).toContain("models: []");
-    expect(source).toContain('agentRuntime: { id: "pi" }');
+    expect(source).toContain('agentRuntime: { id: "openclaw" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
@@ -639,6 +660,42 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe("application/octet-stream");
   });
 
+  it("streams release artifacts from the static file server", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-"));
+    const filePath = join(dir, "openclaw-2026.4.14.tgz");
+    const logPath = join(dir, "server.log");
+    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
+
+    try {
+      const payload = Buffer.from(`artifact-head\n${"x".repeat(1024 * 1024)}\nartifact-tail`);
+      writeFileSync(filePath, payload);
+
+      server = await startStaticFileServer({ filePath, logPath });
+      const response = await fetch(server.url);
+      const body = Buffer.from(await response.arrayBuffer());
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-length")).toBe(String(payload.length));
+      expect(response.headers.get("content-type")).toBe("application/octet-stream");
+      expect(body.equals(payload)).toBe(true);
+      expect(readFileSync(logPath, "utf8")).toContain(`GET /${filePath.split(/[/\\]/u).at(-1)}`);
+    } finally {
+      await server?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not preload static release artifacts before serving them", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const serverSource = source.slice(
+      source.indexOf("export async function startStaticFileServer"),
+      source.indexOf("export function resolveStaticFileContentType"),
+    );
+
+    expect(serverSource).toContain("createReadStream(params.filePath)");
+    expect(serverSource).not.toContain("readFileSync(params.filePath)");
+  });
+
   it("uses the published installer URLs for native installer lanes", () => {
     expect(resolvePublishedInstallerUrl("darwin")).toBe("https://openclaw.ai/install.sh");
     expect(resolvePublishedInstallerUrl("linux")).toBe("https://openclaw.ai/install.sh");
@@ -796,15 +853,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-"));
     try {
       const logPath = join(dir, "command.log");
-      const result = await runCommand(
-        process.execPath,
-        ["-e", "process.stdout.write('ok')"],
-        {
-          cwd: dir,
-          env: process.env,
-          logPath,
-        },
-      );
+      const result = await runCommand(process.execPath, ["-e", "process.stdout.write('ok')"], {
+        cwd: dir,
+        env: process.env,
+        logPath,
+      });
 
       expect(result).toMatchObject({
         exitCode: 0,

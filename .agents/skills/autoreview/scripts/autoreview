@@ -480,7 +480,14 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
-    result = run_with_heartbeat(cmd, repo, input_text=prompt, label="claude", stream_output=args.stream_engine_output)
+    result = run_with_heartbeat(
+        cmd,
+        repo,
+        input_text=prompt,
+        label="claude",
+        stream_output=args.stream_engine_output,
+        stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
+    )
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -598,6 +605,80 @@ class CodexStreamDisplay:
         return text
 
 
+class ClaudeStreamDisplay:
+    def __init__(self, *, activity_seconds: int = 20) -> None:
+        self.activity_seconds = activity_seconds
+        self.hidden_events = 0
+        self.last_visible = time.monotonic()
+        self.started = False
+
+    def __call__(self, name: str, line: str) -> str | None:
+        if name != "stdout":
+            return line
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return self.visible(line)
+        event_type = event.get("type")
+        if event_type == "system" and not self.started:
+            self.started = True
+            return self.visible("claude turn started\n")
+        if event_type == "assistant":
+            return self.assistant_message(event)
+        if event_type == "result":
+            return self.visible(self.flush_hidden() + self.result_summary(event))
+        return self.hidden_activity()
+
+    def assistant_message(self, event: dict[str, Any]) -> str | None:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return self.hidden_activity()
+        chunks: list[str] = []
+        for item in message.get("content", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and isinstance(item.get("text"), str):
+                chunks.append(item["text"].rstrip())
+        if chunks:
+            return self.visible(self.flush_hidden() + "\n".join(chunks) + "\n")
+        return self.hidden_activity()
+
+    def result_summary(self, event: dict[str, Any]) -> str:
+        usage = event.get("usage")
+        fields: list[str] = []
+        if isinstance(usage, dict):
+            for key in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+            ):
+                value = usage.get(key)
+                if isinstance(value, int):
+                    fields.append(f"{key}={value}")
+        cost = event.get("total_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            fields.append(f"cost_usd={cost:.6f}")
+        return "claude usage: " + " ".join(fields) + "\n" if fields else "claude turn completed\n"
+
+    def hidden_activity(self) -> str | None:
+        self.hidden_events += 1
+        if time.monotonic() - self.last_visible < self.activity_seconds:
+            return None
+        return self.visible(self.flush_hidden())
+
+    def flush_hidden(self) -> str:
+        if not self.hidden_events:
+            return ""
+        count = self.hidden_events
+        self.hidden_events = 0
+        return f"claude activity: {count} hidden tool/status events\n"
+
+    def visible(self, text: str) -> str:
+        self.last_visible = time.monotonic()
+        return text
+
+
 def format_codex_usage(usage: dict[str, Any]) -> str:
     fields = [
         "input_tokens",
@@ -646,7 +727,7 @@ def extract_json(text: str) -> dict[str, Any]:
 
 
 def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
-    candidates: list[str] = []
+    candidates: list[str | dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -665,7 +746,13 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
             candidates.append(data["content"])
         if isinstance(event.get("result"), str):
             candidates.append(event["result"])
+        if isinstance(event.get("structured_output"), dict):
+            candidates.append(event["structured_output"])
     for candidate in reversed(candidates):
+        if isinstance(candidate, dict):
+            if "findings" in candidate:
+                return candidate
+            continue
         parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed

@@ -62,6 +62,9 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   cfg: OpenClawConfig;
   hasConfiguredChannels: boolean;
   opts: { timeoutMs?: number; all?: boolean };
+  skipUpdateCheck?: boolean;
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
   getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
@@ -90,12 +93,13 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
             runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
           )
           .catch(() => null);
-  const updatePromise = skipColdStartNetworkChecks
+  const skipNetworkUpdate = skipColdStartNetworkChecks || params.skipUpdateCheck === true;
+  const updatePromise = skipNetworkUpdate
     ? Promise.resolve(buildColdStartUpdateResult())
     : params.getUpdateCheckResult({
         timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
+        fetchGit: params.fetchGitUpdate ?? true,
+        includeRegistry: params.includeRegistryUpdate ?? true,
         updateConfigChannel: params.cfg.update?.channel ?? null,
       });
   const agentStatusPromise = skipColdStartNetworkChecks

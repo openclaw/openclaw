@@ -1,7 +1,7 @@
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
-import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -27,7 +27,11 @@ import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
+import {
+  hasExplicitCronDeliveryTarget,
+  resolveCronDeliveryPlan,
+  type CronDeliveryPlan,
+} from "../delivery-plan.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -107,7 +111,7 @@ const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
 const runtimePluginsLoader = createLazyImportLoader(
-  () => import("./run-runtime-plugins.runtime.js"),
+  () => import("../../plugins/runtime-plugins.runtime.js"),
 );
 
 async function loadSessionStoreRuntime() {
@@ -341,12 +345,6 @@ function canPromptForMessageTool(params: {
     params.toolsAllow === undefined ||
     normalizedToolsAllow?.includes("*") === true ||
     normalizedToolsAllow?.includes("message") === true
-  );
-}
-
-function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
-  return Boolean(
-    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId || plan.accountId,
   );
 }
 

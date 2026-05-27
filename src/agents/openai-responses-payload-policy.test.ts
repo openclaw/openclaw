@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   applyOpenAIResponsesPayloadPolicy,
@@ -163,6 +163,21 @@ describe("openai responses payload policy", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
         api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      { storeMode: "disable" },
+    );
+
+    expect(policy.explicitStore).toBe(false);
+    expect(policy.allowsServiceTier).toBe(true);
+    expect(policy.shouldStripStore).toBe(false);
+  });
+
+  it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openclaw-openai-responses-transport",
         provider: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },

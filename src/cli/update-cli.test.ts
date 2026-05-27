@@ -174,6 +174,10 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
 }));
 
+vi.mock("../infra/update-managed-service-handoff-cleanup.js", () => ({
+  cleanupStaleManagedServiceUpdateHandoffs: vi.fn(async () => 0),
+}));
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -223,6 +227,32 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
   };
 });
+
+vi.mock("./update-cli/post-core-plugin-convergence.js", () => ({
+  convergenceWarningsToOutcomes: (convergence: {
+    warnings: Array<{ pluginId?: string; message: string }>;
+    errored: boolean;
+  }) => ({
+    warnings: convergence.warnings,
+    outcomes: convergence.warnings
+      .filter((warning): warning is { pluginId: string; message: string } =>
+        Boolean(warning.pluginId),
+      )
+      .map((warning) => ({
+        pluginId: warning.pluginId,
+        status: "error",
+        message: warning.message,
+      })),
+    errored: convergence.errored,
+  }),
+  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
+    changes: [],
+    warnings: [],
+    errored: false,
+    smokeFailures: [],
+    installRecords: params.baselineInstallRecords ?? {},
+  })),
+}));
 
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: async () => {

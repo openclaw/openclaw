@@ -49,7 +49,10 @@ async function waitForExit(
   timeoutMs: number,
 ): Promise<{ signal: NodeJS.Signals | null; status: number | null }> {
   return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), timeoutMs);
+    const timeout = setTimeout(
+      () => reject(new Error("timeout waiting for child exit")),
+      timeoutMs,
+    );
     child.on("close", (status, signal) => {
       clearTimeout(timeout);
       resolve({ signal, status });
@@ -68,6 +71,7 @@ describe("package-openclaw-for-docker", () => {
       args: string[];
       cwd: string;
       noPnpm: string | undefined;
+      skipDts: string | undefined;
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
@@ -86,6 +90,7 @@ describe("package-openclaw-for-docker", () => {
             args,
             cwd,
             noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
+            skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
             timeoutMs: options.timeoutMs,
           });
         },
@@ -104,6 +109,7 @@ describe("package-openclaw-for-docker", () => {
         args: ["scripts/build-all.mjs"],
         cwd: "/repo",
         noPnpm: "1",
+        skipDts: "1",
         timeoutMs: 1234,
       },
     ]);
@@ -118,10 +124,9 @@ describe("package-openclaw-for-docker", () => {
     const childPidPath = path.join(tempDir, "child.pid");
     let childPid = 0;
     try {
-      const childScript = [
-        "process.on('SIGTERM', () => {});",
-        "setInterval(() => {}, 1000);",
-      ].join("");
+      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
+        "",
+      );
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "const fs = require('node:fs');",
@@ -135,13 +140,13 @@ describe("package-openclaw-for-docker", () => {
         runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
           env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
           killAfterMs: 50,
-          timeoutMs: 200,
+          timeoutMs: 2000,
         }),
-      ).rejects.toThrow(/timed out after 200ms/u);
+      ).rejects.toThrow(/timed out after 2000ms/u);
 
+      await waitForFile(childPidPath, 2000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(isProcessAlive(childPid)).toBe(false);
+      await waitForDead(childPid, 2000);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");

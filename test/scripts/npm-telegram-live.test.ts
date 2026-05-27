@@ -67,6 +67,28 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('credential_role="ci"');
   });
 
+  it("bounds installed-package hot path OpenClaw commands", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const runtimeRunStart = script.indexOf("# Mount only QA harness source");
+    const runtimeRun = script.slice(runtimeRunStart);
+
+    expect(runtimeRunStart).toBeGreaterThanOrEqual(0);
+    expect(script).toContain(
+      '-e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"',
+    );
+    expect(runtimeRun).toContain("source scripts/lib/openclaw-e2e-instance.sh");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw --version");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw onboard");
+    expect(runtimeRun).toContain(
+      'OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard',
+    );
+    expect(runtimeRun).not.toContain("export OPENAI_API_KEY=");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
+  });
+
   it("can install a resolved package tarball instead of a registry spec", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 

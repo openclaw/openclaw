@@ -87,7 +87,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/run-state.js", () => ({
+vi.mock("../agents/embedded-agent-runner/run-state.js", () => ({
   getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
   listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
@@ -119,7 +119,7 @@ vi.mock("../agents/model-provider-auth.js", () => ({
   },
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 

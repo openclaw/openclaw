@@ -46,6 +46,7 @@ const hoisted = vi.hoisted(() => {
     allowed: true,
     inCatalog: true,
   }));
+  const ensureOpenClawModelsJson = vi.fn(async () => {});
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthState = vi.fn(async (_cfg?: unknown, _options?: unknown) => {});
   const setAuthProfileFailureHook = vi.fn();
@@ -78,6 +79,7 @@ const hoisted = vi.hoisted(() => {
     resolveHooksGmailModel,
     loadModelCatalog,
     getModelRefStatus,
+    ensureOpenClawModelsJson,
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthState,
     setAuthProfileFailureHook,
@@ -169,6 +171,10 @@ vi.mock("../agents/model-selection.js", () => ({
   isCliProvider: hoisted.isCliProvider,
   resolveConfiguredModelRef: hoisted.resolveConfiguredModelRef,
   resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
+}));
+
+vi.mock("../agents/models-config.js", () => ({
+  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
 }));
 
 vi.mock("../agents/model-provider-auth.js", () => ({
@@ -284,6 +290,8 @@ describe("startGatewayPostAttachRuntime", () => {
       allowed: true,
       inCatalog: true,
     });
+    hoisted.ensureOpenClawModelsJson.mockReset();
+    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
     hoisted.clearCurrentProviderAuthState.mockClear();
     hoisted.warmCurrentProviderAuthState.mockReset();
     hoisted.warmCurrentProviderAuthState.mockResolvedValue(undefined);
@@ -867,6 +875,10 @@ describe("startGatewayPostAttachRuntime", () => {
       });
 
       await vi.advanceTimersToNextTimerAsync();
+      await vi.waitFor(() => {
+        expect(onPostReadySidecars).toHaveBeenCalledTimes(1);
+        expect(onGatewayLifetimeSidecars).toHaveBeenCalledTimes(1);
+      });
       const gmailSidecars = onPostReadySidecars.mock.calls[0]?.[0] as
         | { stop: () => void }[]
         | undefined;
@@ -1631,6 +1643,39 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads lazy startup plugins before returning with deferred sidecars", async () => {
+    const pluginRegistry = {
+      plugins: [{ id: "lazy", status: "loaded" }],
+      typedHooks: [],
+    } as never;
+    const loaded = { pluginRegistry, gatewayMethods: ["core.ping"] };
+    const loadStartupPlugins = vi.fn(async () => loaded);
+    const onStartupPluginsLoaded = vi.fn();
+    const startGatewaySidecars = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          deferSidecars: true,
+          loadStartupPlugins,
+          onStartupPluginsLoaded,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    );
+
+    expect(loadStartupPlugins).toHaveBeenCalledTimes(1);
+    expect(onStartupPluginsLoaded).toHaveBeenCalledWith(loaded);
+    expect(startGatewaySidecars).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("dispatches registered gateway startup internal hooks without configured hook packs", async () => {

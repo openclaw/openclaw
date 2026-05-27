@@ -70,6 +70,41 @@ export type CanvasCliDependencies = {
 type CanvasNodeCandidate = NodeMatchCandidate;
 type CanvasSnapshotRequestFormat = "png" | "jpeg";
 
+function normalizeNumericString(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function parseStrictPositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeNumericString(value);
+  if (!normalized || !/^\+?\d+$/.test(normalized)) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseStrictFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeNumericString(value);
+  if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
   const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");
   switch (format) {
@@ -87,13 +122,29 @@ function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  const value =
-    typeof raw === "number" || typeof raw === "bigint"
-      ? Number(raw)
-      : typeof raw === "string" && raw.trim()
-        ? Number.parseInt(raw.trim(), 10)
-        : Number.NaN;
-  return Number.isFinite(value) ? value : undefined;
+  return parseStrictPositiveInteger(raw);
+}
+
+function parseCanvasPositiveIntOption(raw: string | undefined, flag: string): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a number.`);
+  }
+  return parsed;
 }
 
 function parseNodeCandidates(raw: unknown): CanvasNodeCandidate[] {
@@ -249,8 +300,8 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .action(async (opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas snapshot", async () => {
           const format = parseCanvasSnapshotRequestFormat(opts.format);
-          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
+          const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
+          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality");
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
             format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
@@ -287,10 +338,10 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .action(async (opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas present", async () => {
           const placement = {
-            x: opts.x ? Number.parseFloat(opts.x) : undefined,
-            y: opts.y ? Number.parseFloat(opts.y) : undefined,
-            width: opts.width ? Number.parseFloat(opts.width) : undefined,
-            height: opts.height ? Number.parseFloat(opts.height) : undefined,
+            x: parseCanvasFiniteNumberOption(opts.x, "--x"),
+            y: parseCanvasFiniteNumberOption(opts.y, "--y"),
+            width: parseCanvasFiniteNumberOption(opts.width, "--width"),
+            height: parseCanvasFiniteNumberOption(opts.height, "--height"),
           };
           const params: Record<string, unknown> = {};
           if (opts.target) {

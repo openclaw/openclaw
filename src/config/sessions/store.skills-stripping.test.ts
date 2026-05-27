@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveEmbeddedRunSkillEntries } from "../../agents/pi-embedded-runner/skills-runtime.js";
+import { resolveEmbeddedRunSkillEntries } from "../../agents/embedded-agent-runner/skills-runtime.js";
 import { createCanonicalFixtureSkill } from "../../agents/skills.test-helpers.js";
 import type { Skill } from "../../agents/skills/skill-contract.js";
 import {

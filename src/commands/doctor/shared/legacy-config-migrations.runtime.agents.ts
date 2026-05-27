@@ -1,4 +1,3 @@
-import { listLegacyRuntimeModelProviderAliases } from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
@@ -14,6 +13,7 @@ import {
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
 import { uniqueStrings } from "../../../shared/string-normalization.js";
+import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -95,6 +95,21 @@ const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
     message:
       'agents.list[].embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAgentListEmbeddedHarness(value),
+  },
+];
+
+const DEPRECATED_EMBEDDED_AGENT_KEY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "embeddedPi"],
+    message:
+      'agents.defaults.embeddedPi is legacy; use agents.defaults.embeddedAgent instead. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].embeddedPi is legacy; use agents.list[].embeddedAgent instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAgentListEmbeddedAgentKey(value),
   },
 ];
 
@@ -264,6 +279,13 @@ function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
   return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
 }
 
+function hasLegacyAgentListEmbeddedAgentKey(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => getRecord(getRecord(agent)?.embeddedPi) !== null);
+}
+
 function hasAgentListRuntimePolicy(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
@@ -287,6 +309,30 @@ function hasAgentListModelTimeout(value: unknown): boolean {
       hasOwnTimeoutMs(getRecord(agentRecord?.subagents)?.model)
     );
   });
+}
+
+function migrateLegacyEmbeddedAgentKey(
+  container: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const legacy = getRecord(container.embeddedPi);
+  if (!legacy) {
+    return;
+  }
+  const existing = getRecord(container.embeddedAgent);
+  if (!existing) {
+    container.embeddedAgent = legacy;
+    changes.push(`Moved ${pathLabel}.embeddedPi → ${pathLabel}.embeddedAgent.`);
+  } else {
+    const merged = structuredClone(existing);
+    mergeMissing(merged, legacy);
+    container.embeddedAgent = merged;
+    changes.push(
+      `Merged ${pathLabel}.embeddedPi → ${pathLabel}.embeddedAgent (filled missing fields from legacy; kept explicit embeddedAgent values).`,
+    );
+  }
+  delete container.embeddedPi;
 }
 
 function migrateLegacySandboxPerSession(
@@ -332,7 +378,7 @@ function resolveLegacyAgentRuntimeIntent(raw: unknown): LegacyAgentRuntimeIntent
     return undefined;
   }
   const runtime = typeof record.id === "string" ? record.id.trim().toLowerCase() : "";
-  if (!runtime || runtime === "auto" || runtime === "pi") {
+  if (!runtime || runtime === "auto" || runtime === "openclaw") {
     return undefined;
   }
   const alias = listLegacyRuntimeModelProviderAliases().find(
@@ -1103,6 +1149,29 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           `agents.list.${index}.subagents.model`,
           changes,
         );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.embeddedPi->embeddedAgent",
+    describe: "Move legacy embedded agent config key to embeddedAgent",
+    legacyRules: DEPRECATED_EMBEDDED_AGENT_KEY_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (defaults) {
+        migrateLegacyEmbeddedAgentKey(defaults, "agents.defaults", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        if (!agentRecord) {
+          continue;
+        }
+        migrateLegacyEmbeddedAgentKey(agentRecord, `agents.list.${index}`, changes);
       }
     },
   }),

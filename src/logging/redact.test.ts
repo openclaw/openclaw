@@ -564,6 +564,38 @@ describe("redactSensitiveText", () => {
     expect(resolved.patterns).toHaveLength(1);
     expect(resolved.patterns[0]).toBe(pattern);
   });
+
+  it("keeps custom redaction patterns active for text outside default markers", () => {
+    const output = redactSensitiveText("ticket internal-12345 should hide", {
+      mode: "tools",
+      patterns: [/internal-\d+/g],
+    });
+
+    expect(output).toBe("ticket *** should hide");
+  });
+
+  it("keeps configured redaction patterns active for text outside default markers", () => {
+    writeConfig(`{
+      logging: {
+        redactPatterns: ["/internal-\\\\d+/g"],
+      },
+    }`);
+
+    expect(redactSensitiveText("ticket internal-12345 should hide")).toBe("ticket *** should hide");
+  });
+
+  it("redacts built-in query parameters after the default prefilter", () => {
+    expect(redactSensitiveText("https://example.test/callback?pass=opensesamevalue")).toBe(
+      "https://example.test/callback?pass=***",
+    );
+    expect(redactSensitiveText("https://example.test/callback?security_code=123456")).toBe(
+      "https://example.test/callback?security_code=***",
+    );
+  });
+
+  it("redacts standalone bearer tokens after the default prefilter", () => {
+    expect(redactSensitiveText("Bearer abcdef1234567890ghij")).toBe("Bearer abcdef…ghij");
+  });
 });
 
 describe("redactSecrets", () => {

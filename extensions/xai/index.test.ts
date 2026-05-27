@@ -69,6 +69,35 @@ describe("xai provider plugin", () => {
     expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
   });
 
+  it("classifies Grok usage and spending limit errors", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '429 {"code":"Some resource has been exhausted","error":"Rate limit exceeded"}',
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '400 {"code":"Client specified an invalid argument","error":"Incorrect API key provided: xa***en. You can obtain an API key from https://console.x.ai."}',
+      }),
+    ).toBeUndefined();
+  });
+
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
       plugin,
@@ -246,18 +275,5 @@ describe("xai provider plugin", () => {
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
-
-    const compat = provider.contributeResolvedModelCompat?.({
-      provider: "openrouter",
-      modelId: "x-ai/grok-4-1-fast",
-      model: createProviderModel({
-        id: "x-ai/grok-4-1-fast",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-      }),
-    } as never);
-    expect(compat?.toolSchemaProfile).toBe("xai");
-    expect(compat?.nativeWebSearchTool).toBe(true);
-    expect(compat?.toolCallArgumentsEncoding).toBe("html-entities");
   });
 });

@@ -55,7 +55,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        npm install -g bun@1.3.13
+        npm install -g bun@1.3.14
 
     - name: Runtime versions
       shell: bash

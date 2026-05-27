@@ -146,6 +146,7 @@ Skills own workflows; root owns hard policy and routing.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
+- Cross-function state: when valid combos matter, return a closed mode/result shape. Avoid parallel nullable fields or derived booleans that callers must keep in sync; make impossible states unrepresentable.
 - Formatter-friendly shape: when oxfmt explodes an expression vertically, extract named booleans, payloads, or small helpers. Do not change width or use format-ignore for local compactness.
 - Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
 - Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.
@@ -210,6 +211,7 @@ Skills own workflows; root owns hard policy and routing.
 - Lockfiles/shrinkwrap are security surface: review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, `package-lock.json`; root/plugin npm packages ship shrinkwrap, not package-lock.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Use `$release-openclaw-maintainer`.
+- Backport means apply to newest open `release/` branch unless user names another target.
 - GHSA/advisories: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.
 - Beta tag/version match: `vYYYY.M.D-beta.N` -> npm `YYYY.M.D-beta.N --tag beta`.
 

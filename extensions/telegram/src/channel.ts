@@ -10,8 +10,12 @@ import {
   clearAccountEntryFields,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   PAIRING_APPROVED_MESSAGE,
@@ -22,10 +26,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  resolveOutboundSendDep,
-  type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-send-deps";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,

@@ -6,7 +6,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
   onceMessage,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   startConnectedServerWithClient,
   writeSessionStore,
@@ -367,8 +367,8 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(endPayload.operationId).toBe(startPayload.operationId);
   expect(typeof startPayload.ts).toBe("number");
   expect(typeof endPayload.ts).toBe("number");
-  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  const compactionCall = embeddedRunMock.compactEmbeddedAgentSession.mock.calls.at(0)?.[0] as
     | {
         agentHarnessId?: string;
         allowGatewaySubagentBinding?: boolean;
@@ -449,7 +449,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
       }),
     },
   });
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValueOnce({
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
     ok: true,
     compacted: false,
     result: {
@@ -548,8 +548,8 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       const started = await startConnectedServerWithClient();
       const { server, ws } = started;
       try {
-        piSdkMock.enabled = true;
-        piSdkMock.models = [
+        agentDiscoveryMock.enabled = true;
+        agentDiscoveryMock.models = [
           { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
         ];
 

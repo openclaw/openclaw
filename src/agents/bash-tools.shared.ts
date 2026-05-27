@@ -207,8 +207,8 @@ export function clampWithDefault(
   return Math.min(Math.max(value, min), max);
 }
 
-export function readEnvInt(key: string) {
-  const raw = process.env[key];
+export function readEnvInt(key: string, legacyKey?: string) {
+  const raw = process.env[key] || (legacyKey ? process.env[legacyKey] : undefined);
   if (!raw) {
     return undefined;
   }

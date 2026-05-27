@@ -17,20 +17,6 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
-import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import {
-  listLegacyRuntimeModelProviderAliases,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
-import {
-  isCliProvider,
-  resolveModelRefFromString,
-  resolvePersistedOverrideModelRef,
-} from "../../agents/model-selection.js";
-import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
@@ -41,10 +27,21 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
-} from "../../agents/pi-embedded-helpers.js";
-import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+} from "../../agents/embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  isCliProvider,
+  resolveModelRefFromString,
+  resolvePersistedOverrideModelRef,
+} from "../../agents/model-selection.js";
+import { resolveOpenAIRuntimeProvider } from "../../agents/openai-codex-routing.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
@@ -279,7 +276,7 @@ export type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
-      runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
       fallbackAttempts: RuntimeFallbackAttempt[];
@@ -290,7 +287,7 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
-type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 type FallbackSelectionState = Pick<
   SessionEntry,
@@ -643,12 +640,17 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
+  suppressInNonDirect?: boolean;
   cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
-  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
+  if (
+    !params.suppressInNonDirect &&
+    !params.isGenericRunnerFailure &&
+    !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)
+  ) {
     return params.text;
   }
   // Match normal reply routing: default group/channel failures stay silent,
@@ -826,6 +828,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: buildRateLimitCooldownMessage(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -837,6 +840,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: rateLimitOrOverloadedCopy,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -1295,17 +1299,10 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
   if (!runtime || runtime === "auto" || runtime === "default") {
     return undefined;
   }
-  if (runtime === "pi") {
-    return "pi";
-  }
   if (provider === "openai" && runtime === "codex") {
     return "codex";
   }
-  return listLegacyRuntimeModelProviderAliases().find(
-    (alias) =>
-      normalizeLowercaseStringOrEmpty(alias.provider) === provider &&
-      normalizeLowercaseStringOrEmpty(alias.runtime) === runtime,
-  )?.runtime;
+  return undefined;
 }
 
 export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
@@ -1585,7 +1582,7 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let attemptedRuntimeProvider = fallbackProvider;
@@ -1863,8 +1860,14 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
+      const runAbortSignal = params.replyOperation?.abortSignal ?? params.opts?.abortSignal;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
+      const userTurnTranscriptRecorder =
+        params.followupRun.userTurnTranscriptRecorder ?? params.opts?.userTurnTranscriptRecorder;
+      const notifyUserMessagePersisted = () => {
+        queuedUserMessagePersistedAcrossFallback = true;
+      };
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -1879,6 +1882,7 @@ export async function runAgentTurnWithFallback(params: {
           runId,
           sessionId: params.followupRun.run.sessionId,
           lane: runLane,
+          abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
@@ -1972,20 +1976,18 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                 });
                 const resolvedCliExecutionProvider =
-                  resolvedSessionRuntimeOverride === "pi"
-                    ? provider
-                    : ((resolvedSessionRuntimeOverride &&
-                      isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
-                        ? resolvedSessionRuntimeOverride
-                        : undefined) ??
-                      resolveCliRuntimeExecutionProvider({
-                        provider,
-                        cfg: runtimeConfig,
-                        agentId: params.followupRun.run.agentId,
-                        modelId: model,
-                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                      }) ??
-                      provider);
+                  (resolvedSessionRuntimeOverride &&
+                  isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
+                    ? resolvedSessionRuntimeOverride
+                    : undefined) ??
+                  resolveCliRuntimeExecutionProvider({
+                    provider,
+                    cfg: runtimeConfig,
+                    agentId: params.followupRun.run.agentId,
+                    modelId: model,
+                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                  }) ??
+                  provider;
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
@@ -2044,6 +2046,9 @@ export async function runAgentTurnWithFallback(params: {
                     config: runtimeConfig,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
+                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                    userTurnTranscriptRecorder,
+                    onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     inputProvenance: params.followupRun.run.inputProvenance,
@@ -2074,7 +2079,7 @@ export async function runAgentTurnWithFallback(params: {
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     disableTools: params.opts?.disableTools,
-                    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                    abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                   },
                   transformResult: (rawResult) =>
@@ -2120,7 +2125,7 @@ export async function runAgentTurnWithFallback(params: {
                   agentId: params.followupRun.run.agentId,
                   sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
                 });
-            const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
+            const embeddedRunProvider = resolveOpenAIRuntimeProvider({
               provider,
               harnessRuntime: agentHarnessPolicy.runtime,
               authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
@@ -2130,8 +2135,8 @@ export async function runAgentTurnWithFallback(params: {
             });
             const embeddedRunHarnessOverride =
               sessionRuntimeOverride ??
-              (agentHarnessPolicy.runtime === "pi" && embeddedRunProvider !== provider
-                ? "pi"
+              (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== provider
+                ? "openclaw"
                 : undefined);
             return (async () => {
               let attemptCompactionCount = 0;
@@ -2149,7 +2154,7 @@ export async function runAgentTurnWithFallback(params: {
                   milestone: "before_embedded_run",
                 });
                 const result = await agentTurnTiming.measure("embedded_run", () =>
-                  runEmbeddedPiAgent({
+                  runEmbeddedAgent({
                     ...embeddedContext,
                     allowGatewaySubagentBinding: true,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
@@ -2166,6 +2171,7 @@ export async function runAgentTurnWithFallback(params: {
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
+                    userTurnTranscriptRecorder,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
@@ -2174,9 +2180,7 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    onUserMessagePersisted: () => {
-                      queuedUserMessagePersistedAcrossFallback = true;
-                    },
+                    onUserMessagePersisted: notifyUserMessagePersisted,
                     suppressTranscriptOnlyAssistantPersistence:
                       params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
                     suppressAssistantErrorPersistence:
@@ -2205,7 +2209,7 @@ export async function runAgentTurnWithFallback(params: {
                     bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                     images: currentTurnImages.images,
                     imageOrder: currentTurnImages.imageOrder,
-                    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                    abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
@@ -2799,6 +2803,7 @@ export async function runAgentTurnWithFallback(params: {
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+        suppressInNonDirect: Boolean(isRateLimit || rateLimitOrOverloadedCopy),
         cfg: params.followupRun.run.config,
       });
 
@@ -2863,7 +2868,13 @@ export async function runAgentTurnWithFallback(params: {
       if (formattedErrorCandidate) {
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
-            text: formattedErrorCandidate,
+            text: resolveExternalRunFailureTextForConversation({
+              text: formattedErrorCandidate,
+              sessionCtx: params.sessionCtx,
+              isGenericRunnerFailure: false,
+              suppressInNonDirect: true,
+              cfg: params.followupRun.run.config,
+            }),
             isError: true,
           }),
         ];

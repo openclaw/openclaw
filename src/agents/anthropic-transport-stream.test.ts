@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
@@ -204,6 +204,55 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
+  });
+
+  it("strips the provider prefix from direct Anthropic request model ids", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "anthropic/claude-sonnet-4-6" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
+  });
+
+  it("keeps slash-bearing model ids for Anthropic-compatible proxy providers", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4-6",
+        baseUrl: "https://openrouter.ai/api/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-or-test",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps slash-bearing model ids for configured Anthropic-compatible endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "anthropic/claude-sonnet-4-6",
+        baseUrl: "https://anthropic-proxy.internal",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("bypasses the OpenAI SSE sanitizer for Kimi Anthropic thinking streams", async () => {

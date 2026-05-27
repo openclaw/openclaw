@@ -97,6 +97,10 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
+let defaultResolvedPatterns: RegExp[] | undefined;
+
+const DEFAULT_REDACT_PREFILTER_RE =
+  /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CARD|CVC|CVV|PAYMENT|PRIVATE KEY|[?&]pass=|security[-_]?code|securityCode|\bBearer\s+|sk-|ghp_|github_pat_|xox[baprs]-|xapp-|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|npm_|AKID|LTAI|hf_|r8_|\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,})/i;
 
 export type RedactOptions = {
   mode?: RedactSensitiveMode;
@@ -136,8 +140,13 @@ function parsePattern(raw: RedactPattern): RegExp | null {
 }
 
 function resolvePatterns(value?: RedactPattern[]): RegExp[] {
-  const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
-  return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  if (!value?.length) {
+    defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
+      (re): re is RegExp => Boolean(re),
+    );
+    return defaultResolvedPatterns;
+  }
+  return value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
 function maskToken(token: string): string {
@@ -216,6 +225,10 @@ function redactText(text: string, patterns: RegExp[]): string {
   return next;
 }
 
+function couldMatchDefaultRedactPatterns(text: string): boolean {
+  return DEFAULT_REDACT_PREFILTER_RE.test(text);
+}
+
 function looksLikeAppSpecificPassword(candidate: string): boolean {
   return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
 }
@@ -253,10 +266,14 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const resolved = resolveRedactOptions(options);
-  if (resolved.mode === "off") {
+  const resolvedOptions = options ?? resolveConfigRedaction();
+  if (normalizeMode(resolvedOptions.mode) === "off") {
     return text;
   }
+  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(text)) {
+    return text;
+  }
+  const resolved = resolveRedactOptions(resolvedOptions);
   if (!resolved.patterns.length) {
     return text;
   }
