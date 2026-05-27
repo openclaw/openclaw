@@ -321,6 +321,48 @@ describe("getStatusSummary", () => {
     expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
   });
 
+  it("hydrates only recent session rows while preserving total counts", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => {
+        const number = index + 1;
+        return [
+          `agent:main:session-${number}`,
+          {
+            sessionId: `session-${number}`,
+            updatedAt: number,
+          },
+        ];
+      }),
+    );
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue(store);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.count).toBe(12);
+    expect(summary.sessions.byAgent[0]?.count).toBe(12);
+    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:session-12",
+      "agent:main:session-11",
+      "agent:main:session-10",
+      "agent:main:session-9",
+      "agent:main:session-8",
+      "agent:main:session-7",
+      "agent:main:session-6",
+      "agent:main:session-5",
+      "agent:main:session-4",
+      "agent:main:session-3",
+    ]);
+    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
+      summary.sessions.recent.map((session) => session.key),
+    );
+
+    const hydratedKeys = vi
+      .mocked(statusSummaryRuntime.resolveSessionRuntimeLabel)
+      .mock.calls.map(([params]) => params.sessionKey);
+    expect(hydratedKeys).not.toContain("agent:main:session-1");
+    expect(hydratedKeys).not.toContain("agent:main:session-2");
+  });
+
   it("includes configured and selected model labels for pinned sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "zhipu",

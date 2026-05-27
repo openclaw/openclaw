@@ -494,11 +494,20 @@ function createStreamFnWithExtraParams(
     streamParams.seed = resolvedSeed;
   }
 
+  const readSupportsPromptCacheKey = (m: unknown): boolean => {
+    const compat = (m as { compat?: unknown })?.compat;
+    if (!compat || typeof compat !== "object") {
+      return false;
+    }
+    return (compat as Record<string, unknown>).supportsPromptCacheKey === true;
+  };
+
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
     provider,
     typeof model?.api === "string" ? model.api : undefined,
     typeof model?.id === "string" ? model.id : undefined,
+    readSupportsPromptCacheKey(model),
   );
   if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
     const debugParams = initialCacheRetention
@@ -514,6 +523,7 @@ function createStreamFnWithExtraParams(
       provider,
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
+      readSupportsPromptCacheKey(callModel),
     );
     const hasStreamParams = Object.keys(streamParams).length > 0 || cacheRetention;
     if (!hasStreamParams) {

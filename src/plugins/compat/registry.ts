@@ -51,6 +51,31 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/status.test.ts", "src/plugins/contracts/shape.contract.test.ts"],
   },
   {
+    code: "deprecated-memory-embedding-provider-api",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-05-21",
+    warningStarts: "2026-05-21",
+    removeAfter: "2026-08-21",
+    replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
+    docsPath: "/plugins/sdk-migration#memory-embedding-provider-api",
+    surfaces: [
+      "api.registerMemoryEmbeddingProvider(...)",
+      "contracts.memoryEmbeddingProviders",
+      "openclaw/plugin-sdk/memory-core-host-engine-embeddings registerMemoryEmbeddingProvider",
+      "plugins inspect compatibility notices",
+    ],
+    diagnostics: ["plugin compatibility notice", "plugin SDK package guardrail"],
+    tests: [
+      "src/plugins/status.test.ts",
+      "src/plugins/compat/registry.test.ts",
+      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+    ],
+    releaseNote:
+      "Memory-specific embedding provider registration remains wired as a deprecated compatibility path while providers migrate to the generic embedding provider contract.",
+  },
+  {
     code: "legacy-root-sdk-import",
     status: "deprecated",
     owner: "sdk",

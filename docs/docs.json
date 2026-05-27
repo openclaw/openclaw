@@ -1406,6 +1406,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
@@ -1743,8 +1744,8 @@
                   "plugins/architecture-internals",
                   "plugins/sdk-migration",
                   "plugins/compatibility",
-                  "plugins/sdk-channel-message",
-                  "plugins/sdk-channel-turn",
+                  "plugins/sdk-channel-outbound",
+                  "plugins/sdk-channel-inbound",
                   "plugins/sdk-channel-ingress",
                   "plugins/message-presentation"
                 ]

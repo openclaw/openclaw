@@ -887,6 +887,7 @@ describe("runCodexAppServerAttempt", () => {
     await closeCodexSandboxExecServersForTests();
     resetCodexAppServerClientFactoryForTest();
     testing.resetOpenClawCodingToolsFactoryForTests();
+    testing.resetEnsuredCodexWorkspaceDirsForTests();
     testing.clearPendingCodexNativeHookRelayUnregistersForTests();
     resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
@@ -901,6 +902,16 @@ describe("runCodexAppServerAttempt", () => {
     vi.unstubAllEnvs();
     await closeCodexSandboxExecServersForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("recreates cached Codex workspace directories after cleanup removes them", async () => {
+    const workspaceDir = path.join(tempDir, "cached-workspace");
+
+    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+    await testing.ensureCodexWorkspaceDirOnceForTests(workspaceDir);
+
+    expect((await fs.stat(workspaceDir)).isDirectory()).toBe(true);
   });
 
   it("filters Codex-native dynamic tools from app-server tool exposure", () => {
@@ -2334,18 +2345,21 @@ describe("runCodexAppServerAttempt", () => {
       testing.buildDeveloperInstructions(params, {
         dynamicTools: [createMessageDynamicTool("Message test tool")],
       }),
-    ).toContain("To send a visible message, use the `message` tool.");
+    ).toContain("Visible source replies are not automatically delivered for this run.");
 
     const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
       dynamicTools: [],
     });
-    expect(withoutMessageToolInstructions).toContain("active Codex delivery path");
-    expect(withoutMessageToolInstructions).not.toContain("use the `message` tool");
+    expect(withoutMessageToolInstructions).toContain(
+      "reply normally in your final assistant message",
+    );
+    expect(withoutMessageToolInstructions).not.toContain("message(action=send)");
+    expect(withoutMessageToolInstructions).not.toContain("Use `message`");
 
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
-    expect(automaticInstructions).toContain("active Codex delivery path");
-    expect(automaticInstructions).not.toContain("use the `message` tool");
+    expect(automaticInstructions).toContain("reply normally in your final assistant message");
+    expect(automaticInstructions).not.toContain("message(action=send)");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -2433,12 +2447,44 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("keeps leading delivery hints out of the Codex current user request", async () => {
+    const sessionFile = path.join(tempDir, "session-delivery-hint.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-delivery-hint");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "Delivery: to send a message, use the `message` tool.\n\nhello";
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("OpenClaw delivery metadata:");
+    expect(inputText).toContain(
+      "This delivery metadata is runtime routing guidance, not the user's request.",
+    );
+    expect(inputText).toContain("Delivery: to send a message, use the `message` tool.");
+    expect(inputText).toContain("Current user request:\nhello");
+    expect(inputText).not.toContain("Current user request:\nDelivery:");
+  });
+
   it("mirrors the Codex prompt into the transcript when the turn starts", async () => {
     const sessionFile = path.join(tempDir, "session-early-prompt.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "external channel prompt";
+    const onUserMessagePersisted = vi.fn();
+    params.onUserMessagePersisted = onUserMessagePersisted;
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -2447,6 +2493,15 @@ describe("runCodexAppServerAttempt", () => {
       expect(raw).toContain('"role":"user"');
       expect(raw).toContain('"content":"external channel prompt"');
       expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"');
+    });
+    await vi.waitFor(() => {
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: "user",
+          content: "external channel prompt",
+          idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+        }),
+      );
     });
 
     const rawBeforeCompletion = await fs.readFile(sessionFile, "utf8");
@@ -2457,6 +2512,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const rawAfterCompletion = await fs.readFile(sessionFile, "utf8");
     expect(rawAfterCompletion.match(/"role":"user"/gu)).toHaveLength(1);
+    expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
   });
 
   it("does not mirror the Codex prompt early when user message persistence is suppressed", async () => {
@@ -3076,6 +3132,22 @@ describe("runCodexAppServerAttempt", () => {
         config: undefined,
       }),
     ).toBe(testing.CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
+  });
+
+  it("uses a 90 second default for generic Codex dynamic tool calls", () => {
+    expect(
+      testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-session-status",
+          namespace: null,
+          tool: "session_status",
+          arguments: { sessionKey: "current" },
+        },
+        config: undefined,
+      }),
+    ).toBe(90_000);
   });
 
   it("caps dynamic tool timeouts at the bridge maximum", () => {
@@ -4149,7 +4221,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
+  it("unsubscribes and closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
     const close = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -4190,6 +4262,13 @@ describe("runCodexAppServerAttempt", () => {
       {
         threadId: "thread-1",
         turnId: "turn-1",
+      },
+      { timeoutMs: 5_000 },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      {
+        threadId: "thread-1",
       },
       { timeoutMs: 5_000 },
     );
@@ -5392,6 +5471,111 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(false);
   });
 
+  it("arms completion idle watch after non-assistant rawResponseItem/completed with no active items", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
+
+    const toolResult = (await handleRequest?.({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    })) as { success?: boolean };
+    expect(toolResult.success).toBe(false);
+    // Send a rawResponseItem/completed with type "reasoning" — this does NOT
+    // qualify as postToolRawAssistantCompletionNeedsTerminalGuard (which
+    // requires type=message + role=assistant + text preview).  Before the fix,
+    // this would disarm the completion idle watch via the catch-all disarm
+    // block, leaving only the 30-minute terminal timeout.  After the fix,
+    // rawResponseItemCompletedWithNoActiveItems keeps the 60s (here 5ms)
+    // completion idle watch armed.
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "reasoning",
+          id: "raw-reasoning-1",
+        },
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const completionWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+    );
+    expect(completionWarnCall).toBeDefined();
+    const completionWarnData = completionWarnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(completionWarnData?.timeoutMs).toBe(5);
+    expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
+    // The terminal idle watch (500ms) should NOT have fired — the shorter
+    // completion idle watch (5ms) should catch the stall first.
+    expect(
+      warn.mock.calls.some(
+        ([message]) =>
+          message === "codex app-server turn idle timed out waiting for terminal event",
+      ),
+    ).toBe(false);
+  });
+
   it("releases the session when Codex accepts a turn but never sends progress", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
@@ -5469,6 +5653,59 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
+  it("keeps waiting after reasoning and its raw mirror complete before a visible message call", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 15,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "reasoning-1", type: "reasoning" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "reasoning-1", type: "reasoning" },
+      },
+    });
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "raw-reasoning-1", type: "reasoning" },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(settled).toBe(false);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
   it("keeps the normal completion idle guard after non-source reasoning completes", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
@@ -5508,6 +5745,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not treat global rate-limit notifications as turn progress", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -5550,6 +5788,14 @@ describe("runCodexAppServerAttempt", () => {
         ),
       { interval: 1 },
     );
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server client retired after timed-out turn",
+      expect.objectContaining({
+        reason: "turn_completion_idle_timeout",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    );
   });
 
   it("yields a macrotask before processing queued app-server notifications", async () => {
@@ -5573,6 +5819,70 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
+  it("does not idle-timeout when terminal completion queues behind projection", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 120;
+    const turnStartProgressEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress" && event.reason === "codex_app_server:turn:start") {
+        turnStartProgressEvents.push(event);
+      }
+    });
+    let resolveReasoningStarted!: () => void;
+    const reasoningStarted = new Promise<void>((resolve) => {
+      resolveReasoningStarted = resolve;
+    });
+    let releaseProjection!: () => void;
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    params.onReasoningStream = async () => {
+      resolveReasoningStarted();
+      await projectionGate;
+    };
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 5,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(turnStartProgressEvents).toHaveLength(2), { interval: 1 });
+    stopDiagnostics();
+
+    const blockedProjection = harness.notify({
+      method: "item/reasoning/textDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "reasoning-1",
+        delta: "thinking",
+      },
+    });
+    void blockedProjection.catch(() => undefined);
+    await reasoningStarted;
+
+    const queuedTerminal = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    void queuedTerminal.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+
+    releaseProjection();
+    await queuedTerminal;
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
   });
 
   it("releases the session when a completed agent message item goes quiet", async () => {
@@ -6009,8 +6319,9 @@ describe("runCodexAppServerAttempt", () => {
     params.timeoutMs = 200;
 
     const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-      turnTerminalIdleTimeoutMs: 15,
+      turnCompletionIdleTimeoutMs: 5,
+      turnAssistantCompletionIdleTimeoutMs: 30,
+      turnTerminalIdleTimeoutMs: 500,
     });
     await vi.waitFor(
       () =>
@@ -6296,6 +6607,104 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Opik default project context");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
+  });
+
+  it("projects newer mirrored history when resuming an existing Codex thread binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
+    );
+    sessionManager.appendMessage(
+      assistantMessage("David Ondrej was mentioned in that prior thread", bindingUpdatedAt + 2_000),
+    );
+    const harness = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "is the previous message trustworthy?";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(inputText).toContain("David Ondrej was mentioned in that prior thread");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("is the previous message trustworthy?");
+  });
+
+  it("does not reproject Codex-owned mirrored messages on consecutive resumes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const oldBindingUpdatedAt = Date.now() - 60_000;
+    const bindingPath = `${sessionFile}.codex-app-server.json`;
+    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    bindingPayload.updatedAt = new Date(oldBindingUpdatedAt).toISOString();
+    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
+    );
+    sessionManager.appendMessage(
+      assistantMessage(
+        "David Ondrej was mentioned in that prior thread",
+        oldBindingUpdatedAt + 2_000,
+      ),
+    );
+
+    const firstHarness = createResumeHarness();
+    const firstParams = createParams(sessionFile, workspaceDir);
+    firstParams.prompt = "is the previous message trustworthy?";
+    const firstRun = runCodexAppServerAttempt(firstParams);
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await firstRun;
+
+    const firstTurnStart = firstHarness.requests.find((request) => request.method === "turn/start");
+    const firstInputText =
+      (firstTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
+        ?.text ?? "";
+    expect(firstInputText).toContain("OpenClaw assembled context for this turn:");
+    expect(firstInputText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(firstInputText).toContain("is the previous message trustworthy?");
+
+    const secondHarness = createResumeHarness();
+    const secondParams = createParams(sessionFile, workspaceDir);
+    secondParams.prompt = "continue from there";
+    const secondRun = runCodexAppServerAttempt(secondParams);
+    await secondHarness.waitForMethod("turn/start");
+    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondRun;
+
+    const secondTurnStart = secondHarness.requests.find(
+      (request) => request.method === "turn/start",
+    );
+    const secondInputText =
+      (secondTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
+        ?.text ?? "";
+    expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(secondInputText).not.toContain("we were discussing the Sonnet leak screenshots");
+    expect(secondInputText).not.toContain("is the previous message trustworthy?");
+    expect(secondInputText).toContain("continue from there");
   });
 
   it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
@@ -8233,6 +8642,23 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("rejects default queued steering after terminal notification is queued", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await waitForMethod("turn/start");
+
+    const completed = completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    expect(queueActiveRunMessageForTest("session-1", "too late", { debounceMs: 0 })).toBe(false);
+
+    await completed;
+    await run;
+
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+  });
+
   it("batches explicit all-mode steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 
@@ -8241,8 +8667,12 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueActiveRunMessageForTest("session-1", "first", { steeringMode: "all" })).toBe(true);
-    expect(queueActiveRunMessageForTest("session-1", "second", { steeringMode: "all" })).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session-1", "first", { debounceMs: 5, steeringMode: "all" }),
+    ).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session-1", "second", { debounceMs: 5, steeringMode: "all" }),
+    ).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -8950,6 +9380,65 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
+  });
+
+  it("keeps the attempt watchdog armed when terminal projection wedges", async () => {
+    const harness = createStartedThreadHarness();
+    vi.spyOn(CodexAppServerEventProjector.prototype, "handleNotification").mockImplementation(
+      async () => new Promise(() => undefined),
+    );
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 120;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 5,
+    });
+    await harness.waitForMethod("turn/start");
+
+    void harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const result = await Promise.race([
+      run,
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error("attempt watchdog did not release queued terminal turn")),
+          1_000,
+        );
+      }),
+    ]);
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(
+      warn.mock.calls.some(
+        ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+      ),
+    ).toBe(true);
+    expect(
+      warn.mock.calls.some(
+        ([message]) =>
+          message === "codex app-server turn idle timed out waiting for terminal event",
+      ),
+    ).toBe(false);
+    expect(
+      warn.mock.calls.some(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      ),
+    ).toBe(false);
   });
 
   it("routes Computer Use MCP elicitations through the native bridge", async () => {

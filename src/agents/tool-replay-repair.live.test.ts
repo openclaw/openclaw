@@ -11,6 +11,8 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -20,7 +22,6 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const DEFAULT_TARGET_MODEL_REFS = "openai-codex/gpt-5.5,google/gemini-3-flash-preview";
 const TARGET_MODEL_REFS = parseTargetModelRefs(
   process.env.OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS ?? DEFAULT_TARGET_MODEL_REFS,
@@ -214,14 +215,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -319,14 +326,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );

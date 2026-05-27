@@ -152,6 +152,7 @@ type ChannelHandler = {
     target: ChannelOutboundTargetRef;
     messageId: string;
     pin: ReplyPayloadDeliveryPin;
+    gatewayClientScopes?: readonly string[];
   }) => Promise<void>;
   afterDeliverPayload?: (params: {
     target: ChannelOutboundTargetRef;
@@ -413,12 +414,13 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin }) =>
+      ? async ({ target, messageId, pin, gatewayClientScopes }) =>
           outbound.pinDeliveredMessage!({
             cfg: params.cfg,
             target,
             messageId,
             pin,
+            gatewayClientScopes,
           })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload
@@ -880,6 +882,7 @@ async function maybePinDeliveredMessage(params: {
   payload: ReplyPayload;
   target: ChannelOutboundTargetRef;
   messageId?: string;
+  gatewayClientScopes?: readonly string[];
 }): Promise<void> {
   const pin = normalizeDeliveryPin(params.payload);
   if (!pin) {
@@ -910,6 +913,7 @@ async function maybePinDeliveredMessage(params: {
       target: params.target,
       messageId: params.messageId,
       pin,
+      gatewayClientScopes: params.gatewayClientScopes,
     });
   } catch (err) {
     if (pin.required) {
@@ -1621,6 +1625,7 @@ async function deliverOutboundPayloadsCore(
           payload: effectivePayload,
           target: deliveryTarget,
           messageId: delivery.messageId,
+          gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler,
@@ -1670,6 +1675,7 @@ async function deliverOutboundPayloadsCore(
           payload: effectivePayload,
           target: deliveryTarget,
           messageId: pinMessageId,
+          gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler,
@@ -1725,6 +1731,7 @@ async function deliverOutboundPayloadsCore(
           payload: effectivePayload,
           target: deliveryTarget,
           messageId: pinMessageId,
+          gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler,
@@ -1767,6 +1774,7 @@ async function deliverOutboundPayloadsCore(
         payload: effectivePayload,
         target: deliveryTarget,
         messageId: firstMessageId,
+        gatewayClientScopes: params.gatewayClientScopes,
       });
       await maybeNotifyAfterDeliveredPayload({
         handler,

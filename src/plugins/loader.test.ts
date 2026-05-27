@@ -3022,7 +3022,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
       "loaded",
     );
     expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["snapshot"]);
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "active",
+    ]);
     expect(getEmbeddingProvider("snapshot")).toBeUndefined();
   });
 
@@ -3066,7 +3069,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
       "loaded",
     );
     expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["shared"]);
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["shared"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "shared",
+    ]);
     expect(getEmbeddingProvider("shared")?.id).toBe("shared");
   });
 
@@ -3105,7 +3111,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === "failing-embedding")?.status).toBe(
       "error",
     );
-    expect(listEmbeddingProviders()).toStrictEqual([]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toStrictEqual([
+      "openai-compatible",
+    ]);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {

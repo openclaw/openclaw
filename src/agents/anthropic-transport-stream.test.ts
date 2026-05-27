@@ -206,6 +206,55 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("strips the provider prefix from direct Anthropic request model ids", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "anthropic/claude-sonnet-4-6" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("claude-sonnet-4-6");
+  });
+
+  it("keeps slash-bearing model ids for Anthropic-compatible proxy providers", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "openrouter",
+        id: "anthropic/claude-sonnet-4-6",
+        baseUrl: "https://openrouter.ai/api/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-or-test",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps slash-bearing model ids for configured Anthropic-compatible endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "anthropic/claude-sonnet-4-6",
+        baseUrl: "https://anthropic-proxy.internal",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
   it("bypasses the OpenAI SSE sanitizer for Kimi Anthropic thinking streams", async () => {
     const model = makeAnthropicTransportModel({
       id: "kimi-for-coding",

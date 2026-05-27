@@ -517,7 +517,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including the npm package and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
-    - **Auto provider**: checks local model availability first, then tries each remote provider in auto-selection order.
+    - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI and checks OpenAI readiness.
 
     When a cached gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
 

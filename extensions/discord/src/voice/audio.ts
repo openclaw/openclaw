@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
 import {
@@ -7,22 +8,26 @@ import {
   type OpusDecoderHandle as LibopusDecoder,
   type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import prism from "prism-media";
 
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
+const FFMPEG_ERROR_OUTPUT_BYTES = 8_192;
 const DISCORD_OPUS_FRAME_SIZE = 960;
 const DISCORD_OPUS_FRAME_BYTES = DISCORD_OPUS_FRAME_SIZE * CHANNELS * (BIT_DEPTH / 8);
 const FFMPEG_PCM_ARGUMENTS = [
   "-analyzeduration",
   "0",
   "-loglevel",
-  "0",
+  "error",
+  "-vn",
+  "-sn",
+  "-dn",
   "-f",
   "s16le",
   "-ar",
@@ -96,18 +101,58 @@ export function createDiscordOpusEncodeStream(): Transform {
 }
 
 export function createDiscordOpusPlaybackStream(input: Readable | string): Readable {
-  const ffmpeg = new prism.FFmpeg({
-    args: ["-i", typeof input === "string" ? input : "-", ...FFMPEG_PCM_ARGUMENTS],
+  const inputSource = typeof input === "string" ? input : "pipe:0";
+  const ffmpeg = spawn(resolveFfmpegBin(), ["-i", inputSource, ...FFMPEG_PCM_ARGUMENTS, "pipe:1"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
   const opusStream = createDiscordOpusEncodeStream();
+  let stderr = "";
+  let ffmpegClosed = false;
 
-  ffmpeg.on("error", (err) => opusStream.destroy(err));
-  opusStream.on("close", () => ffmpeg.destroy());
+  ffmpeg.stderr.setEncoding("utf8");
+  ffmpeg.stderr.on("data", (chunk: string) => {
+    if (stderr.length < FFMPEG_ERROR_OUTPUT_BYTES) {
+      stderr = `${stderr}${chunk}`.slice(0, FFMPEG_ERROR_OUTPUT_BYTES);
+    }
+  });
+
+  ffmpeg.once("error", (err) => {
+    opusStream.destroy(err);
+  });
+  ffmpeg.once("close", (code, signal) => {
+    ffmpegClosed = true;
+    if (code && code !== 0) {
+      const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
+      opusStream.destroy(new Error(`ffmpeg exited with code ${code}${suffix}`));
+      return;
+    }
+    if (signal) {
+      opusStream.destroy(new Error(`ffmpeg exited with signal ${signal}`));
+    }
+  });
+
+  ffmpeg.stdout.on("error", (err) => opusStream.destroy(err));
+  ffmpeg.stdin.on("error", (err) => {
+    if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
+      opusStream.destroy(err);
+    }
+  });
+  ffmpeg.stdout.pipe(opusStream);
+  opusStream.once("close", () => {
+    if (!ffmpegClosed && !opusStream.readableEnded) {
+      ffmpeg.kill();
+    }
+  });
   if (typeof input !== "string") {
-    input.on("error", (err) => ffmpeg.destroy(err));
-    input.pipe(ffmpeg);
+    input.on("error", (err) => {
+      ffmpeg.stdin.destroy(err);
+      opusStream.destroy(err);
+    });
+    input.pipe(ffmpeg.stdin);
+  } else {
+    ffmpeg.stdin.end();
   }
-  ffmpeg.pipe(opusStream);
   return opusStream;
 }
 
