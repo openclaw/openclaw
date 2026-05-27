@@ -915,6 +915,43 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
+  it("uses the selected model window when stale runtime fields are not an active fallback", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "sider-litellm-completions": {
+              models: [{ id: "deepseek/deepseek-v4-flash", contextWindow: 200_000 }],
+            },
+            "sider-litellm-messages": {
+              models: [{ id: "anthropic/claude-sonnet-4-6", contextWindow: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "sider-litellm-messages/anthropic/claude-sonnet-4-6",
+      },
+      sessionEntry: {
+        sessionId: "default-model-switched",
+        updatedAt: 0,
+        modelProvider: "sider-litellm-completions",
+        model: "deepseek/deepseek-v4-flash",
+        contextTokens: 200_000,
+        totalTokens: 10_000,
+      },
+      runtimeContextTokens: 200_000,
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: sider-litellm-messages/anthropic/claude-sonnet-4-6");
+    expect(normalized).toContain("Context: 10k/1.0m");
+    expect(normalized).not.toContain("Context: 10k/200k");
+  });
+
   it("recomputes context window from the active fallback model when session contextTokens are stale", () => {
     const text = buildStatusMessage({
       config: {
@@ -2217,6 +2254,68 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Fallback: fake-minimax/FakeMiniMax-M2.5");
     expect(normalized).toContain("Context: 49k/777k");
     expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("uses the fallback window when transcript usage hydrates the active model", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-transcript-fallback-active-model";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          model: "fake-minimax/FakeMiniMax-M2.5",
+          usage: {
+            input: 49_000,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 49_000,
+          },
+        });
+
+        const text = buildStatusMessage({
+          config: {
+            models: {
+              providers: {
+                "fake-minimax": {
+                  models: [{ id: "FakeMiniMax-M2.5", contextWindow: 200_000 }],
+                },
+                xiaomi: {
+                  models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          agent: {
+            model: "xiaomi/mimo-v2-flash",
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            providerOverride: "xiaomi",
+            modelOverride: "mimo-v2-flash",
+            fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+            fallbackNoticeActiveModel: "fake-minimax/FakeMiniMax-M2.5",
+            fallbackNoticeReason: "model not allowed",
+            totalTokens: 49_000,
+          },
+          runtimeContextTokens: 200_000,
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+          activeModelAuth: "api-key",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Fallback: fake-minimax/FakeMiniMax-M2.5");
+        expect(normalized).toContain("Context: 49k/200k");
+        expect(normalized).not.toContain("Context: 49k/1.0m");
+      },
+      { prefix: "openclaw-status-" },
+    );
   });
 
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {

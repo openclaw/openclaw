@@ -224,6 +224,9 @@ function withActiveStatusModelIdentity(
   entry: SessionEntry,
   identity: ActiveStatusModelIdentity,
 ): SessionEntry {
+  const entryMatchesActiveIdentity =
+    entry.model?.trim() === identity.model &&
+    (!identity.provider || entry.modelProvider?.trim() === identity.provider);
   const next: SessionEntry = {
     ...entry,
     model: identity.model,
@@ -232,6 +235,10 @@ function withActiveStatusModelIdentity(
   delete next.providerOverride;
   delete next.modelOverride;
   delete next.modelOverrideSource;
+  if (!entryMatchesActiveIdentity) {
+    delete next.contextTokens;
+    delete next.contextBudgetStatus;
+  }
   return next;
 }
 
