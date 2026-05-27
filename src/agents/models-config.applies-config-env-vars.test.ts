@@ -276,4 +276,156 @@ describe("models-config", () => {
       expect(process.env[TEST_ENV_VAR]).toBe("from-host");
     });
   });
+
+  it("omits plaintext configured provider apiKeys from generated models.json", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-responses",
+                apiKey: "sk-config-plaintext-secret", // pragma: allowlist secret
+                models: [
+                  {
+                    id: "custom-model",
+                    name: "Custom Model",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 2048,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; models?: Array<{ id?: string }> }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBeUndefined();
+    expect(parsed.providers?.custom?.models?.map((model) => model.id)).toEqual(["custom-model"]);
+    expect(plan.contents).not.toContain("sk-config-plaintext-secret");
+  });
+
+  it("omits plaintext apiKeys merged from existing models.json entries", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-responses",
+                models: [
+                  {
+                    id: "custom-model",
+                    name: "Custom Model",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 2048,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example/v1",
+              api: "openai-responses",
+              apiKey: "sk-existing-plaintext-secret", // pragma: allowlist secret
+              models: [],
+            },
+          },
+        },
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string; baseUrl?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBeUndefined();
+    expect(parsed.providers?.custom?.baseUrl).toBe("https://custom.example/v1");
+    expect(plan.contents).not.toContain("sk-existing-plaintext-secret");
+  });
+
+  it("preserves SecretRef-managed provider apiKey markers in generated models.json", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-responses",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "CUSTOM_PROVIDER_API_KEY",
+                },
+                models: [
+                  {
+                    id: "custom-model",
+                    name: "Custom Model",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 2048,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
+  });
 });
