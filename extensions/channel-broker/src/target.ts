@@ -300,9 +300,9 @@ export function parseChannelBrokerTarget(params: {
       explicitType ??
       parsed.conversationType ??
       platformConversation.conversationType ??
+      (threadId ? "channel" : undefined) ??
       configuredDefaultType ??
       inferredType ??
-      (threadId ? "channel" : undefined) ??
       params.account.defaultConversationType,
     ...(threadId ? { threadId } : {}),
   };
