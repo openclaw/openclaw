@@ -220,7 +220,7 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps cold-start probes when a channel is configured from manifest env vars", async () => {
+  it("keeps cold-start gateway probes but skips update checks when a channel is configured from manifest env vars", async () => {
     await withTemporaryEnv(
       {
         OPENCLAW_TWITCH_ACCESS_TOKEN: "token",
@@ -233,7 +233,7 @@ describe("scanStatusJsonFast", () => {
       },
     );
 
-    expect(mocks.getUpdateCheckResult).toHaveBeenCalled();
+    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
     expect(mocks.probeGateway).toHaveBeenCalled();
   });
 });
