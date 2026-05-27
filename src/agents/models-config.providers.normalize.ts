@@ -13,6 +13,7 @@ import {
   normalizeResolvedEnvApiKey,
   resolveApiKeyFromProfiles,
   resolveMissingProviderApiKey,
+  stripProfileBackedPlaintextProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
@@ -186,9 +187,10 @@ export function normalizeProviders(params: {
       normalizedProvider = providerWithResolvedEnvApiKey;
     }
 
+    const hasProviderModels =
+      Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
     const needsProfileApiKey =
-      Array.isArray(normalizedProvider.models) &&
-      normalizedProvider.models.length > 0 &&
+      hasProviderModels &&
       !(
         (typeof normalizedProvider.apiKey === "string" && normalizedProvider.apiKey.trim()) ||
         normalizedProvider.apiKey
@@ -208,6 +210,19 @@ export function normalizeProviders(params: {
     if (providerWithApiKey !== normalizedProvider) {
       mutated = true;
       normalizedProvider = providerWithApiKey;
+    }
+
+    const hasProviderApiKey =
+      typeof normalizedProvider.apiKey === "string" && normalizedProvider.apiKey.trim().length > 0;
+    const profileApiKeyForStrip =
+      hasProviderApiKey && !profileApiKey ? resolveProfileApiKey(normalizedKey) : profileApiKey;
+    const providerWithoutProfileBackedPlaintextApiKey = stripProfileBackedPlaintextProviderApiKey({
+      provider: normalizedProvider,
+      profileApiKey: profileApiKeyForStrip,
+    });
+    if (providerWithoutProfileBackedPlaintextApiKey !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = providerWithoutProfileBackedPlaintextApiKey;
     }
 
     const providerSpecificNormalized = normalizeProviderSpecificConfig(

@@ -25,6 +25,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
   applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));

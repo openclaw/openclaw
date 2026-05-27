@@ -307,7 +307,9 @@ export function resolveMissingProviderApiKey(params: {
   }
 
   const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
-  const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
+  const profileApiKey =
+    params.profileApiKey?.source === "plaintext" ? undefined : params.profileApiKey?.apiKey;
+  const apiKey = fromEnv ?? profileApiKey;
   if (!apiKey?.trim()) {
     return params.provider;
   }
@@ -318,4 +320,23 @@ export function resolveMissingProviderApiKey(params: {
     ...params.provider,
     apiKey,
   };
+}
+
+export function stripProfileBackedPlaintextProviderApiKey(params: {
+  provider: ProviderConfig;
+  profileApiKey: ProfileApiKeyResolution | undefined;
+}): ProviderConfig {
+  if (params.profileApiKey?.source !== "plaintext") {
+    return params.provider;
+  }
+  const currentApiKey = normalizeOptionalSecretInput(params.provider.apiKey);
+  if (!currentApiKey || currentApiKey !== params.profileApiKey.apiKey.trim()) {
+    return params.provider;
+  }
+  if (isNonSecretApiKeyMarker(currentApiKey)) {
+    return params.provider;
+  }
+  const nextProvider = { ...params.provider };
+  delete nextProvider.apiKey;
+  return nextProvider;
 }

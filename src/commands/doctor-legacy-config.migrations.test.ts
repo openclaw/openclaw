@@ -35,6 +35,7 @@ vi.mock("../plugins/manifest-registry.js", () => ({
         contracts: { webSearchProviders: ["firecrawl"] },
       },
     ],
+    diagnostics: [],
   }),
   resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
     if (value === "gemini") {
