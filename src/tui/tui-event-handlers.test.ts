@@ -724,6 +724,23 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
+  it("refreshes history after a non-displayable non-local chat final", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "external-empty-run",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [] },
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalledWith("(no output)", "external-empty-run");
+    expect(chatLog.dropAssistant).toHaveBeenCalledWith("external-empty-run");
+  });
+
   it("binds optimistic pending messages to the first gateway run id, clears it after final, and skips history reload", () => {
     const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null, pendingOptimisticUserMessage: true },

@@ -511,6 +511,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender(true);
         return;
       }
+      const hasDisplayableFinal = hasDisplayableFinalEvent(evt);
+      if (hasDisplayableFinal) {
+        forgetLocalRunId?.(evt.runId);
+      } else {
+        maybeRefreshHistoryForRun(evt.runId);
+      }
       const stopReason =
         evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
           ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
@@ -526,7 +532,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       );
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
-      forgetLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
