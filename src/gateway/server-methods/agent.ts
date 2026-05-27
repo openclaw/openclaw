@@ -54,7 +54,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { formatUncaughtError } from "../../infra/errors.js";
+import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -614,6 +614,27 @@ function readAgentRunTimeoutAttribution(meta: unknown) {
   };
 }
 
+function isGatewayAbortSignalReason(reason: unknown): boolean {
+  return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
+}
+
+function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): boolean {
+  if (!signal.aborted) {
+    return false;
+  }
+  if (readErrorName(signal.reason) === "TimeoutError") {
+    return true;
+  }
+  if (!isGatewayAbortSignalReason(signal.reason)) {
+    return false;
+  }
+  return isAbortError(error) || readErrorName(error) === "TimeoutError";
+}
+
+function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "rpc" | "timeout" {
+  return readErrorName(signal.reason) === "TimeoutError" ? "timeout" : "rpc";
+}
+
 function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
   return entry?.abortStopReason?.trim() || "rpc";
 }
@@ -704,22 +725,23 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
-      const aborted = isAbortError(err);
+      const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
       const renderedErr = formatForLog(err);
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: resolveFailedTrackedAgentTaskStatus(err),
+          status: aborted ? "timed_out" : resolveFailedTrackedAgentTaskStatus(err),
           error: renderedErr,
           terminalSummary: renderedErr,
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
+      const stopReason = resolveGatewayAgentAbortStopReason(params.abortController.signal);
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
         summary: aborted ? "aborted" : renderedErr,
-        ...(aborted ? { stopReason: "rpc", timeoutPhase: "gateway_draining" as const } : {}),
+        ...(aborted ? { stopReason, timeoutPhase: "gateway_draining" as const } : {}),
       };
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,

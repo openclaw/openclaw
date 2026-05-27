@@ -72,7 +72,24 @@ jobs:
             echo "PNPM_HOME=$PNPM_HOME"
           } >> "$GITHUB_ENV"
 
+          package_manager="$(node -e "const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); process.stdout.write(pkg.packageManager || '')")"
+          case "$package_manager" in
+            pnpm@*) ;;
+            *)
+              echo "::error::Expected packageManager to pin pnpm, got '${package_manager:-<empty>}'"
+              exit 1
+              ;;
+          esac
           corepack enable --install-directory "$PNPM_HOME"
+          for attempt in 1 2 3; do
+            if corepack prepare "$package_manager" --activate; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              corepack prepare "$package_manager" --activate
+            fi
+            sleep $((attempt * 5))
+          done
           node_bin="$(dirname "$(node -p 'process.execPath')")"
           echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
           echo "$node_bin" >> "$GITHUB_PATH"

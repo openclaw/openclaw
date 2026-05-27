@@ -175,6 +175,7 @@ function checkedOutput(command, commandArgs) {
   return {
     status: result.status ?? 1,
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
+    stdout: (result.stdout ?? "").trim(),
   };
 }
 
@@ -390,6 +391,48 @@ function commandProvider(commandArgs) {
 
 function selectedProvider(commandArgs) {
   return commandProvider(commandArgs) || configuredProvider();
+}
+
+function shouldRequireBrokeredAws(commandArgs, providerName) {
+  if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
+    return false;
+  }
+  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  if (canonicalProvider !== "aws") {
+    return false;
+  }
+  if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
+    return true;
+  }
+  return commandArgs[0] === "actions" && commandArgs[1] === "hydrate";
+}
+
+function brokerAuthConfigured() {
+  const config = checkedOutput(binary, ["config", "show", "--json"]);
+  if (config.status !== 0) {
+    return false;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(config.stdout || config.text);
+  } catch {
+    return false;
+  }
+  return Boolean(parsed?.coordinator && parsed?.brokerAuth === "configured");
+}
+
+function enforceBrokeredAws(commandArgs, providerName) {
+  if (!shouldRequireBrokeredAws(commandArgs, providerName) || brokerAuthConfigured()) {
+    return;
+  }
+  console.error(
+    [
+      "[crabbox] provider=aws requires a configured Crabbox broker for OpenClaw proof.",
+      "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai --provider aws`, then retry.",
+      "[crabbox] for intentional direct AWS provider debugging, set OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS=1.",
+    ].join("\n"),
+  );
+  process.exit(2);
 }
 
 function optionValue(commandArgs, name) {
@@ -1721,6 +1764,8 @@ if (provider && !isProviderAdvertised(provider, providers)) {
   );
   process.exit(2);
 }
+
+enforceBrokeredAws(normalizedArgs, provider);
 
 if (provider === "blacksmith-testbox") {
   const envProvider = process.env.CRABBOX_PROVIDER?.trim();

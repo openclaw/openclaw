@@ -697,7 +697,7 @@ class NpmUpdateSmoke {
 
   private resolveMacosUpdateExecArgs(ctx: UpdateJobContext): string[] {
     const guestPath =
-      "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+      "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
     const currentUser = run("prlctl", ["exec", macosVm, "--current-user", "whoami"], {
       check: false,
       quiet: true,

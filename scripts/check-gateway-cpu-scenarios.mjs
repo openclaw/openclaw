@@ -223,9 +223,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
       qaOutputArg,
       ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
     ]);
-    steps.push(
-      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
-    );
+    steps.push(runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params));
   }
 
   const startup = readJsonIfExists(startupOutput);
@@ -259,8 +257,15 @@ async function runGatewayCpuScenarios(options, params = {}) {
   if (!params.silent) {
     console.log(JSON.stringify(summary, null, 2));
   }
+  if (observations.length > 0) {
+    console.error(
+      `[gateway-cpu] fail hot CPU observations: ${observations
+        .map((observation) => `${observation.kind}:${observation.id}`)
+        .join(", ")}`,
+    );
+  }
 
-  const exitCode = steps.some((step) => step.status !== 0) ? 1 : 0;
+  const exitCode = steps.some((step) => step.status !== 0) || observations.length > 0 ? 1 : 0;
   return { exitCode, summary };
 }
 

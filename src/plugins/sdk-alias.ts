@@ -794,6 +794,7 @@ const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
+const pluginLoaderModuleCacheKeyByAliasMap = new WeakMap<Record<string, string>, string>();
 const pluginLoaderModuleConfigCache = new PluginLruCache<{
   tryNative: boolean;
   aliasMap: Record<string, string>;
@@ -805,9 +806,10 @@ function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
 }
 
 function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
-  return JSON.stringify(
-    Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-  );
+  return Object.entries(aliasMap)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\0${value}`)
+    .join("\0");
 }
 
 function normalizePluginLoaderAliasMapForJiti(
@@ -826,9 +828,19 @@ function normalizePluginLoaderAliasMapForJiti(
     normalizedJitiAliasMapByInput.set(aliasMap, cached);
     return cached;
   }
+  const aliasDepth = new Map<string, number>();
+  const getAliasDepth = (key: string) => {
+    const cachedDepth = aliasDepth.get(key);
+    if (cachedDepth !== undefined) {
+      return cachedDepth;
+    }
+    const depth = key.split("/").length;
+    aliasDepth.set(key, depth);
+    return depth;
+  };
   const normalizedAliasMap = Object.fromEntries(
     Object.entries(aliasMap).toSorted(
-      ([left], [right]) => right.split("/").length - left.split("/").length,
+      ([left], [right]) => getAliasDepth(right) - getAliasDepth(left),
     ),
   );
   for (const aliasKey in normalizedAliasMap) {
@@ -1037,12 +1049,11 @@ export function createPluginLoaderModuleCacheKey(params: {
   tryNative: boolean;
   aliasMap: Record<string, string>;
 }): string {
-  return JSON.stringify({
-    tryNative: params.tryNative,
-    aliasMap: Object.entries(params.aliasMap).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
-  });
+  const aliasMapKey =
+    pluginLoaderModuleCacheKeyByAliasMap.get(params.aliasMap) ??
+    createJitiAliasContentCacheKey(params.aliasMap);
+  pluginLoaderModuleCacheKeyByAliasMap.set(params.aliasMap, aliasMapKey);
+  return `${params.tryNative ? "native" : "transform"}\0${aliasMapKey}`;
 }
 
 export function resolvePluginLoaderModuleConfig(params: {

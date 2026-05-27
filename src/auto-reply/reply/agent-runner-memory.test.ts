@@ -66,6 +66,7 @@ type RefreshQueuedFollowupSessionParams = {
 type ModelFallbackParams = {
   provider?: string;
   model?: string;
+  abortSignal?: AbortSignal;
   agentId?: string;
   sessionKey?: string;
   fallbacksOverride?: unknown[];
@@ -89,13 +90,16 @@ type EmbeddedPiAgentParams = {
   extraSystemPrompt?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
+  abortSignal?: AbortSignal;
 };
 
 type CompactEmbeddedPiSessionParams = {
+  agentId?: string;
+  authProfileId?: string;
+  contextTokenBudget?: number;
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;
-  contextTokenBudget?: number;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -500,6 +504,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     };
 
+    const replyOperation = createReplyOperation();
     await runMemoryFlushIfNeeded({
       cfg: {
         agents: {
@@ -525,18 +530,20 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: { main: sessionEntry },
       sessionKey: "main",
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      replyOperation,
     });
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const fallbackCall = requireModelFallbackCall();
     expect(fallbackCall.provider).toBe("ollama");
     expect(fallbackCall.model).toBe("qwen3:8b");
+    expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.fallbacksOverride).toEqual([]);
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const agentCall = requireEmbeddedPiAgentCall();
     expect(agentCall.provider).toBe("ollama");
     expect(agentCall.model).toBe("qwen3:8b");
+    expect(agentCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(agentCall.authProfileId).toBeUndefined();
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
@@ -938,6 +945,37 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("passes resolved context budget and auth profile to preflight compaction", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 245_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        authProfileId: "anthropic:claude@martian.engineering",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 258_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
+    expect(compactCall.contextTokenBudget).toBe(258_000);
   });
 
   it("updates the active preflight run after transcript rotation", async () => {

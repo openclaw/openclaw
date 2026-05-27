@@ -100,6 +100,9 @@ docker_e2e_package_mount_args() {
   if [ -n "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-}" ]; then
     DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$OPENCLAW_E2E_NPM_INSTALL_TIMEOUT")
   fi
+  if [ -n "${OPENCLAW_E2E_COMMAND_TIMEOUT:-}" ]; then
+    DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_COMMAND_TIMEOUT=$OPENCLAW_E2E_COMMAND_TIMEOUT")
+  fi
 }
 
 docker_e2e_cleanup_package_tgz() {

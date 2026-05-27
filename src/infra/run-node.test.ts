@@ -8,6 +8,7 @@ import {
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mjs";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -59,6 +60,8 @@ const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.
 const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
 const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX =
   "dist/extensions/node_modules/openclaw/plugin-sdk/index.js";
+const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE =
+  "dist/extensions/node_modules/openclaw/plugin-sdk/string-coerce-runtime.js";
 const DIFFS_PACKAGE = "extensions/diffs/package.json";
 const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
 const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
@@ -126,6 +129,13 @@ function createFakeProcess() {
 // Launcher plumbing tests do not need the real runtime artifact copier.
 async function skipRuntimePostBuild(): Promise<void> {
   return;
+}
+
+async function syncBundledPluginMetadata(params?: {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+}): Promise<void> {
+  copyBundledPluginMetadata({ cwd: params?.cwd, env: params?.env });
 }
 
 function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
@@ -453,6 +463,7 @@ describe("run-node script", () => {
         tmp,
         spawn,
         env: { OPENCLAW_FORCE_BUILD: "1" },
+        runRuntimePostBuild: syncBundledPluginMetadata,
       });
 
       expect(exitCode).toBe(0);
@@ -1696,7 +1707,12 @@ describe("run-node script", () => {
       });
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder();
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: syncBundledPluginMetadata,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
@@ -1770,7 +1786,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: syncBundledPluginMetadata,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
@@ -2193,6 +2214,62 @@ describe("run-node script", () => {
     });
   });
 
+  it("does not require private OpenClaw SDK dist files that package exports omit", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [ROOT_PACKAGE]: JSON.stringify(
+            {
+              name: "openclaw-test",
+              exports: {
+                "./plugin-sdk": "./dist/plugin-sdk/index.js",
+                "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
+              },
+            },
+            null,
+            2,
+          ),
+          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
+          "dist/plugin-sdk/string-coerce-runtime.js": "export const publicRuntime = true;\n",
+          "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
+          [DIST_OPENCLAW_ALIAS_PACKAGE]:
+            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js","./plugin-sdk/string-coerce-runtime":"./plugin-sdk/string-coerce-runtime.js"}}\n',
+          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX]:
+            "export * from '../../../../plugin-sdk/index.js';\n",
+          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE]:
+            "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          DIST_PLUGIN_SDK_INDEX,
+          "dist/plugin-sdk/string-coerce-runtime.js",
+          "dist/plugin-sdk/ssrf-runtime-internal.js",
+          DIST_OPENCLAW_ALIAS_PACKAGE,
+          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX,
+          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_STRING_COERCE,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
   it("reports missing static runtime postbuild asset outputs when runtime stamps match HEAD", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -2259,37 +2336,39 @@ describe("run-node script", () => {
   });
 
   it("reports missing core runtime postbuild outputs when runtime stamps match HEAD", async () => {
-    for (const missingPath of [
-      DIST_PLUGIN_SDK_ROOT_ALIAS,
-      DIST_CHANNEL_CATALOG,
-      DIST_LEGACY_CLI_EXIT_COMPAT,
-      DIST_STABLE_ROOT_RUNTIME_ALIAS,
-      DIST_LEGACY_ROOT_RUNTIME_COMPAT,
-    ]) {
-      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
-        await setupTrackedProject(tmp, {
-          files: {
-            [ROOT_SRC]: "export const value = 1;\n",
-            [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
-            [DIST_STABLE_ROOT_RUNTIME_ALIAS]:
-              "export * from './model-catalog.runtime-AbCd1234.js';\n",
-            [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
-            [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
-            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
-          },
-          buildPaths: [
-            ROOT_SRC,
-            DIST_ENTRY,
-            DIST_STABLE_ROOT_RUNTIME_SOURCE,
-            DIST_STABLE_ROOT_RUNTIME_ALIAS,
-            DIST_LEGACY_ROOT_RUNTIME_TARGET,
-            DIST_LEGACY_ROOT_RUNTIME_COMPAT,
-            BUILD_STAMP,
-            RUNTIME_POSTBUILD_STAMP,
-          ],
-        });
-        await fs.rm(resolvePath(tmp, missingPath));
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
+          [DIST_STABLE_ROOT_RUNTIME_ALIAS]:
+            "export * from './model-catalog.runtime-AbCd1234.js';\n",
+          [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
+          [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_STABLE_ROOT_RUNTIME_SOURCE,
+          DIST_STABLE_ROOT_RUNTIME_ALIAS,
+          DIST_LEGACY_ROOT_RUNTIME_TARGET,
+          DIST_LEGACY_ROOT_RUNTIME_COMPAT,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
 
+      for (const missingPath of [
+        DIST_PLUGIN_SDK_ROOT_ALIAS,
+        DIST_CHANNEL_CATALOG,
+        DIST_LEGACY_CLI_EXIT_COMPAT,
+        DIST_STABLE_ROOT_RUNTIME_ALIAS,
+        DIST_LEGACY_ROOT_RUNTIME_COMPAT,
+      ]) {
+        const resolvedMissingPath = resolvePath(tmp, missingPath);
+        const originalContent = await fs.readFile(resolvedMissingPath, "utf8");
+        await fs.rm(resolvedMissingPath);
         const requirement = resolveRuntimePostBuildRequirement(
           createBuildRequirementDeps(tmp, {
             gitHead: "abc123\n",
@@ -2301,8 +2380,9 @@ describe("run-node script", () => {
           shouldSync: true,
           reason: "missing_runtime_postbuild_output",
         });
-      });
-    }
+        await fs.writeFile(resolvedMissingPath, originalContent);
+      }
+    });
   });
 
   it("does not require ambiguous stable runtime aliases that postbuild cannot create", async () => {
@@ -2509,7 +2589,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: "",
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: syncBundledPluginMetadata,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
@@ -2544,7 +2629,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: "",
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: syncBundledPluginMetadata,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);

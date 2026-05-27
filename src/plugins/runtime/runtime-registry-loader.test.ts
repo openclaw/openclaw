@@ -149,7 +149,6 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveRuntimePluginRegistry.mockImplementation(
       (...args: Parameters<typeof mocks.loadOpenClawPlugins>) => mocks.loadOpenClawPlugins(...args),
     );
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue(undefined);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config:
         params.config && typeof params.config === "object"

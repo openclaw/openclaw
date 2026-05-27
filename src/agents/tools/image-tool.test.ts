@@ -2201,13 +2201,16 @@ describe("image tool managed inbound media", () => {
   }
 
   it("resolves media://inbound refs", async () => {
-    await withManagedInboundPng(async ({ mediaId }) => {
+    await withManagedInboundPng(async ({ stateDir, mediaId }) => {
       installImageUnderstandingProviderStubs();
       const fetch = stubMinimaxOkFetch();
+      const workspaceDir = path.join(stateDir, "workspace-agent");
+      await fs.mkdir(workspaceDir, { recursive: true });
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({
           config: createMinimaxImageConfig(),
           agentDir,
+          workspaceDir,
           fsPolicy: { workspaceOnly: true },
         });
 

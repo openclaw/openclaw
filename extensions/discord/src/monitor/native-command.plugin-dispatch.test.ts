@@ -13,6 +13,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
@@ -29,6 +30,7 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   executePluginCommand: vi.fn(),
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
+  getSessionEntry: vi.fn(),
 }));
 
 function createConfig(): OpenClawConfig {
@@ -408,6 +410,7 @@ describe("Discord native plugin command dispatch", () => {
     discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(
       resolveDiscordNativeInteractionRouteState,
     );
+    discordNativeCommandTesting.setGetSessionEntry(getSessionEntry);
   });
 
   beforeEach(() => {
@@ -430,6 +433,8 @@ describe("Discord native plugin command dispatch", () => {
     runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
       text: "status reply",
     });
+    runtimeModuleMocks.getSessionEntry.mockReset();
+    runtimeModuleMocks.getSessionEntry.mockReturnValue(undefined);
     discordNativeCommandTesting.setMatchPluginCommand(
       runtimeModuleMocks.matchPluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand,
     );
@@ -449,6 +454,9 @@ describe("Discord native plugin command dispatch", () => {
           : `agent:main:discord:channel:${params.conversationId}`,
         accountId: params.accountId,
       }),
+    );
+    discordNativeCommandTesting.setGetSessionEntry(
+      runtimeModuleMocks.getSessionEntry as typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry,
     );
   });
 
@@ -473,6 +481,43 @@ describe("Discord native plugin command dispatch", () => {
       cfg,
       commandName: "pairdiscord",
       interaction,
+    });
+  });
+
+  it("passes the active auth profile to Discord plugin commands", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.getSessionEntry.mockReturnValue({
+      sessionId: "discord-session",
+      authProfileOverride: "openai-codex:owner@example.com",
+      updatedAt: Date.now(),
+    });
+
+    registerPairPlugin();
+    const command = await createPluginCommand({
+      cfg,
+      name: "pair",
+    });
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "paired:now",
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      Object.assign(interaction, {
+        options: {
+          getString: () => "now",
+          getBoolean: () => null,
+          getFocused: () => "",
+        },
+      }) as unknown,
+    );
+
+    expectPluginCommandExecution({
+      mock: executeSpy,
+      commandName: "pair",
+      expected: {
+        authProfileId: "openai-codex:owner@example.com",
+      },
     });
   });
 

@@ -272,6 +272,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
+          OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -332,6 +333,7 @@ export async function prepareCliRunContext(
           messageProvider: params.messageChannel ?? params.messageProvider,
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           senderIsOwner: params.senderIsOwner,
         }).tools
       : [];

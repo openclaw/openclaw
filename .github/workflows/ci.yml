@@ -202,6 +202,7 @@ jobs:
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
+              { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
             if (runNodeFastCiRouting) {
@@ -683,7 +684,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: "false"
+          install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -703,6 +704,9 @@ jobs:
               ;;
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/test-projects.test.ts
+              ;;
+            bun-launcher)
+              OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
               ;;
             *)
               echo "Unsupported checks-fast task: $TASK" >&2

@@ -2,35 +2,28 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Changes
-
-### Fixes
-
-- Crabbox: bootstrap raw AWS macOS JavaScript commands launched through `/usr/bin/env` so native mac runners without preinstalled Node, Corepack, or pnpm can still run wrapped Node and pnpm proof.
-- macOS: let app packaging fall back to `corepack pnpm` when a fresh native runner has Node/Corepack but no pnpm shim on `PATH`.
-- E2E: keep package/onboarding/plugin smoke commands bounded on macOS shells that have Node but no GNU `timeout` or `gtimeout` binary.
-
 ## 2026.5.26
 
 ### Highlights
 
-- Faster replies and startup: visible reply delivery now separates user-facing sends from slower follow-up work, command/model/plugin metadata is reused on hot paths, and Gateway startup avoids repeated plugin, channel, session, usage-cost, and filesystem scans.
+- Faster Gateway and replies: startup avoids repeated plugin, channel, session, usage-cost, warning, scheduled-service, and filesystem scans; visible replies separate user-facing sends from slower follow-up work; Gateway runtime/session caches churn less under load.
+- Transcripts are core: transcript-backed meeting summaries, source-provider chunks, cleaned user turns, media provenance, Codex mirrors, WebChat replies, and CLI/TUI replay now use one more reliable transcript path.
+- More channels are production-ready: Telegram keeps typing/progress context and forum topics, iMessage handles attachment roots, remote media staging, and duplicate local Messages sources, WhatsApp restores group/media behavior, Discord improves voice playback and model picking, and Signal/iMessage/WhatsApp get reaction approvals.
 - Better voice and Talk: realtime Talk runs can be inspected, steered, cancelled, or followed up from Web UI and Discord voice; wake-name handling is more tolerant without letting ambient speech trigger agents.
-- More channels are production-ready: Telegram keeps typing/progress context and forum topics, iMessage handles attachment roots and duplicate local Messages sources, WhatsApp restores group/media behavior, Discord improves voice playback and model picking, and Signal/iMessage get reaction approvals.
-- Safer agents: Codex app-server auth, compaction, source replies, sandbox path handling, and usage-limit recovery are more robust; OpenAI-compatible providers avoid empty-tool and malformed payload failures.
-- More reliable replay and installs: legacy tool results, subagent spawn payloads, stale lock ownership, Windows stack-heavy startup, macOS restart validation, and Docker package preparation all fail less surprisingly.
-- Better install/update/release confidence: Alpine installs, stable update channels, Docker/package timeouts, Windows/macOS proof lanes, Testbox/Crabbox delegation, and plugin publish checks all got hardened.
-- New observability: Activity tab, gateway secret-prep traces, tool/model stream progress, OpenTelemetry LLM spans, release performance evidence, and richer missing telemetry signals make failures easier to inspect.
+- Safer content boundaries: Browser snapshot reads honor SSRF policy, system-event text cannot spoof nested prompt markers, fetched file text is wrapped as external content, ClickClack inbound sender allowlists run before agent dispatch, stale device tokens are rejected, and serialized tool-call text is scrubbed from replies.
+- Providers, Codex, and local models are steadier: named auth profiles, OpenAI sampling params, Codex app-server resume/timeout/usage-limit recovery, dynamic tool-schema guards, xAI usage-limit surfacing, Ollama top-p normalization, and local approval resolution reduce provider-specific dead ends.
+- More reliable install/update/release paths: Alpine installs, stable update channels, Docker/package timeouts, Windows/macOS proof lanes, Testbox/Crabbox delegation, plugin publish checks, and macOS runner bootstraps all got hardened.
+- Better observability: Activity tab, gateway secret-prep traces, tool/model stream progress, explicit fast-mode status, systemd Gateway hygiene, OpenTelemetry LLM spans, release performance evidence, and richer telemetry signals make failures easier to inspect.
 
 ### Changes
 
-- Transcripts: add core transcript capture and source-provider support for transcript-backed meeting summaries, including the renamed Transcripts docs and CLI surface.
+- Transcripts: add core transcript capture and source-provider support for transcript-backed meeting summaries, including the renamed Transcripts docs, CLI surface, source-provider chunks, and cleaned user-turn persistence.
 - Auth: add named model login profiles and supported credential migration for Hermes, OpenCode, and Codex auth profiles, with explicit opt-out and non-interactive controls. (#85667) Thanks @fuller-stack-dev.
 - Diagnostics: trace gateway secret preparation, classify skill/tool usage, surface model stream progress, add OpenTelemetry LLM content spans, and expose alertable telemetry for blocked tools, failover, stale sessions, liveness, oversized payloads, and webhook ingress. (#83019, #80370, #86191)
 - Channels: add Signal reaction approvals, iMessage thumb approval reactions, and WhatsApp thumb approval reaction support so mobile approval flows work without textual `/approve` commands. (#85894, #85952, #85477)
 - Agents/API: forward OpenAI sampling params through the Gateway and expose estimated context-budget status for active agent runs. (#84094)
+- TUI/status: queue prompts submitted while an agent is busy and show explicit fast-mode state plus richer systemd Gateway hygiene in status output. (#86722, #87115, #86976)
+- Plugin SDK: add reaction approval helpers and keep diagnostic event root exports discoverable across function-name and alias-bound module graphs. (#86735, #87084)
 - Android/iOS: add the Android pair-new-gateway action and improve mobile Talk mode surfaces, including iOS realtime Talk mode and Android offline voice/gateway recovery. (#86798, #86355) Thanks @ngutman.
 - Performance: cache plugin metadata snapshots, package realpaths, stable gateway metadata, model cost indexes, channel resolution, usage-cost indexes, and session/auth hot-path facts so common Gateway and reply paths do less rediscovery. (#84649, #85843, #86517, #86678)
 - Voice: expose shared realtime turn-context tracking through the realtime voice SDK and reuse it for Discord speaker attribution and wake-name context recovery.
@@ -48,6 +41,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/content boundaries: validate Browser snapshot tab URLs against SSRF policy before ChromeMCP or direct CDP reads, sanitize queued system-event text so untrusted plugin/channel labels cannot spoof nested prompt markers, wrap fetched file text and metadata as external content, apply ClickClack `allowFrom` sender allowlists before agent dispatch, reject RPCs from invalidated device-token clients during rotation, require staged sandbox media refs, and scrub serialized tool-call text from replies. (#78526, #87094, #87062, #83741, #70707, #86924) Thanks @zsxsoft, @ttzero25, and @mmaps.
+- Transcripts/user turns: persist CLI, WebChat, media, follow-up, hook, and Codex-mirror user turns to the admitted session target; keep cleaned transcript text, inline image routing, provenance metadata, replay hooks, and fallback paths idempotent when runtimes fail or restart.
+- TUI/status/onboarding: queue busy TUI prompts instead of dropping them, preserve the configured default model during onboarding, show failed tool results as errors, keep status JSON plugin scans healthy, preserve xAI usage-limit errors locally, and expose explicit fast-mode/systemd state. (#86722, #87000, #85786, #87001, #86614, #87115, #86976)
+- Plugin commands/SDK: preserve plugin LLM command auth, keep `onDiagnosticEvent` exports discoverable through `Function.name`, stabilize diagnostic event root aliases, correlate pathless read diagnostics, suppress transient runner failures in channel command paths, and repair local approval resolution. (#85936, #87084, #86977, #87069, #86771)
+- Codex/providers: keep WebChat delivery hints out of user prompts, avoid false queued-terminal idle timeouts, share the native hook relay registry, quarantine unsupported dynamic tool schemas, preserve Claude resumed-session system prompts, normalize greedy Ollama `top_p`, and preserve per-agent thinking defaults for ingress runs. (#87096, #73950, #87049, #86689)
+- Gateway/perf/release: reuse startup-warning metadata, defer warning and scheduled-service fallback imports, trim Gateway session/startup/runtime CPU churn, stop chat timeout fallback cascades, drop stale subagent announce history, bound benchmark/watch/kitchen-sink teardown waits, bound macOS/package/onboarding/plugin smoke commands, resolve Parallels npm-update commands from guest `PATH`, and bootstrap raw AWS macOS Node/pnpm commands through `/usr/bin/env`.
 - Reply/perf: reduce visible reply delivery latency by preserving Telegram typing/progress context, lazy-loading slash-command startup metadata, avoiding hot-path model hydration, flag-gating Codex profiler timing, deferring context compaction maintenance, and tracking delivery timing. (#86989, #86990, #86991, #86992, #86993, #86994) Thanks @keshavbotagent.
 - Reply/source delivery: keep TUI, Control UI, media, TTS, transcript, and Codex source-reply finals live without duplicate terminal events or stale replay artifacts.
 - Agents/replay: repair legacy tool results before replay, preserve `sessions_spawn` transcript payloads, restore current guard checks, stage sandboxed workspace media, and keep duplicate transcripts tool display metadata from reappearing. (#82203, #86934, #87025) Thanks @martingarramon, @vincentkoc, and @joshavant.
