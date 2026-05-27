@@ -842,6 +842,12 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("prefers a well-formed final block over malformed unclosed reasoning", () => {
+    expect(sanitizeAssistantVisibleText("<think>reasoning <final>VISIBLE</final> trailing")).toBe(
+      "VISIBLE",
+    );
+  });
+
   it("keeps unclosed trailing reasoning hidden when visible text already exists", () => {
     expect(sanitizeAssistantVisibleText("Visible prefix <think>private reasoning tail")).toBe(
       "Visible prefix",

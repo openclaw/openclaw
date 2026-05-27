@@ -63,6 +63,34 @@ describe("stripReasoningTagsFromText", () => {
     ] as const)("$name", (testCase) => {
       expectStrippedCase(testCase);
     });
+
+    it.each([
+      {
+        name: "recovers final content from unclosed think",
+        input: "<think>reasoning <final>VISIBLE</final>",
+        expected: "VISIBLE",
+      },
+      {
+        name: "recovers final content from unclosed thinking",
+        input: "<thinking>reasoning <final>VISIBLE</final>",
+        expected: "VISIBLE",
+      },
+      {
+        name: "drops trailing text outside the final block",
+        input: "<think>reasoning <final>VISIBLE</final> trailing",
+        expected: "VISIBLE",
+      },
+      {
+        name: "preserves the existing fallback when no final block exists",
+        input: "<think>reasoning only",
+        expected: "reasoning only",
+      },
+    ] as const)("$name", (testCase) => {
+      expectStrippedCase({
+        ...testCase,
+        opts: { mode: "strict" },
+      });
+    });
   });
 
   describe("code block preservation (issue #3952)", () => {
@@ -326,6 +354,15 @@ describe("stripReasoningTagsFromText", () => {
     { input: "C <final>2</final> D", expected: "C 2 D" },
     { input: "E <think>x</think> F", expected: "E  F" },
   ] as const)("does not leak regex state across repeated calls: %j", (testCase) => {
+    expectStrippedCase(testCase);
+  });
+
+  it.each([
+    { input: "<final>VISIBLE</final>", expected: "VISIBLE" },
+    { input: "<think>hidden</think><final>VISIBLE</final>", expected: "VISIBLE" },
+    { input: "plain answer", expected: "plain answer" },
+    { input: "plain <final>answer</final>", expected: "plain answer" },
+  ] as const)("preserves clean visible extraction behavior: %j", (testCase) => {
     expectStrippedCase(testCase);
   });
 });

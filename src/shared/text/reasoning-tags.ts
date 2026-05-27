@@ -17,6 +17,78 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
   return value.trim();
 }
 
+function findFirstUnclosedReasoningContentIndex(text: string): number | undefined {
+  const codeRegions = findCodeRegions(text);
+  THINKING_TAG_RE.lastIndex = 0;
+  let thinkingDepth = 0;
+  let firstUnclosedContentIndex: number | undefined;
+
+  for (const match of text.matchAll(THINKING_TAG_RE)) {
+    const idx = match.index ?? 0;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+
+    const isClose = match[1] === "/";
+    if (thinkingDepth === 0) {
+      if (isClose) {
+        continue;
+      }
+      thinkingDepth = 1;
+      firstUnclosedContentIndex = idx + match[0].length;
+      continue;
+    }
+
+    if (isClose) {
+      thinkingDepth -= 1;
+      if (thinkingDepth === 0) {
+        firstUnclosedContentIndex = undefined;
+      }
+    } else {
+      thinkingDepth += 1;
+    }
+  }
+
+  return thinkingDepth > 0 ? firstUnclosedContentIndex : undefined;
+}
+
+function extractWellFormedFinalContentAfterIndex(params: {
+  text: string;
+  minIndex: number;
+  trimMode: ReasoningTagTrim;
+}): string | undefined {
+  const codeRegions = findCodeRegions(params.text);
+  let result = "";
+  let inFinal = false;
+  let finalContentStart = 0;
+  let foundClosedFinal = false;
+
+  for (const match of findFinalTagMatches(params.text)) {
+    const idx = match.index;
+    if (idx < params.minIndex || isInsideCode(idx, codeRegions) || match.isSelfClosing) {
+      continue;
+    }
+
+    if (!inFinal && !match.isClose) {
+      inFinal = true;
+      finalContentStart = idx + match.text.length;
+      continue;
+    }
+
+    if (inFinal && match.isClose) {
+      result += params.text.slice(finalContentStart, idx);
+      inFinal = false;
+      foundClosedFinal = true;
+    }
+  }
+
+  if (!foundClosedFinal) {
+    return undefined;
+  }
+
+  return applyTrim(result, params.trimMode);
+}
+
 export function hasOrphanReasoningCloseBoundary(params: {
   before: string;
   after: string;
@@ -49,6 +121,9 @@ export function stripReasoningTagsFromText(
   if (matches.length === 0 && !hasThinkingTag) {
     return text;
   }
+  const sourceFirstUnclosedContentIndex = hasThinkingTag
+    ? findFirstUnclosedReasoningContentIndex(text)
+    : undefined;
   if (matches.length > 0) {
     const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
@@ -125,6 +200,16 @@ export function stripReasoningTagsFromText(
     firstUnclosedContentIndex !== undefined &&
     cleaned.trim()
   ) {
+    if (sourceFirstUnclosedContentIndex !== undefined) {
+      const finalContent = extractWellFormedFinalContentAfterIndex({
+        text,
+        minIndex: sourceFirstUnclosedContentIndex,
+        trimMode,
+      });
+      if (finalContent !== undefined) {
+        return finalContent;
+      }
+    }
     return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
   }
 

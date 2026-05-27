@@ -796,6 +796,16 @@ describe("extractAssistantVisibleText", () => {
     expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
   });
 
+  it("sanitizes malformed unclosed reasoning around a final block in legacy unphased text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "<think>reasoning <final>Done.</final> trailing" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+  });
+
   it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
