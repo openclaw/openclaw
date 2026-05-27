@@ -2538,6 +2538,9 @@ describe("short-term dreaming trigger", () => {
       getSession: vi.fn(async () => ({
         messages: narrativeMessages,
       })),
+      getSession: vi.fn(async () => ({
+        messages: [{ role: "assistant", content: "A diary entry." }],
+      })),
       deleteSession: vi.fn(async () => {}),
     };
 
