@@ -361,19 +361,20 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("prefers an older routable normalized alias over a fresher non-routable alias", () => {
-    const queriedKey = "agent:main:matrix:channel:!MiXeDCase:Example.Org";
-    const routableAlias = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    storeState.store[canonicalKey] = {
-      sessionId: "fresh-normalized-session",
+  it("prefers an older routable lowercased artifact over a fresher non-routable exact entry", () => {
+    // Same room, two legit aliases: the exact mixed-case key (fresher, non-routable)
+    // and its lowercased legacy artifact (older, routable, delivering to the real
+    // mixed-case room). Routable wins. (Rewritten from a prior 3-casing setup that
+    // relied on cross-room folded reuse — openclaw#87366 codex review.)
+    const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const artifactKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[queriedKey] = {
+      sessionId: "fresh-nonroutable-exact",
       updatedAt: Date.now(),
-      origin: {
-        provider: "matrix",
-      },
+      origin: { provider: "matrix" },
     };
-    storeState.store[routableAlias] = {
-      sessionId: "older-routable-session",
+    storeState.store[artifactKey] = {
+      sessionId: "older-routable-artifact",
       updatedAt: Date.now() - 1_000,
       deliveryContext: {
         channel: "matrix",
@@ -392,6 +393,39 @@ describe("extractDeliveryInfo", () => {
       },
       threadId: undefined,
     });
+  });
+
+  it("does NOT return a case-distinct room via the folded delivery index (codex #87366)", () => {
+    // Only a mixed-case room exists; a lookup for the case-distinct lowercase room
+    // must NOT be routed to it through the folded index.
+    const mixedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    storeState.store[mixedKey] = {
+      sessionId: "mixed-room-session",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+    const result = extractDeliveryInfo("agent:main:matrix:channel:!mixedcase:example.org");
+    expect(result.deliveryContext).toBeUndefined();
+  });
+
+  it("does NOT leak a mixed-case room for a lowercase request via the exact path (codex #87366)", () => {
+    // Mislabeled legacy artifact: the KEY is lowercase but deliveryContext.to points at
+    // the mixed-case room. A lowercase request must not be routed to the mixed-case room.
+    storeState.store["agent:main:matrix:channel:!mixedcase:example.org"] = {
+      sessionId: "mislabeled-artifact",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+    const result = extractDeliveryInfo("agent:main:matrix:channel:!mixedcase:example.org");
+    expect(result.deliveryContext).toBeUndefined();
   });
 
   it("finds legacy lowercase Signal group entries for mixed-case group keys", () => {
@@ -416,25 +450,28 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("prefers the freshest routable alias even when the normalized key is already routable", () => {
-    const queriedKey = "agent:main:matrix:channel:!MiXeDCase:Example.Org";
-    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    const fresherAlias = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    storeState.store[canonicalKey] = {
-      sessionId: "older-canonical-session",
+  it("prefers the exact mixed-case Matrix entry over a fresher folded legacy alias", () => {
+    // Matrix room IDs are case-sensitive (openclaw#75670): the exact mixed-case
+    // session is canonical and must win over a stale lowercased legacy alias even
+    // when the alias is fresher. (Previously these collapsed to one lowercased key
+    // and freshest won — that collapse was the bug.)
+    const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const legacyFoldedKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[queriedKey] = {
+      sessionId: "exact-mixedcase-session",
       updatedAt: Date.now() - 1_000,
       deliveryContext: {
         channel: "matrix",
-        to: "room:!mixedcase:example.org",
+        to: "room:!MixedCase:Example.Org",
         accountId: "matrix-account",
       },
     };
-    storeState.store[fresherAlias] = {
-      sessionId: "fresh-alias-session",
+    storeState.store[legacyFoldedKey] = {
+      sessionId: "fresher-legacy-folded-session",
       updatedAt: Date.now(),
       deliveryContext: {
         channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
+        to: "room:!mixedcase:example.org",
         accountId: "matrix-account",
       },
     };

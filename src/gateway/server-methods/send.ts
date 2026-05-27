@@ -21,7 +21,10 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import {
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -565,7 +568,11 @@ export const sendHandlers: GatewayRequestHandlers = {
         const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
         const mirrorText = mirrorProjection.text;
         const mirrorMediaUrls = mirrorProjection.mediaUrls;
-        const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
+        // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
+        // explicit session key instead of raw-lowercasing it (openclaw#75670).
+        // Non-enrolled channels still canonicalize to lowercase via the registry.
+        const providedSessionKey =
+          normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
         const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
