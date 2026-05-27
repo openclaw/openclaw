@@ -136,7 +136,7 @@ function listSessionCandidates(store: Record<string, SessionEntry | undefined>) 
       entry,
       updatedAt: entry?.updatedAt ?? null,
     }))
-    .sort(compareSessionCandidatesByUpdatedAt);
+    .toSorted(compareSessionCandidatesByUpdatedAt);
 }
 
 export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSummary {
