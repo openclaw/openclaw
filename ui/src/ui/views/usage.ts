@@ -456,7 +456,7 @@ export function renderUsage(props: UsageProps) {
                   filterActions.onAgentChange(null);
                 }}
               />
-              <span>${t("usage.filters.all")}</span>
+              <span>${t("usage.filters.defaultAgent")}</span>
             </label>
             ${options.map((agentId) => {
               const checked = selectedAgentId === agentId;

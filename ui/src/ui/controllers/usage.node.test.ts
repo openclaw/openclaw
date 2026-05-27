@@ -269,6 +269,68 @@ describe("usage controller date interpretation params", () => {
     vi.unstubAllGlobals();
   });
 
+  it("falls back and remembers compatibility when sessions.usage rejects agentId", async () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("localStorage", storage as unknown as Storage);
+    vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-330);
+
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.usage") {
+        const record = (params ?? {}) as Record<string, unknown>;
+        if ("agentId" in record) {
+          throw new Error("invalid sessions.usage params: at root: unexpected property 'agentId'");
+        }
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const state = createState(request, {
+      usageAgentId: "testclaw",
+      usageTimeZone: "local",
+      settings: { gatewayUrl: "ws://127.0.0.1:18789" },
+    });
+
+    await loadUsage(state);
+
+    // First request should include agentId
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: "UTC+5:30",
+      groupBy: "family",
+      includeHistorical: true,
+      agentId: "testclaw",
+      limit: 1000,
+      includeContextWeight: true,
+    });
+
+    // Second request after fallback should omit agentId
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      mode: "specific",
+      utcOffset: "UTC+5:30",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+
+    // Subsequent loads for the same gateway should skip agentId immediately.
+    await loadUsage(state);
+
+    const callArgs = request.mock.calls[4][1] as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty("agentId");
+
+    // Persisted flag should survive cache resets.
+    testApi.resetLegacyUsageDateParamsCache();
+    expect(testApi.shouldSendLegacyUsageAgentIdParams(state)).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
   it("keeps optional loaders resilient when requests fail", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage.timeseries" || method === "sessions.usage.logs") {
