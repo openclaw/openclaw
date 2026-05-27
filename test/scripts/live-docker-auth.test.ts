@@ -25,14 +25,38 @@ function resolveDockerRunArgs(pathPrefix: string) {
     "printf '%s\\n' \"${ARGS[@]}\"",
   ].join("\n");
 
-  return execFileSync("/bin/bash", ["-c", script], {
+  const output = execFileSync("/bin/bash", ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
       ...process.env,
       PATH: pathPrefix,
     },
-  }).trimEnd().split("\n");
+  }).trimEnd();
+  return output ? output.split("\n") : [];
+}
+
+function failDockerRunArgs(pathPrefix: string) {
+  const script = [
+    "source scripts/lib/live-docker-auth.sh",
+    "ARGS=()",
+    "openclaw_live_init_docker_run_args ARGS 42s",
+  ].join("\n");
+
+  try {
+    execFileSync("/bin/bash", ["-c", script], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: pathPrefix,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    return error as { status?: number; stderr?: Buffer | string };
+  }
+  throw new Error("Expected live Docker run arg initialization to fail");
 }
 
 afterEach(() => {
@@ -82,9 +106,36 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(resolveDockerRunArgs(binDir)).toEqual(["timeout", "42s", "docker", "run"]);
   });
 
-  it("uses docker directly when timeout is unavailable", () => {
-    const binDir = makeTempBin("openclaw-live-docker-auth-no-timeout-");
+  it("uses gtimeout when timeout is unavailable", () => {
+    const binDir = makeTempBin("openclaw-live-docker-auth-gtimeout-");
+    writeExecutable(
+      path.join(binDir, "gtimeout"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--kill-after=1s" ] && [ "$2" = "1s" ] && [ "$3" = "true" ]; then',
+        "  exit 0",
+        "fi",
+        "exit 64",
+        "",
+      ].join("\n"),
+    );
 
-    expect(resolveDockerRunArgs(binDir)).toEqual(["docker", "run"]);
+    expect(resolveDockerRunArgs(binDir)).toEqual([
+      "gtimeout",
+      "--kill-after=30s",
+      "42s",
+      "docker",
+      "run",
+    ]);
+  });
+
+  it("fails fast when timeout is unavailable", () => {
+    const binDir = makeTempBin("openclaw-live-docker-auth-no-timeout-");
+    const error = failDockerRunArgs(binDir);
+
+    expect(error.status).toBe(127);
+    expect(String(error.stderr)).toContain(
+      "timeout command not found; cannot bound live Docker run after 42s",
+    );
   });
 });

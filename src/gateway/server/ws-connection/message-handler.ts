@@ -154,6 +154,11 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
+  "device.pair.remove",
+  "device.token.rotate",
+  "device.token.revoke",
+]);
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
@@ -413,6 +418,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
+  let deviceCredentialMutationBarrier: Promise<void> | undefined;
   const browserSecurity = resolveHandshakeBrowserSecurityContext({
     requestOrigin,
     clientIp,
@@ -425,6 +431,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     rateLimitClientIp: browserRateLimitClientIp,
     authRateLimiter,
   } = browserSecurity;
+  const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
+    if (!client.invalidated) {
+      return false;
+    }
+    const reason = client.invalidatedReason ?? "invalidated";
+    setCloseCause("client-invalidated", {
+      reason,
+      method,
+    });
+    close(4001, `client invalidated: ${reason}`);
+    return true;
+  };
 
   const handleMessage = async (data: RawData) => {
     if (isClosed()) {
@@ -1776,7 +1794,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           presence: snapshot.presence.length,
           stateVersion: snapshot.stateVersion.presence,
         });
-        void refreshHealthSnapshot({ probe: true }).catch((err) =>
+        // Post-connect refresh only needs a cached/config snapshot for UI state;
+        // live channel probes here pulled slow Discord/Telegram HTTP checks into
+        // reply-adjacent websocket handshakes.
+        void refreshHealthSnapshot({ probe: false }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
@@ -1797,6 +1818,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       }
       const req = parsed;
       logWs("in", "req", { connId, id: req.id, method: req.method });
+      for (;;) {
+        const barrier = deviceCredentialMutationBarrier;
+        if (!barrier) {
+          break;
+        }
+        await barrier.catch(() => undefined);
+        if (isClosed()) {
+          return;
+        }
+      }
+      if (closeInvalidatedClient(client, req.method)) {
+        return;
+      }
       if (client.usesSharedGatewayAuth) {
         const requiredSharedGatewaySessionGeneration =
           getRequiredSharedGatewaySessionGeneration?.();
@@ -1857,7 +1891,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         });
       };
 
-      void (async () => {
+      const dispatch = (async () => {
         const { handleGatewayRequest } = await import("../../server-methods.js");
         await handleGatewayRequest({
           req,
@@ -1872,6 +1906,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       });
+      if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
+        const barrier = dispatch.finally(() => {
+          if (deviceCredentialMutationBarrier === barrier) {
+            deviceCredentialMutationBarrier = undefined;
+          }
+        });
+        deviceCredentialMutationBarrier = barrier;
+      }
+      void dispatch;
     } catch (err) {
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });

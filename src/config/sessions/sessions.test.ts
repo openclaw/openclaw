@@ -529,6 +529,23 @@ describe("session store writer queue", () => {
     writeSpy.mockRestore();
   });
 
+  it("caches unchanged session stores from persisted JSON shape", async () => {
+    const key = "agent:main:no-op-cache";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-noop-cache", updatedAt: Date.now() },
+    });
+
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        (store[key] as Record<string, unknown>).ephemeral = undefined;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(loadSessionStore(storePath)[key]).not.toHaveProperty("ephemeral");
+  });
+
   it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
     const key = "agent:main:no-fsync";
     const { storePath } = await makeTmpStore({

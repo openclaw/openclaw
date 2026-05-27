@@ -200,6 +200,9 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (child === undefined) {
+      continue;
+    }
     const clonedChild = cloneJsonLikeValue(child);
     if (key === "__proto__") {
       Object.defineProperty(cloned, key, {

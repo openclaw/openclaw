@@ -28,6 +28,7 @@
   "approval-handler-runtime",
   "channel-runtime-context",
   "approval-native-runtime",
+  "approval-reaction-runtime",
   "approval-reply-runtime",
   "approval-runtime",
   "config-runtime",

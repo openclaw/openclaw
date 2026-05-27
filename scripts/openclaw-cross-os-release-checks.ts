@@ -2022,15 +2022,7 @@ async function startManualGatewayFromInstalledCli(params) {
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
     params.cliPath,
-    [
-      "gateway",
-      "run",
-      "--bind",
-      "loopback",
-      "--port",
-      String(params.lane.gatewayPort),
-      "--force",
-    ],
+    ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
       comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
       platform: process.platform,
@@ -2072,19 +2064,26 @@ async function startManualGatewayFromInstalledCli(params) {
 
 async function resolveInstalledGatewayStatusArgs(params) {
   const requireRpc = params.requireRpc !== false;
-  const help = await runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["gateway", "status", "--help"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (
-    requireRpc &&
-    (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc"))
-  ) {
+  try {
+    const help = await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["gateway", "status", "--help"],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`, { requireRpc });
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(params.logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc", { requireRpc });
+  }
+}
+
+export function buildGatewayStatusArgsFromHelpText(helpText, options = {}) {
+  const requireRpc = options.requireRpc !== false;
+  if (requireRpc && helpText.includes("--require-rpc")) {
     return [
       "gateway",
       "status",
@@ -2094,6 +2093,13 @@ async function resolveInstalledGatewayStatusArgs(params) {
     ];
   }
   return ["gateway", "status"];
+}
+
+function appendGatewayStatusHelpProbeFallback(logPath, error) {
+  appendFileSync(
+    logPath,
+    `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
+  );
 }
 
 export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
@@ -3000,24 +3006,20 @@ function gatewayReadyDeadlineMs() {
 }
 
 async function resolveGatewayStatusArgs(lane, env, logPath) {
-  const help = await runOpenClaw({
-    lane,
-    env,
-    args: ["gateway", "status", "--help"],
-    logPath,
-    timeoutMs: 15_000,
-    check: false,
-  });
-  if (help.stdout.includes("--require-rpc") || help.stderr.includes("--require-rpc")) {
-    return [
-      "gateway",
-      "status",
-      "--require-rpc",
-      "--timeout",
-      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
-    ];
+  try {
+    const help = await runOpenClaw({
+      lane,
+      env,
+      args: ["gateway", "status", "--help"],
+      logPath,
+      timeoutMs: 15_000,
+      check: false,
+    });
+    return buildGatewayStatusArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+  } catch (error) {
+    appendGatewayStatusHelpProbeFallback(logPath, error);
+    return buildGatewayStatusArgsFromHelpText("--require-rpc");
   }
-  return ["gateway", "status"];
 }
 
 async function runModelsSet(params) {

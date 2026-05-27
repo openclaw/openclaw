@@ -568,6 +568,21 @@ console.log(JSON.stringify(result));
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
 
+  it("resolves macOS smoke commands from the guest PATH", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain("/usr/local/bin:/usr/local/sbin");
+    expect(macos).toContain('const guestOpenClaw = "openclaw"');
+    expect(macos).toContain('const guestNode = "node"');
+    expect(macos).toContain('const guestNpm = "npm"');
+    expect(macos).toContain('$(npm root -g)/openclaw/openclaw.mjs');
+    expect(macos).toContain("guestOpenClawEntryExec");
+    expect(macos).not.toContain('const guestOpenClaw = "/opt/homebrew/bin/openclaw"');
+    expect(macos).not.toContain('const guestNode = "/opt/homebrew/bin/node"');
+    expect(macos).not.toContain('const guestNpm = "/opt/homebrew/bin/npm"');
+    expect(macos).not.toContain("/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs");
+  });
+
   it("keeps Windows gateway reachability on a real deadline with start recovery", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
 

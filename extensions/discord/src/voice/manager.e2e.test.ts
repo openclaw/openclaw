@@ -671,6 +671,7 @@ describe("DiscordVoiceManager", () => {
     const firstUtterance = vi.fn();
     const secondUtterance = vi.fn();
 
+    await manager.join({ guildId: "g1", channelId: "1001" });
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
@@ -2999,6 +3000,80 @@ describe("DiscordVoiceManager", () => {
     });
     expect(lastAgentCommandArgs().message).toContain("how is it going");
     expectUserMessageIncludes("wake answer");
+  });
+
+  it("treats a bare wake name as an activation for the next realtime transcript", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "follow-up answer" }] });
+    const onUtterance = vi.fn();
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        transcripts: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: "owner prompt", senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Multy?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+
+    bridgeParams?.onTranscript?.("user", "What's your take on rebuilding everything?", true);
+
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+    expect(lastAgentCommandArgs().message).toContain("What's your take on rebuilding everything?");
+    expect(lastAgentCommandArgs().message).not.toContain("Multy");
+    expect(lastAgentCommandArgs().extraSystemPrompt).toBe("owner prompt");
+    expectUserMessageIncludes("follow-up answer");
+    await vi.waitFor(() =>
+      expect(onUtterance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "notes-1",
+          text: "What's your take on rebuilding everything?",
+          speaker: { id: "u-owner", label: "Owner" },
+        }),
+      ),
+    );
   });
 
   it("reuses recently ignored speaker context when wake-name consult has no pending turn", async () => {
