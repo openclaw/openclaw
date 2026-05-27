@@ -231,7 +231,14 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
     return [];
   }
   const normalized = path.resolve(argv1);
-  const starts = [path.dirname(normalized)];
+  const starts: string[] = [];
+  const parts = normalized.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+    const binName = path.basename(normalized);
+    const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
+    starts.push(path.join(nodeModulesDir, binName));
+  }
   try {
     const resolved = fs.realpathSync(normalized);
     if (resolved !== normalized) {
@@ -240,13 +247,7 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
   } catch {
     // Keep the unresolved argv path; startup shims may not exist in tests.
   }
-  const parts = normalized.split(path.sep);
-  const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
-    const binName = path.basename(normalized);
-    const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
-    starts.push(path.join(nodeModulesDir, binName));
-  }
+  starts.push(path.dirname(normalized));
   return dedupeResolvedPaths(starts);
 }
 
@@ -1087,7 +1088,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       const argv1 = params.argv1 ?? process.argv[1];
       candidates.push(
         ...listAncestorPluginRuntimeModuleCandidates({
-          starts: [...listArgvRuntimeFallbackStartDirs(argv1), params.cwd],
+          starts: listArgvRuntimeFallbackStartDirs(argv1),
           orderedKinds,
         }),
       );

@@ -1901,12 +1901,15 @@ export const syntheticRuntimeMarker = {
     const root = makeTempDir();
     const packageRoot = path.join(root, "node_modules", "openclaw");
     const distFile = path.join(packageRoot, "dist", "plugins", "runtime", "index.js");
+    const projectDistFile = path.join(root, "dist", "plugins", "runtime", "index.js");
     const binFile = path.join(root, "node_modules", ".bin", "openclaw");
     const loaderCachePath = path.join(makeTempDir(), "tsx", "openclaw-loader.js");
     mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(projectDistFile));
     mkdirSafeDir(path.dirname(binFile));
     mkdirSafeDir(path.dirname(loaderCachePath));
     fs.writeFileSync(distFile, "export const runtime = 'startup';\n", "utf-8");
+    fs.writeFileSync(projectDistFile, "export const runtime = 'project';\n", "utf-8");
     fs.writeFileSync(binFile, "#!/usr/bin/env node\n", "utf-8");
     fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
 
