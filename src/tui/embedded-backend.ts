@@ -330,6 +330,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       question || stopCommand ? undefined : this.findQueuedSessionRunPromise(opts.sessionKey);
     if (stopCommand) {
       this.abortSessionRuns(opts.sessionKey);
+      return { runId };
     }
     const controller = new AbortController();
     const queuedRunReadiness = createQueuedRunReadiness();

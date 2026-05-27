@@ -7,6 +7,8 @@ import {
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
+type AbortActiveMock = ReturnType<typeof vi.fn> &
+  ((params?: { preferActive?: boolean }) => Promise<void>);
 type SelectableOverlay = {
   items?: Array<{ value: string; label?: string; description?: string }>;
   onSelect?: (item: { value: string; label?: string; description?: string }) => void;
@@ -67,7 +69,7 @@ function createHarness(params?: {
   activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
-  abortActive?: ReturnType<typeof vi.fn>;
+  abortActive?: AbortActiveMock;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -89,7 +91,8 @@ function createHarness(params?: {
   const openOverlay = vi.fn();
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
-  const abortActive = params?.abortActive ?? vi.fn();
+  const abortActive =
+    params?.abortActive ?? (vi.fn().mockResolvedValue(undefined) as AbortActiveMock);
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
@@ -529,9 +532,20 @@ describe("tui command handlers", () => {
 
     await handleCommand("/stop");
 
-    expect(abortActive).toHaveBeenCalledOnce();
+    expect(abortActive).toHaveBeenCalledWith({ preferActive: true });
     expect(sendChat).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();
+  });
+
+  it("sends broad stop-like text as a normal prompt when idle", async () => {
+    const abortActive = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, sendChat, addUser } = createHarness({ abortActive });
+
+    await handleCommand("do not do that");
+
+    expect(abortActive).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledWith("do not do that");
   });
 
   it("rejects normal sends while a queued submit is pending registration", async () => {

@@ -394,7 +394,7 @@ export function createSessionActions(context: SessionActionContext) {
     await loadHistory();
   };
 
-  const abortActive = async () => {
+  const abortActive = async (params?: { preferActive?: boolean }) => {
     if (
       opts.local === true &&
       state.activityStatus === "finishing context" &&
@@ -405,7 +405,7 @@ export function createSessionActions(context: SessionActionContext) {
       return;
     }
     const runId =
-      state.activeChatRunId && state.pendingChatRunId
+      !params?.preferActive && state.activeChatRunId && state.pendingChatRunId
         ? state.pendingChatRunId
         : (state.activeChatRunId ?? state.pendingChatRunId ?? null);
     if (!runId) {

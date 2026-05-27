@@ -46,7 +46,7 @@ type CommandHandlerContext = {
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
   refreshAgents: () => Promise<void>;
-  abortActive: () => Promise<void>;
+  abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
@@ -62,6 +62,11 @@ type CommandHandlerContext = {
 
 function isBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
+}
+
+function isSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -607,6 +612,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
+      case "stop":
+        await abortActive({ preferActive: true });
+        break;
       case "settings":
         openSettings();
         break;
@@ -633,8 +641,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
-    if (isChatStopCommandText(text)) {
-      await abortActive();
+    const busy = Boolean(
+      state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
+    );
+    if (isSlashStopCommand(text) || (busy && isChatStopCommandText(text))) {
+      await abortActive({ preferActive: true });
       return;
     }
     if (!isBtw && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {

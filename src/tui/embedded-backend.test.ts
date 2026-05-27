@@ -708,19 +708,13 @@ describe("EmbeddedTuiBackend", () => {
       payloads: Array<{ text: string }>;
       meta: Record<string, unknown>;
     }>();
-    const second = deferred<{
-      payloads: Array<{ text: string }>;
-      meta: Record<string, unknown>;
-    }>();
     const firstAbortListener = vi.fn(() => {
       first.resolve({ payloads: [{ text: "first aborted" }], meta: {} });
     });
-    agentCommandFromIngressMock
-      .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-        opts.abortSignal?.addEventListener("abort", firstAbortListener);
-        return first.promise;
-      })
-      .mockReturnValueOnce(second.promise);
+    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      opts.abortSignal?.addEventListener("abort", firstAbortListener);
+      return first.promise;
+    });
 
     const backend = new EmbeddedTuiBackend();
     backend.start();
@@ -743,9 +737,7 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     expect(firstAbortListener).toHaveBeenCalledTimes(1);
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-
-    second.resolve({ payloads: [{ text: "stopped" }], meta: {} });
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
     await flushMicrotasks();
   });
 
