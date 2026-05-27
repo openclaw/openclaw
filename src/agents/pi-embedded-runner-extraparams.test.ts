@@ -2660,7 +2660,7 @@ describe("applyExtraParamsToAgent", () => {
       provider: "omlx-local",
       id: "local_model",
       compat: { supportsPromptCacheKey: true },
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {
