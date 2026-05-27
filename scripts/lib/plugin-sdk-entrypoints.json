@@ -45,6 +45,7 @@
   "reply-reference",
   "reply-chunking",
   "reply-payload",
+  "reply-payload-testing",
   "agent-media-payload",
   "inbound-reply-dispatch",
   "inbound-envelope",
