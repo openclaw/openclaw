@@ -43,10 +43,47 @@ export function ensurePiCompactionReserveTokens(params: {
   return { didOverride: true, reserveTokens: minReserveTokens };
 }
 
-export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
+/**
+ * Resolve a context-window-relative share (in (0, 1]) into an absolute token
+ * count. Returns undefined when the share is not configured or when the
+ * caller did not supply a context budget. Always rounds down so the resolved
+ * value never exceeds `floor(share * contextTokenBudget)`. See #72790.
+ */
+export function resolveCompactionShareTokens(
+  share: unknown,
+  contextTokenBudget: number | undefined,
+): number | undefined {
+  if (
+    typeof share !== "number" ||
+    !Number.isFinite(share) ||
+    share <= 0 ||
+    share > 1 ||
+    typeof contextTokenBudget !== "number" ||
+    !Number.isFinite(contextTokenBudget) ||
+    contextTokenBudget <= 0
+  ) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(share * contextTokenBudget));
+}
+
+export function resolveCompactionReserveTokensFloor(
+  cfg?: OpenClawConfig,
+  contextTokenBudget?: number,
+): number {
+  const compactionCfg = cfg?.agents?.defaults?.compaction;
+  const raw = compactionCfg?.reserveTokensFloor;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
     return Math.floor(raw);
+  }
+  // Fall through to the share-based variant only when the absolute is
+  // unset, so the existing absolute-wins precedence is preserved.
+  const fromShare = resolveCompactionShareTokens(
+    compactionCfg?.reserveTokensFloorShare,
+    contextTokenBudget,
+  );
+  if (fromShare !== undefined) {
+    return fromShare;
   }
   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 }
@@ -78,9 +115,25 @@ export function applyPiCompactionSettingsFromConfig(params: {
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
-  const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
-  const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  // Absolute config wins; share-based is consulted only when the absolute
+  // sibling field is unset. Both happen *before* the floor cap so the share
+  // resolves against the user's intended context budget. See #72790.
+  const reserveTokensFromShare = resolveCompactionShareTokens(
+    compactionCfg?.reserveTokensShare,
+    params.contextTokenBudget,
+  );
+  const keepRecentTokensFromShare = resolveCompactionShareTokens(
+    compactionCfg?.keepRecentTokensShare,
+    params.contextTokenBudget,
+  );
+  const configuredReserveTokens =
+    toNonNegativeInt(compactionCfg?.reserveTokens) ?? reserveTokensFromShare;
+  const configuredKeepRecentTokens =
+    toPositiveInt(compactionCfg?.keepRecentTokens) ??
+    (keepRecentTokensFromShare && keepRecentTokensFromShare > 0
+      ? keepRecentTokensFromShare
+      : undefined);
+  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg, params.contextTokenBudget);
 
   // Cap the floor to a safe fraction of the context window so that
   // small-context models (e.g. Ollama with 16 K tokens) are not starved of
