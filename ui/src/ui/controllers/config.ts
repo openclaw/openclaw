@@ -510,7 +510,6 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
     if (!res.ok) {
       const errorMessage = res.error || "Failed to open config file";
       state.lastError = errorMessage;
-      // Copy path to clipboard as fallback
       const path = res.path || state.configSnapshot?.path;
       if (path) {
         try {
