@@ -115,7 +115,7 @@ export function validateHostEnv(env: Record<string, string>): void {
   }
 }
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
-  readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS"),
+  readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
