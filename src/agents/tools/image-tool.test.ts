@@ -2217,6 +2217,26 @@ describe("image tool managed inbound media", () => {
     });
   });
 
+  it("resolves media://inbound refs before workspace-relative path handling", async () => {
+    await withManagedInboundPng(async ({ mediaId }) => {
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        await withTempWorkspacePng(async ({ workspaceDir }) => {
+          const tool = createRequiredImageTool({
+            config: createMinimaxImageConfig(),
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true },
+          });
+
+          await expectImageToolExecOk(tool, `media://inbound/${mediaId}`);
+          expect(fetch).toHaveBeenCalledTimes(1);
+        });
+      });
+    });
+  });
+
   it("allows managed inbound absolute paths when workspaceOnly is enabled", async () => {
     await withManagedInboundPng(async ({ mediaPath }) => {
       installImageUnderstandingProviderStubs();

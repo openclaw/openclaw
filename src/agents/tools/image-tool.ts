@@ -17,6 +17,7 @@ import { resolveTimeoutMs } from "../../media-understanding/resolve.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
+  resolveMediaReferenceLocalPath,
 } from "../../media/media-reference.js";
 import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../../media/web-media.js";
 import {
@@ -874,12 +875,16 @@ export function createImageTool(options?: {
           throw new Error("Sandboxed image tool does not allow remote URLs.");
         }
 
+        const mediaReferencePath = isDataUrl
+          ? normalizedRef
+          : await resolveMediaReferenceLocalPath(normalizedRef);
+
         const resolvedImage = (() => {
           if (sandboxConfig) {
-            return normalizedRef;
+            return mediaReferencePath;
           }
-          if (normalizedRef.startsWith("~")) {
-            return resolveUserPath(normalizedRef);
+          if (mediaReferencePath.startsWith("~")) {
+            return resolveUserPath(mediaReferencePath);
           }
           // Resolve relative paths against workspaceDir so agents can reference
           // workspace-relative paths (e.g. "inbox/photo.png") without needing to
@@ -889,12 +894,12 @@ export function createImageTool(options?: {
             !isFileUrl &&
             !isHttpUrl &&
             !refInfo.looksLikeWindowsDrivePath &&
-            !isAbsolute(normalizedRef) &&
+            !isAbsolute(mediaReferencePath) &&
             options?.workspaceDir
           ) {
-            return resolve(options.workspaceDir, normalizedRef);
+            return resolve(options.workspaceDir, mediaReferencePath);
           }
-          return normalizedRef;
+          return mediaReferencePath;
         })();
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
           ? { resolved: "" }

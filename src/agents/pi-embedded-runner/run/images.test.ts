@@ -353,6 +353,33 @@ describe("modelSupportsImages", () => {
 });
 
 describe("loadImageFromRef", () => {
+  it("loads a media-uri ref from the media store before workspace path handling", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-uri-load-"));
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "claim-check-native.png";
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const image = await loadImageFromRef(
+        {
+          raw: `media://inbound/${mediaId}`,
+          type: "media-uri",
+          resolved: `media://inbound/${mediaId}`,
+        },
+        path.join(stateDir, "workspace"),
+      );
+
+      expect(image?.type).toBe("image");
+      expect(image?.mimeType).toBe("image/png");
+      expect(image?.data).toBe(TINY_PNG_BASE64);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
     await fs.mkdir(homeDir, { recursive: true });
