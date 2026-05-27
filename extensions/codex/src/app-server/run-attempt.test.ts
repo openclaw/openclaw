@@ -176,6 +176,19 @@ function createNamedDynamicTool(
   };
 }
 
+function setAgentWorkspaceForTest(params: EmbeddedRunAttemptParams, workspaceDir: string): void {
+  params.config = {
+    ...params.config,
+    agents: {
+      ...params.config?.agents,
+      defaults: {
+        ...params.config?.agents?.defaults,
+        workspace: workspaceDir,
+      },
+    },
+  } as EmbeddedRunAttemptParams["config"];
+}
+
 async function buildDynamicToolsForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
@@ -1727,6 +1740,7 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setAgentWorkspaceForTest(params, workspaceDir);
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -1877,6 +1891,7 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setAgentWorkspaceForTest(params, workspaceDir);
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -1967,6 +1982,7 @@ describe("runCodexAppServerAttempt", () => {
     params.config = {
       agents: {
         defaults: {
+          workspace: workspaceDir,
           bootstrapMaxChars: 1000,
           bootstrapTotalMaxChars: 2000,
         },
@@ -2037,6 +2053,7 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setAgentWorkspaceForTest(params, workspaceDir);
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -2066,6 +2083,45 @@ describe("runCodexAppServerAttempt", () => {
     expect(nestedMemoryStats).toMatchObject({
       rawChars: nestedMemory.length,
       injectedChars: nestedMemory.length,
+      truncated: false,
+    });
+  });
+
+  it("injects MEMORY.md when active workspace is not the memory tool workspace", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const memorySummary = "Memory summary goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    setAgentWorkspaceForTest(params, path.join(tempDir, "memory-workspace"));
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).not.toContain("OpenClaw Workspace Memory");
+    expect(inputText).toContain(memorySummary);
+
+    const fileStats = new Map(
+      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
+    );
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.length,
+      injectedChars: memorySummary.length,
       truncated: false,
     });
   });

@@ -10,6 +10,7 @@ import {
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -214,7 +215,13 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   memoryToolNames: readonly string[];
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
-    const memoryToolsAvailable = params.memoryToolNames.length > 0;
+    const memoryToolsAvailable =
+      params.memoryToolNames.length > 0 &&
+      canRouteCodexWorkspaceMemoryThroughTools({
+        config: params.params.config,
+        agentId: params.params.agentId ?? params.sessionAgentId,
+        workspaceDir: params.resolvedWorkspace,
+      });
     const bootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
@@ -817,6 +824,20 @@ export function getCodexWorkspaceMemoryToolNames(tools: readonly { name: string 
   return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
 }
 
+function canRouteCodexWorkspaceMemoryThroughTools(params: {
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId: string;
+  workspaceDir: string;
+}): boolean {
+  if (!params.config) {
+    return false;
+  }
+  return isSameCodexWorkspacePath(
+    resolveAgentWorkspaceDir(params.config, params.agentId),
+    params.workspaceDir,
+  );
+}
+
 function isMissingCodexBootstrapContextFile(file: EmbeddedContextFile): boolean {
   return file.content.trimStart().startsWith("[MISSING] Expected at:");
 }
@@ -863,6 +884,10 @@ function isCodexWorkspaceRootMemoryPath(params: {
     ? path.resolve(filePath)
     : path.resolve(params.workspaceDir, filePath);
   return absolutePath === path.join(path.resolve(params.workspaceDir), "MEMORY.md");
+}
+
+function isSameCodexWorkspacePath(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
 }
 
 export function remapCodexContextFilePath(params: {

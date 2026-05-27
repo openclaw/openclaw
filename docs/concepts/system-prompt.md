@@ -183,12 +183,13 @@ in every user turn. Codex loads `AGENTS.md` through its own project-doc
 discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
 Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
 turns get a collaboration-mode note pointing to the file when it exists and is
-non-empty. `MEMORY.md` content is not pasted into every native Codex turn;
-when memory tools are available, Codex turns get a small workspace-memory note
-and should use `memory_search` or `memory_get` when durable memory is relevant.
-If tools are disabled or memory search is unavailable, `MEMORY.md` falls back to
-the normal bounded turn-context path. Active `BOOTSTRAP.md` content keeps the
-normal turn-context role for now.
+non-empty. `MEMORY.md` content from the configured agent workspace is not pasted
+into every native Codex turn; when memory tools are available for that workspace,
+Codex turns get a small workspace-memory note and should use `memory_search` or
+`memory_get` when durable memory is relevant. If tools are disabled, memory
+search is unavailable, or the active workspace differs from the agent memory
+workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
+`BOOTSTRAP.md` content keeps the normal turn-context role for now.
 
 On non-Codex harnesses, bootstrap files continue to be composed into the
 OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
