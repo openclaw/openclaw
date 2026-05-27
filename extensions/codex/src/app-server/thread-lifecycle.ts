@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  formatErrorMessage,
   isActiveHarnessContextEngine,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -55,6 +56,17 @@ export type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
 };
+
+class CodexThreadStartRequestError extends Error {
+  constructor(cause: unknown) {
+    super(formatErrorMessage(cause), { cause });
+    this.name = "CodexThreadStartRequestError";
+  }
+}
+
+export function isCodexThreadStartRequestError(error: unknown): boolean {
+  return error instanceof CodexThreadStartRequestError;
+}
 
 export type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
@@ -548,11 +560,17 @@ export async function startOrResumeThread(params: {
       environmentSelection: params.environmentSelection,
     }),
   );
-  const response = assertCodexThreadStartResponse(
-    await lifecycleTiming.measure("thread_start_request", () =>
-      params.client.request("thread/start", startParams),
-    ),
-  );
+  const threadStartResponse = await lifecycleTiming.measure("thread_start_request", async () => {
+    try {
+      return await params.client.request("thread/start", startParams);
+    } catch (error) {
+      if (isCodexAppServerConnectionClosedError(error)) {
+        throw error;
+      }
+      throw new CodexThreadStartRequestError(error);
+    }
+  });
+  const response = assertCodexThreadStartResponse(threadStartResponse);
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,

@@ -3520,6 +3520,39 @@ describe("runCodexAppServerAttempt", () => {
     clearSpy.mockRestore();
   });
 
+  it("retires the shared Codex client when a spawned helper run times out during thread/start", async () => {
+    const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
+    clearSpy.mockClear();
+    let failedClient: unknown;
+    setCodexAppServerClientFactoryForTest(async () => {
+      const c = {
+        request: vi.fn(async (method: string) => {
+          if (method === "thread/start") {
+            return await new Promise<never>(() => undefined);
+          }
+          return {};
+        }),
+        addNotificationHandler: vi.fn(() => () => undefined),
+        addRequestHandler: vi.fn(() => () => undefined),
+      };
+      failedClient = c;
+      return c as never;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.spawnedBy = "agent:main:session-parent";
+    params.timeoutMs = 1;
+
+    await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
+      "codex app-server startup timed out",
+    );
+    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === failedClient);
+    expect(calledWithFailedClient).toBe(true);
+    clearSpy.mockRestore();
+  });
+
   it("retires the shared Codex client when a top-level run fails with a logical thread/start error", async () => {
     const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
     clearSpy.mockClear();

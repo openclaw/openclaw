@@ -49,6 +49,7 @@ import {
 } from "./shared-client.js";
 import {
   startOrResumeThread,
+  isCodexThreadStartRequestError,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
@@ -375,8 +376,9 @@ export async function startCodexAttemptThread(params: {
     };
   } catch (error) {
     const transportPoisoned = isCodexAppServerConnectionClosedError(error);
-    const isSpawnedHelperRun = Boolean(params.spawnedBy?.trim());
-    if (transportPoisoned || !isSpawnedHelperRun) {
+    const preserveSharedClientForSpawnedThreadStartError =
+      Boolean(params.spawnedBy?.trim()) && isCodexThreadStartRequestError(error);
+    if (transportPoisoned || !preserveSharedClientForSpawnedThreadStartError) {
       clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
     }
     throw error;
