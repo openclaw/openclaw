@@ -597,9 +597,24 @@ importers:
       '@pierre/theme':
         specifier: 1.0.3
         version: 1.0.3
+      '@shikijs/core':
+        specifier: 3.23.0
+        version: 3.23.0
+      '@shikijs/engine-javascript':
+        specifier: 3.23.0
+        version: 3.23.0
+      '@shikijs/engine-oniguruma':
+        specifier: 3.23.0
+        version: 3.23.0
+      '@shikijs/langs':
+        specifier: 3.23.0
+        version: 3.23.0
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
+      shiki:
+        specifier: 3.23.0
+        version: 3.23.0
       typebox:
         specifier: 1.1.38
         version: 1.1.38
@@ -610,6 +625,18 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      esbuild:
+        specifier: 0.28.0
+        version: 0.28.0
+
+  extensions/diffs-language-pack:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      esbuild:
+        specifier: 0.28.0
+        version: 0.28.0
 
   extensions/discord:
     dependencies:
