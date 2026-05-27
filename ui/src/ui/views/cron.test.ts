@@ -915,6 +915,8 @@ describe("cron view", () => {
       throw new Error("Expected run history section with data-run-history attribute");
     }
 
+    // jsdom does not define scrollIntoView; stub it for the test
+    runHistorySection.scrollIntoView = runHistorySection.scrollIntoView ?? vi.fn();
     const scrollSpy = vi.spyOn(runHistorySection, "scrollIntoView").mockImplementation(() => {});
 
     const historyButton = Array.from(container.querySelectorAll("button")).find(
