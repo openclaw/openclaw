@@ -197,7 +197,7 @@ public final class OpenClawChatViewModel {
         return result
     }
 
-    private var resolvedMainSessionKey: String {
+    var resolvedMainSessionKey: String {
         let trimmed = self.sessionDefaults?.mainSessionKey?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (trimmed?.isEmpty == false ? trimmed : nil) ?? "main"
@@ -1245,7 +1245,7 @@ public final class OpenClawChatViewModel {
 
     private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
         if let sessionKey = payload.sessionKey,
-           !Self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+           !self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
         {
             return
         }
@@ -1276,7 +1276,7 @@ public final class OpenClawChatViewModel {
         // Never drop events for our own pending run on key mismatch, or the UI can stay
         // stuck at "thinking" until the user reopens and forces a history reload.
         if let sessionKey = chat.sessionKey,
-           !Self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey),
+           !self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey),
            !isOurRun
         {
             return
@@ -1365,27 +1365,6 @@ public final class OpenClawChatViewModel {
             usage: message.usage,
             stopReason: message.stopReason,
             errorMessage: message.errorMessage)
-    }
-
-    private static func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {
-        let incomingNormalized = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let currentNormalized = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incomingNormalized == currentNormalized {
-            return true
-        }
-        // Common alias pair in operator clients: UI uses "main" while gateway emits
-        // the default agent's canonical "agent:<id>:main" key.
-        if (currentNormalized == "main" && Self.isAgentMainSessionKey(incomingNormalized)) ||
-            (incomingNormalized == "main" && Self.isAgentMainSessionKey(currentNormalized))
-        {
-            return true
-        }
-        return false
-    }
-
-    private static func isAgentMainSessionKey(_ sessionKey: String) -> Bool {
-        let parts = sessionKey.split(separator: ":", omittingEmptySubsequences: false)
-        return parts.count == 3 && parts[0] == "agent" && parts[2] == "main"
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {

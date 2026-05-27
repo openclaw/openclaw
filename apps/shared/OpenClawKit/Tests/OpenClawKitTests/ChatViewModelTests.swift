@@ -1038,7 +1038,7 @@ extension TestChatTransportState {
             .chat(
                 OpenClawChatEventPayload(
                     runId: "external-run",
-                    sessionKey: "agent:aiden:main",
+                    sessionKey: "agent:main:main",
                     state: "final",
                     message: nil,
                     errorMessage: nil)))
@@ -1050,7 +1050,9 @@ extension TestChatTransportState {
 
     @Test func appendsExternalSessionUserMessageForActiveSession() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:aiden:main",
+            historyResponses: [historyPayload(sessionKey: "agent:aiden:main")])
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
@@ -1080,6 +1082,35 @@ extension TestChatTransportState {
                     vm.messages.first?.content.first?.text == "spoken transcript"
             }
         }
+    }
+
+    @Test func ignoresAgentMainSessionMessageForDifferentCurrentMainAlias() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:sentinel:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "wrong agent transcript",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now),
+                    messageId: "msg-other-agent",
+                    messageSeq: 1)))
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await MainActor.run { vm.messages.isEmpty })
     }
 
     @Test func ignoresExternalSessionUserMessageForOtherSession() async throws {

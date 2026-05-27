@@ -65,13 +65,14 @@ extension SettingsProTab {
             let flags = Int32(ptr.pointee.ifa_flags)
             let isUp = (flags & IFF_UP) != 0
             let isLoopback = (flags & IFF_LOOPBACK) != 0
-            let family = ptr.pointee.ifa_addr.pointee.sa_family
+            guard let addrPtr = ptr.pointee.ifa_addr else { continue }
+            let family = addrPtr.pointee.sa_family
             if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
-            var addr = ptr.pointee.ifa_addr.pointee
+            var addr = addrPtr.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             let result = getnameinfo(
                 &addr,
-                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                socklen_t(addrPtr.pointee.sa_len),
                 &buffer,
                 socklen_t(buffer.count),
                 nil,
