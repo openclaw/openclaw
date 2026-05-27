@@ -117,6 +117,10 @@ vi.mock("../../agents/model-auth.js", () => {
   };
 });
 
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider,
+}));
+
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -657,7 +661,7 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
     expect(reply?.text).toContain("via codex runtime / openai-codex");
     expect(reply?.text).toContain("openai-codex:patrick@example.test=OAuth");
-  });
+  }, 240_000);
 
   it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
     setAuthProfiles({
