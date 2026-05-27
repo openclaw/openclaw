@@ -137,6 +137,41 @@ describe("prompt cache observability", () => {
     expect(second.changes).toBeNull();
   });
 
+  it("tracks recurring prompt-cache affinity across rotating session ids", () => {
+    beginPromptCacheObservation({
+      sessionId: "isolated-run-1",
+      promptCacheKey: "openclaw-cron-stable-cache-key",
+      sessionKey: "agent:cron:run:isolated-run-1",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      toolNames: ["read"],
+    });
+    completePromptCacheObservation({
+      sessionId: "isolated-run-1",
+      promptCacheKey: "openclaw-cron-stable-cache-key",
+      sessionKey: "agent:cron:run:isolated-run-1",
+      usage: { cacheRead: 8_000 },
+    });
+
+    const nextRun = beginPromptCacheObservation({
+      sessionId: "isolated-run-2",
+      promptCacheKey: "openclaw-cron-stable-cache-key",
+      sessionKey: "agent:cron:run:isolated-run-2",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      toolNames: ["read"],
+    });
+
+    expect(nextRun.previousCacheRead).toBe(8_000);
+    expect(nextRun.changes).toBeNull();
+  });
+
   it("evicts old tracker entries when the tracker map grows past the soft cap", () => {
     beginPromptCacheObservation({
       sessionId: "session-0",

@@ -396,11 +396,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps explicit provider env overrides for Windows runs", () => {
-    const result = runWrapper(
-      azureProviderHelp,
-      ["run", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
-    );
+    const result = runWrapper(azureProviderHelp, ["run", "--target", "windows", "--", "echo ok"], {
+      env: { CRABBOX_PROVIDER: "aws" },
+    });
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toEqual([

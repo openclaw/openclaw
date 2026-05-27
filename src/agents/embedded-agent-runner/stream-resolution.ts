@@ -11,6 +11,7 @@ let openClawNativeCodexResponsesStreamFnForTest: StreamFn | undefined;
 
 type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
   authProfileId?: string;
+  promptCacheKey?: string;
 };
 
 export function resolveEmbeddedAgentBaseStreamFn(params: {
@@ -115,6 +116,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
   sessionId: string;
+  promptCacheKey?: string;
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
@@ -128,6 +130,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       authProfileId: params.authProfileId,
       authStorage: params.authStorage,
       providerId: params.model.provider,
+      promptCacheKey: params.promptCacheKey,
       transformContext: (context) =>
         context.systemPrompt
           ? {
@@ -155,6 +158,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       authStorage: params.authStorage,
       providerId: params.model.provider,
       sessionId: params.sessionId,
+      promptCacheKey: params.promptCacheKey,
       transformContext: (context) =>
         context.systemPrompt
           ? {
@@ -186,11 +190,23 @@ export function resolveEmbeddedAgentStreamFn(params: {
         authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
+        promptCacheKey: params.promptCacheKey,
       });
     }
   }
 
-  return currentStreamFn;
+  const promptCacheKey = params.promptCacheKey?.trim();
+  if (!promptCacheKey) {
+    return currentStreamFn;
+  }
+  return wrapEmbeddedAgentStreamFn(currentStreamFn, {
+    runSignal: params.signal,
+    resolvedApiKey: undefined,
+    authProfileId: undefined,
+    authStorage: undefined,
+    providerId: params.model.provider,
+    promptCacheKey,
+  });
 }
 
 export const testing = {
@@ -211,6 +227,7 @@ function wrapEmbeddedAgentStreamFn(
     authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
     providerId: string;
     sessionId?: string;
+    promptCacheKey?: string;
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
   },
 ): StreamFn {
@@ -223,6 +240,10 @@ function wrapEmbeddedAgentStreamFn(
       params.sessionId && !embeddedOptions?.sessionId
         ? { ...embeddedOptions, sessionId: params.sessionId }
         : embeddedOptions;
+    const promptCacheKey = params.promptCacheKey?.trim();
+    if (promptCacheKey && !merged?.promptCacheKey) {
+      merged = { ...merged, promptCacheKey };
+    }
     if (params.authProfileId && !merged?.authProfileId) {
       merged = { ...merged, authProfileId: params.authProfileId };
     }

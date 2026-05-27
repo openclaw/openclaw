@@ -55,7 +55,15 @@ function digestText(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-function buildTrackerKey(params: { sessionKey?: string; sessionId: string }): string {
+function buildTrackerKey(params: {
+  promptCacheKey?: string;
+  sessionKey?: string;
+  sessionId: string;
+}): string {
+  const promptCacheKey = params.promptCacheKey?.trim();
+  if (promptCacheKey) {
+    return promptCacheKey;
+  }
   return params.sessionKey?.trim() || params.sessionId;
 }
 
@@ -135,6 +143,7 @@ export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): st
 
 export function beginPromptCacheObservation(params: {
   sessionId: string;
+  promptCacheKey?: string;
   sessionKey?: string;
   provider: string;
   modelId: string;
@@ -174,6 +183,7 @@ export function beginPromptCacheObservation(params: {
 
 export function completePromptCacheObservation(params: {
   sessionId: string;
+  promptCacheKey?: string;
   sessionKey?: string;
   usage?: NormalizedUsage;
 }): PromptCacheBreak | null {

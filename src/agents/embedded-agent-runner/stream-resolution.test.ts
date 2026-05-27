@@ -274,6 +274,83 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
+  it("propagates prompt cache identity separately from the session id", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      sessionId: "run-session",
+      promptCacheKey: "cron-cache-key",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn(
+        { provider: "demo-provider", id: "demo-model" } as never,
+        {} as never,
+        { sessionId: "run-session" } as never,
+      ),
+      "provider-owned prompt cache result",
+    );
+    expect(result.sessionId).toBe("run-session");
+    expect(result.promptCacheKey).toBe("cron-cache-key");
+  });
+
+  it("does not overwrite caller-supplied prompt cache identity", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      sessionId: "run-session",
+      promptCacheKey: "cron-cache-key",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn(
+        { provider: "demo-provider", id: "demo-model" } as never,
+        {} as never,
+        { promptCacheKey: "caller-cache-key" } as never,
+      ),
+      "provider-owned caller prompt cache result",
+    );
+    expect(result.promptCacheKey).toBe("caller-cache-key");
+  });
+
+  it("propagates prompt cache identity into custom session streams", async () => {
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "run-session",
+      promptCacheKey: "cron-cache-key",
+      model: {
+        api: "custom-api",
+        provider: "custom-provider",
+        id: "custom-model",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
+    const result = await expectStreamResultRecord(
+      streamFn(
+        { provider: "custom-provider", id: "custom-model" } as never,
+        {} as never,
+        { sessionId: "run-session" } as never,
+      ),
+      "custom prompt cache result",
+    );
+    expect(result.sessionId).toBe("run-session");
+    expect(result.promptCacheKey).toBe("cron-cache-key");
+  });
+
   it("forwards the run abort signal into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const signal = new AbortController().signal;

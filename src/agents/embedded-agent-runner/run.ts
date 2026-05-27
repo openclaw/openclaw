@@ -1473,6 +1473,7 @@ export async function runEmbeddedAgent(
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
+            promptCacheKey: params.promptCacheKey,
             sandboxSessionKey: params.sandboxSessionKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,

@@ -195,6 +195,75 @@ describe("buildGuardedModelFetch", () => {
     );
   });
 
+  it("passes model request timeouts to local service startup", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    try {
+      const fetcher = buildGuardedModelFetch(model, 750);
+      const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+      });
+      await response.text();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(750);
+      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+        model,
+        undefined,
+        timeoutController.signal,
+      );
+      const params = latestGuardedFetchParams();
+      expect(params.timeoutMs).toBe(750);
+      expect(params.signal).toBeUndefined();
+      expect((params.init as RequestInit | undefined)?.signal).toBeUndefined();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("combines caller abort signals with model request timeouts", async () => {
+    const callerController = new AbortController();
+    const timeoutController = new AbortController();
+    const combinedController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const anySpy = vi.spyOn(AbortSignal, "any").mockReturnValue(combinedController.signal);
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    try {
+      const fetcher = buildGuardedModelFetch(model, 750);
+      const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+        signal: callerController.signal,
+      });
+      await response.text();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(750);
+      expect(anySpy).toHaveBeenCalledWith([callerController.signal, timeoutController.signal]);
+      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+        model,
+        undefined,
+        combinedController.signal,
+      );
+      const params = latestGuardedFetchParams();
+      expect(params.signal).toBe(callerController.signal);
+      expect((params.init as RequestInit | undefined)?.signal).toBe(callerController.signal);
+    } finally {
+      timeoutSpy.mockRestore();
+      anySpy.mockRestore();
+    }
+  });
+
   it("releases local service leases when guarded fetch fails", async () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });

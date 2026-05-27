@@ -848,7 +848,10 @@ export type MutableSession = {
       systemPrompt?: string;
     };
   };
-  prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  prompt: (
+    prompt: string,
+    options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
+  ) => Promise<void>;
   sendCustomMessage: (
     message: {
       customType: string;
@@ -867,7 +870,7 @@ export type MutableSession = {
 type SessionPromptOverride = (
   session: MutableSession,
   prompt: string,
-  options?: { images?: unknown[] },
+  options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
 ) => Promise<void>;
 
 type TestAgentStream = {
@@ -1009,13 +1012,13 @@ export function createDefaultEmbeddedSession(params?: {
   prompt?: (
     session: MutableSession,
     prompt: string,
-    options?: { images?: unknown[] },
+    options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
 }): MutableSession {
   let pendingPrompt:
     | {
         prompt: string;
-        options?: { images?: unknown[] };
+        options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void };
       }
     | undefined;
   const session: MutableSession = {
@@ -1025,13 +1028,20 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     agent: {
       prompt: async (prompt, options) => {
-        pendingPrompt = { prompt: String(prompt), options: options as { images?: unknown[] } };
+        pendingPrompt = {
+          prompt: String(prompt),
+          options: options as {
+            images?: unknown[];
+            preflightResult?: (submitted: boolean) => void;
+          },
+        };
         await session.agent.streamFn?.();
       },
       streamFn: async () => {
         if (params?.prompt && pendingPrompt) {
           const currentPrompt = pendingPrompt;
           pendingPrompt = undefined;
+          currentPrompt.options?.preflightResult?.(true);
           await params.prompt(session, currentPrompt.prompt, currentPrompt.options);
         }
         return createCompletedAssistantStream();

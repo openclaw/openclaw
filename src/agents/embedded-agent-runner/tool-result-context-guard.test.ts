@@ -8,6 +8,7 @@ import {
   formatContextLimitTruncationNotice,
   installContextEngineLoopHook,
   installToolResultContextGuard,
+  markTranscriptPromptText,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
 } from "./tool-result-context-guard.js";
 
@@ -667,6 +668,34 @@ describe("installContextEngineLoopHook", () => {
       messages,
       prePromptMessageCount: 1,
     });
+  });
+
+  it("projects marked model prompts for ingest without leaking the marker to assembly", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 0);
+
+    const modelPrompt = makeUser("model-only hook context\n\nvisible prompt");
+    markTranscriptPromptText(modelPrompt, "visible prompt");
+    const messages = [modelPrompt, makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, messages);
+
+    const afterTurnMessage = (recordMockArg(engine.afterTurn).messages as AgentMessage[])[0];
+    const assembleMessage = (recordMockArg(engine.assemble).messages as AgentMessage[])[0];
+    const transformedMessage = (transformed as AgentMessage[])[0];
+
+    expect(afterTurnMessage).toMatchObject({ role: "user", content: "visible prompt" });
+    expect(JSON.stringify(afterTurnMessage)).not.toContain("__openclawTranscriptPromptText");
+    expect(assembleMessage).toMatchObject({
+      role: "user",
+      content: "model-only hook context\n\nvisible prompt",
+    });
+    expect(JSON.stringify(assembleMessage)).not.toContain("__openclawTranscriptPromptText");
+    expect(transformedMessage).toMatchObject({
+      role: "user",
+      content: "model-only hook context\n\nvisible prompt",
+    });
+    expect(JSON.stringify(transformedMessage)).not.toContain("__openclawTranscriptPromptText");
   });
 
   it("calls afterTurn and assemble when new messages are appended after the first call", async () => {

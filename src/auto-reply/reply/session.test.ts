@@ -1555,6 +1555,44 @@ describe("initSessionState reset policy", () => {
     expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
+  it("reuses completed run entries while the session is still fresh", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-terminal-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:terminal-entry";
+    const existingSessionId = "terminal-entry-old";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        startedAt: Date.now() - 10_000,
+        endedAt: Date.now() - 1_000,
+        runtimeMs: 9_000,
+        status: "done",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
+    expect(persisted[sessionKey]?.status).toBe("done");
+    expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
+    expect(persisted[sessionKey]?.endedAt).toBe(Date.now() - 1_000);
+    expect(persisted[sessionKey]?.runtimeMs).toBe(9_000);
+  });
+
   it("keeps the existing stale session for /reset soft", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-soft-stale-");

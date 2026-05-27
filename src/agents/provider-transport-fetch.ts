@@ -401,6 +401,20 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
+function buildModelRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
+}
+
 function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
@@ -552,10 +566,13 @@ export function buildGuardedModelFetch(
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
+    const baseInit = requestInit ?? init;
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
+    const baseSignal = baseInit?.signal ?? undefined;
+    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
-      init: requestInit ?? init,
+      init: baseInit,
       capture: {
         meta: {
           provider: model.provider,
@@ -565,6 +582,7 @@ export function buildGuardedModelFetch(
       },
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
+      ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -576,15 +594,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        (requestInit ?? init)?.headers,
-        (requestInit ?? init)?.signal,
+        baseInit?.headers,
+        localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
         useEnvProxy

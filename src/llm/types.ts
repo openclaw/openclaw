@@ -69,6 +69,11 @@ export interface StreamOptions {
    */
   sessionId?: string;
   /**
+   * Optional provider prompt-cache affinity key, distinct from transcript/session identity.
+   * Providers that do not support separate cache affinity ignore it.
+   */
+  promptCacheKey?: string;
+  /**
    * Optional callback for inspecting or replacing provider payloads before sending.
    * Return undefined to keep the payload unchanged.
    */

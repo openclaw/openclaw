@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
@@ -118,6 +119,7 @@ export function createCodexDynamicToolBridge(params: {
     ...registeredProjection.quarantinedTools,
   ]);
   warnQuarantinedDynamicTools(quarantinedTools);
+  emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -335,6 +337,23 @@ function warnQuarantinedDynamicTools(tools: readonly CodexDynamicToolSchemaQuara
       tools: [...unique.entries()].map(([tool, violations]) => ({ tool, violations })),
     },
   );
+}
+
+function emitQuarantinedDynamicToolDiagnostics(
+  tools: readonly CodexDynamicToolSchemaQuarantine[],
+  ctx: CodexDynamicToolHookContext | undefined,
+): void {
+  for (const tool of tools) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.blocked",
+      runId: ctx?.runId,
+      sessionId: ctx?.sessionId,
+      sessionKey: ctx?.sessionKey,
+      toolName: tool.tool,
+      deniedReason: "unsupported_tool_schema",
+      reason: tool.violations.join(", "),
+    });
+  }
 }
 
 function dedupeQuarantinedDynamicTools(

@@ -544,6 +544,9 @@ function installImageUnderstandingProviderDeps(
     loadImageWebMediaRuntime?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["loadImageWebMediaRuntime"];
+    resolveImageCompressionPolicy?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["resolveImageCompressionPolicy"];
     resolveModelAsync?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["resolveModelAsync"];
@@ -574,6 +577,9 @@ function installImageUnderstandingProviderDeps(
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    ...(options?.resolveImageCompressionPolicy
+      ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
+      : {}),
     ...(options?.resolveModelAsync ? { resolveModelAsync: options.resolveModelAsync } : {}),
     ...(options?.loadImageWebMediaRuntime
       ? { loadImageWebMediaRuntime: options.loadImageWebMediaRuntime }
@@ -587,6 +593,7 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
 
 function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProvider[]) {
   installImageUnderstandingProviderDeps(providers, {
+    resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
     resolveModelAsync: async (provider, model) => ({
       model: {
         id: model,

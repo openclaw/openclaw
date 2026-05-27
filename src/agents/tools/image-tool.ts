@@ -111,6 +111,7 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
   resolveModelAsync,
+  resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
 
@@ -173,6 +174,7 @@ export const testing = {
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: typeof resolveModelAsync;
+    resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
     imageToolProviderDeps.buildProviderRegistry =
@@ -190,6 +192,8 @@ export const testing = {
     imageToolProviderDeps.resolveBundledStaticCatalogModel =
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync = overrides?.resolveModelAsync ?? resolveModelAsync;
+    imageToolProviderDeps.resolveImageCompressionPolicy =
+      overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =
       overrides?.loadImageWebMediaRuntime ?? loadImageWebMediaRuntime;
   },
@@ -830,7 +834,7 @@ export function createImageTool(options?: {
           "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
         );
       }
-      const imageCompression = await resolveImageCompressionPolicy({
+      const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
         cfg: options?.config,
         imageModelConfig,
         modelOverride,

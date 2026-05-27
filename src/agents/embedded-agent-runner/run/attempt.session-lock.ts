@@ -600,11 +600,53 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  let retainedLockUseCount = 0;
+  const retainedLockIdleWaiters = new Set<() => void>();
+  let heldLockDraining = false;
+  let heldLockDrainOwner: symbol | undefined;
+  const heldLockDrainWaiters = new Set<() => void>();
   const sessionFileFenceKey = resolveSessionFileFenceKey(params.lockOptions.sessionFile);
 
-  async function acquireWriteLock(): Promise<{ lock: SessionLock; owned: boolean }> {
+  function beginRetainedLockUse(): () => void {
+    retainedLockUseCount += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      retainedLockUseCount -= 1;
+      if (retainedLockUseCount === 0 && retainedLockIdleWaiters.size > 0) {
+        const waiters = Array.from(retainedLockIdleWaiters);
+        retainedLockIdleWaiters.clear();
+        for (const resolve of waiters) {
+          resolve();
+        }
+      }
+    };
+  }
+
+  async function waitForRetainedLockIdle(): Promise<boolean> {
+    if (retainedLockUseCount === 0) {
+      return true;
+    }
+    if (activeWriteLock.getStore()?.active === true) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      retainedLockIdleWaiters.add(resolve);
+    });
+    return true;
+  }
+
+  async function acquireWriteLock(): Promise<{
+    lock: SessionLock;
+    owned: boolean;
+    releaseRetainedUse?: () => void;
+  }> {
+    await waitForHeldLockDrain();
     if (heldLock) {
-      return { lock: heldLock, owned: false };
+      return { lock: heldLock, owned: false, releaseRetainedUse: beginRetainedLockUse() };
     }
     try {
       return { lock: await acquireLock(), owned: true };
@@ -613,6 +655,47 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         takeoverDetected = true;
       }
       throw err;
+    }
+  }
+
+  async function waitForHeldLockDrain(): Promise<void> {
+    for (;;) {
+      if (!heldLockDraining) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        heldLockDrainWaiters.add(resolve);
+      });
+    }
+  }
+
+  async function beginHeldLockDrain(): Promise<symbol> {
+    for (;;) {
+      if (!heldLockDraining) {
+        const owner = Symbol("held-lock-drain");
+        heldLockDraining = true;
+        heldLockDrainOwner = owner;
+        return owner;
+      }
+      await new Promise<void>((resolve) => {
+        heldLockDrainWaiters.add(resolve);
+      });
+    }
+  }
+
+  function finishHeldLockDrain(owner: symbol): void {
+    if (!heldLockDraining || heldLockDrainOwner !== owner) {
+      return;
+    }
+    heldLockDraining = false;
+    heldLockDrainOwner = undefined;
+    if (heldLockDrainWaiters.size === 0) {
+      return;
+    }
+    const waiters = Array.from(heldLockDrainWaiters);
+    heldLockDrainWaiters.clear();
+    for (const resolve of waiters) {
+      resolve();
     }
   }
 
@@ -703,21 +786,107 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   async function releaseHeldLockWithFence(): Promise<void> {
     if (!heldLock) {
+      await waitForHeldLockDrain();
       return;
     }
-    const lock = heldLock;
-    heldLock = undefined;
-    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-    const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-    const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-    fenceFingerprint = fingerprint;
-    fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-    fenceGeneration =
-      ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-        ? ownedWrite.generation
-        : (trustedGeneration ?? fenceGeneration);
-    fenceActive = true;
-    await lock.release();
+    const drainOwner = await beginHeldLockDrain();
+    try {
+      if (!(await waitForRetainedLockIdle())) {
+        return;
+      }
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+      fenceFingerprint = fingerprint;
+      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      fenceGeneration =
+        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+          ? ownedWrite.generation
+          : (trustedGeneration ?? fenceGeneration);
+      fenceActive = true;
+      await lock.release();
+    } finally {
+      finishHeldLockDrain(drainOwner);
+    }
+  }
+
+  async function takeHeldLockAfterRetainedIdle(): Promise<SessionLock | undefined> {
+    if (!heldLock) {
+      return undefined;
+    }
+    const drainOwner = await beginHeldLockDrain();
+    try {
+      if (!(await waitForRetainedLockIdle())) {
+        return undefined;
+      }
+      if (!heldLock) {
+        return undefined;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      return lock;
+    } finally {
+      finishHeldLockDrain(drainOwner);
+    }
+  }
+
+  async function disposeHeldLockAfterRetainedIdle(): Promise<void> {
+    if (!heldLock) {
+      await waitForHeldLockDrain();
+      return;
+    }
+    const drainOwner = await beginHeldLockDrain();
+    try {
+      if (!(await waitForRetainedLockIdle())) {
+        return;
+      }
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      await lock.release();
+    } finally {
+      finishHeldLockDrain(drainOwner);
+    }
+  }
+
+  async function acquireCleanupLock(): Promise<SessionLock | undefined> {
+    const retainedLock = await takeHeldLockAfterRetainedIdle();
+    if (retainedLock) {
+      return retainedLock;
+    }
+    await waitForHeldLockDrain();
+    try {
+      return await acquireLock();
+    } catch (err) {
+      if (isSessionWriteLockTimeoutError(err)) {
+        takeoverDetected = true;
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
+  async function runWithRetainedLock<T>(
+    run: () => Promise<T>,
+    releaseRetainedUse: () => void,
+  ): Promise<T> {
+    try {
+      const activeLockState: ActiveWriteLockState = { active: true };
+      try {
+        return await activeWriteLock.run(activeLockState, run);
+      } finally {
+        activeLockState.active = false;
+      }
+    } finally {
+      releaseRetainedUse();
+    }
   }
 
   return {
@@ -734,6 +903,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     },
     async reacquireAfterPrompt(): Promise<void> {
+      await waitForHeldLockDrain();
       if (takeoverDetected || heldLock) {
         return;
       }
@@ -766,30 +936,33 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           await publishOwnedSessionFileFence(beforeWrite);
         }
       }
-      const { lock, owned } = await acquireWriteLock();
+      const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
       try {
-        await assertSessionFileFence();
-        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-        const runWithLock = async () => {
-          try {
-            return await run();
-          } finally {
-            if (options?.publishOwnedWrite === true) {
-              await publishOwnedSessionFileFence(beforeWrite);
-            } else {
-              await refreshSessionFileFence(beforeWrite);
+        const runLockedOperation = async () => {
+          await assertSessionFileFence();
+          const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+          const runWithLock = async () => {
+            try {
+              return await run();
+            } finally {
+              if (options?.publishOwnedWrite === true) {
+                await publishOwnedSessionFileFence(beforeWrite);
+              } else {
+                await refreshSessionFileFence(beforeWrite);
+              }
             }
-          }
+          };
+          return await runWithLock();
         };
         if (owned) {
           const activeLockState: ActiveWriteLockState = { active: true };
           try {
-            return await activeWriteLock.run(activeLockState, runWithLock);
+            return await activeWriteLock.run(activeLockState, runLockedOperation);
           } finally {
             activeLockState.active = false;
           }
         }
-        return await runWithLock();
+        return await runWithRetainedLock(runLockedOperation, releaseRetainedUse ?? (() => {}));
       } finally {
         if (owned) {
           await lock.release();
@@ -803,17 +976,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (takeoverDetected) {
         return noopLock;
       }
-      try {
-        heldLock ??= await acquireLock();
-      } catch (err) {
-        if (isSessionWriteLockTimeoutError(err)) {
-          takeoverDetected = true;
-          return noopLock;
-        }
-        throw err;
+      const cleanupLock = await acquireCleanupLock();
+      if (!cleanupLock) {
+        return noopLock;
       }
-      const cleanupLock = heldLock;
-      heldLock = undefined;
       try {
         await assertSessionFileFence();
       } catch (err) {
@@ -829,12 +995,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return takeoverDetected;
     },
     async dispose(): Promise<void> {
-      if (!heldLock) {
-        return;
-      }
-      const lock = heldLock;
-      heldLock = undefined;
-      await lock.release();
+      await disposeHeldLockAfterRetainedIdle();
     },
   };
 }

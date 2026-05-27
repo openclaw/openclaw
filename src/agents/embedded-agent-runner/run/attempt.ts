@@ -280,6 +280,7 @@ import {
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
+  markTranscriptPromptText,
 } from "../tool-result-context-guard.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -1022,6 +1023,136 @@ function installRuntimeContextMessageForPrompt(params: {
       agent.continue = originalContinue as typeof agent.continue;
     }
     session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
+  };
+}
+
+function replaceLastUserTextPrompt(params: {
+  messages: AgentMessage[];
+  shouldCapture?: (message: AgentMessage) => boolean;
+  transcriptText?: string;
+  replace: (text: string) => string | undefined;
+}): AgentMessage[] {
+  const userIndex = params.messages.findLastIndex((message) => message.role === "user");
+  if (userIndex === -1) {
+    return params.messages;
+  }
+  const message = params.messages[userIndex];
+  if (!message || message.role !== "user") {
+    return params.messages;
+  }
+  if (params.shouldCapture && !params.shouldCapture(message)) {
+    return params.messages;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const replacement = params.replace(content);
+    if (replacement === undefined) {
+      return params.messages;
+    }
+    const next = params.messages.slice();
+    next[userIndex] = { ...message, content: replacement } as AgentMessage;
+    if (params.transcriptText !== undefined) {
+      markTranscriptPromptText(next[userIndex], params.transcriptText);
+    }
+    return next;
+  }
+  if (!Array.isArray(content)) {
+    return params.messages;
+  }
+  let replaced = false;
+  const nextContent = content.map((block) => {
+    if (replaced || !block || typeof block !== "object") {
+      return block;
+    }
+    const textBlock = block as { type?: unknown; text?: unknown };
+    if (textBlock.type !== "text" || typeof textBlock.text !== "string") {
+      return block;
+    }
+    const replacement = params.replace(textBlock.text);
+    if (replacement === undefined) {
+      return block;
+    }
+    replaced = true;
+    return Object.assign({}, block, { text: replacement });
+  });
+  if (!replaced) {
+    return params.messages;
+  }
+  const next = params.messages.slice();
+  next[userIndex] = { ...message, content: nextContent } as AgentMessage;
+  if (params.transcriptText !== undefined) {
+    markTranscriptPromptText(next[userIndex], params.transcriptText);
+  }
+  return next;
+}
+
+function composeModelPromptContext(params: {
+  prompt: string;
+  prependContext?: string;
+  appendContext?: string;
+}): string {
+  return [params.prependContext, params.prompt, params.appendContext]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join("\n\n");
+}
+
+function installModelPromptTransform(params: {
+  session: AgentSession;
+  transcriptPrompt: string;
+  modelPrompt?: string;
+  prependContext?: string;
+  appendContext?: string;
+  shouldCapturePrompt: () => boolean;
+}): () => void {
+  const modelPrompt = params.modelPrompt;
+  const hasPromptContext =
+    Boolean(params.prependContext?.trim()) || Boolean(params.appendContext?.trim());
+  if ((!modelPrompt?.trim() || modelPrompt === params.transcriptPrompt) && !hasPromptContext) {
+    return () => undefined;
+  }
+  const agent = params.session.agent as {
+    transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  };
+  const originalTransformContext = agent.transformContext;
+  let targetPromptTimestamp: number | undefined;
+  agent.transformContext = async (messages, signal) => {
+    const promptMessages = replaceLastUserTextPrompt({
+      messages,
+      transcriptText: params.transcriptPrompt,
+      shouldCapture: (message) => {
+        const timestamp = (message as { timestamp?: unknown }).timestamp;
+        if (targetPromptTimestamp !== undefined) {
+          return timestamp === targetPromptTimestamp;
+        }
+        if (!params.shouldCapturePrompt()) {
+          return false;
+        }
+        if (typeof timestamp === "number") {
+          targetPromptTimestamp = timestamp;
+        }
+        return true;
+      },
+      replace: (text) => {
+        if (modelPrompt?.trim() && text === params.transcriptPrompt) {
+          return modelPrompt;
+        }
+        if (!hasPromptContext) {
+          return undefined;
+        }
+        const replacement = composeModelPromptContext({
+          prompt: text,
+          prependContext: params.prependContext,
+          appendContext: params.appendContext,
+        });
+        return replacement === text ? undefined : replacement;
+      },
+    });
+    return originalTransformContext
+      ? await originalTransformContext.call(agent, promptMessages, signal)
+      : promptMessages;
+  };
+  return () => {
+    agent.transformContext = originalTransformContext;
   };
 }
 
@@ -3007,6 +3138,7 @@ export async function runEmbeddedAttempt(
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
         sessionId: params.sessionId,
+        promptCacheKey: params.promptCacheKey,
         signal: runAbortController.signal,
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
@@ -3491,6 +3623,13 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void abortActiveSession();
+        if (isTimeout) {
+          void sessionLockController.releaseHeldLockForAbort().catch((err) => {
+            log.warn(
+              `failed to release session lock on timeout abort: runId=${params.runId} ${String(err)}`,
+            );
+          });
+        }
       };
       abortRunForExternalSignal = abortRun;
       idleTimeoutTrigger = (error) => {
@@ -3861,6 +4000,11 @@ export async function runEmbeddedAttempt(
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
             });
+        const promptBeforePromptBuildHooks = effectivePrompt;
+        const promptBuildPrependContext = hookResult?.prependContext;
+        const promptBuildAppendContext = hookResult?.appendContext;
+        const hasPromptBuildContext =
+          Boolean(promptBuildPrependContext?.trim()) || Boolean(promptBuildAppendContext?.trim());
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
@@ -3911,6 +4055,7 @@ export async function runEmbeddedAttempt(
         if (cacheObservabilityEnabled) {
           const cacheObservation = beginPromptCacheObservation({
             sessionId: params.sessionId,
+            promptCacheKey: params.promptCacheKey,
             sessionKey: params.sessionKey,
             provider: params.provider,
             modelId: params.modelId,
@@ -3946,15 +4091,37 @@ export async function runEmbeddedAttempt(
           `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId} ` +
             routingSummary,
         );
+        const effectiveTranscriptPrompt =
+          params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;
+        let transcriptPromptForRuntimeSplit = effectiveTranscriptPrompt;
+        let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          const orphanPromptMerge = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
+          const messageMergeStrategy = resolveMessageMergeStrategy();
+          const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
             trigger: params.trigger,
             leafMessage: leafEntry.message,
           });
+          const runtimePromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+            prompt: promptForRuntimeContextSplit,
+            trigger: params.trigger,
+            leafMessage: leafEntry.message,
+          });
+          const transcriptPromptMerge =
+            effectiveTranscriptPrompt === undefined
+              ? undefined
+              : messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+                  prompt: effectiveTranscriptPrompt,
+                  trigger: params.trigger,
+                  leafMessage: leafEntry.message,
+                });
           effectivePrompt = orphanPromptMerge.prompt;
+          promptForRuntimeContextSplit = runtimePromptMerge.prompt;
+          if (transcriptPromptMerge) {
+            transcriptPromptForRuntimeSplit = transcriptPromptMerge.prompt;
+          }
           if (orphanPromptMerge.removeLeaf) {
             if (leafEntry.parentId) {
               sessionManager.branch(leafEntry.parentId);
@@ -3982,11 +4149,13 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
+        const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
         if (!isRawModelRun) {
-          effectivePrompt = annotateInterSessionPromptText(effectivePrompt, params.inputProvenance);
+          promptForRuntimeContextSplit = annotateInterSessionPromptText(
+            promptForRuntimeContextSplit,
+            params.inputProvenance,
+          );
         }
-        const effectiveTranscriptPrompt =
-          params.transcriptPrompt === undefined ? undefined : params.transcriptPrompt;
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
         const heartbeatSummary =
@@ -4006,15 +4175,22 @@ export async function runEmbeddedAttempt(
           prePromptMessageCount = activeSession.messages.length;
 
           const promptSubmission = resolveRuntimeContextPromptParts({
-            effectivePrompt,
-            transcriptPrompt: effectiveTranscriptPrompt,
+            effectivePrompt: promptForRuntimeContextSplit,
+            transcriptPrompt: transcriptPromptForRuntimeSplit,
+            modelPrompt: hasPromptBuildContext
+              ? promptForModelBeforeRuntimeContextSplit
+              : undefined,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",
           });
-          const promptForModel = buildCurrentInboundPrompt({
+          const promptForSession = buildCurrentInboundPrompt({
             context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
+          });
+          const promptForModel = buildCurrentInboundPrompt({
+            context: params.currentInboundContext,
+            prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
           });
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
@@ -4464,7 +4640,7 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
-            finalPromptText = promptForModel;
+            finalPromptText = promptForSession;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptForModel,
               systemPrompt: systemPromptForHook,
@@ -4475,26 +4651,51 @@ export async function runEmbeddedAttempt(
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
-              inFlightPrompt: promptForModel,
+              inFlightPrompt: promptForSession,
             });
-            if (promptSubmission.runtimeOnly) {
-              await promptActiveSession(promptForModel);
-            } else {
-              const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
-                session: activeSession,
-                message: runtimeContextMessageForCurrentTurn,
-              });
-              try {
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
-                  await promptActiveSession(promptForModel, { images: imageResult.images });
-                } else {
-                  await promptActiveSession(promptForModel);
-                }
-              } finally {
-                cleanupRuntimeContextMessage();
+            let captureCurrentPromptForModel = false;
+            const cleanupModelPromptTransform = installModelPromptTransform({
+              session: activeSession,
+              transcriptPrompt: promptForSession,
+              modelPrompt: promptForModel,
+              prependContext: promptBuildPrependContext,
+              appendContext: promptBuildAppendContext,
+              shouldCapturePrompt: () => captureCurrentPromptForModel,
+            });
+            const armModelPromptTransform = (submitted: boolean) => {
+              if (submitted) {
+                captureCurrentPromptForModel = true;
               }
+            };
+            try {
+              if (promptSubmission.runtimeOnly) {
+                await promptActiveSession(promptForSession, {
+                  preflightResult: armModelPromptTransform,
+                });
+              } else {
+                const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
+                  session: activeSession,
+                  message: runtimeContextMessageForCurrentTurn,
+                });
+                try {
+                  // Only pass images option if there are actually images to pass
+                  // This avoids potential issues with models that don't expect the images parameter
+                  if (imageResult.images.length > 0) {
+                    await promptActiveSession(promptForSession, {
+                      images: imageResult.images,
+                      preflightResult: armModelPromptTransform,
+                    });
+                  } else {
+                    await promptActiveSession(promptForSession, {
+                      preflightResult: armModelPromptTransform,
+                    });
+                  }
+                } finally {
+                  cleanupRuntimeContextMessage();
+                }
+              }
+            } finally {
+              cleanupModelPromptTransform();
             }
           }
         } catch (err) {
@@ -4668,6 +4869,7 @@ export async function runEmbeddedAttempt(
           cacheBreak = cacheObservabilityEnabled
             ? completePromptCacheObservation({
                 sessionId: params.sessionId,
+                promptCacheKey: params.promptCacheKey,
                 sessionKey: params.sessionKey,
                 usage: attemptUsage,
               })

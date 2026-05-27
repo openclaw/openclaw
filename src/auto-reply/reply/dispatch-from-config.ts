@@ -1304,11 +1304,18 @@ export async function dispatchReplyFromConfig(
       return null;
     }
     markInboundDedupeReplayUnsafe();
+    // Outbound session.key must match the session key used by the agent
+    // runtime that produced this payload, so agent_end and message delivery
+    // hooks expose the same canonical key for native command redirects.
+    const agentRuntimeSessionKey =
+      ctx.CommandSource === "native"
+        ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
+        : ctx.SessionKey;
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
-      sessionKey: ctx.SessionKey,
+      sessionKey: agentRuntimeSessionKey,
       policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: replyRoute.accountId,

@@ -133,6 +133,52 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
+  const timeoutMs = options?.timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
+}
+
+function buildRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
+}
+
+function isRequestTimeoutError(
+  error: unknown,
+  callerSignal: AbortSignal | undefined,
+  requestSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): boolean {
+  if (timeoutMs === undefined || callerSignal?.aborted || !requestSignal?.aborted) {
+    return false;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    error.message === "Request was aborted"
+  );
+}
+
+function formatRequestTimeoutError(timeoutMs: number, cause: unknown): Error {
+  return new Error(`Request timed out after ${timeoutMs}ms`, {
+    cause: cause instanceof Error ? cause : undefined,
+  });
+}
+
 // ============================================================================
 // Main Stream Function
 // ============================================================================
@@ -148,6 +194,8 @@ export const streamOpenAICodexResponses: StreamFunction<
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
+    let requestTimeoutMs: number | undefined;
+    let activeSignal: AbortSignal | undefined;
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -194,6 +242,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         websocketRequestId,
       );
       const bodyJson = JSON.stringify(body);
+      requestTimeoutMs = resolveRequestTimeoutMs(options);
+      activeSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
+      const requestOptions =
+        activeSignal === options?.signal ? options : { ...options, signal: activeSignal };
       const transport = options?.transport || "auto";
       const websocketDisabledForSession =
         transport === "auto" && isWebSocketSseFallbackActive(options?.sessionId);
@@ -214,10 +266,10 @@ export const streamOpenAICodexResponses: StreamFunction<
             () => {
               websocketStarted = true;
             },
-            options,
+            requestOptions,
           );
 
-          if (options?.signal?.aborted) {
+          if (activeSignal?.aborted) {
             throw new Error("Request was aborted");
           }
           stream.push({
@@ -228,7 +280,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           stream.end();
           return;
         } catch (error) {
-          const aborted = options?.signal?.aborted;
+          const aborted = activeSignal?.aborted;
           if (aborted || isCodexNonTransportError(error)) {
             throw error;
           }
@@ -259,7 +311,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       let lastError: Error | undefined;
 
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (options?.signal?.aborted) {
+        if (activeSignal?.aborted) {
           throw new Error("Request was aborted");
         }
 
@@ -268,7 +320,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             method: "POST",
             headers: sseHeaders,
             body: bodyJson,
-            signal: options?.signal,
+            signal: activeSignal,
           });
           await options?.onResponse?.(
             { status: response.status, headers: headersToRecord(response.headers) },
@@ -304,7 +356,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               }
             }
 
-            await sleep(delayMs, options?.signal);
+            await sleep(delayMs, activeSignal);
             continue;
           }
 
@@ -317,15 +369,24 @@ export const streamOpenAICodexResponses: StreamFunction<
           throw new Error(info.friendlyMessage || info.message);
         } catch (error) {
           if (error instanceof Error) {
+            if (
+              isRequestTimeoutError(error, options?.signal, activeSignal, requestTimeoutMs) &&
+              requestTimeoutMs !== undefined
+            ) {
+              throw formatRequestTimeoutError(requestTimeoutMs, error);
+            }
             if (error.name === "AbortError" || error.message === "Request was aborted") {
               throw new Error("Request was aborted", { cause: error });
+            }
+            if (error.name === "TimeoutError" && requestTimeoutMs !== undefined) {
+              throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
             }
           }
           lastError = error instanceof Error ? error : new Error(String(error));
           // Network errors are retryable
           if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
-            await sleep(delayMs, options?.signal);
+            await sleep(delayMs, activeSignal);
             continue;
           }
           throw lastError;
@@ -343,7 +404,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       stream.push({ type: "start", partial: output });
       await processStream(response, output, stream, model, options);
 
-      if (options?.signal?.aborted) {
+      if (activeSignal?.aborted) {
         throw new Error("Request was aborted");
       }
 
@@ -354,12 +415,18 @@ export const streamOpenAICodexResponses: StreamFunction<
       });
       stream.end();
     } catch (error) {
+      const normalizedError =
+        isRequestTimeoutError(error, options?.signal, activeSignal, requestTimeoutMs) &&
+        requestTimeoutMs !== undefined
+          ? formatRequestTimeoutError(requestTimeoutMs, error)
+          : error;
       for (const block of output.content) {
         // partialJson is only a streaming scratch buffer; never persist it.
         delete (block as { partialJson?: string }).partialJson;
       }
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
+      output.errorMessage =
+        normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }
@@ -410,7 +477,10 @@ function buildRequestBody(
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],
-    prompt_cache_key: clampOpenAIPromptCacheKey(options?.sessionId),
+    prompt_cache_key:
+      options?.cacheRetention === "none"
+        ? undefined
+        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
     tool_choice: "auto",
     parallel_tool_calls: true,
   };
@@ -975,6 +1045,11 @@ async function connectWebSocket(
       signal?.removeEventListener("abort", onAbort);
     };
 
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+
     socket.addEventListener("open", onOpen);
     socket.addEventListener("error", onError);
     socket.addEventListener("close", onClose);
@@ -1374,6 +1449,9 @@ async function processWebSocketStream(
     }
   }
   try {
+    if (options?.signal?.aborted) {
+      throw new Error("Request was aborted");
+    }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
       startWebSocketOutputOnFirstEvent(

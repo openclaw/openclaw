@@ -18,6 +18,7 @@ function createAttemptParams(): EmbeddedRunAttemptParams {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     sessionFile: "/tmp/session.jsonl",
+    effectiveCwd: "/tmp",
     workspaceDir: "/tmp",
     runId: "run-1",
     provider: "codex",
