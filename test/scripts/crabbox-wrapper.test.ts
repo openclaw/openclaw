@@ -278,6 +278,8 @@ afterAll(() => {
 });
 
 describe.concurrent("scripts/crabbox-wrapper", () => {
+  const azureProviderHelp =
+    "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
   const advertisedProviderAliasHelp = [
     "provider: hetzner, aws, gcp, local-container, blacksmith-testbox,",
     "  namespace-devbox, runpod, semaphore, cloudflare, railway, exe-dev, or ssh",
@@ -350,6 +352,108 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
       "on-demand",
       "--",
       "echo ok",
+    ]);
+  });
+
+  it("prefers Azure for unqualified Windows runs", () => {
+    const result = runWrapper(azureProviderHelp, [
+      "run",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "wsl2",
+      "--",
+      "corepack",
+      "pnpm",
+      "check:changed",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--target",
+      "windows",
+      "--windows-mode",
+      "wsl2",
+      "--provider",
+      "azure",
+      "--",
+      "corepack",
+      "pnpm",
+      "check:changed",
+    ]);
+    expect(result.stderr).toContain("provider=azure");
+  });
+
+  it("keeps explicit provider env overrides for Windows runs", () => {
+    const result = runWrapper(
+      azureProviderHelp,
+      ["run", "--target", "windows", "--", "echo ok"],
+      { env: { CRABBOX_PROVIDER: "aws" } },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--target",
+      "windows",
+      "--",
+      "echo ok",
+    ]);
+    expect(result.stderr).toContain("provider=aws");
+  });
+
+  it("keeps the configured provider for Windows runs when Azure is unavailable", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--target", "windows", "--", "echo ok"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--target",
+      "windows",
+      "--",
+      "echo ok",
+    ]);
+    expect(result.stderr).toContain("provider=aws");
+  });
+
+  it("keeps existing Windows lease selections on the configured provider", () => {
+    const result = runWrapper(azureProviderHelp, [
+      "run",
+      "--id",
+      "cbx_existing",
+      "--target",
+      "windows",
+      "--",
+      "echo ok",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--id",
+      "cbx_existing",
+      "--target",
+      "windows",
+      "--",
+      "echo ok",
+    ]);
+    expect(result.stderr).toContain("provider=aws");
+  });
+
+  it("prefers Azure for unqualified Windows warmups", () => {
+    const result = runWrapper(azureProviderHelp, ["warmup", "--target", "windows"]);
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "warmup",
+      "--target",
+      "windows",
+      "--provider",
+      "azure",
     ]);
   });
 
@@ -1480,6 +1584,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(result.stderr).toContain("overlaying local HEAD as worktree changes from origin/main");
+    expect(parseFakeCrabboxOutput(result).args.join(" ")).toContain(
+      "if ! git status --short >/dev/null 2>&1; then rm -rf .git;",
+    );
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 
@@ -2023,7 +2130,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     ]);
   });
 
-  it("keeps clean sparse local-container syncs on the original checkout", () => {
+  it("uses a temporary full checkout when local-container syncs clean sparse worktrees", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "local-container", "--", "echo ok"],
@@ -2036,8 +2143,8 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("uses a temporary full checkout when existing AWS leases sync clean sparse worktrees", () => {

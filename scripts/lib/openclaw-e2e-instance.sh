@@ -165,7 +165,11 @@ openclaw_e2e_install_package() {
       echo "npm install timed out after $timeout_value for $label" >&2
     fi
     echo "npm install failed for $label" >&2
-    cat "$log_file" >&2 || true
+    if [ -f "$log_file" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line" >&2
+      done <"$log_file"
+    fi
     exit 1
   fi
 }

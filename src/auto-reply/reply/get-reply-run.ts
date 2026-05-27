@@ -84,6 +84,7 @@ import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import {
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
   isReplyRunActiveForSessionId,
   isReplyRunStreamingForSessionId,
@@ -950,12 +951,15 @@ export async function runPreparedReply(
   const piRuntime = useFastReplyRuntime
     ? null
     : await traceRunPhase("reply.load_pi_runtime", () => loadPiEmbeddedRuntime());
+  const resolveActiveEmbeddedSessionId = (sessionFile = preparedSessionState.sessionFile) =>
+    piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    piRuntime?.resolveActiveEmbeddedRunSessionIdBySessionFile?.(sessionFile);
   const sessionLaneKey = piRuntime
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
   const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
-  const rawActiveSessionIdForInterrupt = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+  const rawActiveSessionIdForInterrupt = resolveActiveEmbeddedSessionId();
   const activeSessionIdForInterrupt = isOwnPreDispatchOperationSession(
     rawActiveSessionIdForInterrupt,
   )
@@ -1045,11 +1049,11 @@ export async function runPreparedReply(
   const resolveActiveReplyOperationSessionId = () =>
     sessionKey ? resolveActiveReplyRunSessionId(sessionKey) : undefined;
   const resolveActiveQueueSessionId = () =>
-    piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    resolveActiveEmbeddedSessionId() ??
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
-    const embeddedActiveSessionId = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+    const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
@@ -1106,7 +1110,7 @@ export async function runPreparedReply(
       },
       waitForActiveRunEnd: (activeRunSessionId) =>
         isReplyRunActiveForSessionId(activeRunSessionId)
-          ? waitForReplyRunEndBySessionId(activeRunSessionId)
+          ? waitForReplyRunEndBySessionId(activeRunSessionId, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS)
           : (piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined)),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
@@ -1317,7 +1321,8 @@ export async function runPreparedReply(
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
       const latestActiveSessionId =
-        piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
+        resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
+        latestSessionState.sessionId;
       return piRuntime?.isEmbeddedPiRunActive(latestActiveSessionId) ?? false;
     },
     isStreaming,

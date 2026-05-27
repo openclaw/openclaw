@@ -826,7 +826,7 @@ describe("install.sh", () => {
 
   it("loads nvm before checking Node.js so stale system Node does not win", () => {
     expect(script).toMatch(
-      /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
+      /# Step 1: Node\.js[\s\S]*?load_nvm_for_node_detection\s+if ! check_node; then/,
     );
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
@@ -888,6 +888,22 @@ describe("install.sh", () => {
     expect(output).toContain("status=0");
     expect(output).toContain(`path=${nvmNode}`);
     expect(output).toContain("version=v22.22.1");
+  });
+
+  it("installs Homebrew lazily before macOS Git installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      install_homebrew() { echo "install_homebrew"; }
+      run_quiet_step() { echo "run_quiet_step:$*"; return 0; }
+      install_git
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      /install_homebrew\s+run_quiet_step:Installing Git brew install git/,
+    );
   });
 
   it("promotes a supported Linux Node binary over stale PATH entries", () => {

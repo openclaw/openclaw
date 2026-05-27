@@ -71,6 +71,7 @@ describe("package-openclaw-for-docker", () => {
       args: string[];
       cwd: string;
       noPnpm: string | undefined;
+      skipDts: string | undefined;
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
@@ -89,6 +90,7 @@ describe("package-openclaw-for-docker", () => {
             args,
             cwd,
             noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
+            skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
             timeoutMs: options.timeoutMs,
           });
         },
@@ -107,6 +109,7 @@ describe("package-openclaw-for-docker", () => {
         args: ["scripts/build-all.mjs"],
         cwd: "/repo",
         noPnpm: "1",
+        skipDts: "1",
         timeoutMs: 1234,
       },
     ]);

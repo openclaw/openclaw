@@ -315,7 +315,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       actions: {
         start: {
           label: "start",
-          detailKeys: ["providerId", "sessionId", "title", "meetingUrl", "guildId", "channelId"],
+          detailKeys: [
+            "sessionId",
+            "title",
+            "providerId",
+            "accountId",
+            "guildId",
+            "channelId",
+            "meetingUrl",
+          ],
         },
         stop: {
           label: "stop",
@@ -326,7 +334,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
         import: {
           label: "import",
-          detailKeys: ["providerId", "sessionId", "title", "meetingUrl"],
+          detailKeys: ["sessionId", "title", "providerId", "meetingUrl", "speakerLabel"],
         },
         summarize: {
           label: "summarize",
