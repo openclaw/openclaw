@@ -291,7 +291,7 @@ export function resolveHookTargetAgentId(
   if (hooksConfig.agentPolicy.knownAgentIds.has(normalized)) {
     return normalized;
   }
-  return hooksConfig.agentPolicy.defaultAgentId;
+  return undefined;
 }
 
 export function resolveEffectiveHookTargetAgentId(
@@ -305,6 +305,10 @@ export function isHookAgentAllowed(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
 ): boolean {
+  const raw = normalizeOptionalString(agentId);
+  if (raw && !resolveHookTargetAgentId(hooksConfig, raw)) {
+    return false;
+  }
   const allowed = hooksConfig.agentPolicy.allowedAgentIds;
   if (allowed === undefined) {
     return true;

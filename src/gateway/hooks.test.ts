@@ -191,7 +191,7 @@ describe("gateway hooks helpers", () => {
     } as OpenClawConfig;
     const resolved = resolveHooksConfigOrThrow(cfg);
     expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
-    expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBe("main");
+    expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBeUndefined();
     expect(resolveHookTargetAgentId(resolved, undefined)).toBeUndefined();
     expect(resolveHookTargetAgentId(resolved, " ")).toBeUndefined();
     expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBe("main");
@@ -221,15 +221,15 @@ describe("gateway hooks helpers", () => {
     expect(isHookAgentAllowed(resolved, "")).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(false);
   });
 
-  test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
+  test("isHookAgentAllowed treats wildcard allowlist as allow-all for known targets", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
     expect(isHookAgentAllowed(resolved, "")).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
-    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(false);
   });
 
   test("resolveHookSessionKey disables request sessionKey by default", () => {

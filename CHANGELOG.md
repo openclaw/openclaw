@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Hooks/security: reject explicit `/hooks/agent` requests for unknown `agentId` values instead of silently falling back to the default agent when hook routing is allowlisted.
 - Memory/security: reject prompt-like text submitted through the explicit `memory_store` tool before embedding or storage, matching the existing auto-capture prompt-injection filter. (#87142)
 - Gateway/security: enable the default auth rate limiter for remote non-browser and HTTP gateway auth failures when `gateway.auth.rateLimit` is unset, while preserving the loopback exemption. (#87148)
 - Prompt hardening: route untrusted group prompt metadata through sanitized untrusted structured context while preserving trusted operator-configured group system prompts and aligning the plugin SDK docs/test helpers. (#87144)

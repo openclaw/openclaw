@@ -225,17 +225,17 @@ describe("gateway server hooks", () => {
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
-      mockIsolatedRunOkOnce();
+      const callsBeforeUnknownAgent = cronIsolatedRun.mock.calls.length;
       const resAgentUnknown = await postHook(port, "/hooks/agent", {
         message: "Do it",
         name: "Email",
         agentId: "missing-agent",
       });
-      expect(resAgentUnknown.status).toBe(200);
-      await waitForSystemEvent();
-      const fallbackCall = cronRunCall();
-      expect(fallbackCall?.job?.agentId).toBe("main");
-      drainSystemEvents(resolveMainKey());
+      expect(resAgentUnknown.status).toBe(400);
+      const agentUnknownBody = (await resAgentUnknown.json()) as { error?: string };
+      expect(agentUnknownBody.error).toContain("hooks.allowedAgentIds");
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(callsBeforeUnknownAgent);
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
 
       const resQuery = await postHook(
         port,
