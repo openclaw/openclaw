@@ -47,6 +47,32 @@ const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
 const STARTUP_CRON_RETRY_MAX_ATTEMPTS = 12;
 const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
+const BYTES_PER_MIB = 1024 * 1024;
+const DREAMING_PRESSURE_RSS_WARNING_BYTES = 1536 * BYTES_PER_MIB;
+const DREAMING_PRESSURE_HEAP_WARNING_BYTES = 1024 * BYTES_PER_MIB;
+const DREAMING_PRESSURE_BACKOFF_INITIAL_MS = 30_000;
+const DREAMING_PRESSURE_BACKOFF_MAX_MS = 5 * 60_000;
+
+let dreamingPressureBackoffSleep: (delayMs: number, abortSignal?: AbortSignal) => Promise<void> = (
+  delayMs,
+  abortSignal,
+) =>
+  new Promise((resolve) => {
+    if (abortSignal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -139,6 +165,101 @@ type ReconcileResult =
   | { status: "noop"; removed: number };
 
 type LegacyPhaseMigrationMode = "enabled" | "disabled";
+
+type DreamingResourcePressure = {
+  reason: "rss_threshold" | "heap_threshold";
+  rssBytes: number;
+  heapUsedBytes: number;
+  thresholdBytes: number;
+};
+
+function detectDreamingResourcePressure(): DreamingResourcePressure | null {
+  const memory = process.memoryUsage();
+  if (memory.rss >= DREAMING_PRESSURE_RSS_WARNING_BYTES) {
+    return {
+      reason: "rss_threshold",
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      thresholdBytes: DREAMING_PRESSURE_RSS_WARNING_BYTES,
+    };
+  }
+  if (memory.heapUsed >= DREAMING_PRESSURE_HEAP_WARNING_BYTES) {
+    return {
+      reason: "heap_threshold",
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      thresholdBytes: DREAMING_PRESSURE_HEAP_WARNING_BYTES,
+    };
+  }
+  return null;
+}
+
+function formatDreamingResourcePressure(pressure: DreamingResourcePressure): string {
+  return `reason=${pressure.reason} rssBytes=${pressure.rssBytes} heapUsedBytes=${pressure.heapUsedBytes} thresholdBytes=${pressure.thresholdBytes}`;
+}
+
+async function waitForDreamingPressureToEase(params: {
+  logger: Logger;
+  workspaceDir: string;
+  abortSignal?: AbortSignal;
+}): Promise<"ready" | "aborted"> {
+  let pressure = detectDreamingResourcePressure();
+  let delayMs = DREAMING_PRESSURE_BACKOFF_INITIAL_MS;
+  while (pressure) {
+    if (params.abortSignal?.aborted) {
+      params.logger.warn(
+        `memory-core: dreaming promotion stopped while waiting for gateway memory pressure to ease [workspace=${params.workspaceDir}].`,
+      );
+      return "aborted";
+    }
+    params.logger.warn(
+      `memory-core: dreaming promotion waiting ${delayMs}ms because gateway memory pressure is high (${formatDreamingResourcePressure(pressure)}) [workspace=${params.workspaceDir}].`,
+    );
+    await dreamingPressureBackoffSleep(delayMs, params.abortSignal);
+    if (params.abortSignal?.aborted) {
+      params.logger.warn(
+        `memory-core: dreaming promotion stopped while waiting for gateway memory pressure to ease [workspace=${params.workspaceDir}].`,
+      );
+      return "aborted";
+    }
+    pressure = detectDreamingResourcePressure();
+    delayMs = Math.min(delayMs * 2, DREAMING_PRESSURE_BACKOFF_MAX_MS);
+  }
+  return "ready";
+}
+
+export function setDreamingPressureBackoffSleepForTest(
+  sleep?: (delayMs: number, abortSignal?: AbortSignal) => Promise<void>,
+): void {
+  if (sleep) {
+    let calls = 0;
+    dreamingPressureBackoffSleep = async (delayMs, abortSignal) => {
+      calls += 1;
+      if (calls > 100) {
+        throw new Error("dreaming pressure backoff test sleep exceeded 100 calls");
+      }
+      await sleep(delayMs, abortSignal);
+    };
+    return;
+  }
+  dreamingPressureBackoffSleep = (delayMs, abortSignal) =>
+    new Promise((resolve) => {
+      if (abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        abortSignal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      const onAbort = () => {
+        clearTimeout(timer);
+        abortSignal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+    });
+}
 
 function formatRepairSummary(repair: {
   rewroteStore: boolean;
@@ -501,6 +622,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  abortSignal?: AbortSignal;
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -555,6 +677,16 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
   for (const workspaceDir of workspaces) {
+    if (params.trigger === "cron") {
+      const pressureStatus = await waitForDreamingPressureToEase({
+        logger: params.logger,
+        workspaceDir,
+        abortSignal: params.abortSignal,
+      });
+      if (pressureStatus === "aborted") {
+        return { handled: true, reason: "memory-core: short-term dreaming aborted" };
+      }
+    }
     try {
       const sweepNowMs = Date.now();
       await runDreamingSweepPhases({
@@ -643,6 +775,14 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
         if (detachNarratives) {
+          const narrativePressureStatus = await waitForDreamingPressureToEase({
+            logger: params.logger,
+            workspaceDir,
+            abortSignal: params.abortSignal,
+          });
+          if (narrativePressureStatus === "aborted") {
+            return { handled: true, reason: "memory-core: short-term dreaming aborted" };
+          }
           runDetachedDreamNarrative({
             subagent: params.subagent,
             workspaceDir,
@@ -900,12 +1040,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
       return await runShortTermDreamingPromotionIfTriggered({
         cleanedBody: event.cleanedBody,
-        trigger: ctx.trigger,
+        trigger: isManagedHeartbeatTrigger ? "cron" : ctx.trigger,
         workspaceDir: ctx.workspaceDir,
         cfg: currentConfig,
         config,
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
+        abortSignal: ctx.abortSignal,
       });
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);

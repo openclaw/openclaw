@@ -115,11 +115,13 @@ describe("runCliAgent cron before_agent_reply seam", () => {
       reply: { text: "dreaming claimed via cli runner" },
     });
     const onExecutionPhase = vi.fn();
+    const abortController = new AbortController();
 
     const result = await runCliAgent({
       ...baseRunParams,
       trigger: "cron",
       jobId: "cron-job-123",
+      abortSignal: abortController.signal,
       onExecutionPhase,
     });
 
@@ -138,6 +140,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe(baseRunParams.sessionKey);
     expect(hookContext?.workspaceDir).toBe(baseRunParams.workspaceDir);
     expect(hookContext?.trigger).toBe("cron");
+    expect(hookContext?.abortSignal).toBe(abortController.signal);
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
   });
