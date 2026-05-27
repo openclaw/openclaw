@@ -33,9 +33,11 @@ import {
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
+  STRICT_AGENTIC_UNSAFE_CONTINUATION_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
+  resolveUnsafeTerminalContinuationText,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -2777,5 +2779,132 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("retries Chinese planning-only continuation promises", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "请确认当前问题核心在哪，然后继续修复并验证。",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        [],
+        "我下一步会直接拿这个控制循环去做真实验证，而不是继续停在聊天里。",
+      ),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("retries Chinese continuation promises after one replay-safe read", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "请看一下日志，然后继续验证。",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools(
+        ["read"],
+        "我已经看到了日志。接下来我会继续检查失败路径并跑验证。",
+      ),
+    });
+
+    expect(result).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry completed Chinese result text", () => {
+    const result = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "请验证修复结果。",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptWithTools([], "已经完成验证，结果是通过。核心原因也已经确认。"),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("blocks Chinese continuation promises after a side-effecting tool", () => {
+    const attempt = makeAttemptWithTools(
+      ["edit"],
+      "我已经改了文档。下一步我会继续跑真实验证，而不是停在这里。",
+    );
+
+    expect(
+      resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "请修复这个问题并验证。",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveUnsafeTerminalContinuationText({
+        ...openaiParams,
+        prompt: "请修复这个问题并验证。",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(STRICT_AGENTIC_UNSAFE_CONTINUATION_TEXT);
+  });
+
+  it("blocks the observed Chinese incident text after a side-effecting tool", () => {
+    const attempt = makeAttemptWithTools(
+      ["edit"],
+      "所以我现在不再解释原因。\n我下一步会直接拿这个控制循环去做真实验证，而不是继续停在聊天里。",
+    );
+
+    expect(
+      resolveUnsafeTerminalContinuationText({
+        ...openaiParams,
+        prompt: "不是把规则写上去，而是验证这套东西能不能真的让任务持续推进到完成。",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(STRICT_AGENTIC_UNSAFE_CONTINUATION_TEXT);
+  });
+
+  it("blocks a long Chinese unfinished test report that hands off obvious next work", () => {
+    const attempt = makeAttemptWithTools(
+      ["edit"],
+      [
+        "结果：**A 和 B 这次重测都没有完成。**",
+        "",
+        "证据，不是感觉：",
+        "",
+        "```json",
+        "{",
+        '  "task_id": "east-asia-visa-test",',
+        '  "all_exist": true,',
+        '  "all_delivered": false,',
+        '  "should_continue": false',
+        "}",
+        "```",
+        "",
+        "所以 A 不只是控制流没闭环，**内容本身也还是半成品**。",
+        "",
+        "## 下一步正确动作",
+        "现在不该再空聊“能不能完成”，而是二选一：",
+        "",
+        "1. **继续把 A 和 B 真正做完**",
+        "2. **把这次测试结果整理成验证报告，明确 CodeX 做到了什么、没做到什么**",
+        "",
+        "我的建议是 **1**，因为你要的是结果，不是再多一份评价文档。",
+      ].join("\n"),
+    );
+
+    expect(
+      resolveUnsafeTerminalContinuationText({
+        ...openaiParams,
+        prompt:
+          "请给我完整可行的方案，并给出测试的用例。最后执行完成过后，再跑一遍测试用例，看一下效果是否符合预期。",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(STRICT_AGENTIC_UNSAFE_CONTINUATION_TEXT);
   });
 });
