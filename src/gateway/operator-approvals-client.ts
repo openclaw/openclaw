@@ -44,12 +44,15 @@ export async function createOperatorApprovalsGatewayClient(
     gatewayUrl: params.gatewayUrl,
     env: process.env,
   });
+  const shouldSendApprovalRuntimeToken = !params.gatewayUrl || isLoopbackGatewayUrl(bootstrap.url);
 
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
-    ...(params.gatewayUrl ? {} : { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }),
+    ...(shouldSendApprovalRuntimeToken
+      ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
+      : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
