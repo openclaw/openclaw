@@ -126,15 +126,19 @@ describe("tryNativeRequireJavaScriptModule", () => {
     ).toEqual({ ok: false });
   });
 
-  it("resolves alias subpaths relative to file-valued alias targets", () => {
+  it("resolves scoped plugin-sdk subpaths via exact alias entries supplied by the scoped backfill", () => {
+    // Production flow: `resolvePluginSdkScopedAliasMap` adds the scoped
+    // alias as an exact entry, so the native require can find it without
+    // needing prefix fallback through the file-valued root alias.
     const dir = makeTempDir();
     const pluginSdkDir = path.join(dir, "plugin-sdk");
     fs.mkdirSync(pluginSdkDir, { recursive: true });
     const modulePath = path.join(dir, "plugin.cjs");
     const rootAliasPath = path.join(pluginSdkDir, "root-alias.cjs");
+    const taskRuntimePath = path.join(pluginSdkDir, "agent-harness-task-runtime.js");
     fs.writeFileSync(rootAliasPath, "module.exports = {};\n", "utf8");
     fs.writeFileSync(
-      path.join(pluginSdkDir, "agent-harness-task-runtime.js"),
+      taskRuntimePath,
       'module.exports = { marker: "task-runtime" };\n',
       "utf8",
     );
@@ -148,10 +152,49 @@ describe("tryNativeRequireJavaScriptModule", () => {
       allowWindows: true,
       aliasMap: {
         "openclaw/plugin-sdk": rootAliasPath,
+        "openclaw/plugin-sdk/agent-harness-task-runtime": taskRuntimePath,
       },
     });
 
     expect(result).toEqual({ ok: true, moduleExport: { marker: "task-runtime" } });
+  });
+
+  it("does not resolve subpaths via prefix fallback against a file-valued root alias", () => {
+    // P2-1 regression: when only the file-valued `openclaw/plugin-sdk` root
+    // alias is present, sibling files on disk MUST NOT be reachable via
+    // prefix matching. The scoped alias map (which honors private-subpath
+    // gating) is the single source of truth for which subpaths are
+    // resolvable. Without this, private subpaths like
+    // `codex-native-task-runtime` could be loaded by untrusted plugins just
+    // because the dist artifact happens to exist next to root-alias.cjs.
+    const dir = makeTempDir();
+    const pluginSdkDir = path.join(dir, "plugin-sdk");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    const rootAliasPath = path.join(pluginSdkDir, "root-alias.cjs");
+    fs.writeFileSync(rootAliasPath, "module.exports = {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "codex-native-task-runtime.js"),
+      'module.exports = { private: true };\n',
+      "utf8",
+    );
+    const modulePath = path.join(dir, "plugin.cjs");
+    fs.writeFileSync(
+      modulePath,
+      'module.exports = require("openclaw/plugin-sdk/codex-native-task-runtime");\n',
+      "utf8",
+    );
+
+    const result = tryNativeRequireJavaScriptModule(modulePath, {
+      allowWindows: true,
+      fallbackOnMissingDependency: true,
+      aliasMap: {
+        // Only the file-valued root alias. No scoped entry for the private
+        // subpath - so resolution must NOT succeed via prefix matching.
+        "openclaw/plugin-sdk": rootAliasPath,
+      },
+    });
+
+    expect(result).toEqual({ ok: false });
   });
 
   it("uses the longest alias prefix when resolving native require subpaths", () => {
@@ -236,11 +279,11 @@ describe("tryNativeRequireJavaScriptModule", () => {
   });
 
   it("re-throws non-MODULE_NOT_FOUND errors raised during subpath alias resolution", () => {
+    // Use a DIRECTORY-VALUED alias to exercise the prefix-resolution path
+    // (file-valued targets are intentionally excluded from prefix matching).
     const dir = makeTempDir();
-    const pluginSdkDir = path.join(dir, "plugin-sdk");
+    const pluginSdkDir = path.join(dir, "plugin-sdk-dir");
     fs.mkdirSync(pluginSdkDir, { recursive: true });
-    const rootAliasPath = path.join(pluginSdkDir, "root-alias.cjs");
-    fs.writeFileSync(rootAliasPath, "module.exports = {};\n", "utf8");
 
     const moduleWithResolver = Module as typeof Module & {
       _resolveFilename?: (
@@ -266,7 +309,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
     try {
       expect(() =>
         withNativeRequireAliases(
-          { "openclaw/plugin-sdk": rootAliasPath },
+          { "openclaw/plugin-sdk": pluginSdkDir },
           () => testRequire("openclaw/plugin-sdk/throw-trigger"),
         ),
       ).toThrow("permission denied");

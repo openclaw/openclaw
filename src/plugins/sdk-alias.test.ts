@@ -714,6 +714,33 @@ describe("plugin sdk alias helpers", () => {
     expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBeUndefined();
   });
 
+  it("does not backfill openclaw/plugin-sdk/index (root-export dist artifact)", () => {
+    // P2-2 regression: `dist/plugin-sdk/index.js` is the dist artifact for
+    // the package's root `./plugin-sdk` export, not a scoped subpath. The
+    // package.json contract only exposes `openclaw/plugin-sdk` for it, so
+    // backfilling `openclaw/plugin-sdk/index` would synthesize a subpath
+    // that does not exist in `package.json#exports` and would break for
+    // plugins loaded against the published package.
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    // dist/plugin-sdk/index.js already exists from the fixture (default
+    // distFile). Confirm the backfill does NOT publish it as a scoped alias.
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(aliases["openclaw/plugin-sdk/index"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/index"]).toBeUndefined();
+  });
+
   it("does NOT backfill private dist plugin-sdk artifacts for untrusted callers", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {

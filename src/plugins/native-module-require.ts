@@ -137,14 +137,24 @@ function resolveNativeRequireAlias(
   if (exactTarget) {
     return exactTarget;
   }
+  // Restrict prefix-based subpath fallback to alias targets that are
+  // DIRECTORIES. A file-valued root alias (e.g. `openclaw/plugin-sdk` ->
+  // `dist/plugin-sdk/root-alias.cjs`) intentionally does NOT expose every
+  // sibling file in its containing directory; the scoped alias map governs
+  // which subpaths are reachable, including private-subpath gating. Using
+  // prefix matching against a file target to resolve arbitrary siblings
+  // would bypass that gate. Public subpaths must already be present as
+  // exact entries in the alias map via the scoped backfill.
   const prefix = Object.keys(aliasMap)
-    .filter((key) => request.startsWith(`${key}/`))
+    .filter(
+      (key) => request.startsWith(`${key}/`) && !isFileValuedAliasTarget(aliasMap[key] ?? ""),
+    )
     .toSorted((left, right) => right.length - left.length)[0];
   if (!prefix) {
     return null;
   }
   return resolveAliasSubpathTarget({
-    aliasTarget: aliasMap[prefix],
+    aliasTarget: aliasMap[prefix] ?? "",
     remainder: request.slice(prefix.length + 1),
     parent,
     isMain,

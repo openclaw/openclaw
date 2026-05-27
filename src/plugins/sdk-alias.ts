@@ -632,6 +632,15 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   );
 }
 
+// `dist/plugin-sdk/index.js` is the dist artifact for the package's root
+// `./plugin-sdk` export, not a scoped subpath. The package contract only
+// exposes `openclaw/plugin-sdk` for it, so backfilling
+// `openclaw/plugin-sdk/index` here would synthesize a subpath that does
+// not exist in `package.json#exports` and would break for plugins that
+// load against the published package rather than the OpenClaw aliasing
+// loader.
+const PLUGIN_SDK_ROOT_DIST_BASENAME = "index";
+
 function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   try {
     const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
@@ -640,7 +649,11 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
         .readdirSync(distPluginSdkDir, { withFileTypes: true })
         .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
         .map((entry) => entry.name.slice(0, -".js".length))
-        .filter((subpath) => isSafePluginSdkSubpathSegment(subpath)),
+        .filter(
+          (subpath) =>
+            isSafePluginSdkSubpathSegment(subpath) &&
+            subpath !== PLUGIN_SDK_ROOT_DIST_BASENAME,
+        ),
     );
   } catch {
     return new Set();
