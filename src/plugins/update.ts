@@ -894,13 +894,13 @@ function resetDisabledPluginSlots(
     return slots;
   }
   let next = slots;
-  if (next.memory === pluginId) {
+  if (resolvePluginSlotOwner(next.memory) === pluginId) {
     next = {
       ...next,
       memory: defaultSlotIdForKey("memory"),
     };
   }
-  if (next.contextEngine === pluginId) {
+  if (resolvePluginSlotOwner(next.contextEngine) === pluginId) {
     next = {
       ...next,
       contextEngine: defaultSlotIdForKey("contextEngine"),

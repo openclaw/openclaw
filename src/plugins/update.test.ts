@@ -1791,6 +1791,56 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("clears object-form slot owner references when disabling failed updates", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "security scan blocked install",
+    });
+    const config = {
+      plugins: {
+        slots: {
+          memory: {
+            owner: "demo",
+            claimed_at: "2026-05-26T00:00:00.000Z",
+            claimed_by_version: "2026.5.26",
+          },
+          contextEngine: {
+            owner: "demo",
+            claimed_at: "2026-05-26T00:00:00.000Z",
+          },
+        },
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+    });
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+  });
+
   it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockImplementation(
