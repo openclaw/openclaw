@@ -349,10 +349,17 @@ final class GatewayConnectionController {
     /// Rebuild connect options from current local settings (caps/commands/permissions)
     /// and re-apply the active gateway config so capability changes take effect immediately.
     func refreshActiveGatewayRegistrationFromSettings() {
+        Task { [weak self] in
+            await self?.refreshActiveGatewayRegistrationFromSettingsAsync()
+        }
+    }
+
+    private func refreshActiveGatewayRegistrationFromSettingsAsync() async {
         guard let appModel else { return }
         guard let cfg = appModel.activeGatewayConnectConfig else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
 
+        let nodeOptions = await self.makeConnectOptions(stableID: cfg.stableID)
         let refreshedConfig = GatewayConnectConfig(
             url: cfg.url,
             stableID: cfg.stableID,
@@ -360,7 +367,7 @@ final class GatewayConnectionController {
             token: cfg.token,
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
-            nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
+            nodeOptions: nodeOptions)
         appModel.applyGatewayConnectConfig(refreshedConfig)
     }
 
@@ -691,17 +698,20 @@ final class GatewayConnectionController {
         forceReconnect: Bool = false)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
         appModel.gatewayStatusText = "Connecting…"
-        let cfg = GatewayConnectConfig(
-            url: url,
-            stableID: gatewayStableID,
-            tls: tls,
-            token: token,
-            bootstrapToken: bootstrapToken,
-            password: password,
-            nodeOptions: connectOptions)
-        appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
+        Task { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            let nodeOptions = await self.makeConnectOptions(stableID: gatewayStableID)
+            let cfg = GatewayConnectConfig(
+                url: url,
+                stableID: gatewayStableID,
+                tls: tls,
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password,
+                nodeOptions: nodeOptions)
+            appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
+        }
     }
 
     private func resolveDiscoveredTLSParams(
@@ -921,17 +931,18 @@ extension GatewayConnectionController {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions(stableID: String?) -> GatewayConnectOptions {
+    private func makeConnectOptions(stableID: String?) async -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
         let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
+        let permissions = await self.currentPermissions()
 
         return GatewayConnectOptions(
             role: "node",
             scopes: [],
             caps: self.currentCaps(),
             commands: self.currentCommands(),
-            permissions: self.currentPermissions(),
+            permissions: permissions,
             clientId: resolvedClientId,
             clientMode: "node",
             clientDisplayName: displayName)
@@ -1069,12 +1080,16 @@ extension GatewayConnectionController {
         return commands
     }
 
-    private func currentPermissions() -> [String: Bool] {
+    private func currentPermissions() async -> [String: Bool] {
         var permissions: [String: Bool] = [:]
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        permissions["location"] = Self.isLocationAuthorized(status: CLLocationManager().authorizationStatus)
+        let locationStatus = CLLocationManager().authorizationStatus
+        let locationServicesEnabled = await Self.locationServicesEnabled()
+        permissions["location"] = Self.isLocationAvailable(
+            servicesEnabled: locationServicesEnabled,
+            status: locationStatus)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -1101,12 +1116,19 @@ extension GatewayConnectionController {
         return permissions
     }
 
-    private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
+    }
+
+    private static func isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
+        guard servicesEnabled else { return false }
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            true
+            return true
         default:
-            false
+            return false
         }
     }
 
@@ -1133,8 +1155,12 @@ extension GatewayConnectionController {
         self.currentCommands()
     }
 
-    func _test_currentPermissions() -> [String: Bool] {
-        self.currentPermissions()
+    func _test_currentPermissions() async -> [String: Bool] {
+        await self.currentPermissions()
+    }
+
+    static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
+        self.isLocationAvailable(servicesEnabled: servicesEnabled, status: status)
     }
 
     func _test_platformString() -> String {
