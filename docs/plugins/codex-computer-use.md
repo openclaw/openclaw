@@ -76,8 +76,10 @@ driver's safety model.
 
 ## Quick setup
 
-Set `plugins.entries.codex.config.computerUse` when Codex-mode turns must have
-Computer Use available before a thread starts:
+Set `plugins.entries.codex.config.computerUse.enabled` to `true` when
+Codex-mode turns must have Computer Use available before a thread starts. Pair
+it with `autoInstall` when OpenClaw should install or re-enable the Codex
+Computer Use plugin from discovered local marketplaces:
 
 ```json5
 {
@@ -87,6 +89,7 @@ Computer Use available before a thread starts:
         enabled: true,
         config: {
           computerUse: {
+            enabled: true,
             autoInstall: true,
           },
         },
