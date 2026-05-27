@@ -2695,27 +2695,44 @@ extension TalkModeManager {
 
     static func configureAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
+        let forceSpeaker = TalkDefaults.speakerphoneEnabled()
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
+        if forceSpeaker {
+            options.insert(.defaultToSpeaker)
+        }
         // Prefer `.spokenAudio` for STT; it tends to preserve speech energy better than `.voiceChat`.
-        try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [
-            .allowBluetoothHFP,
-            .defaultToSpeaker,
-        ])
+        try session.setCategory(.playAndRecord, mode: .spokenAudio, options: options)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
+        if forceSpeaker, !Self.hasExternalAudioOutput(session.currentRoute) {
+            try? session.overrideOutputAudioPort(.speaker)
+        } else {
+            try? session.overrideOutputAudioPort(.none)
+        }
+        GatewayDiagnostics.log("talk audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
     }
 
     static func configureRealtimeAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
+        let forceSpeaker = TalkDefaults.speakerphoneEnabled()
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
+        if forceSpeaker {
+            options.insert(.defaultToSpeaker)
+        }
         // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
         // output is less likely to be captured as fresh microphone input.
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [
-            .allowBluetoothHFP,
-            .defaultToSpeaker,
-        ])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: options)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
+        if forceSpeaker, !Self.hasExternalAudioOutput(session.currentRoute) {
+            try? session.overrideOutputAudioPort(.speaker)
+        } else {
+            try? session.overrideOutputAudioPort(.none)
+        }
+        GatewayDiagnostics.log(
+            "talk realtime audio: session speakerphone=\(forceSpeaker) \(Self.describeAudioSession())")
     }
 
     private static func describeAudioSession() -> String {
@@ -2732,6 +2749,17 @@ extension TalkModeManager {
         return "category=\(session.category.rawValue) mode=\(session.mode.rawValue) "
             + "opts=\(session.categoryOptions.rawValue) inputAvail=\(session.isInputAvailable) "
             + "routeIn=[\(inputs)] routeOut=[\(outputs)] availIn=[\(available)]"
+    }
+
+    private static func hasExternalAudioOutput(_ route: AVAudioSessionRouteDescription) -> Bool {
+        route.outputs.contains(where: { output in
+            switch output.portType {
+            case .airPlay, .bluetoothA2DP, .bluetoothHFP, .bluetoothLE, .carAudio, .headphones, .usbAudio:
+                true
+            default:
+                false
+            }
+        })
     }
 }
 
