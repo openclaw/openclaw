@@ -662,7 +662,7 @@ describe("channel-broker HTTP routes", () => {
     });
 
     expect(res.statusCode).toBe(202);
-    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+    expect(pluginRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         media: [
           expect.objectContaining({
@@ -831,7 +831,7 @@ describe("channel-broker HTTP routes", () => {
     expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
     expect(second.statusCode).toBe(200);
     expect(JSON.parse(second.body)).toMatchObject({ ok: true, status: "duplicate" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
   });
 
   it("returns a retryable response for redelivery while durable send is still pending", async () => {
@@ -845,7 +845,7 @@ describe("channel-broker HTTP routes", () => {
       state: { openKeyedStore },
     });
     let rejectFirstTurn!: (error: Error) => void;
-    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+    vi.mocked(pluginRuntime.channel.inbound.run).mockImplementationOnce(
       async () =>
         await new Promise<never>((_resolve, reject) => {
           rejectFirstTurn = reject;
@@ -858,7 +858,7 @@ describe("channel-broker HTTP routes", () => {
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res: createResponse(),
     });
-    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1));
 
     const redelivery = createResponse();
     await handleChannelBrokerInboundHttpRequest({
@@ -873,7 +873,7 @@ describe("channel-broker HTTP routes", () => {
       status: "pending",
       message: "delivery pending",
     });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(1);
 
     rejectFirstTurn(new Error("stop first turn"));
     await expect(first).rejects.toThrow("stop first turn");
@@ -889,7 +889,7 @@ describe("channel-broker HTTP routes", () => {
       },
       state: { openKeyedStore },
     });
-    vi.mocked(pluginRuntime.channel.turn.run).mockRejectedValueOnce(new Error("transient"));
+    vi.mocked(pluginRuntime.channel.inbound.run).mockRejectedValueOnce(new Error("transient"));
     setChannelBrokerRuntime(pluginRuntime);
 
     await expect(
@@ -909,7 +909,7 @@ describe("channel-broker HTTP routes", () => {
 
     expect(retry.statusCode).toBe(202);
     expect(JSON.parse(retry.body)).toMatchObject({ ok: true, status: "accepted" });
-    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(2);
+    expect(pluginRuntime.channel.inbound.run).toHaveBeenCalledTimes(2);
   });
 
   it("routes inbound progress and final deliveries through broker previews", async () => {
