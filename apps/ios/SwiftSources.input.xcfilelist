@@ -93,6 +93,7 @@ Sources/Voice/TalkDefaults.swift
 Sources/Voice/RealtimeTalkRelaySession.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
+Sources/Voice/TalkModeManager+Permissions.swift
 Sources/Voice/TalkPermissionPromptView.swift
 Sources/Voice/TalkRealtimeClientSession.swift
 Sources/Voice/TalkRealtimeWebRTCSession.swift
