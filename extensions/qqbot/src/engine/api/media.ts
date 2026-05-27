@@ -12,6 +12,7 @@
  */
 
 import * as fs from "node:fs";
+import * as net from "node:net";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
@@ -65,12 +66,12 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
 
   // urlDirectUpload is documented as public-URL support. Use the generic
   // SSRF guard here; the QQ/Tencent host allowlist belongs to fallback downloads.
-  // Mirror QQBOT_MEDIA_SSRF_POLICY's fake-IP allowance so sing-box/Clash/Surge
-  // proxy stacks that resolve public hostnames into 198.18.0.0/15 still upload.
-  // Literal private/loopback/link-local targets remain blocked.
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: { allowRfc2544BenchmarkRange: true },
-  });
+  // Only allow the RFC 2544 fake-IP range for hostnames whose DNS may legitimately
+  // resolve into 198.18.0.0/15 under sing-box/Clash/Surge proxy stacks. Literal
+  // IP URLs do not benefit from fake-IP DNS, so passing the flag for them would
+  // accept special-use/private literals (incl. 198.18.0.0/15) at the sink.
+  const policy = net.isIP(parsed.hostname) === 0 ? { allowRfc2544BenchmarkRange: true } : undefined;
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, { policy });
   return parsed.toString();
 }
 
