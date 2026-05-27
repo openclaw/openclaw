@@ -1058,6 +1058,164 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
+  it("clears stale auto-created legacy openai-codex route pins when primary is canonical openai", async () => {
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      contextTokens: 350_000,
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openai-codex/gpt-5.5");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+    expect(sessionStore[sessionKey]?.model).toBeUndefined();
+    expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("preserves usable Codex auth while clearing stale legacy openai-codex route pins", async () => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "test-key",
+        },
+      },
+    };
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(true);
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("openai-codex:default");
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBe("auto");
+  });
+
+  it("keeps auto openai-codex pins when canonical openai uses a custom API route", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
+  });
+
+  it("keeps explicit user openai-codex route overrides", async () => {
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("user");
+  });
+
   it("still clears disallowed auto-failover overrides through allowlist validation", async () => {
     const cfg = {
       agents: {
