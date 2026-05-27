@@ -18,6 +18,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       aggregates: null,
       costDaily: [],
       cacheStatus: undefined,
+      allAgentIds: [],
     },
     filters: {
       startDate: "2026-05-14",
@@ -113,5 +114,79 @@ describe("renderUsage", () => {
     expect(container.querySelector(".usage-page-header")).toBeNull();
     expect(container.querySelector(".usage-page-title")).toBeNull();
     expect(container.querySelector(".usage-header")).not.toBeNull();
+  });
+
+  it("renders agent selector dropdown from configured allAgentIds", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            loading: false,
+            error: null,
+            sessions: [],
+            sessionsLimitReached: false,
+            totals: null,
+            aggregates: null,
+            costDaily: [],
+            cacheStatus: undefined,
+            allAgentIds: ["main", "opus"],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const agentSelect = container.querySelector(
+      'select[aria-label="Agent"]',
+    ) as HTMLSelectElement | null;
+    expect(agentSelect).not.toBeNull();
+    const optionValues = Array.from(agentSelect!.options).map((o) => o.value);
+    expect(optionValues).toContain("");
+    expect(optionValues).toContain("main");
+    expect(optionValues).toContain("opus");
+    expect(agentSelect!.value).toBe("");
+  });
+
+  it("shows selected usageAgentId in agent selector", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          filters: {
+            startDate: "2026-05-14",
+            endDate: "2026-05-14",
+            scope: "family",
+            usageAgentId: "opus",
+            selectedSessions: [],
+            selectedDays: [],
+            selectedHours: [],
+            query: "",
+            queryDraft: "",
+            timeZone: "local",
+          },
+          data: {
+            loading: false,
+            error: null,
+            sessions: [],
+            sessionsLimitReached: false,
+            totals: null,
+            aggregates: null,
+            costDaily: [],
+            cacheStatus: undefined,
+            allAgentIds: ["main", "opus"],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const agentSelect = container.querySelector(
+      'select[aria-label="Agent"]',
+    ) as HTMLSelectElement | null;
+    expect(agentSelect).not.toBeNull();
+    expect(agentSelect!.value).toBe("opus");
   });
 });

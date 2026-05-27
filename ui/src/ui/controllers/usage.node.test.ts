@@ -112,6 +112,37 @@ describe("usage controller date interpretation params", () => {
     expect(state.usageError).toBe("request failed");
   });
 
+  it("includes agentId in sessions.usage request when usageAgentId is set", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request, { usageAgentId: "opus", usageTimeZone: "utc" });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "opus",
+      mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+  });
+
+  it("omits agentId from sessions.usage request when usageAgentId is not set", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request, { usageAgentId: undefined, usageTimeZone: "utc" });
+
+    await loadUsage(state);
+
+    const sessionsCall = (request.mock.calls[0] as Record<string, unknown>[])[1] as Record<
+      string,
+      unknown
+    >;
+    expect(sessionsCall).not.toHaveProperty("agentId");
+  });
+
   it("serializes non-Error objects without object-to-string coercion", () => {
     expect(testApi.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
   });

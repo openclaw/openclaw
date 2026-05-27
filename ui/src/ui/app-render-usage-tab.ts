@@ -58,6 +58,7 @@ export function renderUsageTab(state: AppViewState) {
         state.usageResult?.cacheStatus,
         state.usageCostSummary?.cacheStatus,
       ),
+      allAgentIds: (state.agentsList?.agents ?? []).map((a) => a.id),
     },
     filters: {
       startDate: state.usageStartDate,

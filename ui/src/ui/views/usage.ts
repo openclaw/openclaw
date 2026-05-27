@@ -204,10 +204,12 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
+  const configuredAgentIds =
+    data.allAgentIds.length > 0 ? data.allAgentIds : unique(sortedSessions.map((s) => s.agentId));
   const agentOptions = unique([
-    ...sortedSessions.map((s) => s.agentId),
+    ...configuredAgentIds,
     ...(filters.usageAgentId ? [filters.usageAgentId] : []),
-  ]).slice(0, 12);
+  ]);
   const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
     ...sortedSessions.map((s) => s.modelProvider),
