@@ -22,6 +22,7 @@ import {
 import { listAgentIds } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../pi-embedded-runner/runs.js";
@@ -180,20 +181,20 @@ async function startAgentRun(params: {
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && fallbackSessionKey && messageText) {
-      void (async () => {
-        const queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
-          activeRunSessionId,
-          messageText,
-          {
-            steeringMode: "all",
-            debounceMs: 0,
-            deliveryTimeoutMs: params.deliveryTimeoutMs,
-            waitForTranscriptCommit: true,
-          },
-        );
-        if (queueOutcome.queued) {
-          return;
-        }
+      const queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+        activeRunSessionId,
+        messageText,
+        {
+          steeringMode: "all",
+          debounceMs: 0,
+          deliveryTimeoutMs: params.deliveryTimeoutMs,
+          waitForTranscriptCommit: true,
+        },
+      );
+      if (queueOutcome.queued) {
+        return { ok: true, runId: params.runId, activeRunQueue: true };
+      }
+      try {
         await params.callGateway({
           method: "agent",
           params: {
@@ -203,7 +204,11 @@ async function startAgentRun(params: {
           },
           timeoutMs: 10_000,
         });
-      })().catch(() => undefined);
+      } catch (err) {
+        const queueSummary =
+          formatEmbeddedPiQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
+        throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`);
+      }
       return { ok: true, runId: params.runId, activeRunQueue: true };
     }
     const response = await params.callGateway<{ runId: string }>({
