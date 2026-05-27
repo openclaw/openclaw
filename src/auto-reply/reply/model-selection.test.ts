@@ -63,7 +63,7 @@ const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
   id: "gpt-5.4",
   name: "GPT-5.4",
   reasoning: true,
-  input: ["text"],
+  input: ["text"] as Array<"text">,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 16_384,
@@ -231,12 +231,13 @@ describe("createModelSelectionState catalog loading", () => {
       models: {
         providers: {
           vllm: {
+            baseUrl: "http://localhost:9000/v1",
             models: [
-              {
+              makeConfiguredModel({
                 id: "Qwen/Qwen3-8B",
                 name: "Qwen3",
                 compat: { thinkingFormat: "qwen-chat-template" },
-              },
+              }),
             ],
           },
         },
@@ -286,12 +287,13 @@ describe("createModelSelectionState catalog loading", () => {
       models: {
         providers: {
           vllm: {
+            baseUrl: "http://localhost:9000/v1",
             models: [
-              {
+              makeConfiguredModel({
                 id: "Qwen/Qwen3-8B",
                 name: "Qwen3",
                 compat: { thinkingFormat: "qwen-chat-template" },
-              },
+              }),
             ],
           },
         },

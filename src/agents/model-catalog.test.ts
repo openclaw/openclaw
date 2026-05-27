@@ -1061,7 +1061,7 @@ describe("loadModelCatalog", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
     });
 
     const entry = requireCatalogEntry(result, "vllm", "Qwen/Qwen3-8B");
@@ -1111,7 +1111,7 @@ describe("loadModelCatalog", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       readOnly: true,
     });
 
