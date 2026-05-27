@@ -1020,8 +1020,7 @@ export async function ensureDeviceToken(params: {
         approvedScopes,
       });
       const issuerAllowsReuse = params.issuer
-        ? deviceTokenIssuerMatches(existing, params.issuer) ||
-          (!existing.issuer && !isBrowserRelatedPairedDevice(device))
+        ? deviceTokenIssuerMatches(existing, params.issuer)
         : true;
       if (
         existingWithinApproved &&
