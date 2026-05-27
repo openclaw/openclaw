@@ -527,6 +527,28 @@ vi.mock("./model-selection.js", () => {
       return { provider, model: modelParts.join("/") || "claude" };
     },
     resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
+    normalizeProviderId: (provider: string): string => {
+      const normalized = (provider ?? "").trim().toLowerCase();
+      if (normalized === "modelstudio" || normalized === "qwencloud") return "qwen";
+      if (normalized === "z.ai" || normalized === "z-ai") return "zai";
+      if (normalized === "opencode-zen") return "opencode";
+      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding")
+        return "kimi";
+      if (normalized === "moonshotai" || normalized === "moonshot-ai") return "moonshot";
+      if (normalized === "bedrock" || normalized === "aws-bedrock") return "amazon-bedrock";
+      return normalized;
+    },
+    normalizeProviderIdForAuth: (provider: string): string => {
+      const normalized = (provider ?? "").trim().toLowerCase();
+      if (normalized === "modelstudio" || normalized === "qwencloud") return "qwen";
+      if (normalized === "z.ai" || normalized === "z-ai") return "zai";
+      if (normalized === "opencode-zen") return "opencode";
+      if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding")
+        return "kimi";
+      if (normalized === "moonshotai" || normalized === "moonshot-ai") return "moonshot";
+      if (normalized === "bedrock" || normalized === "aws-bedrock") return "amazon-bedrock";
+      return normalized;
+    },
   };
 });
 
@@ -968,7 +990,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
+    expect(state.persistSessionEntryMock).toHaveBeenCalled();
+    const lastCall = state.persistSessionEntryMock.mock.calls.slice(-1)[0]?.[0] as
+      | {
+          entry?: SessionEntry;
+        }
+      | undefined;
+    const stored = lastCall?.entry;
     expect(stored?.pendingFinalDelivery).toBeUndefined();
     expect(stored?.pendingFinalDeliveryText).toBeUndefined();
     expect(stored?.pendingFinalDeliveryCreatedAt).toBeUndefined();
@@ -1013,10 +1041,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     expect(attemptCalls).toHaveLength(1);
     expect(attemptCalls[0]?.sessionFile).toBe("/tmp/openclaw-internal-run.jsonl");
-    expect(attemptCalls[0]?.sessionEntry).toBe(visibleEntry);
+    expect(attemptCalls[0]?.sessionEntry).toStrictEqual(visibleEntry);
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
-    expect(sessionStore["agent:main:main"]).toBe(visibleEntry);
+    expect(sessionStore["agent:main:main"]).toStrictEqual(visibleEntry);
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {
