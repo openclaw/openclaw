@@ -110,6 +110,21 @@ function hasSilentIntentFinalSilentToken(text: string, token: string): boolean {
   return !withoutToken || silentIntentTextRe.test(withoutToken);
 }
 
+const plainReasoningOnlyTextRe =
+  /^\s*(?:(?:the\s+)?(?:user|sender|author|message|conversation|thread|chat)\b|[\p{L}\p{N}_-]{2,40}\s+is\b)[\s\S]{0,280}\b(?:talking|asking|saying|discussing|mentioning|referring|following\s+up|checking|wondering)\b[\s\S]*[.!?]?\s*$/iu;
+
+function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean {
+  const withoutToken = stripFinalSilentToken(text, token);
+  if (withoutToken === null) {
+    return false;
+  }
+  return (
+    !withoutToken ||
+    silentIntentTextRe.test(withoutToken) ||
+    plainReasoningOnlyTextRe.test(withoutToken)
+  );
+}
+
 function isReasoningPrefixedSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -136,7 +151,11 @@ function isReasoningPrefixedSilentReplyText(
   if (!plainReasoningPrefixRe.test(trimmed)) {
     return false;
   }
-  return hasFinalSilentToken(trimmed, token);
+  const withoutPlainReasoningPrefix = trimmed.replace(plainReasoningPrefixRe, "");
+  return (
+    isSilentReplyText(withoutPlainReasoningPrefix, token) ||
+    hasPlainReasoningFinalSilentToken(withoutPlainReasoningPrefix, token)
+  );
 }
 
 export function isSilentReplyPayloadText(

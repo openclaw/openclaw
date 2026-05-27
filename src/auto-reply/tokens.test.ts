@@ -72,6 +72,7 @@ describe("isSilentReplyPayloadText", () => {
     expect(
       isSilentReplyPayloadText("<think>internal reasoning</think>\nHere is the answer.\nNO_REPLY"),
     ).toBe(false);
+    expect(isSilentReplyPayloadText("think\nHere is the actual answer.\nNO_REPLY")).toBe(false);
     expect(
       isSilentReplyPayloadText(
         "<think>internal reasoning</think>\nYou should not reply to that email.\nNO_REPLY",
