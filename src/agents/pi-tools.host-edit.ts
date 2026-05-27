@@ -381,7 +381,7 @@ export function wrapWriteToolWithRecovery(
         typeof pathParam === "string" && typeof content === "string"
           ? resolveFileMutationPath(options.root, pathParam)
           : undefined;
-      const precheck =
+      const precheck: WriteToolPrecheck =
         absolutePath && typeof content === "string"
           ? await readOriginalWriteState(absolutePath, content, options)
           : { state: "unknown" };
