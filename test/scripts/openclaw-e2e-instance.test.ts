@@ -313,9 +313,14 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       writePackageFixture(packagePath);
       writeNodeShim(tempDir);
       fs.writeFileSync(
+        path.join(tempDir, "node"),
+        ["#!/bin/sh", "set -eu", `exec ${shellQuote(process.execPath)} "$@"`, ""].join("\n"),
+      );
+      fs.writeFileSync(
         path.join(tempDir, "npm"),
         ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
       );
+      fs.chmodSync(path.join(tempDir, "node"), 0o755);
       fs.chmodSync(path.join(tempDir, "npm"), 0o755);
 
       const result = spawnSync(
