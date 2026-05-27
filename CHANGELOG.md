@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram: route `sendMessage` action replies through durable outbound delivery so completed agent responses remain retryable when the gateway send path times out. (#87261) Thanks @mbelinky.
+- Gateway/security: require `operator.admin` for node and other non-operator device-role pairing approvals, including trusted-proxy sessions, while keeping pairing-only approvals available for operator-role requests. (#87146)
 
 ## 2026.5.26
 
