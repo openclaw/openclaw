@@ -86,6 +86,16 @@ describe("argv helpers", () => {
       expected: ["node", "openclaw", "docs", "help", "--help"],
     },
     {
+      name: "known command group help target",
+      argv: ["node", "openclaw", "plugins", "help", "list"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "known command group help target help flag",
+      argv: ["node", "openclaw", "plugins", "help", "list", "--help"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
       name: "extra help positionals remain untouched",
       argv: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
       expected: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],

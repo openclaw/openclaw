@@ -191,7 +191,7 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
     positionals.push({ value: arg, index });
   }
 
-  const [primary, secondary] = positionals;
+  const [primary, secondary, target] = positionals;
   if (
     !primary ||
     secondary?.value !== "help" ||
@@ -204,7 +204,16 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
     return argv.toSpliced(helpFlagIndex, 1);
   }
 
-  return argv;
+  if (
+    !target ||
+    positionals.length !== 3 ||
+    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+  ) {
+    return argv;
+  }
+
+  const normalized = argv.toSpliced(secondary.index, 1);
+  return helpFlagIndex === null ? [...normalized, "--help"] : normalized;
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
