@@ -429,6 +429,52 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it("preserves configured proxy-looking keys for custom realtime endpoints", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-litellm-custom-endpoint-key", // pragma: allowlist secret
+        azureEndpoint: "https://realtime-proxy.example.com",
+        model: "gpt-realtime-2",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    expect(socket?.args[0]).toBe(
+      "wss://realtime-proxy.example.com/v1/realtime?model=gpt-realtime-2",
+    );
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer sk-litellm-custom-endpoint-key");
+  });
+
+  it("preserves env proxy-looking keys for custom realtime endpoints", () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-or-custom-endpoint-key"); // pragma: allowlist secret
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        azureEndpoint: "https://realtime-proxy.example.com",
+        model: "gpt-realtime-2",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    bridge.close();
+
+    const socket = FakeWebSocket.instances[0];
+    expect(socket?.args[0]).toBe(
+      "wss://realtime-proxy.example.com/v1/realtime?model=gpt-realtime-2",
+    );
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer sk-or-custom-endpoint-key");
+  });
+
   it("does not open a native websocket after slow OAuth resolution times out", async () => {
     vi.useFakeTimers();
     resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");

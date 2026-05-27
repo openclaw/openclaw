@@ -827,10 +827,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       if (directApiKey.status === "missing") {
         throw new Error("OpenAI API key missing");
       }
+      if (cfg.azureEndpoint) {
+        return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      }
       if (isObviouslyNotDirectOpenAIRealtimeApiKey(directApiKey.value)) {
-        if (cfg.azureEndpoint) {
-          throw openAIRealtimeDirectAuthError();
-        }
         return this.resolveDefaultConnectionParams(model);
       }
       return this.resolveApiKeyConnectionParams(directApiKey.value, model);
@@ -840,9 +840,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       const directApiKey = resolveOpenAIRealtimeEnvApiKey();
       if (directApiKey.status === "missing") {
         throw new Error("OpenAI API key missing");
-      }
-      if (isObviouslyNotDirectOpenAIRealtimeApiKey(directApiKey.value)) {
-        throw openAIRealtimeDirectAuthError();
       }
       return this.resolveApiKeyConnectionParams(directApiKey.value, model);
     }
