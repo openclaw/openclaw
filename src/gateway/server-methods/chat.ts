@@ -150,6 +150,21 @@ type TranscriptAppendResult = {
   error?: string;
 };
 
+export const testing = {
+  async rewriteChatSendUserTurnMediaPathsForTest(params: {
+    transcriptPath: string;
+    sessionKey: string;
+    message: string;
+    savedImages: Array<{ id: string; path: string; size?: number; contentType?: string }>;
+    cfg: OpenClawConfig;
+  }): Promise<unknown> {
+    return await rewriteChatSendUserTurnMediaPaths({
+      ...params,
+      savedImages: params.savedImages as SavedMedia[],
+    });
+  },
+};
+
 type AbortOrigin = "rpc" | "stop-command";
 
 type AbortedPartialSnapshot = {
@@ -1098,6 +1113,41 @@ function extractTranscriptUserText(content: unknown): string | undefined {
   return textBlocks.length > 0 ? textBlocks.join("") : undefined;
 }
 
+function isTranscriptImageContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "image" || type === "input_image";
+}
+
+function transcriptContentHasImageBlocks(content: unknown): boolean {
+  return Array.isArray(content) && content.some(isTranscriptImageContentBlock);
+}
+
+function stripTranscriptImageContentBlocks(content: unknown): unknown {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  return content.filter((block) => !isTranscriptImageContentBlock(block));
+}
+
+function transcriptUserTextMatchesChatSend(content: unknown, message: string): boolean {
+  const text = extractTranscriptUserText(content);
+  if (text === undefined) {
+    return false;
+  }
+  if (text === message) {
+    return true;
+  }
+  const trimmedMessage = message.trim();
+  return (
+    trimmedMessage.length > 0 &&
+    transcriptContentHasImageBlocks(content) &&
+    text.includes(trimmedMessage)
+  );
+}
+
 async function rewriteChatSendUserTurnMediaPaths(params: {
   transcriptPath: string;
   sessionKey: string;
@@ -1125,7 +1175,10 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     ) {
       return false;
     }
-    return extractTranscriptUserText((message as { content?: unknown }).content) === params.message;
+    return transcriptUserTextMatchesChatSend(
+      (message as { content?: unknown }).content,
+      params.message,
+    );
   });
   const targetMessage = target?.record.message as Record<string, unknown> | undefined;
   if (!target || !target.id || !targetMessage) {
@@ -1133,9 +1186,10 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   }
   const rewrittenMessage = {
     ...targetMessage,
+    content: stripTranscriptImageContentBlocks(targetMessage.content),
     ...mediaFields,
   };
-  await rewriteTranscriptEntriesInSessionFile({
+  return await rewriteTranscriptEntriesInSessionFile({
     sessionFile: params.transcriptPath,
     sessionKey: params.sessionKey,
     config: params.cfg,

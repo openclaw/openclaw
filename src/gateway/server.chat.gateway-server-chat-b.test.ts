@@ -907,6 +907,78 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send rewrites metadata-wrapped image user turns to media paths", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      const { readSessionTranscriptIndex } = await import("./session-transcript-index.fs.js");
+      const { testing: chatTesting } = await import("./server-methods/chat.js");
+      const prompt = "Add these items to my pantry. 2 of each";
+      const hugeInlineImageData = "i".repeat(120_000);
+      const transcriptPath = path.join(sessionDir, "sess-main.jsonl");
+
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "sess-main",
+          timestamp: new Date().toISOString(),
+          cwd: sessionDir,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "metadata-wrapped-image-user-turn",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Sender (untrusted metadata):\n\`\`\`json\n{"label":"ClawHome (openclaw-ios)"}\n\`\`\`\n${prompt}`,
+              },
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: hugeInlineImageData,
+              },
+            ],
+          },
+        }),
+      ]);
+
+      const result = await chatTesting.rewriteChatSendUserTurnMediaPathsForTest({
+        transcriptPath,
+        sessionKey: "main",
+        message: prompt,
+        savedImages: [
+          {
+            id: "image-1",
+            path: "/tmp/openclaw-media/inbound/image-1.png",
+            size: 1024,
+            contentType: "image/png",
+          },
+        ],
+        cfg: {},
+      });
+      expect(result).toMatchObject({
+        changed: true,
+        bytesFreed: expect.any(Number),
+        rewrittenEntries: 1,
+      });
+
+      const transcript = await fs.readFile(transcriptPath, "utf-8");
+      expect(transcript).toContain("MediaPaths");
+      const index = await readSessionTranscriptIndex(transcriptPath);
+      const activeMessages = index?.entries.map((entry) => entry.record.message) ?? [];
+      const activeSerialized = JSON.stringify(activeMessages);
+      expect(activeSerialized).toContain("MediaPaths");
+      expect(activeSerialized).toContain(prompt);
+      expect(activeSerialized).not.toContain(hugeInlineImageData.slice(0, 128));
+    } finally {
+      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
