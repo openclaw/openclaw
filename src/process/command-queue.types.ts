@@ -8,6 +8,11 @@ export type CommandQueueEnqueueOptions = {
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   priority?: "foreground" | "normal" | "background";
+  /**
+   * Internal continuation escape hatch for work that already owns a logical
+   * active turn before gateway drain begins. Do not set for new user work.
+   */
+  allowGatewayDrainingContinuation?: boolean;
 };
 
 /** Minimal queue function contract used by code that only needs to schedule work. */

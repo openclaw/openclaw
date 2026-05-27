@@ -5,6 +5,7 @@
  */
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getCommandLaneSnapshots, isGatewayDraining } from "../process/command-queue.js";
 import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
 import type { FailoverReason } from "./embedded-agent-helpers.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
@@ -48,6 +49,9 @@ export type ModelFallbackStepFields = {
   fallbackStepFromFailureDetail?: string;
   fallbackStepChainPosition?: number;
   fallbackStepFinalOutcome: FallbackStepOutcome;
+  fallbackStepQueueActive?: number;
+  fallbackStepQueueQueued?: number;
+  fallbackStepQueueDraining?: boolean;
 };
 
 /** Input payload for logging one model fallback decision. */
@@ -82,6 +86,18 @@ function formatModelRef(candidate: ModelCandidate): string {
   return `${candidate.provider}/${candidate.model}`;
 }
 
+function buildQueueObservationFields(): Pick<
+  ModelFallbackStepFields,
+  "fallbackStepQueueActive" | "fallbackStepQueueQueued" | "fallbackStepQueueDraining"
+> {
+  const snapshots = getCommandLaneSnapshots();
+  return {
+    fallbackStepQueueActive: snapshots.reduce((total, lane) => total + lane.activeCount, 0),
+    fallbackStepQueueQueued: snapshots.reduce((total, lane) => total + lane.queuedCount, 0),
+    fallbackStepQueueDraining: isGatewayDraining(),
+  };
+}
+
 function buildFallbackStepFields(params: {
   decision: "skip_candidate" | "candidate_failed" | "candidate_succeeded";
   candidate: ModelCandidate;
@@ -98,6 +114,9 @@ function buildFallbackStepFields(params: {
     if (!lastPreviousAttempt) {
       return undefined;
     }
+    const observedPrevious = buildErrorObservationFields(lastPreviousAttempt.error);
+    const previousFailureDetail =
+      observedPrevious.providerErrorMessagePreview ?? observedPrevious.errorPreview;
     return {
       fallbackStepType: "fallback_step",
       fallbackStepFromModel: `${lastPreviousAttempt.provider}/${lastPreviousAttempt.model}`,
@@ -105,11 +124,10 @@ function buildFallbackStepFields(params: {
       ...(lastPreviousAttempt.reason
         ? { fallbackStepFromFailureReason: lastPreviousAttempt.reason }
         : {}),
-      ...(lastPreviousAttempt.error
-        ? { fallbackStepFromFailureDetail: lastPreviousAttempt.error }
-        : {}),
+      ...(previousFailureDetail ? { fallbackStepFromFailureDetail: previousFailureDetail } : {}),
       ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
       fallbackStepFinalOutcome: "succeeded",
+      ...buildQueueObservationFields(),
     };
   }
 
@@ -127,6 +145,7 @@ function buildFallbackStepFields(params: {
       : {}),
     ...(typeof params.attempt === "number" ? { fallbackStepChainPosition: params.attempt } : {}),
     fallbackStepFinalOutcome: params.nextCandidate ? "next_fallback" : "chain_exhausted",
+    ...buildQueueObservationFields(),
   };
 }
 

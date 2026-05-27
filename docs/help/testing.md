@@ -25,6 +25,26 @@ of Docker runners. This doc is a "how we test" guide:
 This page covers running the regular test suites and Docker/Parallels runners. The QA-specific runners section below ([QA-specific runners](#qa-specific-runners)) lists the concrete `qa` invocations and points back at the references above.
 </Note>
 
+## Production AI regression contract
+
+For high-risk AI pipeline changes, pair the regular test selection below with
+the lightweight [Production AI governance](/architecture/production-ai-governance)
+contract. The minimum golden coverage is:
+
+- memory retrieval preserves source, scope, and degraded-mode behavior
+- provider and tool replay preserves transcript bytes unless a documented
+  repair path intentionally rewrites them
+- channel routing names every configured inbound surface separately, including
+  DMs, groups, channels, threads, mentions, slash commands, webhooks, and native
+  command delivery when they exist
+- agent context enters through scoped `AGENTS.md`, workspace files, skills, and
+  the documented system prompt path
+- token, cache, and cost changes can be attributed to a session, provider, model,
+  or pipeline stage
+
+When existing tests already cover a behavior, link to or run those tests instead
+of adding a parallel harness only to satisfy a checklist.
+
 ## Quick start
 
 Most days:

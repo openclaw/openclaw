@@ -426,7 +426,7 @@ export function enqueueCommandInLane<T>(
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
   const queueState = getQueueState();
-  if (queueState.gatewayDraining) {
+  if (queueState.gatewayDraining && opts?.allowGatewayDrainingContinuation !== true) {
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = normalizeLane(lane);

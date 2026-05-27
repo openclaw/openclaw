@@ -14,6 +14,7 @@ export function sanitizeForConsole(text: string | undefined, maxChars = 200): st
         code === 0x0b ||
         code === 0x0c ||
         (code >= 0x0e && code <= 0x1f) ||
+        (code >= 0x80 && code <= 0x9f) ||
         code === 0x7f
       );
     })

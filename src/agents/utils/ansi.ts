@@ -30,8 +30,8 @@ function ansiRegex({ onlyFirst = false }: { onlyFirst?: boolean } = {}): RegExp 
   // Valid string terminator sequences are BEL, ESC\, and 0x9c
   const ST = "(?:\\u0007|\\u001B\\u005C|\\u009C)";
 
-  // OSC sequences only: ESC ] ... ST (non-greedy until the first ST)
-  const osc = `(?:\\u001B\\][\\s\\S]*?${ST})`;
+  // OSC sequences only: ESC ] / C1 OSC ... ST (non-greedy until the first ST)
+  const osc = `(?:(?:\\u001B\\]|\\u009D)[\\s\\S]*?${ST})`;
 
   // CSI and related: ESC/C1, optional intermediates, optional params (supports ; and :) then final byte
   const csi = "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
@@ -48,8 +48,8 @@ export function stripAnsi(value: string): string {
     throw new TypeError(`Expected a \`string\`, got \`${typeof value}\``);
   }
 
-  // Fast path: ANSI codes require ESC (7-bit) or CSI (8-bit) introducer
-  if (!value.includes("\u001B") && !value.includes("\u009B")) {
+  // Fast path: ANSI codes require ESC (7-bit), CSI (8-bit), or OSC (8-bit) introducer
+  if (!value.includes("\u001B") && !value.includes("\u009B") && !value.includes("\u009D")) {
     return value;
   }
 

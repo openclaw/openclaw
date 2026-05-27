@@ -430,6 +430,7 @@ export function runAgentAttempt(params: {
   pluginsEnabled?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   allowTransientCooldownProbe?: boolean;
+  allowGatewayDrainingContinuation?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
@@ -702,6 +703,7 @@ export function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    allowGatewayDrainingContinuation: params.allowGatewayDrainingContinuation,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
