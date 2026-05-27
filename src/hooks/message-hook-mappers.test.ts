@@ -40,6 +40,7 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
     MessageThreadId: 42,
     MediaPath: "/tmp/audio.ogg",
     MediaType: "audio/ogg",
+    MediaUrl: "https://cdn.example.com/audio.ogg",
     GroupSubject: "ops",
     GroupChannel: "ops-room",
     GroupSpace: "guild-1",
@@ -112,6 +113,8 @@ describe("message hook mappers", () => {
         MediaType: undefined,
         MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
         MediaTypes: ["image/jpeg", "image/jpeg"],
+        MediaUrl: "https://cdn.example.com/tree.jpg",
+        MediaUrls: ["https://cdn.example.com/tree.jpg", "https://cdn.example.com/ramp.jpg"],
       }),
     );
 
@@ -119,6 +122,11 @@ describe("message hook mappers", () => {
     expect(canonical.mediaType).toBe("image/jpeg");
     expect(canonical.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
     expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+    expect(canonical.mediaUrl).toBe("https://cdn.example.com/tree.jpg");
+    expect(canonical.mediaUrls).toEqual([
+      "https://cdn.example.com/tree.jpg",
+      "https://cdn.example.com/ramp.jpg",
+    ]);
     expect(toPluginInboundClaimEvent(canonical)).toEqual(
       expect.objectContaining({
         metadata: expect.objectContaining({
@@ -126,6 +134,20 @@ describe("message hook mappers", () => {
           mediaType: "image/jpeg",
           mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
           mediaTypes: ["image/jpeg", "image/jpeg"],
+          mediaUrl: "https://cdn.example.com/tree.jpg",
+          mediaUrls: ["https://cdn.example.com/tree.jpg", "https://cdn.example.com/ramp.jpg"],
+        }),
+      }),
+    );
+    expect(toPluginMessageReceivedEvent(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          mediaPath: "/tmp/tree.jpg",
+          mediaType: "image/jpeg",
+          mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+          mediaTypes: ["image/jpeg", "image/jpeg"],
+          mediaUrl: "https://cdn.example.com/tree.jpg",
+          mediaUrls: ["https://cdn.example.com/tree.jpg", "https://cdn.example.com/ramp.jpg"],
         }),
       }),
     );
