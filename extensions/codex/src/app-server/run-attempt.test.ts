@@ -12546,7 +12546,7 @@ describe("runCodexAppServerAttempt", () => {
     clearSpy.mockRestore();
   });
 
-  it("retires the shared Codex client when a spawned helper hits a thread/start write failure", async () => {
+  it("retires the shared Codex client when a spawned helper hits a thread/start connection close", async () => {
     const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
     clearSpy.mockClear();
     let failedClient: unknown;
@@ -12554,7 +12554,7 @@ describe("runCodexAppServerAttempt", () => {
       const c = {
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("write EPIPE");
+            throw new Error("codex app-server client is closed");
           }
           return {};
         }),
@@ -12570,13 +12570,15 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.spawnedBy = "agent:main:session-parent";
 
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("write EPIPE");
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "codex app-server client is closed",
+    );
     const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === failedClient);
     expect(calledWithFailedClient).toBe(true);
     clearSpy.mockRestore();
   });
 
-  it("retires the shared Codex client when a top-level run fails with a logical thread/start error", async () => {
+  it("does not retire the shared Codex client when a top-level run fails with a logical thread/start error", async () => {
     const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
     clearSpy.mockClear();
     let failedClient: unknown;
@@ -12604,7 +12606,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
     const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === failedClient);
-    expect(calledWithFailedClient).toBe(true);
+    expect(calledWithFailedClient).toBe(false);
     clearSpy.mockRestore();
   });
 

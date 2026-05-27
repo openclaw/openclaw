@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -833,6 +834,7 @@ describe("config plugin validation", () => {
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
     const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
     await mkdirSafe(path.dirname(installedPluginIndexPath));
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     await fs.writeFile(
       installedPluginIndexPath,
       JSON.stringify(
@@ -870,6 +872,7 @@ describe("config plugin validation", () => {
       });
     } finally {
       await fs.rm(installedPluginIndexPath, { force: true });
+      clearLoadInstalledPluginIndexInstallRecordsCache();
     }
   });
 

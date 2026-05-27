@@ -189,7 +189,6 @@ import {
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
   isContextEngineBindingCompatible,
-  isCodexThreadStartRequestError,
   startOrResumeThread,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
@@ -1851,9 +1850,7 @@ export async function runCodexAppServerAttempt(
   } catch (error) {
     nativeHookRelay?.unregister();
     await releaseSandboxExecEnvironment();
-    const preserveSpawnedThreadStartFailureClient =
-      Boolean(params.spawnedBy?.trim()) && isCodexThreadStartRequestError(error);
-    if (!preserveSpawnedThreadStartFailureClient) {
+    if (runAbortController.signal.aborted || shouldClearSharedClientAfterStartupRace(error)) {
       clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
     }
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -6561,6 +6558,15 @@ function waitForCodexNotificationDispatchTurn(): Promise<void> {
   return new Promise((resolve) => {
     setImmediate(resolve);
   });
+}
+
+function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === "codex app-server startup timed out" ||
+      error.message === "codex app-server startup aborted" ||
+      error.message.endsWith(" timed out"))
+  );
 }
 
 function handleApprovalRequest(params: {
