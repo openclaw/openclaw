@@ -538,6 +538,14 @@ export function resolveEffectiveModelFallbacks(params: {
     params.modelOverrideSource === "auto" ||
     (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
   if (!canUseConfiguredFallbacks) {
+    // When the user manually switches models (e.g., /model deepseek-v4-pro),
+    // still allow the agent's configured fallbacks so the session doesn't
+    // deadlock when the chosen model is temporarily unavailable (timeout, 5xx).
+    // The fallback is per-call only; passivation does not persist it, so the
+    // user's model preference is preserved for the next message.
+    if (params.modelOverrideSource === "user") {
+      return agentFallbacksOverride;
+    }
     return [];
   }
   const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
