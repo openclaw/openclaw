@@ -138,12 +138,12 @@ function matchesCurrentThread(requestParams: JsonObject | undefined, threadId: s
 }
 
 function turnIdMismatches(requestParams: JsonObject | undefined, turnId: string): boolean {
-  const rawTurnId = requestParams?.turnId;
+  const rawTurnId = readValue(requestParams, "turnId");
   return rawTurnId !== null && rawTurnId !== undefined && rawTurnId !== turnId;
 }
 
 function hasExactTurnId(requestParams: JsonObject | undefined, turnId: string): boolean {
-  return requestParams?.turnId === turnId;
+  return readValue(requestParams, "turnId") === turnId;
 }
 
 function resolvePluginElicitation(params: {
@@ -154,7 +154,7 @@ function resolvePluginElicitation(params: {
   if (!requestParams) {
     return { kind: "not_plugin" };
   }
-  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
+  const meta = readJsonObject(requestParams, "_meta") ?? {};
   const context = params.pluginAppPolicyContext;
   const entries = context ? Object.values(context.apps) : [];
 
@@ -291,15 +291,13 @@ function buildPluginPolicyElicitationResponse(
     logPluginElicitationDecline("destructive_actions_disabled", requestParams);
     return declineElicitationResponse();
   }
-  if (
-    readString(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams.requestedSchema)
-  ) {
+  const requestedSchema = readJsonObject(requestParams, "requestedSchema");
+  if (readString(requestParams, "mode") !== "form" || !requestedSchema) {
     logPluginElicitationDecline("unsupported_schema", requestParams);
     return declineElicitationResponse();
   }
-  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
-  const response = buildElicitationResponse(requestParams.requestedSchema, meta, "approved-once");
+  const meta = readJsonObject(requestParams, "_meta") ?? {};
+  const response = buildElicitationResponse(requestedSchema, meta, "approved-once");
   if (isJsonObject(response) && response.action === "accept") {
     return response;
   }
@@ -322,20 +320,21 @@ function logPluginElicitationDecline(reason: string, requestParams: JsonObject |
 function readBridgeableApprovalElicitation(
   requestParams: JsonObject | undefined,
 ): BridgeableApprovalElicitation | undefined {
+  const meta = readJsonObject(requestParams, "_meta");
+  const requestedSchema = readJsonObject(requestParams, "requestedSchema");
   if (
     !requestParams ||
     readString(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams["_meta"]) ||
-    requestParams["_meta"][MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
-    !isJsonObject(requestParams.requestedSchema)
+    !meta ||
+    readString(meta, MCP_TOOL_APPROVAL_KIND_KEY) !== MCP_TOOL_APPROVAL_KIND ||
+    !requestedSchema
   ) {
     return undefined;
   }
 
-  const requestedSchema = requestParams.requestedSchema;
   if (
     readString(requestedSchema, "type") !== "object" ||
-    !isJsonObject(requestedSchema.properties)
+    !readJsonObject(requestedSchema, "properties")
   ) {
     return undefined;
   }
@@ -346,12 +345,12 @@ function readBridgeableApprovalElicitation(
     title,
     description: buildApprovalDescription({
       title,
-      meta: requestParams["_meta"],
+      meta,
       requestedSchema,
       serverName: sanitizeOptionalDisplayText(readString(requestParams, "serverName")),
     }),
     requestedSchema,
-    meta: requestParams["_meta"],
+    meta,
   };
 }
 
@@ -369,17 +368,15 @@ function readComputerUseApprovalElicitation(
     return undefined;
   }
 
-  const requestedSchema = isJsonObject(requestParams?.requestedSchema)
-    ? requestParams.requestedSchema
-    : EMPTY_OBJECT_SCHEMA;
+  const requestedSchema = readJsonObject(requestParams, "requestedSchema") ?? EMPTY_OBJECT_SCHEMA;
   if (
     readString(requestedSchema, "type") !== "object" ||
-    !isJsonObject(requestedSchema.properties)
+    !readJsonObject(requestedSchema, "properties")
   ) {
     return undefined;
   }
 
-  const meta = isJsonObject(requestParams?.["_meta"]) ? requestParams["_meta"] : {};
+  const meta = readJsonObject(requestParams, "_meta") ?? {};
   const title =
     sanitizeDisplayText(readString(requestParams, "message") ?? "") || COMPUTER_USE_APPROVAL_TITLE;
   return {
@@ -429,8 +426,8 @@ function buildApprovalDescription(params: {
 }
 
 function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
-  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
-  return Object.entries(properties)
+  const properties = readJsonObject(requestedSchema, "properties") ?? {};
+  return readObjectEntries(properties)
     .map(([name, value]) => {
       const schema = isJsonObject(value) ? value : undefined;
       if (!schema) {
@@ -447,7 +444,7 @@ function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
 }
 
 function readDisplayParamLines(meta: JsonObject): string[] {
-  const displayParams = meta[MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY];
+  const displayParams = readValue(meta, MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY);
   if (!Array.isArray(displayParams)) {
     return [];
   }
@@ -464,7 +461,7 @@ function readDisplayParamLines(meta: JsonObject): string[] {
       if (!name) {
         return undefined;
       }
-      return `- ${name}: ${formatDisplayParamValue(param.value)}`;
+      return `- ${name}: ${formatDisplayParamValue(readValue(param, "value"))}`;
     })
     .filter((line): line is string => Boolean(line));
   const remaining = displayParams.length - MAX_DISPLAY_PARAM_ENTRIES;
@@ -493,7 +490,13 @@ function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPT
     const parts: string[] = [];
     const limit = Math.min(value.length, MAX_DISPLAY_VALUE_ARRAY_ITEMS);
     for (let i = 0; i < limit; i += 1) {
-      parts.push(formatDisplayJsonValue(value[i] ?? null, depth - 1));
+      let entry: JsonValue | undefined;
+      try {
+        entry = value[i];
+      } catch {
+        entry = undefined;
+      }
+      parts.push(formatDisplayJsonValue(entry ?? null, depth - 1));
     }
     if (value.length > MAX_DISPLAY_VALUE_ARRAY_ITEMS) {
       parts.push("...");
@@ -507,18 +510,25 @@ function formatDisplayJsonValue(value: JsonValue, depth = MAX_DISPLAY_VALUE_DEPT
     const parts: string[] = [];
     let count = 0;
     let truncated = false;
-    for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) {
-        continue;
-      }
+    let keys: string[];
+    try {
+      keys = Object.keys(value);
+    } catch {
+      return "{unreadable}";
+    }
+    for (const key of keys) {
       if (count >= MAX_DISPLAY_VALUE_OBJECT_KEYS) {
         truncated = true;
         break;
       }
       const safeKey = truncateDisplayText(sanitizeDisplayText(key), 80);
-      parts.push(
-        `${JSON.stringify(safeKey)}:${formatDisplayJsonValue(value[key] ?? null, depth - 1)}`,
-      );
+      let child: JsonValue | undefined;
+      try {
+        child = value[key];
+      } catch {
+        child = undefined;
+      }
+      parts.push(`${JSON.stringify(safeKey)}:${formatDisplayJsonValue(child ?? null, depth - 1)}`);
       count += 1;
     }
     if (truncated) {
@@ -604,8 +614,8 @@ function buildElicitationResponse(
       };
     }
     embeddedAgentLog.warn("codex MCP approval elicitation approved without a mappable response", {
-      approvalKind: meta[MCP_TOOL_APPROVAL_KIND_KEY],
-      fields: Object.keys(requestedSchema.properties ?? {}),
+      approvalKind: readValue(meta, MCP_TOOL_APPROVAL_KIND_KEY),
+      fields: readObjectKeys(readJsonObject(requestedSchema, "properties") ?? {}),
       outcome,
     });
     return { action: "decline", content: null, _meta: null };
@@ -618,21 +628,18 @@ function buildAcceptedContent(
   meta: JsonObject,
   outcome: AppServerApprovalOutcome,
 ): JsonObject | undefined {
-  const properties = isJsonObject(requestedSchema.properties)
-    ? requestedSchema.properties
-    : undefined;
+  const properties = readJsonObject(requestedSchema, "properties");
   if (!properties) {
     return undefined;
   }
-  const required = Array.isArray(requestedSchema.required)
-    ? new Set(
-        requestedSchema.required.filter((entry): entry is string => typeof entry === "string"),
-      )
+  const rawRequired = readValue(requestedSchema, "required");
+  const required = Array.isArray(rawRequired)
+    ? new Set(rawRequired.filter((entry): entry is string => typeof entry === "string"))
     : new Set<string>();
   const content: JsonObject = {};
   let sawApprovalField = false;
 
-  for (const [name, value] of Object.entries(properties)) {
+  for (const [name, value] of readObjectEntries(properties)) {
     const schema = isJsonObject(value) ? value : undefined;
     if (!schema) {
       continue;
@@ -710,7 +717,7 @@ function readPersistFieldValue(
 }
 
 function readDefaultValue(schema: JsonObject): JsonValue | undefined {
-  return schema.default as JsonValue | undefined;
+  return readValue(schema, "default");
 }
 
 function readFallbackFieldValue(
@@ -744,7 +751,7 @@ function propertyText(property: ApprovalPropertyContext): string {
 }
 
 function readPersistHints(meta: JsonObject): string[] {
-  const raw = meta.persist;
+  const raw = readValue(meta, "persist");
   if (typeof raw === "string") {
     return [raw];
   }
@@ -773,20 +780,23 @@ function choosePersistHint(persistHints: string[]): "always" | "session" | undef
 }
 
 function hasNoSchemaProperties(requestedSchema: JsonObject): boolean {
-  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
-  return Object.keys(properties).length === 0;
+  const properties = readJsonObject(requestedSchema, "properties") ?? {};
+  return readObjectKeys(properties).length === 0;
 }
 
 function readEnumOptions(schema: JsonObject): Array<{ value: string; label: string }> {
-  if (Array.isArray(schema.enum)) {
-    const values = schema.enum.filter((entry): entry is string => typeof entry === "string");
-    const labels = Array.isArray(schema.enumNames)
-      ? schema.enumNames.filter((entry): entry is string => typeof entry === "string")
+  const rawEnum = readValue(schema, "enum");
+  if (Array.isArray(rawEnum)) {
+    const values = rawEnum.filter((entry): entry is string => typeof entry === "string");
+    const rawEnumNames = readValue(schema, "enumNames");
+    const labels = Array.isArray(rawEnumNames)
+      ? rawEnumNames.filter((entry): entry is string => typeof entry === "string")
       : [];
     return values.map((value, index) => ({ value, label: labels[index] ?? value }));
   }
-  if (Array.isArray(schema.oneOf)) {
-    return schema.oneOf
+  const rawOneOf = readValue(schema, "oneOf");
+  if (Array.isArray(rawOneOf)) {
+    return rawOneOf
       .map((entry) => {
         const option = isJsonObject(entry) ? entry : undefined;
         const value = readString(option, "const");
@@ -813,8 +823,37 @@ function isSessionApprovalOption(option: { value: string; label: string }): bool
 }
 
 function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
+  const value = readValue(record, key);
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readJsonObject(record: JsonObject | undefined, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readObjectEntries(record: JsonObject): Array<[string, JsonValue]> {
+  try {
+    return Object.entries(record);
+  } catch {
+    return [];
+  }
+}
+
+function readObjectKeys(record: JsonObject): string[] {
+  try {
+    return Object.keys(record);
+  } catch {
+    return [];
+  }
+}
+
+function readValue(record: JsonObject | undefined, key: string): JsonValue | undefined {
+  try {
+    return record?.[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function readFirstString(record: JsonObject | undefined, keys: string[]): string | undefined {

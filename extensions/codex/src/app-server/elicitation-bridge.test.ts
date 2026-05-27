@@ -308,6 +308,59 @@ describe("Codex app-server elicitation bridge", () => {
     expect(approvalRequest.description).toContain("Repository: openclaw/openclaw");
   });
 
+  it("ignores unreadable synthetic elicitation routing fields without throwing", async () => {
+    const requestParams: Record<string, unknown> = {};
+    Object.defineProperty(requestParams, "threadId", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin elicitation read failed");
+      },
+    });
+
+    await expect(
+      handleCodexAppServerElicitationRequest({
+        requestParams: requestParams as never,
+        paramsForRun: createParams(),
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    ).resolves.toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes unreadable synthetic approval display parameters without throwing", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-unreadable", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-unreadable", decision: "allow-once" });
+
+    const requestParams = buildCurrentCodexApprovalElicitation();
+    const unreadableValue: Record<string, unknown> = {};
+    Object.defineProperty(unreadableValue, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin display read failed");
+      },
+    });
+    requestParams["_meta"].tool_params_display = [
+      { name: "fuzzplugin", display_name: "Fuzz plugin", value: unreadableValue },
+    ] as never;
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams,
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    const approvalRequest = gatewayToolArg(0, 2) as {
+      description: string;
+    };
+    expect(approvalRequest.description).toContain("Fuzz plugin");
+    expect(approvalRequest.description).toContain('"fuzzplugin":null');
+    expect(approvalRequest.description).not.toContain("display read failed");
+  });
+
   it("routes Computer Use app approvals through plugin approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-computer-use", status: "accepted" })
