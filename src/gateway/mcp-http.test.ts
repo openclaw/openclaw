@@ -320,6 +320,53 @@ describe("mcp loopback server", () => {
     });
   });
 
+  it("does not require properties that are optional through boolean union variants", async () => {
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "fuzzplugin_optional_angles",
+          description: "exercise boolean MCP union schemas",
+          parameters: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { angle: { type: "number" } },
+                required: ["angle"],
+              },
+              true,
+            ],
+          },
+          execute: async () => ({
+            content: [{ type: "text", text: "ok" }],
+          }),
+        },
+      ],
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.nonOwnerToken,
+      headers: {
+        "content-type": "application/json",
+        "x-session-key": "agent:main:main",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    const payload = (await response.json()) as {
+      result?: { tools?: Array<{ inputSchema?: Record<string, unknown> }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.result?.tools?.[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: { angle: { type: "number" } },
+      required: [],
+    });
+  });
+
   it("derives sender owner identity from the loopback bearer token", async () => {
     server = await startMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();

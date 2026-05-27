@@ -19,16 +19,21 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
   const mergedProps: Record<string, unknown> = {};
   const requiredSets: Set<string>[] = [];
   for (const variant of variants) {
+    if (variant === false) {
+      continue;
+    }
     if (!isRecord(variant)) {
+      if (variant !== true) {
+        logWarn("mcp loopback: malformed union variant, treating it as unconstrained");
+      }
+      requiredSets.push(new Set());
       continue;
     }
     const props = isRecord(variant.properties) ? variant.properties : undefined;
     if (props) {
       for (const [key, schema] of Object.entries(props)) {
         if (!isPropertySchema(schema)) {
-          logWarn(
-            `mcp loopback: malformed schema definition for "${key}", ignoring that variant`,
-          );
+          logWarn(`mcp loopback: malformed schema definition for "${key}", ignoring that variant`);
           continue;
         }
         if (!(key in mergedProps)) {
