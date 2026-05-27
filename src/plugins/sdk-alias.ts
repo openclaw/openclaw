@@ -226,6 +226,30 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
   return dedupeResolvedPaths(candidates);
 }
 
+function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
+  if (!argv1) {
+    return [];
+  }
+  const normalized = path.resolve(argv1);
+  const starts = [path.dirname(normalized)];
+  try {
+    const resolved = fs.realpathSync(normalized);
+    if (resolved !== normalized) {
+      starts.push(path.dirname(resolved));
+    }
+  } catch {
+    // Keep the unresolved argv path; startup shims may not exist in tests.
+  }
+  const parts = normalized.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+    const binName = path.basename(normalized);
+    const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
+    starts.push(path.join(nodeModulesDir, binName));
+  }
+  return dedupeResolvedPaths(starts);
+}
+
 function formatResolutionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -1063,7 +1087,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       const argv1 = params.argv1 ?? process.argv[1];
       candidates.push(
         ...listAncestorPluginRuntimeModuleCandidates({
-          starts: [argv1 ? path.dirname(argv1) : undefined, params.cwd],
+          starts: [...listArgvRuntimeFallbackStartDirs(argv1), params.cwd],
           orderedKinds,
         }),
       );
