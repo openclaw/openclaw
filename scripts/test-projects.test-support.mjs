@@ -1777,6 +1777,7 @@ export function buildVitestRunPlans(
   }
   const toolingTargets = groupedTargets.get("tooling") ?? [];
   if (
+    !watchMode &&
     toolingTargets.some((targetArg) =>
       includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [
         TOOLING_ISOLATED_TEST_TARGET,

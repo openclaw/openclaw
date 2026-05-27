@@ -359,6 +359,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("keeps broad shell helper watch targets in one tooling shard", () => {
+    expect(buildVitestRunPlans(["--watch", "test/scripts"], process.cwd())).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/**/*.test.ts"],
+        watchMode: true,
+      },
+    ]);
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
