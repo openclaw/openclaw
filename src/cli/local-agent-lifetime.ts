@@ -264,17 +264,35 @@ async function flushOtelBeforeExit(deps: CliCompletionExitDeps): Promise<void> {
   } catch {}
 }
 
-function exitWithKillFallback(deps: CliCompletionExitDeps): void {
+function armForceKillFallback(deps: CliCompletionExitDeps): void {
   const setTimer = deps.setTimeout ?? globalThis.setTimeout;
   const kill = deps.kill ?? process.kill.bind(process);
-  const exit = deps.exit ?? process.exit.bind(process);
   const pid = deps.pid ?? process.pid;
-  setTimer(() => {
+  const timer = setTimer(() => {
     try {
       kill(pid, "SIGKILL");
     } catch {}
   }, deps.forceKillTimeoutMs ?? CLI_COMPLETION_FORCE_KILL_TIMEOUT_MS);
-  exit(process.exitCode ?? 0);
+  timer.unref?.();
+}
+
+function resolveCurrentExitCode(): number {
+  const code = process.exitCode;
+  if (typeof code === "number" && Number.isFinite(code)) {
+    return code;
+  }
+  if (typeof code === "string") {
+    const parsed = Number.parseInt(code, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+function exitWithCurrentCode(deps: CliCompletionExitDeps): void {
+  const exit = deps.exit ?? process.exit.bind(process);
+  exit(resolveCurrentExitCode());
 }
 
 export async function exitAfterLocalAgentCompletion(
@@ -292,6 +310,7 @@ export async function exitAfterLocalAgentCompletion(
     waitForStreamFlush(deps.stdout ?? process.stdout, drainDeps),
     waitForStreamFlush(deps.stderr ?? process.stderr, drainDeps),
   ]);
+  armForceKillFallback(deps);
   await flushOtelBeforeExit(deps);
-  exitWithKillFallback(deps);
+  exitWithCurrentCode(deps);
 }

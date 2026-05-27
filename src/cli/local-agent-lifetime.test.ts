@@ -231,7 +231,10 @@ describe("exitAfterLocalAgentCompletion", () => {
           resolveHook = resolve;
         }),
     );
-    const setTimeout = vi.fn((_cb: () => void, _timeoutMs: number) => ({ unref: vi.fn() }));
+    const forceKillUnref = vi.fn();
+    const setTimeout = vi.fn((_cb: () => void, _timeoutMs: number) => ({
+      unref: forceKillUnref,
+    }));
     const clearTimeout = vi.fn();
     const kill = vi.fn();
     const exit = vi.fn(() => {
@@ -252,21 +255,25 @@ describe("exitAfterLocalAgentCompletion", () => {
     });
 
     await vi.waitFor(() => expect(hook).toHaveBeenCalledOnce());
+    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 3);
+    expect(forceKillUnref).toHaveBeenCalledOnce();
+    const killCallback = setTimeout.mock.calls.find(([, timeoutMs]) => timeoutMs === 3)?.[0];
+    killCallback?.();
+    expect(kill).toHaveBeenCalledWith(12345, "SIGKILL");
     expect(exit).not.toHaveBeenCalled();
 
     resolveHook?.();
     await expect(result).rejects.toThrow("exit");
 
     expect(exit).toHaveBeenCalledWith(process.exitCode ?? 0);
-    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 3);
-    const killCallback = setTimeout.mock.calls.find(([, timeoutMs]) => timeoutMs === 3)?.[0];
-    killCallback?.();
-    expect(kill).toHaveBeenCalledWith(12345, "SIGKILL");
   });
 
   it("still exits when the optional otel pre-exit hook rejects", async () => {
     const hook = vi.fn(() => Promise.reject(new Error("flush failed")));
-    const setTimeout = vi.fn((_cb: () => void, _timeoutMs: number) => ({ unref: vi.fn() }));
+    const forceKillUnref = vi.fn();
+    const setTimeout = vi.fn((_cb: () => void, _timeoutMs: number) => ({
+      unref: forceKillUnref,
+    }));
     const exit = vi.fn(() => {
       throw new Error("exit");
     });
@@ -288,5 +295,6 @@ describe("exitAfterLocalAgentCompletion", () => {
     expect(hook).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledWith(process.exitCode ?? 0);
     expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 3);
+    expect(forceKillUnref).toHaveBeenCalledOnce();
   });
 });

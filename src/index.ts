@@ -131,7 +131,7 @@ if (isMain) {
       for (const line of formatCliFailureLines({
         title: "The CLI command failed.",
         error: err,
-        argv: process.argv,
+        argv: cliArgv,
       })) {
         console.error(line);
       }
