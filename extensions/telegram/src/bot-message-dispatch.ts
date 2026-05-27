@@ -1004,17 +1004,84 @@ export const dispatchTelegramMessage = async ({
   let finalAnswerDelivered = false;
   const pushStreamToolProgress = async (
     line?: string | ChannelProgressDraftLine,
-    options?: { toolName?: string; startImmediately?: boolean },
+    options?: { toolName?: string; startImmediately?: boolean; allowAfterFinal?: boolean },
   ) => {
+    const finalDeliveryClosed =
+      answerLane.finalized || finalAnswerDeliveryStarted || finalAnswerDelivered;
     if (
       !answerLane.stream ||
-      answerLane.finalized ||
-      finalAnswerDeliveryStarted ||
-      finalAnswerDelivered
+      (finalDeliveryClosed && (!options?.allowAfterFinal || !nativeToolProgressDraft))
     ) {
       return false;
     }
-    return await progressDraft.pushToolProgress(line, options);
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return false;
+    }
+    const rawText = typeof line === "string" ? line : line?.text;
+    const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
+    if (streamToolProgressSuppressed) {
+      return false;
+    }
+    if (streamMode !== "progress" && !streamToolProgressEnabled) {
+      return false;
+    }
+    const shouldUpdateProgressLines =
+      streamToolProgressEnabled && !streamToolProgressSuppressed && Boolean(normalized);
+    if (!shouldUpdateProgressLines && streamMode !== "progress") {
+      return false;
+    }
+    const progressLine =
+      typeof line === "object" && line !== undefined ? { ...line, text: normalized } : normalized;
+    const nextLines = shouldUpdateProgressLines
+      ? mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
+          maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+        })
+      : streamToolProgressLines;
+    if (shouldUpdateProgressLines && nextLines === streamToolProgressLines) {
+      return false;
+    }
+    if (nativeToolProgressDraft && shouldUpdateProgressLines) {
+      const streamText = formatChannelProgressDraftText({
+        entry: telegramCfg,
+        lines: nextLines,
+        seed: progressSeed,
+      });
+      if (streamText && (await nativeToolProgressDraft.update(streamText))) {
+        streamToolProgressLines = nextLines;
+        return true;
+      }
+    }
+    if (streamMode !== "progress") {
+      streamToolProgressLines = nextLines;
+      const streamText = formatChannelProgressDraftText({
+        entry: telegramCfg,
+        lines: streamToolProgressLines,
+        seed: progressSeed,
+        formatLine: formatProgressAsMarkdownCode,
+      });
+      await prepareAnswerLaneForToolProgress();
+      answerLane.lastPartialText = streamText;
+      answerLane.hasStreamedMessage = true;
+      answerLane.finalized = false;
+      answerLane.stream.update(streamText);
+      return true;
+    }
+    streamToolProgressLines = nextLines;
+    if (options?.startImmediately) {
+      await progressDraftGate.startNow();
+      if (progressDraftGate.hasStarted) {
+        await renderProgressDraft();
+        return true;
+      }
+      return progressDraftGate.hasStarted;
+    }
+    const alreadyStarted = progressDraftGate.hasStarted;
+    const progressActive = await progressDraftGate.noteWork();
+    if ((alreadyStarted || progressActive) && progressDraftGate.hasStarted) {
+      await renderProgressDraft();
+      return true;
+    }
+    return false;
   };
   const pushStreamReasoningProgress = async (payload: {
     text?: string;
@@ -2132,7 +2199,10 @@ export const dispatchTelegramMessage = async ({
                     if (!text) {
                       return;
                     }
-                    await pushStreamToolProgress(text, { startImmediately: true });
+                    await pushStreamToolProgress(text, {
+                      startImmediately: true,
+                      allowAfterFinal: isFastModeAutoProgressPayload(payload),
+                    });
                   },
                   onCommandOutput: async (payload) => {
                     if (payload.phase !== "end") {

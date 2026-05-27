@@ -1801,6 +1801,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(nativeDraft.stop).toHaveBeenCalled();
   });
 
+  it("keeps fast auto reset visible in native DM drafts after final text", async () => {
+    const nativeDraft = createNativeToolProgressDraft();
+    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onToolResult?.({
+          text: "💨Fast: auto-off(10s>=5s)",
+          channelData: { openclawProgressKind: "fast-mode-auto" },
+        });
+        await dispatcherOptions.deliver({ text: "Done answer." }, { kind: "final" });
+        await replyOptions?.onToolResult?.({
+          text: "💨Fast: auto-on",
+          channelData: { openclawProgressKind: "fast-mode-auto" },
+        });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["123"] },
+        },
+      },
+    });
+
+    expect(nativeDraft.update).toHaveBeenLastCalledWith(expect.stringContaining("💨Fast: auto-on"));
+    expect(nativeDraft.update).toHaveBeenLastCalledWith(
+      expect.stringContaining("💨Fast: auto-off(10s>=5s)"),
+    );
+  });
+
   it("keeps native DM drafts off by default", async () => {
     const nativeDraft = createNativeToolProgressDraft();
     createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
