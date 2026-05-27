@@ -174,8 +174,8 @@ function addCandidate(
   candidates.set(path.resolve(authPath), { agentDir, authPath });
 }
 
-function listExistingAgentDirsFromState(): string[] {
-  const root = path.join(resolveStateDir(), "agents");
+function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
+  const root = path.join(resolveStateDir(env), "agents");
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(root, { withFileTypes: true });
@@ -194,13 +194,21 @@ function listExistingAgentDirsFromState(): string[] {
     });
 }
 
-function listAuthProfileRepairCandidates(cfg: OpenClawConfig): AuthProfileRepairCandidate[] {
+function listAuthProfileRepairCandidates(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveDefaultAgentDir(cfg));
-  for (const agentId of listAgentIds(cfg)) {
-    addCandidate(candidates, resolveAgentDir(cfg, agentId));
+  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
+  const envAgentDir =
+    readNonEmptyString(env.OPENCLAW_AGENT_DIR) ?? readNonEmptyString(env.PI_CODING_AGENT_DIR);
+  if (envAgentDir) {
+    addCandidate(candidates, envAgentDir);
   }
-  for (const agentDir of listExistingAgentDirsFromState()) {
+  for (const agentId of listAgentIds(cfg)) {
+    addCandidate(candidates, resolveAgentDir(cfg, agentId, env));
+  }
+  for (const agentDir of listExistingAgentDirsFromState(env)) {
     addCandidate(candidates, agentDir);
   }
   return [...candidates.values()];
@@ -304,12 +312,14 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   now?: () => number;
+  env?: NodeJS.ProcessEnv;
 }): Promise<LegacyFlatAuthProfileRepairResult> {
   const now = params.now ?? Date.now;
-  const legacyStores = listAuthProfileRepairCandidates(params.cfg)
+  const env = params.env ?? process.env;
+  const legacyStores = listAuthProfileRepairCandidates(params.cfg, env)
     .map(resolveLegacyFlatStore)
     .filter((entry): entry is LegacyFlatAuthProfileStore => entry !== null);
-  const awsSdkMarkerStores = listAuthProfileRepairCandidates(params.cfg)
+  const awsSdkMarkerStores = listAuthProfileRepairCandidates(params.cfg, env)
     .map(resolveAwsSdkAuthProfileMarkerStore)
     .filter((entry): entry is AwsSdkAuthProfileMarkerStore => entry !== null);
 
@@ -446,9 +456,11 @@ export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   now?: () => number;
+  env?: NodeJS.ProcessEnv;
 }): Promise<LegacyFlatAuthProfileRepairResult> {
   const now = params.now ?? Date.now;
-  const repairs = listAuthProfileRepairCandidates(params.cfg)
+  const env = params.env ?? process.env;
+  const repairs = listAuthProfileRepairCandidates(params.cfg, env)
     .map(resolveCanonicalApiKeyAliasRepair)
     .filter((entry): entry is CanonicalApiKeyAliasRepair => entry !== null);
 

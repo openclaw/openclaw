@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
 import {
@@ -135,6 +136,86 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
     expect(JSON.parse(fs.readFileSync(`${authPath}.api-key-alias.123.bak`, "utf8"))).toEqual(
       canonical,
     );
+  });
+
+  it("repairs auth profiles from OPENCLAW_AGENT_DIR", async () => {
+    const state = await makeTestState();
+    const agentDir = state.path("external-agent");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    const canonical = {
+      version: 1,
+      profiles: {
+        "my-key": {
+          type: "api_key",
+          provider: "my-provider",
+          api_key: "sk-snake-case-key",
+        },
+      },
+    };
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(authPath, `${JSON.stringify(canonical, null, 2)}\n`, "utf8");
+
+    const result = await maybeRepairCanonicalApiKeyFieldAlias({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 123,
+      env: {
+        ...state.env,
+        OPENCLAW_AGENT_DIR: agentDir,
+      },
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.changes).toStrictEqual([
+      `Rewrote 1 "api_key" field(s) to "key" in ${authPath} (backup: ${authPath}.api-key-alias.123.bak).`,
+    ]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        "my-key": {
+          type: "api_key",
+          provider: "my-provider",
+          key: "sk-snake-case-key",
+        },
+      },
+    });
+  });
+
+  it("repairs auth profiles from PI_CODING_AGENT_DIR", async () => {
+    const state = await makeTestState();
+    const agentDir = state.path("legacy-external-agent");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    const canonical = {
+      version: 1,
+      profiles: {
+        "my-key": {
+          type: "api_key",
+          provider: "my-provider",
+          api_key: "sk-snake-case-key",
+        },
+      },
+    };
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(authPath, `${JSON.stringify(canonical, null, 2)}\n`, "utf8");
+
+    const result = await maybeRepairCanonicalApiKeyFieldAlias({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 123,
+      env: {
+        ...state.env,
+        OPENCLAW_AGENT_DIR: undefined,
+        PI_CODING_AGENT_DIR: agentDir,
+      },
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8")).profiles["my-key"]).toEqual({
+      type: "api_key",
+      provider: "my-provider",
+      key: "sk-snake-case-key",
+    });
   });
 
   it('does not touch profiles that already have the canonical "key" field', async () => {
