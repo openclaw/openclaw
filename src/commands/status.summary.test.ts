@@ -289,16 +289,6 @@ describe("getStatusSummary", () => {
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
 
-  it("skips task registry maintenance when task summary is explicitly disabled", async () => {
-    const summary = await getStatusSummary({ includeTaskSummary: false });
-
-    expect(summary.tasks.total).toBe(0);
-    expect(summary.taskAudit.total).toBe(0);
-    expect(statusSummaryMocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
-    expect(statusSummaryMocks.getInspectableTaskRegistrySummary).not.toHaveBeenCalled();
-    expect(statusSummaryMocks.getInspectableTaskAuditFindings).not.toHaveBeenCalled();
-  });
-
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 

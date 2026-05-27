@@ -18,8 +18,6 @@ import {
   summarizeActionableTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
-import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
@@ -165,16 +163,11 @@ export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
     includeChannelSummary?: boolean;
-    includeTaskSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
   } = {},
 ): Promise<StatusSummary> {
-  const {
-    includeSensitive = true,
-    includeChannelSummary = true,
-    includeTaskSummary = true,
-  } = options;
+  const { includeSensitive = true, includeChannelSummary = true } = options;
   const {
     classifySessionKey,
     resolveConfiguredStatusModelRef,
@@ -218,27 +211,16 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  taskMaintenanceModule.configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
   const now = Date.now();
-  const { tasks, taskAudit, taskAuditRetainedLost } = includeTaskSummary
-    ? await (async () => {
-        const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
-        taskMaintenanceModule.configureTaskRegistryMaintenance({
-          cronStorePath: resolveCronStorePath(cfg.cron?.store),
-        });
-        const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-        const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
-        const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
-        const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, {
-          now,
-        });
-        const tasks = discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count);
-        return { tasks, taskAudit, taskAuditRetainedLost };
-      })()
-    : {
-        tasks: createEmptyTaskRegistrySummary(),
-        taskAudit: createEmptyTaskAuditSummary(),
-        taskAuditRetainedLost: { count: 0 },
-      };
+  const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
+  const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
+  const tasks = discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count);
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,

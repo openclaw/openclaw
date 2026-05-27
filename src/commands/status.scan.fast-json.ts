@@ -24,7 +24,6 @@ type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
   includeChannelSummary?: boolean;
-  includeTaskSummary?: boolean;
   skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
@@ -107,7 +106,6 @@ export async function scanStatusJsonWithPolicy(
     runtime,
     summary: {
       includeChannelSummary: policy.includeChannelSummary,
-      includeTaskSummary: policy.includeTaskSummary,
     },
     resolveMemory: policy.resolveMemory,
     channelIssues: [],
@@ -127,7 +125,6 @@ export async function scanStatusJsonFast(
     commandName: "status --json",
     allowMissingConfigFastPath: true,
     includeChannelSummary: false,
-    includeTaskSummary: opts.all === true,
     skipUpdateCheck: opts.all !== true,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,

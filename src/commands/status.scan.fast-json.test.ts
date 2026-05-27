@@ -167,10 +167,8 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.getStatusSummary).toHaveBeenCalledOnce();
     const summaryOptions = firstCallArg(mocks.getStatusSummary, "status summary options") as {
       includeChannelSummary?: unknown;
-      includeTaskSummary?: unknown;
     };
     expect(summaryOptions.includeChannelSummary).toBe(false);
-    expect(summaryOptions.includeTaskSummary).toBe(false);
   });
 
   it("skips memory inspection for the lean status --json fast path", async () => {
