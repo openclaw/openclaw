@@ -182,6 +182,36 @@ describe("live model switch", () => {
     });
   });
 
+  it("uses runtime modelProvider when no override is set, preventing false codex→openai switch", async () => {
+    // Session started on openai-codex but config default is openai.
+    // Without the fix, resolveLiveSessionModelSelection would resolve to
+    // openai (config default), triggering a false live switch that kills
+    // the codex runtime mid-execution.
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+      }),
+    ).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
   it("splits legacy combined session overrides when providerOverride is missing", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
