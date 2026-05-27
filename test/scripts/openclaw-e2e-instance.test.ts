@@ -107,7 +107,9 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           "fi",
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -136,6 +138,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+            OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
           }),
         },
       );
@@ -171,7 +174,9 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           "fi",
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -200,6 +205,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+            OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
           }),
         },
       );
@@ -234,7 +240,9 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           "fi",
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -263,6 +271,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+            OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
           }),
         },
       );
@@ -416,9 +425,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "fixture-command" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_COMMAND_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -452,6 +464,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_COMMAND_TIMEOUT: "17s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
+            OPENCLAW_TEST_COMMAND_BIN: path.join(tempDir, "fixture-command"),
           }),
         },
       );
@@ -478,9 +491,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           `while [ "$#" -gt 0 ] && [ "$1" != ${shellQuote(path.join(tempDir, "openclaw"))} ]; do shift; done`,
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_OPENCLAW_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -515,6 +531,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
+            OPENCLAW_TEST_OPENCLAW_BIN: path.join(tempDir, "openclaw"),
           }),
         },
       );
@@ -540,9 +557,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "script" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_SCRIPT_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -576,6 +596,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_COMMAND_TIMEOUT: "31s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_SCRIPT_ARGS: scriptArgsPath,
+            OPENCLAW_TEST_SCRIPT_BIN: path.join(tempDir, "script"),
           }),
         },
       );
