@@ -34,6 +34,16 @@ describe("classifyCompactionReason", () => {
     );
   });
 
+  it('classifies "no real conversation messages" as a skip-like reason (#87016)', () => {
+    // Empty transcript / stale token counter desync: preflight compaction
+    // would otherwise throw a generic failure for every subsequent inbound
+    // message, leaving the session permanently wedged. Treat as a skip so
+    // the runner continues with the fresh session.
+    expect(classifyCompactionReason("no real conversation messages")).toBe(
+      "no_compactable_entries",
+    );
+  });
+
   it('classifies "already under target" as below threshold', () => {
     expect(classifyCompactionReason("already under target")).toBe("below_threshold");
   });
