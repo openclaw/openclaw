@@ -585,6 +585,27 @@ jobs:
             pids+=("$!")
           }
 
+          run_check() {
+            local name="$1"
+            shift
+            local log="${RUNNER_TEMP}/${name}.log"
+            echo "starting ${name}: $*"
+            if "$@" >"$log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+
+            echo "::group::${name} log"
+            cat "$log"
+            echo "::endgroup::"
+            results["$name"]="$result"
+          }
+
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            run_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
+          fi
+
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -597,10 +618,6 @@ jobs:
               NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
-          fi
-
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do
