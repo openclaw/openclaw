@@ -56,6 +56,8 @@ struct SettingsProTab: View {
     @State private var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State private var notificationStatusText = "Checking"
     @State private var notificationActionText = "Request Access"
+    @State private var diagnosticsLastRunText = "Not run"
+    @State private var diagnosticsIssueCount: Int?
 
     var body: some View {
         NavigationStack {
@@ -272,7 +274,7 @@ extension SettingsProTab {
                 color: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0),
                 isBusy: self.isRefreshingGateway)
             {
-                Task { await self.refreshGateway() }
+                Task { await self.runDiagnostics() }
             }
         }
     }
@@ -474,7 +476,7 @@ extension SettingsProTab {
                     color: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0),
                     isBusy: self.isRefreshingGateway)
                 {
-                    Task { await self.refreshGateway() }
+                    Task { await self.runDiagnostics() }
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -999,6 +1001,13 @@ extension SettingsProTab {
         ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
             VStack(spacing: 0) {
                 self.diagnosticCheckRow(
+                    icon: "stethoscope",
+                    title: "Last Run",
+                    detail: self.diagnosticsLastRunText,
+                    value: self.diagnosticsRunValue,
+                    color: self.diagnosticsRunColor)
+                Divider().padding(.leading, 60)
+                self.diagnosticCheckRow(
                     icon: "antenna.radiowaves.left.and.right",
                     title: "Gateway Link",
                     detail: self.appModel.gatewayDisplayStatusText,
@@ -1104,6 +1113,27 @@ extension SettingsProTab {
         self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
         self.gatewayController.restartDiscovery()
         await self.appModel.refreshGatewayOverviewIfConnected()
+    }
+
+    @MainActor
+    private func runDiagnostics() async {
+        guard !self.isRefreshingGateway else { return }
+        self.isRefreshingGateway = true
+        defer { self.isRefreshingGateway = false }
+
+        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+        self.gatewayController.restartDiscovery()
+        await self.appModel.refreshGatewayOverviewIfConnected()
+        let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
+        self.applyNotificationStatus(notificationSettings.authorizationStatus)
+
+        let issueCount = SettingsDiagnostics.issueCount(
+            gatewayConnected: self.gatewayConnected,
+            discoveredGatewayCount: self.gatewayController.gateways.count,
+            talkConfigLoaded: self.appModel.talkMode.gatewayTalkConfigLoaded,
+            notificationStatusText: self.notificationStatusText)
+        self.diagnosticsIssueCount = issueCount
+        self.diagnosticsLastRunText = SettingsDiagnostics.timestamp(Date())
     }
 
     private func syncSettingsState() {
@@ -1557,6 +1587,16 @@ extension SettingsProTab {
         if self.gatewayConnected { return "ready" }
         if self.gatewayController.gateways.isEmpty { return "check" }
         return "partial"
+    }
+
+    private var diagnosticsRunValue: String {
+        guard let diagnosticsIssueCount else { return "pending" }
+        return diagnosticsIssueCount == 0 ? "pass" : "\(diagnosticsIssueCount)"
+    }
+
+    private var diagnosticsRunColor: Color {
+        guard let diagnosticsIssueCount else { return .secondary }
+        return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
     }
 
     private var privacyDetail: String {

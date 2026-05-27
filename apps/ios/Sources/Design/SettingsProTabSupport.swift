@@ -16,6 +16,26 @@ enum SettingsLayout {
     static let rowHeight: CGFloat = 58
 }
 
+enum SettingsDiagnostics {
+    static func issueCount(
+        gatewayConnected: Bool,
+        discoveredGatewayCount: Int,
+        talkConfigLoaded: Bool,
+        notificationStatusText: String) -> Int
+    {
+        var issues = 0
+        if !gatewayConnected { issues += 1 }
+        if discoveredGatewayCount == 0 { issues += 1 }
+        if gatewayConnected, !talkConfigLoaded { issues += 1 }
+        if notificationStatusText != "Allowed" { issues += 1 }
+        return issues
+    }
+
+    static func timestamp(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+}
+
 extension SettingsProTab {
     static func hasTailnetIPv4() -> Bool {
         var addrList: UnsafeMutablePointer<ifaddrs>?
