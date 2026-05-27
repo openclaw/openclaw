@@ -53,6 +53,12 @@ openclaw_e2e_maybe_timeout() {
   fi
   if [ -z "$timeout_bin" ]; then
     if command -v node >/dev/null 2>&1; then
+      local command_bin
+      command_bin="$(command -v "$1")" || {
+        echo "$1 command not found for OpenClaw E2E command timeout $timeout_value" >&2
+        return 127
+      }
+      set -- "$command_bin" "${@:2}"
       echo "timeout command not found; using Node watchdog for OpenClaw E2E command timeout $timeout_value" >&2
       if [[ "$1" != */* ]]; then
         local resolved_command
