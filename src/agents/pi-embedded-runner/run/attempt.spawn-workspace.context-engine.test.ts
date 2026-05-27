@@ -344,7 +344,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ]);
   });
 
-  it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {
+  it("sends transcriptPrompt visibly and keeps runtime context out of transcript messages", async () => {
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -385,16 +385,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         role: "custom",
         customType: "openclaw.runtime-context",
         display: false,
-        content:
-          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
       },
     );
-    expect(JSON.stringify(seen.messages)).not.toContain(
-      "OpenClaw runtime context for the immediately preceding user message.",
-    );
-    expect(JSON.stringify(seen.messages)).not.toContain("not user-authored");
     expect(seen.systemPrompt).not.toContain("secret runtime context");
-    expect(seen.systemPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+    expect(JSON.stringify(seen.messages)).not.toContain(
+      "visible ask",
+    );
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -761,7 +757,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
   });
 
-  it("keeps before_prompt_build prependContext out of system prompt on transcriptPrompt runs", async () => {
+  it("keeps before_prompt_build prependContext out of post-user transcript messages", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "dynamic hook context" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
@@ -802,7 +798,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         role: "custom",
         customType: "openclaw.runtime-context",
         display: false,
-        content: "dynamic hook context",
+        content: [
+          "OpenClaw runtime context for the immediately preceding user message.",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "dynamic hook context",
+        ].join("\n"),
       },
     );
   });
@@ -1062,7 +1063,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps inter-session provenance hidden while submitting the visible prompt", async () => {
-    const seen: { prompt?: string; messages?: unknown[] } = {};
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1086,6 +1087,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
         seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -1097,9 +1099,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.finalPromptText).toBe("visible ask");
     const runtimeContext = findRecord(
       requireRecords(seen.messages, "seen messages"),
-      (message) => message.customType === "openclaw.runtime-context",
+        (message) => message.customType === "openclaw.runtime-context",
       "runtime context message",
     );
+    expect(seen.systemPrompt).not.toContain("[Inter-session message]");
     expect(runtimeContext.content).toContain("[Inter-session message]");
     expect(runtimeContext.content).toContain("isUser=false");
     expect(runtimeContext.content).not.toContain("visible ask");

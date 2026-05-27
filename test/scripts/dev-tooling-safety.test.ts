@@ -69,6 +69,80 @@ describe("script-specific dev tooling hardening", () => {
     expect(discordSmokeTesting.redactDiscordApiPath(path)).toContain("/webhooks/123/");
   });
 
+  it("computes the remaining Discord smoke timeout budget", () => {
+    expect(discordSmokeTesting.remainingTimeoutMs(1_500, 1_000)).toBe(500);
+    expect(() => discordSmokeTesting.remainingTimeoutMs(1_000, 1_000)).toThrow(
+      /exceeded total timeout/u,
+    );
+  });
+
+  it("aborts stalled Discord smoke fetches at the request timeout", async () => {
+    let signal: AbortSignal | undefined;
+    const request = discordSmokeTesting.requestDiscordJson({
+      method: "GET",
+      path: "/users/@me",
+      headers: {},
+      retries: 0,
+      timeoutMs: 5,
+      errorPrefix: "Discord API",
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise(() => {});
+      }) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(/Discord API GET \/users\/@me exceeded timeout/u);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("times out stalled Discord smoke response body reads", async () => {
+    const response = {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: () => new Promise(() => {}),
+    } as Response;
+    const request = discordSmokeTesting.requestDiscordJson({
+      method: "GET",
+      path: "/channels/123/messages",
+      headers: {},
+      retries: 0,
+      timeoutMs: 5,
+      errorPrefix: "Discord API",
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(
+      /Discord API GET \/channels\/123\/messages exceeded timeout/u,
+    );
+  });
+
+  it("does not launch another Discord smoke retry after the timeout budget expires", async () => {
+    let calls = 0;
+    const response = {
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+      json: async () => ({ retry_after: 1 }),
+    } as Response;
+
+    await expect(
+      discordSmokeTesting.requestDiscordJson({
+        method: "GET",
+        path: "/channels/123/messages",
+        headers: {},
+        retries: 1,
+        timeoutMs: 5,
+        errorPrefix: "Discord API",
+        fetchImpl: (() => {
+          calls += 1;
+          return Promise.resolve(response);
+        }) as typeof fetch,
+      }),
+    ).rejects.toThrow(/exceeded total timeout/u);
+    expect(calls).toBe(1);
+  });
+
   it("rejects absolute-form URLs in the Anthropic capture proxy", () => {
     expect(
       promptProbeTesting.resolveAnthropicUpstreamUrl(

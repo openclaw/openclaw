@@ -522,6 +522,10 @@ export function renderOverview(props: OverviewProps) {
       : primaryQuota
         ? [primaryQuota]
         : [];
+  const usageCardProviderName = visibleQuotaStats[0]?.displayName ?? null;
+  const usageCardTitle = usageCardProviderName
+    ? `${usageCardProviderName} ${t("tabs.usage")}`
+    : t("overview.operator.providerUsageTitle");
   const showLocalCostStat = totalCost !== "$0.00" || visibleQuotaStats.length === 0;
   const logSummary = summarizeLogLines(props.overviewLogLines);
   const hasOperationalData =
@@ -954,7 +958,7 @@ export function renderOverview(props: OverviewProps) {
             </div>
 
             <div class="card ov-usage-card">
-              <div class="card-title">${t("overview.operator.providerUsageTitle")}</div>
+              <div class="card-title">${usageCardTitle}</div>
               <div class="card-sub">${t("overview.operator.providerUsageSubtitle")}</div>
               <div class="ov-usage-metrics">
                 ${visibleQuotaStats.length > 0

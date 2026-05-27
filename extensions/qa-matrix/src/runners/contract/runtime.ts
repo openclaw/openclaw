@@ -47,6 +47,7 @@ type MatrixQaGatewayChild = {
   ) => Promise<void>;
   restart(): Promise<void>;
   runtimeEnv?: NodeJS.ProcessEnv;
+  workspaceDir: string;
 };
 
 const DEFAULT_MATRIX_QA_RUN_TIMEOUT_MS = 30 * 60_000;
@@ -200,8 +201,17 @@ function resolveMatrixQaCanaryTimeoutMs() {
   );
 }
 
-function remainingMatrixQaRunMs(deadline: { deadlineMs: number }) {
-  return Math.max(1, deadline.deadlineMs - Date.now());
+function remainingMatrixQaRunMs(
+  deadline: { deadlineMs: number; timeoutMs: number },
+  label: string,
+) {
+  const remainingMs = Math.floor(deadline.deadlineMs - Date.now());
+  if (!Number.isFinite(deadline.deadlineMs) || remainingMs <= 0) {
+    throw new Error(
+      `${label} not started because Matrix QA run timed out after ${formatMatrixQaDurationMs(deadline.timeoutMs)}`,
+    );
+  }
+  return remainingMs;
 }
 
 async function withMatrixQaTimeout<T>(
@@ -231,7 +241,7 @@ async function withMatrixQaRunDeadline<T>(
   label: string,
   task: () => Promise<T>,
 ) {
-  return await withMatrixQaTimeout(label, remainingMatrixQaRunMs(deadline), task);
+  return await withMatrixQaTimeout(label, remainingMatrixQaRunMs(deadline, label), task);
 }
 
 async function cleanupMatrixQaResource(params: {
@@ -434,13 +444,16 @@ async function waitForMatrixChannelReady(
   const pollMs = opts?.pollMs ?? 500;
   const timeoutMs = opts?.timeoutMs ?? 60_000;
   const startedAt = Date.now();
+  const deadlineMs = startedAt + timeoutMs;
   let lastAccounts: unknown;
-  while (Date.now() - startedAt < timeoutMs) {
+  while (Date.now() < deadlineMs) {
+    const remainingMs = Math.max(1, deadlineMs - Date.now());
+    const statusTimeoutMs = Math.min(5_000, remainingMs);
     try {
       const payload = (await gateway.call(
         "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
+        { probe: false, timeoutMs: Math.min(2_000, statusTimeoutMs) },
+        { timeoutMs: statusTimeoutMs },
       )) as {
         channelAccounts?: Record<
           string,
@@ -462,7 +475,7 @@ async function waitForMatrixChannelReady(
     } catch {
       // retry
     }
-    await sleep(pollMs);
+    await sleep(Math.min(pollMs, Math.max(1, deadlineMs - Date.now())));
   }
   throw new Error(
     `matrix account "${accountId}" did not become ready; last matrix accounts: ${JSON.stringify(
@@ -801,6 +814,7 @@ export async function runMatrixQaLive(params: {
                 observerUserId: provisioning.observer.userId,
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
+                gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
                 gatewayCall: async (method, params, opts) =>
                   await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
                 outputDir,
@@ -1135,10 +1149,12 @@ export const testing = {
   findMatrixQaScenarios,
   isMatrixAccountReady,
   patchMatrixQaGatewayConfig,
+  remainingMatrixQaRunMs,
   resolveMatrixQaCanaryTimeoutMs,
   resolveMatrixQaModels,
   shouldWriteMatrixQaProgress,
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
+  withMatrixQaRunDeadline,
 };
 export { testing as __testing };

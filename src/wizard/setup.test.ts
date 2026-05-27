@@ -550,7 +550,7 @@ describe("runSetupWizard", () => {
     );
     expectRecordFields(
       replaceParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "config replacement write options",
     );
     expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 0, "workspace setup")).toBe(workspaceDir);
@@ -560,6 +560,74 @@ describe("runSetupWizard", () => {
       { skipBootstrap: true },
       "workspace setup options",
     );
+  });
+
+  it("allows size-drop writes for pending plugin install record migration", async () => {
+    replaceConfigFile.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        plugins: {
+          installs: {
+            demo: { source: "npm", spec: "@openclaw/demo-plugin" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const workspaceDir = await makeCaseDir("plugin-install-migration-");
+    const select = vi.fn(async ({ options }: WizardSelectParams<unknown>) => {
+      const values = options.map((option) => option.value);
+      if (values.includes("keep")) {
+        return "keep";
+      }
+      if (values.includes("quickstart")) {
+        return "quickstart";
+      }
+      if (values.includes("__skip__")) {
+        return "__skip__";
+      }
+      return values[0];
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipBootstrap: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    const replaceParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 0, 0, "config replacement"),
+      "config replacement params",
+    );
+    const writeOptions = expectRecordFields(
+      replaceParams.writeOptions,
+      { allowConfigSizeDrop: true },
+      "config replacement write options",
+    );
+    expect(writeOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
   });
 
   it("fails fast if the auth choice prompt returns nothing", async () => {

@@ -282,7 +282,7 @@ describe("overview view rendering", () => {
     const quota = container.querySelector('[data-kind="quota"]');
     expect(compactText(quota)).toBe("Week quota 28% left Codex · Week · Codex · 3h 82% left");
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
-      "Provider Usage Compact view of model usage, costs, and quota signals.",
+      "Codex Usage Compact view of model usage, costs, and quota signals.",
     );
     const metricLabels = Array.from(
       container.querySelectorAll(".ov-usage-metrics .stat-label"),
@@ -359,6 +359,9 @@ describe("overview view rendering", () => {
 
     expect(compactText(container.querySelector('[data-kind="quota"]'))).toBe(
       "Credits $12.34 left OpenRouter · Credits · Z.ai · Tokens (6h) 60% left",
+    );
+    expect(compactText(container.querySelector(".ov-usage-card .card-title"))).toBe(
+      "OpenRouter Usage",
     );
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain("Credits $12.34 left");
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
