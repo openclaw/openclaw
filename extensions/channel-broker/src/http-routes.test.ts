@@ -713,6 +713,36 @@ describe("channel-broker HTTP routes", () => {
     );
   });
 
+  it("rejects malformed inline broker attachment bodies before runtime dispatch", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "see image",
+        attachments: [
+          {
+            id: "image-1",
+            mediaType: "image",
+            mimeType: "image/png",
+            contentBase64: 123,
+          },
+        ],
+      },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "invalid_event" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("routes inbound tool progress deliveries as broker preview updates", async () => {
     const body = inboundBody();
     const config = brokerConfig("broker-secret", {
@@ -2136,6 +2166,27 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it("keeps provider-header requests on the pre-auth body limit until configured", async () => {
+    const body = inboundBody("user-1", { message: { id: "101", text: "x".repeat(70 * 1024) } });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: {},
+      req: createRequest({
+        body,
+        providerIdHeader: "default",
+        signature: sign(body, "broker-secret"),
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toBe("Payload too large");
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
   it("limits concurrent pre-auth broker body reads per source", async () => {
     const stalled = Array.from({ length: 9 }, () => createStalledRequest());
     const responses = stalled.map(() => createResponse());
@@ -2245,6 +2296,53 @@ describe("channel-broker HTTP routes", () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ ok: true, status: "ignored", reason: "bot_sender" });
     expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not treat broker bot handles as explicit wildcard allowances", async () => {
+    const body = inboundBody("integration-bot", {
+      sender: { id: "integration-bot", handle: "trusted-bot", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: ["*", "trusted-bot"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true, status: "ignored", reason: "bot_sender" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("dispatches bot-originated broker webhooks matched by access groups", async () => {
+    const body = inboundBody("integration-bot", {
+      sender: { id: "integration-bot", handle: "acme-bot", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const config = {
+      ...brokerConfig("broker-secret", { allowFrom: ["*", "accessGroup:bots"] }),
+      accessGroups: {
+        bots: {
+          type: "message.senders" as const,
+          members: { "channel-broker": ["telegram:integration-bot"] },
+        },
+      },
+    };
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(receiveInboundEvent).toHaveBeenCalledOnce();
   });
 
   it("does not hide unallowlisted bot-originated broker webhooks", async () => {

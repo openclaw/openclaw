@@ -121,6 +121,27 @@ function isSenderAllowed(params: {
   return [...normalizedAllowed].some((entry) => candidates.has(entry));
 }
 
+function isSenderMatchedByAllowFromEntries(params: {
+  account: ResolvedChannelBrokerAccount;
+  event: BrokerInboundEventV1;
+  entries: string[];
+}): boolean {
+  const entries = params.entries.map((value) => String(value).trim()).filter(Boolean);
+  if (entries.length === 0) {
+    return false;
+  }
+  const normalizedEntries = new Set([
+    ...entries,
+    ...entries.map((entry) => normalizePlatformQualifiedAllowFrom(entry, params.account)),
+  ]);
+  const candidates = new Set([
+    params.event.sender.id,
+    `${params.event.platform}:${params.event.sender.id}`,
+    params.event.message.nativeIds?.from ?? "",
+  ]);
+  return [...normalizedEntries].some((entry) => candidates.has(entry));
+}
+
 function isSelfOriginatedEvent(params: {
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
@@ -131,26 +152,56 @@ function isSelfOriginatedEvent(params: {
 }
 
 function hasExplicitSenderAllowance(params: {
+  cfg: CoreConfig;
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
 }): boolean {
   const allowed = params.account.allowFrom.map((value) => String(value).trim()).filter(Boolean);
-  const normalizedAllowed = new Set([
-    ...allowed.filter((entry) => entry !== "*"),
-    ...allowed
-      .filter((entry) => entry !== "*")
-      .map((entry) => normalizePlatformQualifiedAllowFrom(entry, params.account)),
-  ]);
-  const candidates = new Set([
-    params.event.sender.id,
-    params.event.sender.handle ?? "",
-    `${params.event.platform}:${params.event.sender.id}`,
-    params.event.message.nativeIds?.from ?? "",
-  ]);
-  return [...normalizedAllowed].some((entry) => candidates.has(entry));
+  const directAllowed = allowed.filter(
+    (entry) => entry !== "*" && parseAccessGroupAllowFromEntry(entry) === null,
+  );
+  if (
+    isSenderMatchedByAllowFromEntries({
+      account: params.account,
+      event: params.event,
+      entries: directAllowed,
+    })
+  ) {
+    return true;
+  }
+
+  const accessGroups = params.cfg.accessGroups;
+  if (!accessGroups) {
+    return false;
+  }
+  for (const entry of allowed) {
+    const groupName = parseAccessGroupAllowFromEntry(entry);
+    if (!groupName) {
+      continue;
+    }
+    const group = accessGroups[groupName];
+    if (group?.type !== "message.senders") {
+      continue;
+    }
+    const groupEntries = [
+      ...(group.members["*"] ?? []),
+      ...(group.members["channel-broker"] ?? []),
+    ];
+    if (
+      isSenderMatchedByAllowFromEntries({
+        account: params.account,
+        event: params.event,
+        entries: groupEntries,
+      })
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isWildcardOnlyBotSender(params: {
+  cfg: CoreConfig;
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
 }): boolean {
@@ -282,21 +333,24 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     if (providerIdHint && !isListedChannelBrokerProviderId(params.cfg, providerIdHint)) {
       return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
     }
+    let account = providerIdHint
+      ? resolveChannelBrokerAccount({ cfg: params.cfg, accountId: providerIdHint })
+      : undefined;
+    const trustedProviderHint = Boolean(
+      account?.enabled && account.configured && account.signingSecret,
+    );
 
     const body = await readWebhookBodyOrReject({
       req: params.req,
       res: params.res,
       profile: "pre-auth",
-      maxBytes: providerIdHint ? TRUSTED_PROVIDER_BODY_MAX_BYTES : undefined,
+      maxBytes: trustedProviderHint ? TRUSTED_PROVIDER_BODY_MAX_BYTES : undefined,
       invalidBodyMessage: "invalid payload",
     });
     if (!body.ok) {
       return true;
     }
 
-    let account = providerIdHint
-      ? resolveChannelBrokerAccount({ cfg: params.cfg, accountId: providerIdHint })
-      : undefined;
     if (account && (!account.enabled || !account.configured)) {
       return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
     }
@@ -381,7 +435,7 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     if (isSelfOriginatedEvent({ account, event })) {
       return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "self_sender" });
     }
-    if (isWildcardOnlyBotSender({ account, event })) {
+    if (isWildcardOnlyBotSender({ cfg: params.cfg, account, event })) {
       return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "bot_sender" });
     }
     if (!isSenderAllowed({ account, event })) {

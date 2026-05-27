@@ -327,6 +327,20 @@ describe("channel-broker SDK", () => {
         message: { id: "msg-1", text: 123 },
       } as never),
     ).toThrow("broker message text must be a string");
+    expect(() =>
+      normalizeBrokerInboundEvent({
+        version: BROKER_PROTOCOL_VERSION,
+        eventId: "evt-1",
+        providerId: "acme",
+        platform: "telegram",
+        conversation: { id: "chat-1", type: "channel" },
+        sender: { id: "user-1" },
+        message: {
+          id: "msg-1",
+          attachments: [{ contentBase64: 123 }],
+        },
+      } as never),
+    ).toThrow("broker attachment contentBase64 must be a string");
   });
 
   it("preserves intentional inbound message whitespace", () => {

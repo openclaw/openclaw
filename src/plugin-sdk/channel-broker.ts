@@ -348,8 +348,17 @@ function requireBrokerString(value: string | undefined, field: string): string {
   return trimmed;
 }
 
-function normalizeOptionalBrokerString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+function normalizeOptionalBrokerString(
+  value: string | undefined,
+  field = "broker string field",
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${field} must be a string`);
+  }
+  const trimmed = value.trim();
   return trimmed || undefined;
 }
 
@@ -372,20 +381,27 @@ function normalizeBrokerAttachments(
   if (!attachments?.length) {
     return undefined;
   }
-  return attachments.map((attachment) => ({
-    ...(normalizeOptionalBrokerString(attachment.id) ? { id: attachment.id?.trim() } : {}),
-    ...(normalizeOptionalBrokerString(attachment.mediaType)
-      ? { mediaType: attachment.mediaType?.trim() }
-      : {}),
-    ...(normalizeOptionalBrokerString(attachment.mimeType)
-      ? { mimeType: attachment.mimeType?.trim() }
-      : {}),
-    ...(normalizeOptionalBrokerString(attachment.name) ? { name: attachment.name?.trim() } : {}),
-    ...(normalizeOptionalBrokerString(attachment.url) ? { url: attachment.url?.trim() } : {}),
-    ...(attachment.contentBase64 !== undefined ? { contentBase64: attachment.contentBase64 } : {}),
-    ...(attachment.sizeBytes !== undefined ? { sizeBytes: attachment.sizeBytes } : {}),
-    ...(attachment.raw !== undefined ? { raw: attachment.raw } : {}),
-  }));
+  return attachments.map((attachment) => {
+    const id = normalizeOptionalBrokerString(attachment.id);
+    const mediaType = normalizeOptionalBrokerString(attachment.mediaType);
+    const mimeType = normalizeOptionalBrokerString(attachment.mimeType);
+    const name = normalizeOptionalBrokerString(attachment.name);
+    const url = normalizeOptionalBrokerString(attachment.url);
+    const contentBase64 = normalizeOptionalBrokerString(
+      attachment.contentBase64,
+      "broker attachment contentBase64",
+    );
+    return {
+      ...(id ? { id } : {}),
+      ...(mediaType ? { mediaType } : {}),
+      ...(mimeType ? { mimeType } : {}),
+      ...(name ? { name } : {}),
+      ...(url ? { url } : {}),
+      ...(contentBase64 ? { contentBase64 } : {}),
+      ...(attachment.sizeBytes !== undefined ? { sizeBytes: attachment.sizeBytes } : {}),
+      ...(attachment.raw !== undefined ? { raw: attachment.raw } : {}),
+    };
+  });
 }
 
 function normalizeNativeIds(
