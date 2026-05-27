@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export type ExistingProviderConfig = ProviderConfig & {
@@ -179,25 +178,6 @@ function resolveProviderApiSurface(
   return resolveProviderApi(entry) ?? resolveModelApiSurface(entry);
 }
 
-function shouldPreserveExistingApiKey(params: {
-  providerKey: string;
-  existing: ExistingProviderConfig;
-  nextEntry: ProviderConfig;
-  secretRefManagedProviders: ReadonlySet<string>;
-}): boolean {
-  const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
-  const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
-  if (nextApiKey && isNonSecretApiKeyMarker(nextApiKey)) {
-    return false;
-  }
-  return (
-    !secretRefManagedProviders.has(providerKey) &&
-    typeof existing.apiKey === "string" &&
-    existing.apiKey.length > 0 &&
-    !isNonSecretApiKeyMarker(existing.apiKey, { includeEnvVarName: false })
-  );
-}
-
 function shouldPreserveExistingBaseUrl(params: {
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
@@ -217,7 +197,7 @@ export function mergeWithExistingProviderSecrets(params: {
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
+  const { nextProviders, existingProviders } = params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -229,16 +209,6 @@ export function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (
-      shouldPreserveExistingApiKey({
-        providerKey: key,
-        existing,
-        nextEntry: newEntry,
-        secretRefManagedProviders,
-      })
-    ) {
-      preserved.apiKey = existing.apiKey;
-    }
     if (
       shouldPreserveExistingBaseUrl({
         existing,

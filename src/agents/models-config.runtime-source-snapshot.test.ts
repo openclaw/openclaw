@@ -418,4 +418,31 @@ describe("models-config runtime source snapshot", () => {
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expectOpenAiHeaderMarkers(providers);
   });
+
+  it("strips plaintext api keys from planned models.json output", async () => {
+    const providers = await planGeneratedProviders({
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "sk-inline-runtime-value",
+              api: "openai-completions" as const,
+              models: [],
+            },
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              apiKey: NON_ENV_SECRETREF_MARKER,
+              api: "openai-completions" as const,
+              models: [],
+            },
+          },
+        },
+      },
+      sourceConfigForSecrets: {},
+    });
+
+    expect(providers.openai?.apiKey).toBeUndefined();
+    expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+  });
 });
