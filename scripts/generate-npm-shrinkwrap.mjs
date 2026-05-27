@@ -305,9 +305,58 @@ function mergeOverrideEntry(merged, name, spec) {
     }
     return;
   }
+  if (
+    typeof current === "string" &&
+    isPlainObject(spec) &&
+    typeof spec["."] === "string" &&
+    exactOverrideVersionsMatch(current, spec["."])
+  ) {
+    merged[name] = { ".": preferredExactOverrideRootSpec(current, spec["."]) };
+    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
+      if (nestedName === ".") {
+        continue;
+      }
+      mergeOverrideEntry(merged[name], nestedName, nestedSpec);
+    }
+    return;
+  }
+  if (
+    isPlainObject(current) &&
+    typeof spec === "string" &&
+    typeof current["."] === "string" &&
+    exactOverrideVersionsMatch(current["."], spec)
+  ) {
+    current["."] = preferredExactOverrideRootSpec(current["."], spec);
+    return;
+  }
   if (JSON.stringify(current) !== JSON.stringify(spec)) {
     throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
   }
+}
+
+function preferredExactOverrideRootSpec(current, incoming) {
+  return incoming.startsWith("npm:") ? incoming : current;
+}
+
+function exactOverrideVersionsMatch(left, right) {
+  const leftVersion = exactVersionFromOverrideSpec(left);
+  if (leftVersion === null || leftVersion !== exactVersionFromOverrideSpec(right)) {
+    return false;
+  }
+  const leftAlias = parseNpmAliasOverrideSpec(left);
+  const rightAlias = parseNpmAliasOverrideSpec(right);
+  return !leftAlias || !rightAlias || leftAlias.name === rightAlias.name;
+}
+
+function parseNpmAliasOverrideSpec(spec) {
+  if (!spec.startsWith("npm:")) {
+    return null;
+  }
+  const versionIndex = spec.lastIndexOf("@");
+  if (versionIndex <= "npm:".length) {
+    return null;
+  }
+  return { name: spec.slice("npm:".length, versionIndex) };
 }
 
 function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides) {
@@ -1085,6 +1134,7 @@ export {
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  mergeOverrides,
   applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
   packageJsonForShrinkwrap,
