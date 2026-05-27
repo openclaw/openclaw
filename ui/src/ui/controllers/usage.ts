@@ -2,6 +2,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { SessionsUsageResult, CostUsageSummary, SessionUsageTimeSeries } from "../types.ts";
+import { extractQueryTerms } from "../usage-helpers.ts";
 import type { SessionLogEntry } from "../views/usage.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -18,6 +19,7 @@ export type UsageState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageQuery: string;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
@@ -170,6 +172,14 @@ const buildDateInterpretationParams = (timeZone: "local" | "utc") => {
   };
 };
 
+export function resolveUsageAgentIdFromQuery(query: string): string | undefined {
+  const agentValues = extractQueryTerms(query)
+    .filter((term) => normalizeLowercaseStringOrEmpty(term.key) === "agent")
+    .map((term) => term.value.trim())
+    .filter((value) => value.length > 0 && !value.includes("*") && !value.includes("?"));
+  return new Set(agentValues).size === 1 ? agentValues[0] : undefined;
+}
+
 function toErrorMessage(err: unknown): string {
   if (typeof err === "string") {
     return err;
@@ -213,6 +223,7 @@ export async function loadUsage(
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
+    const agentId = resolveUsageAgentIdFromQuery(state.usageQuery);
     const runUsageRequests = (includeDateInterpretation: boolean, includeUsageScope: boolean) => {
       const dateInterpretation = includeDateInterpretation
         ? buildDateInterpretationParams(state.usageTimeZone)
@@ -227,6 +238,7 @@ export async function loadUsage(
         client.request("sessions.usage", {
           startDate,
           endDate,
+          ...(agentId ? { agentId } : undefined),
           ...dateInterpretation,
           ...usageScopeParams,
           limit: 1000, // Cap at 1000 sessions
@@ -287,6 +299,7 @@ export const testApi = {
   toErrorMessage,
   isLegacyDateInterpretationUnsupportedError,
   isLegacyUsageScopeUnsupportedError,
+  resolveUsageAgentIdFromQuery,
   normalizeGatewayCompatibilityKey,
   shouldSendLegacyDateInterpretation,
   rememberLegacyDateInterpretation,

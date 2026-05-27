@@ -1,7 +1,12 @@
 import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
-import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
+import {
+  loadUsage,
+  loadSessionTimeSeries,
+  loadSessionLogs,
+  resolveUsageAgentIdFromQuery,
+} from "./controllers/usage.ts";
 import { renderUsage } from "./views/usage.ts";
 
 type UsageCacheStatus = NonNullable<NonNullable<UsageState["usageResult"]>["cacheStatus"]>;
@@ -50,6 +55,7 @@ export function renderUsageTab(state: AppViewState) {
       loading: state.usageLoading,
       error: state.usageError,
       sessions: state.usageResult?.sessions ?? [],
+      agents: state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ?? [],
       sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
       totals: state.usageResult?.totals ?? null,
       aggregates: state.usageResult?.aggregates ?? null,
@@ -156,25 +162,37 @@ export function renderUsageTab(state: AppViewState) {
           if (state.usageQueryDebounceTimer) {
             window.clearTimeout(state.usageQueryDebounceTimer);
           }
+          const previousAgentId = resolveUsageAgentIdFromQuery(state.usageQuery);
           state.usageQueryDebounceTimer = window.setTimeout(() => {
             state.usageQuery = state.usageQueryDraft;
             state.usageQueryDebounceTimer = null;
+            if (resolveUsageAgentIdFromQuery(state.usageQuery) !== previousAgentId) {
+              void loadUsage(state);
+            }
           }, 250);
         },
         onApplyQuery: () => {
+          const previousAgentId = resolveUsageAgentIdFromQuery(state.usageQuery);
           if (state.usageQueryDebounceTimer) {
             window.clearTimeout(state.usageQueryDebounceTimer);
             state.usageQueryDebounceTimer = null;
           }
           state.usageQuery = state.usageQueryDraft;
+          if (resolveUsageAgentIdFromQuery(state.usageQuery) !== previousAgentId) {
+            void loadUsage(state);
+          }
         },
         onClearQuery: () => {
+          const previousAgentId = resolveUsageAgentIdFromQuery(state.usageQuery);
           if (state.usageQueryDebounceTimer) {
             window.clearTimeout(state.usageQueryDebounceTimer);
             state.usageQueryDebounceTimer = null;
           }
           state.usageQueryDraft = "";
           state.usageQuery = "";
+          if (previousAgentId) {
+            void loadUsage(state);
+          }
         },
         onSelectDay: (day, shiftKey) => {
           if (shiftKey && state.usageSelectedDays.length > 0) {

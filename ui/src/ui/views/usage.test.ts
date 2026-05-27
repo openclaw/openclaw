@@ -13,6 +13,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       loading: false,
       error: null,
       sessions: [],
+      agents: [],
       sessionsLimitReached: false,
       totals: null,
       aggregates: null,
@@ -111,5 +112,34 @@ describe("renderUsage", () => {
     expect(container.querySelector(".usage-page-header")).toBeNull();
     expect(container.querySelector(".usage-page-title")).toBeNull();
     expect(container.querySelector(".usage-header")).not.toBeNull();
+  });
+
+  it("shows configured agents in the agent filter even before their usage sessions load", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            agents: ["main", "research"],
+            sessions: [
+              {
+                key: "agent:main:main",
+                agentId: "main",
+                lastUpdated: Date.now(),
+                usage: null,
+              } as UsageProps["data"]["sessions"][number],
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const agentFilter = container.querySelector(".usage-filter-select");
+
+    expect(agentFilter?.textContent).toContain("main");
+    expect(agentFilter?.textContent).toContain("research");
   });
 });

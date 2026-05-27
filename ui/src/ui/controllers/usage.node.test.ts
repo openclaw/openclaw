@@ -21,6 +21,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
     usageScope: "family",
+    usageQuery: "",
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageTimeSeries: null,
@@ -98,6 +99,33 @@ describe("usage controller date interpretation params", () => {
       endDate: "2026-02-16",
       mode: "utc",
     });
+  });
+
+  it("passes a single selected agent query as sessions.usage agentId", async () => {
+    const request = vi.fn(async () => ({}));
+    const state = createState(request, {
+      usageQuery: "provider:openai agent:research ",
+      usageTimeZone: "utc",
+    });
+
+    await loadUsage(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", {
+      startDate: "2026-02-16",
+      endDate: "2026-02-16",
+      agentId: "research",
+      mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
+      limit: 1000,
+      includeContextWeight: true,
+    });
+  });
+
+  it("does not send agentId for multiple or globbed agent query filters", () => {
+    expect(testApi.resolveUsageAgentIdFromQuery("agent:research agent:main")).toBeUndefined();
+    expect(testApi.resolveUsageAgentIdFromQuery("agent:research*")).toBeUndefined();
+    expect(testApi.resolveUsageAgentIdFromQuery("agent:research channel:slack")).toBe("research");
   });
 
   it("captures useful error strings in loadUsage", async () => {

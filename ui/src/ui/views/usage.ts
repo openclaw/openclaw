@@ -204,7 +204,10 @@ export function renderUsage(props: UsageProps) {
     }
     return Array.from(set);
   };
-  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
+  const agentOptions = unique([...data.agents, ...sortedSessions.map((s) => s.agentId)]).slice(
+    0,
+    12,
+  );
   const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
   const providerOptions = unique([
     ...sortedSessions.map((s) => s.modelProvider),
