@@ -807,19 +807,21 @@ describe("createTypingSignaler", () => {
   });
 
   it("suppresses typing when disabled", async () => {
-    const typing = createMockTypingController();
-    const signaler = createTypingSignaler({
-      typing,
-      mode: "instant",
-      isHeartbeat: true,
-    });
+    const disabledCases = [
+      { mode: "instant" as const, isHeartbeat: true },
+      { mode: "never" as const, isHeartbeat: false },
+    ];
+    for (const params of disabledCases) {
+      const typing = createMockTypingController();
+      const signaler = createTypingSignaler({ typing, ...params });
 
-    await signaler.signalRunStart();
-    await signaler.signalTextDelta("hi");
-    await signaler.signalReasoningDelta();
+      await signaler.signalRunStart();
+      await signaler.signalTextDelta("hi");
+      await signaler.signalReasoningDelta();
 
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+      expect(typing.startTypingLoop, `mode=${params.mode}`).not.toHaveBeenCalled();
+      expect(typing.startTypingOnText, `mode=${params.mode}`).not.toHaveBeenCalled();
+    }
   });
 });
 
