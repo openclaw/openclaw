@@ -66,6 +66,7 @@ type RefreshQueuedFollowupSessionParams = {
 type ModelFallbackParams = {
   provider?: string;
   model?: string;
+  abortSignal?: AbortSignal;
   agentId?: string;
   sessionKey?: string;
   fallbacksOverride?: unknown[];
@@ -89,6 +90,7 @@ type EmbeddedPiAgentParams = {
   extraSystemPrompt?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
+  abortSignal?: AbortSignal;
 };
 
 type CompactEmbeddedPiSessionParams = {
@@ -502,6 +504,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     };
 
+    const replyOperation = createReplyOperation();
     await runMemoryFlushIfNeeded({
       cfg: {
         agents: {
@@ -527,18 +530,20 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: { main: sessionEntry },
       sessionKey: "main",
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      replyOperation,
     });
 
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     const fallbackCall = requireModelFallbackCall();
     expect(fallbackCall.provider).toBe("ollama");
     expect(fallbackCall.model).toBe("qwen3:8b");
+    expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.fallbacksOverride).toEqual([]);
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const agentCall = requireEmbeddedPiAgentCall();
     expect(agentCall.provider).toBe("ollama");
     expect(agentCall.model).toBe("qwen3:8b");
+    expect(agentCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(agentCall.authProfileId).toBeUndefined();
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
