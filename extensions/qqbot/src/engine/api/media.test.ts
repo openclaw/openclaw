@@ -67,7 +67,9 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       );
 
       expect(result).toBe(UPLOAD_RESPONSE);
-      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("cdn.example.com");
+      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("cdn.example.com", {
+        policy: { allowRfc2544BenchmarkRange: true },
+      });
       expect(tokenManager.getAccessToken).toHaveBeenCalledWith("app-id", "client-secret");
       expect(client.request).toHaveBeenCalledWith(
         "token-1",
@@ -146,7 +148,9 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         ),
       ).rejects.toThrow("Blocked hostname");
 
-      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith(host);
+      expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith(host, {
+        policy: { allowRfc2544BenchmarkRange: true },
+      });
       expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
       expect(client.request).not.toHaveBeenCalled();
     },
@@ -221,8 +225,45 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       ),
     ).rejects.toThrow("resolves to private");
 
-    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("attacker.example");
+    expect(resolvePinnedHostnameWithPolicyMock).toHaveBeenCalledWith("attacker.example", {
+      policy: { allowRfc2544BenchmarkRange: true },
+    });
     expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
     expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("allows public direct-upload URLs whose DNS resolves into the fake-IP RFC 2544 range", async () => {
+    await useRealSsrfResolverOnce();
+    const client = mockApiClient();
+    const tokenManager = mockTokenManager();
+    const api = new MediaApi(client, tokenManager);
+
+    // 198.18.0.0/15 is the RFC 2544 benchmarking range that sing-box / Clash /
+    // Surge fake-IP proxy stacks use as the DNS answer for foreign hostnames.
+    // The direct-upload guard must mirror QQBOT_MEDIA_SSRF_POLICY's allowance
+    // so these public URL uploads keep working in proxy deployments.
+    const result = await api.uploadMedia(
+      "c2c",
+      "user-openid",
+      MediaFileType.IMAGE,
+      { appId: "app-id", clientSecret: "client-secret" },
+      { url: "https://198.18.0.42/assets/photo.png" },
+    );
+
+    expect(result).toBe(UPLOAD_RESPONSE);
+    expect(client.request).toHaveBeenCalledWith(
+      "token-1",
+      "POST",
+      expect.any(String),
+      {
+        file_type: MediaFileType.IMAGE,
+        srv_send_msg: false,
+        url: "https://198.18.0.42/assets/photo.png",
+      },
+      {
+        redactBodyKeys: ["file_data"],
+        uploadRequest: true,
+      },
+    );
   });
 });

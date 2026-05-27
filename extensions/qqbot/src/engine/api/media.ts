@@ -65,7 +65,12 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
 
   // urlDirectUpload is documented as public-URL support. Use the generic
   // SSRF guard here; the QQ/Tencent host allowlist belongs to fallback downloads.
-  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  // Mirror QQBOT_MEDIA_SSRF_POLICY's fake-IP allowance so sing-box/Clash/Surge
+  // proxy stacks that resolve public hostnames into 198.18.0.0/15 still upload.
+  // Literal private/loopback/link-local targets remain blocked.
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    policy: { allowRfc2544BenchmarkRange: true },
+  });
   return parsed.toString();
 }
 
