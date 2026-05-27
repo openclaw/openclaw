@@ -55,6 +55,7 @@ jobs:
           node-version: "24"
 
       - name: Setup pnpm and dependencies
+        if: runner.os != 'Windows'
         shell: bash
         env:
           CI: "true"
@@ -131,7 +132,87 @@ jobs:
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
           fi
 
+      - name: Setup pnpm and dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CI: "true"
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $workspace = (Get-Location).Path
+          $cacheRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+          $env:XDG_CACHE_HOME = Join-Path $cacheRoot "cache"
+          $env:COREPACK_HOME = Join-Path $env:XDG_CACHE_HOME "corepack"
+          $env:PNPM_HOME = Join-Path $cacheRoot "pnpm-home"
+          $env:PNPM_CONFIG_STORE_DIR = Join-Path $cacheRoot "openclaw-pnpm-store"
+          $env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"
+          $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $workspace "node_modules\.pnpm"
+          New-Item -ItemType Directory -Force `
+            $env:XDG_CACHE_HOME, `
+            $env:COREPACK_HOME, `
+            $env:PNPM_HOME, `
+            $env:PNPM_CONFIG_STORE_DIR | Out-Null
+          $env:PATH = "$env:PNPM_HOME;$env:PATH"
+          @(
+            "XDG_CACHE_HOME=$env:XDG_CACHE_HOME"
+            "COREPACK_HOME=$env:COREPACK_HOME"
+            "PNPM_HOME=$env:PNPM_HOME"
+            "PNPM_CONFIG_STORE_DIR=$env:PNPM_CONFIG_STORE_DIR"
+            "PNPM_CONFIG_MODULES_DIR=$env:PNPM_CONFIG_MODULES_DIR"
+            "PNPM_CONFIG_VIRTUAL_STORE_DIR=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+          ) | Add-Content -Path $env:GITHUB_ENV
+          $env:PNPM_HOME | Add-Content -Path $env:GITHUB_PATH
+
+          $packageManager = (Get-Content package.json -Raw | ConvertFrom-Json).packageManager
+          if (-not $packageManager -or -not $packageManager.StartsWith("pnpm@")) {
+            Write-Error "Expected packageManager to pin pnpm, got '$packageManager'"
+          }
+          corepack enable --install-directory $env:PNPM_HOME
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            corepack prepare $packageManager --activate
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq 3) {
+              exit $LASTEXITCODE
+            }
+            Start-Sleep -Seconds ($attempt * 5)
+          }
+          $nodeBin = Split-Path -Parent (node -p "process.execPath")
+          "NODE_BIN=$nodeBin" | Add-Content -Path $env:GITHUB_ENV
+          $nodeBin | Add-Content -Path $env:GITHUB_PATH
+          $env:PATH = "$nodeBin;$env:PATH"
+
+          node -v
+          npm -v
+          pnpm -v
+
+          $installArgs = @(
+            "install",
+            "--prefer-offline",
+            "--ignore-scripts=false",
+            "--config.engine-strict=false",
+            "--config.enable-pre-post-scripts=true",
+            "--config.side-effects-cache=true",
+            "--frozen-lockfile",
+            "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
+            "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
+            "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
+            "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+          )
+          pnpm @installArgs
+          if ($LASTEXITCODE -ne 0) {
+            pnpm @installArgs
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
       - name: Prepare Crabbox shell
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -152,6 +233,7 @@ jobs:
           sudo chmod 0755 /usr/local/bin/pnpm
 
       - name: Ensure Docker is running
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -205,6 +287,7 @@ jobs:
           docker compose version || true
 
       - name: Ensure SSH is available
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -215,6 +298,7 @@ jobs:
           fi
 
       - name: Hydrate provider env helper
+        if: runner.os != 'Windows'
         shell: bash
         run: bash scripts/ci-hydrate-testbox-env.sh
 

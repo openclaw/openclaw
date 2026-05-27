@@ -129,10 +129,22 @@ describe("package acceptance workflow", () => {
     expect(hydrate.if).toBe("${{ inputs.crabbox_job != 'hydrate-github' }}");
     expect(workflowStep(hydrate, "Setup Node.js").uses).toBe("actions/setup-node@v6");
     expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
-    expect(workflowStep(hydrate, "Setup pnpm and dependencies").run).toContain(
-      'corepack enable --install-directory "$PNPM_HOME"',
+    const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
+    const hydrateWindowsPnpm = workflowStep(hydrate, "Setup pnpm and dependencies (Windows)");
+    expect(hydratePnpm.if).toBe("runner.os != 'Windows'");
+    expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
+    expect(hydratePnpm.run).toContain("COREPACK_HOME");
+    expect(hydrateWindowsPnpm.if).toBe("runner.os == 'Windows'");
+    expect(hydrateWindowsPnpm.shell).toBe("pwsh");
+    expect(hydrateWindowsPnpm.run).toContain(
+      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
     );
-    expect(workflowStep(hydrate, "Setup pnpm and dependencies").run).toContain("COREPACK_HOME");
+    expect(hydrateWindowsPnpm.run).toContain("corepack enable --install-directory $env:PNPM_HOME");
+    expect(hydrateWindowsPnpm.run).toContain("pnpm @installArgs");
+    expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBe("runner.os != 'Windows'");
+    expect(workflowStep(hydrate, "Ensure Docker is running").if).toBe("runner.os != 'Windows'");
+    expect(workflowStep(hydrate, "Ensure SSH is available").if).toBe("runner.os != 'Windows'");
+    expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBe("runner.os != 'Windows'");
     expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
@@ -431,7 +443,7 @@ describe("package artifact reuse", () => {
     expect(pullHelper).toContain("timeout --kill-after=1s 1s true >/dev/null 2>&1");
     expect(pullHelper).toContain('timeout "${timeout_seconds}s" docker pull "$image"');
     expect(pullHelper).toContain(
-      'timeout command not found; cannot bound Docker pull after ${timeout_seconds}s',
+      "timeout command not found; cannot bound Docker pull after ${timeout_seconds}s",
     );
     expect(dockerE2ePlanAction.match(/bash scripts\/ci-docker-pull-retry\.sh/g)?.length).toBe(2);
     expect(dockerE2ePlanAction).not.toContain('docker pull "${OPENCLAW_DOCKER_E2E_');
