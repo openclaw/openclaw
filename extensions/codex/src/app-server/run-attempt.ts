@@ -2460,6 +2460,10 @@ export async function runCodexAppServerAttempt(
       isReasoningItemCompletionNotification(notification) &&
       activeTurnItemIds.size === 0 &&
       params.sourceReplyDeliveryMode === "message_tool_only";
+    const shouldArmPostRawReasoningSourceReplyWatch =
+      rawResponseItemCompletedWithNoActiveItems &&
+      isRawReasoningCompletionNotification(notification) &&
+      params.sourceReplyDeliveryMode === "message_tool_only";
     const shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem =
       isCurrentTurnNotification &&
       notification.method === "item/completed" &&
@@ -2480,7 +2484,10 @@ export async function runCodexAppServerAttempt(
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
       armTurnCompletionIdleWatch({ timeoutMs: postToolRawAssistantCompletionIdleTimeoutMs });
-    } else if (shouldArmPostReasoningSourceReplyWatch) {
+    } else if (
+      shouldArmPostReasoningSourceReplyWatch ||
+      shouldArmPostRawReasoningSourceReplyWatch
+    ) {
       armTurnCompletionIdleWatch({ timeoutMs: CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS });
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
@@ -2511,6 +2518,7 @@ export async function runCodexAppServerAttempt(
       !postToolRawAssistantCompletionNeedsTerminalGuard &&
       !rawResponseItemCompletedWithNoActiveItems &&
       !shouldArmPostReasoningSourceReplyWatch &&
+      !shouldArmPostRawReasoningSourceReplyWatch &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
       // The short completion-idle watchdog guards blind gaps after Codex
@@ -5268,6 +5276,14 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
 
 function isReasoningItemCompletionNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params) || notification.method !== "item/completed") {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "reasoning" : false;
+}
+
+function isRawReasoningCompletionNotification(notification: CodexServerNotification): boolean {
+  if (!isJsonObject(notification.params) || notification.method !== "rawResponseItem/completed") {
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
