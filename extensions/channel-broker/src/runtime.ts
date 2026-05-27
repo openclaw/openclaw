@@ -16,7 +16,7 @@ import {
   type DurableInboundReceiveCompletedRecord,
   type DurableInboundReceivePendingRecord,
   type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { ResolvedChannelBrokerAccount } from "./types.js";
