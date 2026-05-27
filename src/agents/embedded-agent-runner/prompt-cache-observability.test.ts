@@ -140,7 +140,7 @@ describe("prompt cache observability", () => {
   it("tracks recurring prompt-cache affinity across rotating session ids", () => {
     beginPromptCacheObservation({
       sessionId: "isolated-run-1",
-      promptCacheKey: "openclaw:cron:stable-cache-key",
+      promptCacheKey: "openclaw-cron-stable-cache-key",
       sessionKey: "agent:cron:run:isolated-run-1",
       provider: "openai",
       modelId: "gpt-5.4",
@@ -151,14 +151,14 @@ describe("prompt cache observability", () => {
     });
     completePromptCacheObservation({
       sessionId: "isolated-run-1",
-      promptCacheKey: "openclaw:cron:stable-cache-key",
+      promptCacheKey: "openclaw-cron-stable-cache-key",
       sessionKey: "agent:cron:run:isolated-run-1",
       usage: { cacheRead: 8_000 },
     });
 
     const nextRun = beginPromptCacheObservation({
       sessionId: "isolated-run-2",
-      promptCacheKey: "openclaw:cron:stable-cache-key",
+      promptCacheKey: "openclaw-cron-stable-cache-key",
       sessionKey: "agent:cron:run:isolated-run-2",
       provider: "openai",
       modelId: "gpt-5.4",
