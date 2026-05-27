@@ -424,7 +424,8 @@ function resolveCanonicalApiKeyAliasRepair(
     }
     const type = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
     const hasApiKeyField = readNonEmptyString(value["api_key"]) !== undefined;
-    const hasCanonicalKey = readNonEmptyString(value.key) !== undefined;
+    const hasCanonicalKey =
+      readNonEmptyString(value.key) !== undefined || coerceSecretRef(value.key) !== null;
     const hasCanonicalKeyRef = coerceSecretRef(value.keyRef) !== null;
     if (type === "api_key" && hasApiKeyField && !hasCanonicalKey && !hasCanonicalKeyRef) {
       profileIds.push(profileId);

@@ -150,6 +150,33 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
     expect(fs.existsSync(`${authPath}.api-key-alias.123.bak`)).toBe(false);
   });
 
+  it('does not replace inline canonical SecretRef "key" credentials with stale "api_key" fields', async () => {
+    const state = await makeTestState();
+    const canonical = {
+      version: 1,
+      profiles: {
+        "inline-ref-key": {
+          type: "api_key",
+          provider: "my-provider",
+          key: { source: "env", provider: "default", id: "MY_PROVIDER_API_KEY" },
+          api_key: "stale-inline-key",
+        },
+      },
+    };
+    const authPath = await state.writeAuthProfiles(canonical);
+
+    const result = await maybeRepairCanonicalApiKeyFieldAlias({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 123,
+    });
+
+    expect(result.detected).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(canonical);
+    expect(fs.existsSync(`${authPath}.api-key-alias.123.bak`)).toBe(false);
+  });
+
   it('reports the non-canonical "api_key" field without rewriting when repair is declined', async () => {
     const state = await makeTestState();
     const canonical = {
