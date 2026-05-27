@@ -61,6 +61,13 @@ export async function runGatewayPostReadyMaintenance(params: {
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
 }): Promise<void> {
+  if (params.shouldStartCron()) {
+    params.markCronStartHandled();
+    startGatewayCronWithLogging({
+      cron: params.cron,
+      logCron: params.logCron,
+    });
+  }
   try {
     const maintenance = await params.startMaintenance();
     if (maintenance) {
@@ -68,13 +75,6 @@ export async function runGatewayPostReadyMaintenance(params: {
     }
   } catch (err) {
     params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
-  }
-  if (params.shouldStartCron()) {
-    params.markCronStartHandled();
-    startGatewayCronWithLogging({
-      cron: params.cron,
-      logCron: params.logCron,
-    });
   }
   params.recordPostReadyMemory();
 }

@@ -368,6 +368,34 @@ async function cleanupTimedOutCronAgentRun(
 function resolveRunConcurrency(state: CronServiceState): number {
   return resolveCronMaxConcurrentRuns(state.deps.cronConfig);
 }
+
+function countReservedCronRuns(state: CronServiceState): number {
+  if (!state.store) {
+    return 0;
+  }
+  let count = 0;
+  for (const job of state.store.jobs) {
+    if (typeof job.state?.runningAtMs === "number") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function resolveAvailableCronRunSlots(state: CronServiceState): {
+  maxConcurrentRuns: number;
+  reservedRuns: number;
+  availableSlots: number;
+} {
+  const maxConcurrentRuns = resolveRunConcurrency(state);
+  const reservedRuns = countReservedCronRuns(state);
+  return {
+    maxConcurrentRuns,
+    reservedRuns,
+    availableSlots: Math.max(0, maxConcurrentRuns - reservedRuns),
+  };
+}
+
 function timeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
   const phase = formatCronAgentExecutionPhase(execution);
   if (!phase) {
@@ -1216,37 +1244,84 @@ export async function onTimer(state: CronServiceState) {
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
   try {
-    const dueJobs = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      const dueCheckNow = state.deps.nowMs();
-      const due = collectRunnableJobs(state, dueCheckNow);
-
-      if (due.length === 0) {
-        // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
-        // values without execution. This prevents jobs from being silently skipped
-        // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const changed = recomputeNextRunsForMaintenance(state, {
-          recomputeExpired: true,
-          nowMs: dueCheckNow,
+    const reservedThisPass = new Set<string>();
+    const reserveDueJobs = async (limit?: number) =>
+      await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        const dueCheckNow = state.deps.nowMs();
+        const due = collectRunnableJobs(state, dueCheckNow, {
+          skipJobIds: reservedThisPass,
         });
-        if (changed) {
-          await persist(state);
+
+        if (due.length === 0) {
+          // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
+          // values without execution. This prevents jobs from being silently skipped
+          // when the timer wakes up but findDueJobs returns empty (see #13992).
+          const changed = recomputeNextRunsForMaintenance(state, {
+            recomputeExpired: true,
+            nowMs: dueCheckNow,
+          });
+          if (changed) {
+            await persist(state);
+          }
+          return [];
         }
-        return [];
-      }
 
-      const now = state.deps.nowMs();
-      for (const job of due) {
-        job.state.runningAtMs = now;
-        job.state.lastError = undefined;
-      }
-      await persist(state);
+        const { maxConcurrentRuns, reservedRuns, availableSlots } =
+          resolveAvailableCronRunSlots(state);
+        const requestedSlots =
+          typeof limit === "number" ? Math.max(0, Math.floor(limit)) : due.length;
+        const slots = Math.min(availableSlots, requestedSlots);
+        if (slots <= 0) {
+          state.deps.log.debug(
+            { dueCount: due.length, maxConcurrentRuns, reservedRuns },
+            "cron: due jobs deferred until a concurrency slot is available",
+          );
+          return [];
+        }
 
-      return due.map((j) => ({
-        id: j.id,
-        job: j,
-      }));
-    });
+        const reservedDue = due.slice(0, slots);
+        if (reservedDue.length < due.length) {
+          state.deps.log.info(
+            {
+              dueCount: due.length,
+              reservedCount: reservedDue.length,
+              deferredCount: due.length - reservedDue.length,
+              maxConcurrentRuns,
+              reservedRuns,
+            },
+            "cron: reserving due jobs up to concurrency limit",
+          );
+        }
+
+        const now = state.deps.nowMs();
+        for (const job of reservedDue) {
+          reservedThisPass.add(job.id);
+          job.state.runningAtMs = now;
+          job.state.lastError = undefined;
+        }
+        await persist(state);
+
+        return reservedDue.map((j) => ({
+          id: j.id,
+          job: j,
+        }));
+      });
+
+    const finalizeDueJobResult = async (result: TimedCronRunOutcome): Promise<void> => {
+      await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        applyOutcomeToStoredJob(state, result);
+
+        // Use maintenance-only recompute to avoid advancing past-due
+        // nextRunAtMs values that became due while other jobs are still
+        // executing. Those slots must remain runnable for the next top-off.
+        recomputeNextRunsForMaintenance(state);
+        await persist(state);
+      });
+    };
+
+    const dueJobs = await reserveDueJobs();
 
     const runDueJob = async (params: {
       id: string;
@@ -1292,43 +1367,23 @@ export async function onTimer(state: CronServiceState) {
     };
 
     const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
-    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
     let cursor = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       for (;;) {
         const index = cursor++;
-        if (index >= dueJobs.length) {
-          return;
+        let due = index < dueJobs.length ? dueJobs[index] : undefined;
+        if (!due) {
+          const next = await reserveDueJobs(1);
+          due = next[0];
         }
-        const due = dueJobs[index];
         if (!due) {
           return;
         }
-        results[index] = await runDueJob(due);
+        const result = await runDueJob(due);
+        await finalizeDueJobResult(result);
       }
     });
     await Promise.all(workers);
-
-    const completedResults: TimedCronRunOutcome[] = results.filter(
-      (entry): entry is TimedCronRunOutcome => entry !== undefined,
-    );
-
-    if (completedResults.length > 0) {
-      await locked(state, async () => {
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-        for (const result of completedResults) {
-          applyOutcomeToStoredJob(state, result);
-        }
-
-        // Use maintenance-only recompute to avoid advancing past-due
-        // nextRunAtMs values that became due between findDueJobs and this
-        // locked block.  The full recomputeNextRuns would silently skip
-        // those jobs (advancing nextRunAtMs without execution), causing
-        // daily cron schedules to jump 48 h instead of 24 h (#17852).
-        recomputeNextRunsForMaintenance(state);
-        await persist(state);
-      });
-    }
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
     // Placed in `finally` so the reaper runs even when a long-running job keeps
@@ -1521,8 +1576,10 @@ async function planStartupCatchup(
     const startupEligible = opts?.deferAgentTurnJobs
       ? sorted.filter((job) => job.payload.kind !== "agentTurn")
       : sorted;
-    const startupCandidates = startupEligible.slice(0, maxImmediate);
-    const deferredOverflow = startupEligible.slice(maxImmediate);
+    const { maxConcurrentRuns, reservedRuns, availableSlots } = resolveAvailableCronRunSlots(state);
+    const startupLimit = Math.min(maxImmediate, availableSlots);
+    const startupCandidates = startupEligible.slice(0, startupLimit);
+    const deferredOverflow = startupEligible.slice(startupLimit);
     const deferredAgentDelayMs = Math.max(
       0,
       state.deps.startupDeferredMissedAgentJobDelayMs ??
@@ -1538,6 +1595,9 @@ async function planStartupCatchup(
           immediateCount: startupCandidates.length,
           deferredCount: deferred.length,
           totalMissed: missed.length,
+          maxConcurrentRuns,
+          reservedRuns,
+          availableSlots,
         },
         "cron: staggering missed jobs to prevent gateway overload",
       );

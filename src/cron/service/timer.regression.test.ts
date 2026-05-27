@@ -13,6 +13,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import * as schedule from "../schedule.js";
+import { loadCronStore } from "../store.js";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -64,6 +65,25 @@ function firstMockArg(mock: unknown): unknown {
     throw new Error("Expected mock to have at least one call");
   }
   return call[0];
+}
+
+async function waitForCronAssertion(
+  label: string,
+  assertion: () => void | Promise<void>,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`timed out waiting for ${label}`);
 }
 
 describe("cron service timer regressions", () => {
@@ -1098,6 +1118,230 @@ describe("cron service timer regressions", () => {
     const jobs = state.store?.jobs ?? [];
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
+  });
+
+  it("only reserves available due jobs before execution starts", async () => {
+    vi.useRealTimers();
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const first = createDueIsolatedJob({
+      id: "reservation-first",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const second = createDueIsolatedJob({
+      id: "reservation-second",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const third = createDueIsolatedJob({
+      id: "reservation-third",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await writeCronJobs(store.storePath, [first, second, third]);
+
+    const firstRunStarted = createDeferred<void>();
+    const firstRun = createDeferred<{ status: "ok"; summary: string }>();
+    let callCount = 0;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        callCount += 1;
+        if (callCount === 1) {
+          firstRunStarted.resolve();
+          return await firstRun.promise;
+        }
+        return { status: "ok" as const, summary: "extra run" };
+      }),
+    });
+
+    const timerPromise = onTimer(state);
+    const startTimeout = setTimeout(() => {
+      firstRunStarted.reject(new Error("timed out waiting for first job start"));
+    }, 250);
+    try {
+      await firstRunStarted.promise;
+    } finally {
+      clearTimeout(startTimeout);
+    }
+
+    const persisted = await loadCronStore(store.storePath);
+    const runningIds = persisted.jobs
+      .filter((job) => typeof job.state.runningAtMs === "number")
+      .map((job) => job.id);
+    expect(runningIds).toEqual(["reservation-first"]);
+    expect(persisted.jobs.find((job) => job.id === "reservation-second")?.state.nextRunAtMs).toBe(
+      dueAt,
+    );
+    expect(persisted.jobs.find((job) => job.id === "reservation-third")?.state.nextRunAtMs).toBe(
+      dueAt,
+    );
+
+    firstRun.resolve({ status: "ok", summary: "first done" });
+    await timerPromise;
+
+    await waitForCronAssertion("all reserved due jobs to finish", () => {
+      expect(callCount).toBe(3);
+      const jobs = state.store?.jobs ?? [];
+      expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
+      expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");
+      expect(jobs.find((job) => job.id === third.id)?.state.lastStatus).toBe("ok");
+      expect(jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBeUndefined();
+      expect(jobs.find((job) => job.id === third.id)?.state.runningAtMs).toBeUndefined();
+    });
+  });
+
+  it("finalizes completed due jobs and tops off slots while slower jobs continue", async () => {
+    vi.useRealTimers();
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const fast = createDueIsolatedJob({
+      id: "topoff-fast",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const slow = createDueIsolatedJob({
+      id: "topoff-slow",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const queued = createDueIsolatedJob({
+      id: "topoff-queued",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await writeCronJobs(store.storePath, [fast, slow, queued]);
+
+    const slowStarted = createDeferred<void>();
+    const slowRun = createDeferred<{ status: "ok"; summary: string }>();
+    const queuedStarted = createDeferred<void>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 2 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async ({ job }) => {
+        if (job.id === "topoff-fast") {
+          return { status: "ok" as const, summary: "fast done" };
+        }
+        if (job.id === "topoff-slow") {
+          slowStarted.resolve();
+          return await slowRun.promise;
+        }
+        if (job.id === "topoff-queued") {
+          queuedStarted.resolve();
+          return { status: "ok" as const, summary: "queued done" };
+        }
+        throw new Error(`unexpected job ${job.id}`);
+      }),
+    });
+
+    const timerPromise = onTimer(state);
+    const topoffTimeout = setTimeout(() => {
+      queuedStarted.reject(new Error("timed out waiting for top-off job start"));
+    }, 500);
+    try {
+      await slowStarted.promise;
+      await queuedStarted.promise;
+    } finally {
+      clearTimeout(topoffTimeout);
+    }
+
+    const persistedWhileSlow = await loadCronStore(store.storePath);
+    expect(
+      persistedWhileSlow.jobs.find((job) => job.id === fast.id)?.state.runningAtMs,
+    ).toBeUndefined();
+    expect(persistedWhileSlow.jobs.find((job) => job.id === fast.id)?.state.lastStatus).toBe("ok");
+
+    slowRun.resolve({ status: "ok", summary: "slow done" });
+    await timerPromise;
+
+    await waitForCronAssertion("top-off jobs to finish", () => {
+      const jobs = state.store?.jobs ?? [];
+      expect(jobs.find((job) => job.id === slow.id)?.state.lastStatus).toBe("ok");
+      expect(jobs.find((job) => job.id === queued.id)?.state.lastStatus).toBe("ok");
+    });
+  });
+
+  it("only reserves available startup catch-up jobs before execution starts", async () => {
+    vi.useRealTimers();
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const first = createDueIsolatedJob({
+      id: "startup-reservation-first",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const second = createDueIsolatedJob({
+      id: "startup-reservation-second",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const third = createDueIsolatedJob({
+      id: "startup-reservation-third",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await writeCronJobs(store.storePath, [first, second, third]);
+
+    const firstRunStarted = createDeferred<void>();
+    const firstRun = createDeferred<{ status: "ok"; summary: string }>();
+    let callCount = 0;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        callCount += 1;
+        firstRunStarted.resolve();
+        return await firstRun.promise;
+      }),
+    });
+
+    const catchupPromise = runMissedJobs(state);
+    const startTimeout = setTimeout(() => {
+      firstRunStarted.reject(new Error("timed out waiting for startup catch-up job start"));
+    }, 250);
+    try {
+      await firstRunStarted.promise;
+    } finally {
+      clearTimeout(startTimeout);
+    }
+
+    const persisted = await loadCronStore(store.storePath);
+    const runningIds = persisted.jobs
+      .filter((job) => typeof job.state.runningAtMs === "number")
+      .map((job) => job.id);
+    expect(runningIds).toEqual(["startup-reservation-first"]);
+    expect(
+      persisted.jobs.find((job) => job.id === "startup-reservation-second")?.state.runningAtMs,
+    ).toBeUndefined();
+    expect(
+      persisted.jobs.find((job) => job.id === "startup-reservation-third")?.state.runningAtMs,
+    ).toBeUndefined();
+
+    firstRun.resolve({ status: "ok", summary: "first startup done" });
+    await catchupPromise;
+
+    expect(callCount).toBe(1);
+    const jobs = state.store?.jobs ?? [];
+    expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
+    expect(jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBeUndefined();
+    expect(jobs.find((job) => job.id === third.id)?.state.runningAtMs).toBeUndefined();
   });
 
   it("finalizes a successful isolated job that removes itself during execution", async () => {

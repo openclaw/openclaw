@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -7,6 +8,9 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const SYSTEMD_RUN = "/usr/bin/systemd-run";
+const SYSTEMD_SCOPE_DISABLE_ENV = "OPENCLAW_CHILD_SYSTEMD_SCOPE";
+const SYSTEMD_WORKER_SLICE = "openclaw-workers.slice";
 
 type CodexAppServerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -41,6 +45,59 @@ export function resolveCodexAppServerSpawnInvocation(
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
   };
+}
+
+export function resolveCodexAppServerWorkerScopeSpawn(params: {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  systemdRunPath?: string;
+  systemdRunExists?: (path: string) => boolean;
+}): { command: string; args: string[]; env: NodeJS.ProcessEnv; wrapped: boolean } {
+  const platform = params.platform ?? process.platform;
+  const systemdRunPath = params.systemdRunPath ?? SYSTEMD_RUN;
+  const systemdRunExists = params.systemdRunExists ?? ((candidate) => fs.existsSync(candidate));
+  if (
+    platform !== "linux" ||
+    !params.env.OPENCLAW_SERVICE_MARKER?.trim() ||
+    systemdScopeDisabled(params.env) ||
+    !systemdRunExists(systemdRunPath)
+  ) {
+    return { command: params.command, args: params.args, env: params.env, wrapped: false };
+  }
+  return {
+    command: systemdRunPath,
+    args: [
+      "--user",
+      "--scope",
+      "--quiet",
+      `--property=Slice=${SYSTEMD_WORKER_SLICE}`,
+      "--property=CollectMode=inactive-or-failed",
+      "--",
+      params.command,
+      ...params.args,
+    ],
+    env: {
+      ...params.env,
+      // The app-server scope owns its MCP/tool subprocesses. Avoid recursive
+      // transient scopes when worker-side OpenClaw code launches children.
+      [SYSTEMD_SCOPE_DISABLE_ENV]: "0",
+    },
+    wrapped: true,
+  };
+}
+
+function systemdScopeDisabled(env: NodeJS.ProcessEnv): boolean {
+  switch (env[SYSTEMD_SCOPE_DISABLE_ENV]?.trim().toLowerCase()) {
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return true;
+    default:
+      return false;
+  }
 }
 
 export function resolveCodexAppServerSpawnEnv(
@@ -97,9 +154,15 @@ export function createStdioTransport(options: CodexAppServerStartOptions): Codex
     env,
     execPath: process.execPath,
   });
-  return spawn(invocation.command, invocation.args, {
+  const scopedInvocation = resolveCodexAppServerWorkerScopeSpawn({
+    command: invocation.command,
+    args: invocation.args,
     env,
-    detached: process.platform !== "win32",
+    platform: process.platform,
+  });
+  return spawn(scopedInvocation.command, scopedInvocation.args, {
+    env: scopedInvocation.env,
+    detached: process.platform !== "win32" && !scopedInvocation.wrapped,
     shell: invocation.shell,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: invocation.windowsHide,

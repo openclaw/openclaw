@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import fs from "node:fs";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
@@ -9,6 +10,9 @@ import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const SYSTEMD_RUN = "/usr/bin/systemd-run";
+const SYSTEMD_SCOPE_DISABLE_ENV = "OPENCLAW_CHILD_SYSTEMD_SCOPE";
+const SYSTEMD_WORKER_SLICE = "openclaw-workers.slice";
 
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
@@ -21,6 +25,63 @@ export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
+}
+
+function systemdScopeDisabled(env: NodeJS.ProcessEnv): boolean {
+  switch (env[SYSTEMD_SCOPE_DISABLE_ENV]?.trim().toLowerCase()) {
+    case "0":
+    case "false":
+    case "no":
+    case "off":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function shouldUseSystemdWorkerScope(env: NodeJS.ProcessEnv | undefined): boolean {
+  const effectiveEnv = env ?? process.env;
+  if (process.platform !== "linux" || !isServiceManagedRuntime()) {
+    return false;
+  }
+  if (systemdScopeDisabled(effectiveEnv)) {
+    return false;
+  }
+  try {
+    return fs.statSync(SYSTEMD_RUN).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function wrapInSystemdWorkerScope(params: {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv | undefined;
+}): { command: string; args: string[]; env: NodeJS.ProcessEnv | undefined; wrapped: boolean } {
+  if (!shouldUseSystemdWorkerScope(params.env)) {
+    return { ...params, wrapped: false };
+  }
+  return {
+    command: SYSTEMD_RUN,
+    args: [
+      "--user",
+      "--scope",
+      "--quiet",
+      `--property=Slice=${SYSTEMD_WORKER_SLICE}`,
+      "--property=CollectMode=inactive-or-failed",
+      "--",
+      params.command,
+      ...params.args,
+    ],
+    env: {
+      ...(params.env ?? process.env),
+      // The child is already outside the gateway service cgroup. Avoid nesting
+      // scopes when worker-side OpenClaw code launches its own subprocesses.
+      [SYSTEMD_SCOPE_DISABLE_ENV]: "0",
+    },
+    wrapped: true,
+  };
 }
 
 export async function createChildAdapter(params: {
@@ -37,6 +98,7 @@ export async function createChildAdapter(params: {
   const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
     env: baseEnv,
   });
+  const scopedSpawn = wrapInSystemdWorkerScope(preparedSpawn);
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
@@ -47,7 +109,7 @@ export async function createChildAdapter(params: {
 
   const options: SpawnOptions = {
     cwd: params.cwd,
-    env: preparedSpawn.env,
+    env: scopedSpawn.env,
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
@@ -60,16 +122,17 @@ export async function createChildAdapter(params: {
   }
 
   const spawned = await spawnWithFallback({
-    argv: [preparedSpawn.command, ...preparedSpawn.args],
+    argv: [scopedSpawn.command, ...scopedSpawn.args],
     options,
-    fallbacks: useDetached
-      ? [
-          {
-            label: "no-detach",
-            options: { detached: false },
-          },
-        ]
-      : [],
+    fallbacks:
+      useDetached && !scopedSpawn.wrapped
+        ? [
+            {
+              label: "no-detach",
+              options: { detached: false },
+            },
+          ]
+        : [],
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;

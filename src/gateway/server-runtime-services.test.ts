@@ -252,6 +252,38 @@ describe("server-runtime-services", () => {
     expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
   });
 
+  it("starts cron without waiting for post-ready maintenance to finish", async () => {
+    vi.useFakeTimers();
+    const cron = { start: vi.fn(async () => undefined) };
+    const recordPostReadyMemory = vi.fn();
+    let resolveMaintenance: (() => void) | undefined;
+    const startMaintenance = vi.fn(
+      () =>
+        new Promise<null>((resolve) => {
+          resolveMaintenance = () => resolve(null);
+        }),
+    );
+
+    const promise = runGatewayPostReadyMaintenance({
+      startMaintenance,
+      applyMaintenance: vi.fn(),
+      shouldStartCron: () => true,
+      markCronStartHandled: vi.fn(),
+      cron,
+      logCron: { error: vi.fn() },
+      log: createLog(),
+      recordPostReadyMemory,
+    });
+
+    await Promise.resolve();
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(recordPostReadyMemory).not.toHaveBeenCalled();
+
+    resolveMaintenance?.();
+    await promise;
+    expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
+  });
+
   it("returns a cancellable post-ready maintenance timer", async () => {
     vi.useFakeTimers();
     const startMaintenance = vi.fn(async () => null);
@@ -312,7 +344,7 @@ describe("server-runtime-services", () => {
     await Promise.resolve();
 
     expect(applyMaintenance).not.toHaveBeenCalled();
-    expect(cron.start).not.toHaveBeenCalled();
+    expect(cron.start).toHaveBeenCalledTimes(1);
     expect(recordPostReadyMemory).not.toHaveBeenCalled();
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.tickInterval);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.healthInterval);
