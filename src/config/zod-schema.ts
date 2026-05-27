@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -1228,10 +1229,11 @@ export const OpenClawSchema = z
       return;
     }
     const agentIds = new Set(agents.map((agent) => agent.id));
+    const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
 
     // Bindings referencing a missing agent id silently misroute at gateway
-    // load time — see openclaw#84692. Only validate when agents.list is
-    // non-empty so legacy configs that haven't populated list yet still load.
+    // load time. Match routing's normalized id semantics; otherwise valid
+    // configured routes like "Team Ops" -> "team-ops" would fail at load.
     const bindings = cfg.bindings;
     if (Array.isArray(bindings)) {
       for (let idx = 0; idx < bindings.length; idx += 1) {
@@ -1240,7 +1242,7 @@ export const OpenClawSchema = z
           continue;
         }
         const agentId = (binding as { agentId?: unknown }).agentId;
-        if (typeof agentId === "string" && !agentIds.has(agentId)) {
+        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["bindings", idx, "agentId"],
