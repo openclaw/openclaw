@@ -1924,7 +1924,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     err: unknown,
     command: "query" | "search" | "vsearch",
   ): QmdQueryResult[] | null {
-    if (!isCliCommandError(err) || !hasQmdJsonArrayPayload(err.stdout)) {
+    if (
+      !isCliCommandError(err) ||
+      this.isMissingCollectionSearchError(err) ||
+      this.isUnsupportedQmdOptionError(err) ||
+      !hasQmdJsonArrayPayload(err.stdout)
+    ) {
       return null;
     }
     try {

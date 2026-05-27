@@ -1952,7 +1952,11 @@ describe("QmdMemoryManager", () => {
         if (collection === "memory-root-main" && !missingCollectionSeen) {
           missingCollectionSeen = true;
           const child = createMockChild({ autoClose: false });
-          emitAndClose(child, "stderr", "Collection not found: memory-root-main", 1);
+          queueMicrotask(() => {
+            child.stdout.emit("data", "[]");
+            child.stderr.emit("data", "Collection not found: memory-root-main");
+            child.closeWith(1);
+          });
           return child;
         }
         if (collection === "memory-root-main") {
