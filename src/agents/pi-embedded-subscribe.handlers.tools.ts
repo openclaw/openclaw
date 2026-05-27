@@ -53,6 +53,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./pi-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -104,6 +105,94 @@ function loadMediaParse(): Promise<MediaParseModule> {
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
   return beforeToolCallModuleLoader.load();
 }
+
+function getRequiredParamGroupsForTool(
+  toolName: string,
+): readonly RequiredParamGroup[] | undefined {
+  if (toolName === "read") {
+    return REQUIRED_PARAM_GROUPS.read;
+  }
+  if (toolName === "write") {
+    return REQUIRED_PARAM_GROUPS.write;
+  }
+  if (toolName === "edit") {
+    return REQUIRED_PARAM_GROUPS.edit;
+  }
+  return undefined;
+}
+
+function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
+  const groups = getRequiredParamGroupsForTool(toolName);
+  if (!groups?.length) {
+    return [];
+  }
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  if (!record) {
+    return groups.map((group) => group.label ?? group.keys.join(" or "));
+  }
+  return groups
+    .filter((group) => {
+      const satisfied =
+        group.validator?.(record) ??
+        group.keys.some((key) => {
+          const value = record[key];
+          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
+        });
+      return !satisfied;
+    })
+    .map((group) => group.label ?? group.keys.join(" or "));
+}
+
+function buildToolExecutionStartTraceMeta(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}): Record<string, unknown> {
+  const args = params.args;
+  const argsType = Array.isArray(args) ? "array" : typeof args;
+  const argsKeys =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? Object.keys(args as Record<string, unknown>).toSorted()
+      : undefined;
+  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
+  return {
+    event: "embedded_tool_execution_start",
+    tags: ["tool_start", "embedded", "trace"],
+    runId: params.ctx.params.runId,
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    argsType,
+    ...(argsKeys?.length ? { argsKeys } : {}),
+    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
+    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
+    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
+    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
+  };
+}
+
+function traceToolExecutionStart(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}) {
+  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
+    return;
+  }
+  params.ctx.log.trace(
+    "embedded run tool start",
+    buildToolExecutionStartTraceMeta({
+      ctx: params.ctx,
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      args: params.args,
+    }),
+  );
+}
+
+const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
+const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_CHARS + 1;
 
 type ToolStartRecord = {
   startTime: number;
@@ -791,6 +880,7 @@ export function handleToolExecutionStart(
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
+    traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -803,7 +893,11 @@ export function handleToolExecutionStart(
       const filePath = filePathValue.trim();
       if (!filePath) {
         const argsType = typeof args;
-        const argsPreview = sanitizeForConsole(readStringValue(args), 200);
+        const rawArgsPreview = readStringValue(args);
+        const argsPreview = sanitizeForConsole(
+          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
+          TOOL_START_WARNING_PREVIEW_MAX_CHARS,
+        );
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);

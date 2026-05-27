@@ -24,11 +24,15 @@ function createTestContext(): {
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
+  trace: ReturnType<typeof vi.fn>;
+  isEnabled: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
+  const trace = vi.fn();
+  const isEnabled = vi.fn(() => false);
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
@@ -44,6 +48,8 @@ function createTestContext(): {
     hookRunner: undefined,
     log: {
       debug: vi.fn(),
+      trace,
+      isEnabled,
       info: vi.fn(),
       warn,
     },
@@ -79,7 +85,7 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };
+  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase, trace, isEnabled };
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
@@ -156,8 +162,55 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {
+    const { ctx, trace, isEnabled, warn } = createTestContext();
+    isEnabled.mockImplementation((level: string) => level === "trace");
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "tool-trace",
+      args: { path: "notes.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(trace).toHaveBeenCalledTimes(1);
+    expect(trace.mock.calls[0]?.[0]).toBe("embedded run tool start");
+    expect(trace.mock.calls[0]?.[1]).toEqual({
+      event: "embedded_tool_execution_start",
+      tags: ["tool_start", "embedded", "trace"],
+      runId: "run-test",
+      toolName: "write",
+      toolCallId: "tool-trace",
+      argsType: "object",
+      argsKeys: ["path"],
+      sessionKey: "agent:unit-session",
+      sessionId: "session-test-id",
+      agentId: "agent-test-id",
+      requiredParamsMissing: ["content"],
+    });
+  });
+
+  it("does not build trace tool start diagnostics unless trace logging is enabled", async () => {
+    const { ctx, trace, isEnabled } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "write",
+      toolCallId: "tool-trace-disabled",
+      args: { path: "notes.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(isEnabled).toHaveBeenCalledWith("trace");
+    expect(trace).not.toHaveBeenCalled();
+  });
+
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
+    const { ctx, warn, trace, onBlockReplyFlush, onExecutionPhase } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -176,6 +229,7 @@ describe("handleToolExecutionStart read path checks", () => {
       source: "pi-embedded",
     });
     expect(warn).not.toHaveBeenCalled();
+    expect(trace).not.toHaveBeenCalled();
   });
 
   it("warns when read tool has neither path nor file_path", async () => {
@@ -211,6 +265,22 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(warnMeta?.consoleMessage).toContain("argsType=object");
     expect(warnMeta?.consoleMessage).toContain("read tool called without path");
     expect(warnMeta).not.toHaveProperty("argsPreview");
+  });
+
+  it("bounds string args before adding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-string-args",
+      args: "x".repeat(500),
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
