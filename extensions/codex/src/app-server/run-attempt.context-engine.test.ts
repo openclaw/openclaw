@@ -1575,6 +1575,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(result.preflightRecovery?.route).not.toBe("fits");
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(2);
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/resume",
       "thread/start",

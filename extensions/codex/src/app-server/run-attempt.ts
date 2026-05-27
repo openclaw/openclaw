@@ -2352,6 +2352,7 @@ export async function runCodexAppServerAttempt(
             allowCompaction: false,
           });
         if (providerBoundaryPrecheckFailure) {
+          await clearCodexAppServerBinding(activeSessionFile);
           await unsubscribeCodexThreadBestEffort(client, {
             threadId: thread.threadId,
             timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
