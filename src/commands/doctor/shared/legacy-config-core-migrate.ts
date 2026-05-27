@@ -8,42 +8,6 @@ import {
   normalizeLegacyCommandsConfig,
   normalizeLegacyOpenAICodexModelsAddMetadata,
 } from "./legacy-config-core-normalizers.js";
-import { isRecord } from "./legacy-config-record-shared.js";
-
-function pruneBindingsForMissingAgents(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const agents = cfg.agents?.list;
-  const bindings = cfg.bindings;
-  if (!Array.isArray(agents) || agents.length === 0 || !Array.isArray(bindings)) {
-    return cfg;
-  }
-
-  const agentIds = new Set<string>();
-  for (const agent of agents) {
-    if (!isRecord(agent) || typeof agent.id !== "string") {
-      continue;
-    }
-    agentIds.add(normalizeAgentId(agent.id));
-  }
-  if (agentIds.size === 0) {
-    return cfg;
-  }
-  const nextBindings = bindings.filter((binding) => {
-    const agentId = binding && typeof binding === "object" ? binding.agentId : undefined;
-    return typeof agentId !== "string" || agentIds.has(normalizeAgentId(agentId));
-  });
-  const removed = bindings.length - nextBindings.length;
-  if (removed === 0) {
-    return cfg;
-  }
-
-  changes.push(
-    `Removed ${removed} binding${removed === 1 ? "" : "s"} that referenced missing agents.list ids.`,
-  );
-  return {
-    ...cfg,
-    ...(nextBindings.length > 0 ? { bindings: nextBindings } : { bindings: undefined }),
-  };
-}
 
 function pruneBindingsForMissingAgents(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const agents = cfg.agents?.list;
