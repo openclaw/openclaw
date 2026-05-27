@@ -539,7 +539,7 @@ function isActiveAbortRecoveryEligible(params: {
   );
 }
 
-function isIdleQueuedEmbeddedRunStall(params: {
+function isIdleQueuedRecoverableSessionStall(params: {
   state: {
     state: SessionStateValue;
     queueDepth: number;
@@ -1235,16 +1235,16 @@ export function startDiagnosticHeartbeat(
         { sessionId: state.sessionId, sessionKey: state.sessionKey },
         now,
       );
-      const idleQueuedEmbeddedRunStall = isIdleQueuedEmbeddedRunStall({
+      const idleQueuedRecoverableStall = isIdleQueuedRecoverableSessionStall({
         state,
         activity,
         staleMs: stuckSessionWarnMs,
       });
       if (
         (state.state === "processing" && ageMs > stuckSessionWarnMs) ||
-        idleQueuedEmbeddedRunStall
+        idleQueuedRecoverableStall
       ) {
-        const attentionAgeMs = idleQueuedEmbeddedRunStall
+        const attentionAgeMs = idleQueuedRecoverableStall
           ? (activity.lastProgressAgeMs ?? ageMs)
           : ageMs;
         const classification = logSessionAttention({
