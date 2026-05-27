@@ -722,7 +722,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         model: effectiveModel,
         modelApi: effectiveModel.api,
         harnessId: params.agentHarnessId,
-        harnessRuntime: selectedHarnessRuntime,
+        harnessRuntime: runtimeHarnessPolicy.runtime,
         authProfileProvider: authProfileId?.split(":", 1)[0],
         sessionAuthProfileId: authProfileId,
         config: params.config,

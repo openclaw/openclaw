@@ -191,7 +191,7 @@ describe("handleCompactCommand", () => {
   });
 
   it("treats already-under-target manual compaction as skipped", async () => {
-    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: false,
       compacted: false,
       reason: "already under target",

@@ -15,8 +15,6 @@ import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
-import { uniqueValues } from "../../shared/string-normalization.js";
-import { asBoolean } from "../../utils/boolean.js";
 import { hasBeforeToolCallPolicy, runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
