@@ -661,6 +661,7 @@ function generateShrinkwrap(packageDir, options = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-"));
   try {
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
+    const currentShrinkwrap = readCurrentShrinkwrap(packageDir);
     const shrinkwrapOverrides = mergeOverrides(
       options.useCurrentShrinkwrapOverrides
         ? readCurrentShrinkwrapOverrides(packageDir, declaredPackageDependencies(packageJson))
@@ -683,10 +684,13 @@ function generateShrinkwrap(packageDir, options = {}) {
     runNpm(npmInstallArgs, tempDir);
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
-    const generated = normalizeNpmVersionDrift(
-      applyPackageExtensionPeerMetadata(
-        JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+    const generated = restoreCurrentPnpmLockedPackages(
+      normalizeNpmVersionDrift(
+        applyPackageExtensionPeerMetadata(
+          JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+        ),
       ),
+      currentShrinkwrap,
     );
     assertShrinkwrapMatchesPnpmLock(generated);
     return `${JSON.stringify(generated, null, 2)}\n`;
@@ -857,6 +861,70 @@ function readCurrentShrinkwrapOverrides(
     }
     throw error;
   }
+}
+
+function readCurrentShrinkwrap(packageDir) {
+  try {
+    return JSON.parse(readFileSync(shrinkwrapPathForPackage(packageDir), "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function packageNameForLockPath(lockPath, metadata) {
+  return metadata?.name ?? parseLockPackagePath(lockPath).at(-1)?.name ?? null;
+}
+
+function restoreCurrentPnpmLockedPackages(
+  generated,
+  current,
+  pnpmLockPackages = readPnpmLockPackages(),
+) {
+  if (!current) {
+    return generated;
+  }
+  const generatedPackages = generated?.packages;
+  const currentPackages = current?.packages;
+  if (
+    !generatedPackages ||
+    typeof generatedPackages !== "object" ||
+    !currentPackages ||
+    typeof currentPackages !== "object"
+  ) {
+    return generated;
+  }
+
+  for (const [lockPath, metadata] of Object.entries(generatedPackages)) {
+    if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
+      continue;
+    }
+    const packageName = packageNameForLockPath(lockPath, metadata);
+    if (!packageName || pnpmLockPackages.has(`${packageName}@${metadata.version}`)) {
+      continue;
+    }
+
+    const currentMetadata = currentPackages[lockPath];
+    const currentPackageName = packageNameForLockPath(lockPath, currentMetadata);
+    if (
+      !currentMetadata ||
+      typeof currentMetadata !== "object" ||
+      !currentMetadata.version ||
+      currentPackageName !== packageName ||
+      !pnpmLockPackages.has(`${packageName}@${currentMetadata.version}`)
+    ) {
+      continue;
+    }
+
+    // npm can float transitive patch ranges beyond pnpm's lock when one package
+    // name has multiple locked major lines. Keep the existing shrinkwrap entry
+    // when it still matches the canonical pnpm lock.
+    generatedPackages[lockPath] = currentMetadata;
+  }
+
+  return generated;
 }
 
 function assertShrinkwrapMatchesPnpmLock(shrinkwrap) {
@@ -1143,6 +1211,7 @@ export {
   parsePnpmPackageKey,
   parseLockPackagePath,
   readShrinkwrapOverrides,
+  restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 };

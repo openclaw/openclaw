@@ -14,6 +14,7 @@ import {
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
@@ -141,6 +142,42 @@ describe("generate-npm-shrinkwrap", () => {
         path: "node_modules/react",
       },
     ]);
+  });
+
+  it("restores current shrinkwrap entries when npm floats past pnpm's lock", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.1",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
+          integrity: "sha512-new",
+        },
+        "node_modules/lru-memoizer/node_modules/lru-cache": {
+          version: "6.0.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
+          integrity: "sha512-old-major",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.0.tgz",
+          integrity: "sha512-current",
+        },
+        "node_modules/lru-memoizer/node_modules/lru-cache": {
+          version: "6.0.0",
+          resolved: "https://registry.npmjs.org/lru-cache/-/lru-cache-6.0.0.tgz",
+          integrity: "sha512-old-major",
+        },
+      },
+    };
+    const pnpmPackages = new Set(["lru-cache@11.5.0", "lru-cache@6.0.0"]);
+
+    expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual(current);
   });
 
   it("pins current shrinkwrap versions that are still in the pnpm lock", () => {
