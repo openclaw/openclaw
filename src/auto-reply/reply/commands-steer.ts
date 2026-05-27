@@ -68,6 +68,20 @@ function resolveSteerSessionId(params: {
   const entry = resolveStoredSessionEntry(params.commandParams, params.targetSessionKey);
   const sessionId = normalizeOptionalString(entry?.sessionId);
   if (!sessionId || !isEmbeddedPiRunActive(sessionId)) {
+    // If the steer target is a slash lane but has no active run,
+    // try sibling direct/DM lanes that may have the active run instead.
+    if (params.targetSessionKey.includes(":slash:")) {
+      const siblingKeys = [
+        params.targetSessionKey.replace(":slash:", ":direct:"),
+        params.targetSessionKey.replace(":slash:", ":dm:"),
+      ];
+      for (const siblingKey of siblingKeys) {
+        const siblingId = resolveActiveEmbeddedRunSessionId(siblingKey);
+        if (siblingId) {
+          return siblingId;
+        }
+      }
+    }
     return undefined;
   }
   return sessionId;
