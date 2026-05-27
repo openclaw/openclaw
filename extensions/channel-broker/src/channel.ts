@@ -69,8 +69,7 @@ function resolveBrokerSessionTarget(params: {
       buildBrokerConversationTarget({
         platform: parsed.platform,
         conversationId: parsed.conversationId,
-        conversationType:
-          parsed.conversationType ?? (params.threadId ? "thread" : params.kind),
+        conversationType: parsed.conversationType ?? (params.threadId ? "thread" : params.kind),
         threadId: parsed.threadId ?? params.threadId ?? undefined,
       }),
     );
