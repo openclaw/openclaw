@@ -659,7 +659,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   async function waitForHeldLockDrain(): Promise<void> {
-    while (heldLockDraining) {
+    for (;;) {
+      if (!heldLockDraining) {
+        return;
+      }
       await new Promise<void>((resolve) => {
         heldLockDrainWaiters.add(resolve);
       });
@@ -667,15 +670,17 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   async function beginHeldLockDrain(): Promise<symbol> {
-    while (heldLockDraining) {
+    for (;;) {
+      if (!heldLockDraining) {
+        const owner = Symbol("held-lock-drain");
+        heldLockDraining = true;
+        heldLockDrainOwner = owner;
+        return owner;
+      }
       await new Promise<void>((resolve) => {
         heldLockDrainWaiters.add(resolve);
       });
     }
-    const owner = Symbol("held-lock-drain");
-    heldLockDraining = true;
-    heldLockDrainOwner = owner;
-    return owner;
   }
 
   function finishHeldLockDrain(owner: symbol): void {
