@@ -804,4 +804,55 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("synthetic");
     expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
   });
+
+  test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6@myprofile" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("myprofile");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("does not set authProfileOverride when profile suffix is missing", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBeUndefined();
+  });
+
+  test("persists full provider:profile authProfileOverride on model patch", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          model: "anthropic/claude-sonnet-4-6@openai-codex:user@example.com",
+        },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("openai-codex:user@example.com");
+    expect(entry.authProfileOverrideSource).toBe("user");
+  });
 });

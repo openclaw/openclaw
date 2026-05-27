@@ -5,6 +5,7 @@ import {
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
@@ -525,6 +526,7 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
+      const { profile: trailingProfile } = splitTrailingAuthProfile(trimmed);
       const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
@@ -545,6 +547,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        profileOverride: trailingProfile || undefined,
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
