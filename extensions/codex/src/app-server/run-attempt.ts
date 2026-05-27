@@ -1097,6 +1097,26 @@ function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean
   return !params.messageChannel && !params.messageProvider;
 }
 
+type ContextEngineProviderBoundaryPrecheck = ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>;
+type ContextEngineProviderBoundaryOverflowPrecheck = ContextEngineProviderBoundaryPrecheck & {
+  route: Exclude<ContextEngineProviderBoundaryPrecheck["route"], "fits">;
+};
+
+function shouldHandleContextEngineProviderBoundaryOverflow(
+  precheck: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt> | undefined,
+): precheck is ContextEngineProviderBoundaryOverflowPrecheck {
+  return precheck !== undefined && precheck.route !== "fits";
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  const rawName =
+    error && typeof error === "object" && "name" in error
+      ? (error as { name?: unknown }).name
+      : undefined;
+  const name = typeof rawName === "string" ? rawName : "";
+  return name === "AbortError";
+}
+
 async function runCodexAgentEndHook(
   params: EmbeddedRunAttemptParams,
   hookParams: CodexAgentEndHookParams,
@@ -1485,6 +1505,9 @@ export async function runCodexAppServerAttempt(
       });
       return true;
     } catch (compactErr) {
+      if (runAbortController.signal.aborted || isAbortLikeError(compactErr)) {
+        throw compactErr;
+      }
       embeddedAgentLog.warn("codex app-server context-engine forced compaction failed", {
         sessionId: activeSessionId,
         sessionKey: contextSessionKey,
@@ -1782,13 +1805,53 @@ export async function runCodexAppServerAttempt(
       },
     });
   };
-  const maybeCompactContextEngineForProviderBoundaryPrecheck = async () => {
-    if (!activeContextEngine?.info.ownsCompaction || !contextEngineProjection) {
-      return;
+  const buildCurrentSystemPromptReport = (
+    attempt: EmbeddedRunAttemptParams = buildActiveRunAttemptParams(),
+  ) =>
+    buildCodexSystemPromptReport({
+      attempt,
+      sessionKey: contextSessionKey,
+      workspaceDir: effectiveWorkspace,
+      developerInstructions: buildRenderedCodexDeveloperInstructions(),
+      workspaceBootstrapContext,
+      skillsPrompt: openClawPromptContext ? (params.skillsSnapshot?.prompt ?? "") : "",
+      tools: toolBridge.availableSpecs,
+    });
+  const buildPreStartPromptErrorResult = (
+    message: string,
+    preflightRecovery?: EmbeddedRunAttemptResult["preflightRecovery"],
+  ): EmbeddedRunAttemptResult => {
+    const activeAttempt = buildActiveRunAttemptParams();
+    return {
+      ...buildCodexTurnStartFailureResult({
+        params: activeAttempt,
+        message,
+        messagesSnapshot: [
+          ...historyMessages,
+          buildCodexUserPromptMessage({ ...activeAttempt, prompt: codexTurnPromptText }),
+        ],
+        systemPromptReport: buildCurrentSystemPromptReport(activeAttempt),
+      }),
+      ...(preflightRecovery
+        ? { promptErrorSource: "precheck" as const, preflightRecovery }
+        : {}),
+    };
+  };
+  const buildPreStartAbortResult = (error: unknown): EmbeddedRunAttemptResult => ({
+    ...buildPreStartPromptErrorResult(formatErrorMessage(error)),
+    aborted: true,
+    externalAbort: params.abortSignal?.aborted === true,
+    promptError: undefined,
+    promptErrorSource: null,
+  });
+  const maybeCompactContextEngineForProviderBoundaryPrecheck =
+    async (): Promise<EmbeddedRunAttemptResult | undefined> => {
+    if (!activeContextEngine?.info.ownsCompaction) {
+      return undefined;
     }
     const precheck = buildCodexProviderBoundaryPrecheck();
     if (!precheck) {
-      return;
+      return undefined;
     }
     embeddedAgentLog.debug(
       formatPrePromptPrecheckLog({
@@ -1808,19 +1871,26 @@ export async function runCodexAppServerAttempt(
         ...(activeSessionFile ? { sessionFile: activeSessionFile } : {}),
       }),
     );
-    if (precheck.route === "fits") {
-      return;
+    if (!shouldHandleContextEngineProviderBoundaryOverflow(precheck)) {
+      return undefined;
+    }
+    if (!precheck.shouldCompact) {
+      return buildPreStartPromptErrorResult(PREEMPTIVE_OVERFLOW_ERROR_TEXT, {
+        route: precheck.route,
+      });
     }
     const compacted = await forceContextEngineCompactionForCodexOverflow(
       PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     );
     if (!compacted) {
-      return;
+      return buildPreStartPromptErrorResult(PREEMPTIVE_OVERFLOW_ERROR_TEXT, {
+        route: precheck.route,
+      });
     }
     await rebuildPromptAfterContextEngineCompaction();
     const afterCompactionPrecheck = buildCodexProviderBoundaryPrecheck();
     if (!afterCompactionPrecheck || afterCompactionPrecheck.route === "fits") {
-      return;
+      return undefined;
     }
     embeddedAgentLog.warn(
       "codex app-server provider-boundary precheck still overflowed after compaction",
@@ -1833,17 +1903,26 @@ export async function runCodexAppServerAttempt(
         overflowTokens: afterCompactionPrecheck.overflowTokens,
       },
     );
+    return buildPreStartPromptErrorResult(PREEMPTIVE_OVERFLOW_ERROR_TEXT, {
+      route: afterCompactionPrecheck.route,
+    });
   };
-  await maybeCompactContextEngineForProviderBoundaryPrecheck();
-  const systemPromptReport = buildCodexSystemPromptReport({
-    attempt: params,
-    sessionKey: contextSessionKey,
-    workspaceDir: effectiveWorkspace,
-    developerInstructions: buildRenderedCodexDeveloperInstructions(),
-    workspaceBootstrapContext,
-    skillsPrompt: openClawPromptContext ? (params.skillsSnapshot?.prompt ?? "") : "",
-    tools: toolBridge.availableSpecs,
-  });
+  let providerBoundaryPrecheckFailure: EmbeddedRunAttemptResult | undefined;
+  try {
+    providerBoundaryPrecheckFailure =
+      await maybeCompactContextEngineForProviderBoundaryPrecheck();
+  } catch (error) {
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    if (runAbortController.signal.aborted || isAbortLikeError(error)) {
+      return buildPreStartAbortResult(error);
+    }
+    throw error;
+  }
+  if (providerBoundaryPrecheckFailure) {
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    return providerBoundaryPrecheckFailure;
+  }
+  let systemPromptReport = buildCurrentSystemPromptReport();
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveWorkspace,
@@ -3428,6 +3507,7 @@ export async function runCodexAppServerAttempt(
         );
         if (compactedForRetry) {
           await rebuildPromptAfterContextEngineCompaction();
+          systemPromptReport = buildCurrentSystemPromptReport();
         }
         emitCodexNativeThreadLifecycleDiagnostic({
           action: "rotated",
@@ -3455,6 +3535,12 @@ export async function runCodexAppServerAttempt(
           data: { phase: "thread_ready_retry", threadId: thread.threadId },
         });
         try {
+          if (compactedForRetry) {
+            runAgentHarnessLlmInputHook({
+              event: buildLlmInputEvent(),
+              ctx: hookContext,
+            });
+          }
           turn = await startCodexTurn();
         } catch (retryError) {
           turnStartError = retryError;
@@ -3679,7 +3765,16 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
-  setActiveEmbeddedRun(activeSessionId, handle, contextSessionKey);
+  const activeRunRegistrations =
+    activeSessionId === params.sessionId
+      ? [{ sessionId: activeSessionId, sessionKey: contextSessionKey }]
+      : [
+          { sessionId: params.sessionId, sessionKey: undefined },
+          { sessionId: activeSessionId, sessionKey: contextSessionKey },
+        ];
+  for (const registration of activeRunRegistrations) {
+    setActiveEmbeddedRun(registration.sessionId, handle, registration.sessionKey);
+  }
   void mirrorPromptAtTurnStartBestEffort({
     params: activeRunAttemptParams,
     agentId: sessionAgentId,
@@ -3987,7 +4082,9 @@ export async function runCodexAppServerAttempt(
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueue?.cancel();
-    clearActiveEmbeddedRun(activeSessionId, handle, contextSessionKey);
+    for (const registration of activeRunRegistrations) {
+      clearActiveEmbeddedRun(registration.sessionId, handle, registration.sessionKey);
+    }
   }
 }
 
@@ -5304,6 +5401,7 @@ function resolveContextEngineBootstrapProjectionDecision(params: {
     return { project: true, reason: CodexNativeThreadLifecycleReason.DynamicToolsMismatch };
   }
   const projectionChanged =
+    bindingProjection.schemaVersion !== params.expectedBinding.projection?.schemaVersion ||
     bindingProjection.mode !== "thread_bootstrap" ||
     bindingProjection.epoch !== params.projection.epoch ||
     bindingProjection.fingerprint !== params.projection.fingerprint;
@@ -6845,8 +6943,10 @@ export const testing = {
   buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,
   shouldProjectMirroredHistoryForCodexStart,
+  resolveContextEngineBootstrapProjectionDecision,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
+  shouldHandleContextEngineProviderBoundaryOverflow,
   shouldReleaseTurnAfterTerminalDynamicTool,
   resolveTerminalDynamicToolBatchAction,
   toCodexDynamicToolProgressResponse,

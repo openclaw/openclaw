@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   embeddedAgentLog,
   isActiveHarnessContextEngine,
@@ -1087,6 +1088,12 @@ export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[
   return fingerprintDynamicTools(dynamicTools);
 }
 
+export function codexUserMcpServersConfigPatchFingerprint(
+  configPatch: JsonObject | undefined,
+): string | undefined {
+  return fingerprintUserMcpServersConfigPatch(configPatch);
+}
+
 export function areCodexDynamicToolFingerprintsCompatible(params: {
   previous?: string;
   next: string;
@@ -1103,7 +1110,11 @@ function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
 function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
-  return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
+  if (!configPatch) {
+    return undefined;
+  }
+  const stableJson = JSON.stringify(stabilizeJsonValue(configPatch));
+  return `sha256:${createHash("sha256").update(stableJson).digest("hex")}`;
 }
 
 function fingerprintEnvironmentSelection(

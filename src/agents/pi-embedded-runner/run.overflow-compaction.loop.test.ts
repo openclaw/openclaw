@@ -319,6 +319,33 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("runs early truncation before compaction when a precheck returns truncate-only recovery", async () => {
+    const overflowError = makeOverflowError(
+      "Context overflow: prompt too large for the model (precheck).",
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "truncate_tool_results_only" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectLogIncludes(mockedLog.info, "early tool-result truncation succeeded");
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("continues from the transcript after mid-turn precheck truncation handled the overflow", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(

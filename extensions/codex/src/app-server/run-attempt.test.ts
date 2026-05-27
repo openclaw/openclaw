@@ -2468,6 +2468,75 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(false);
   });
 
+  it("handles every provider-boundary context-engine overflow route before submission", () => {
+    const basePrecheck = {
+      estimatedPromptTokens: 12_000,
+      pressureSource: "codex_app_server_rendered_prompt",
+      promptBudgetBeforeReserve: 8_000,
+      overflowTokens: 4_000,
+      toolResultReducibleChars: 40_000,
+      effectiveReserveTokens: 8_000,
+    } as const;
+
+    expect(
+      testing.shouldHandleContextEngineProviderBoundaryOverflow({
+        ...basePrecheck,
+        route: "truncate_tool_results_only",
+        shouldCompact: false,
+      }),
+    ).toBe(true);
+    expect(
+      testing.shouldHandleContextEngineProviderBoundaryOverflow({
+        ...basePrecheck,
+        route: "fits",
+        shouldCompact: false,
+      }),
+    ).toBe(false);
+    expect(
+      testing.shouldHandleContextEngineProviderBoundaryOverflow({
+        ...basePrecheck,
+        route: "compact_only",
+        shouldCompact: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("reprojects context-engine bootstrap bindings when projection schema changes", () => {
+    const decision = testing.resolveContextEngineBootstrapProjectionDecision({
+      startupBinding: {
+        threadId: "thread-1",
+        dynamicToolsFingerprint: "[]",
+        contextEngine: {
+          schemaVersion: 1,
+          engineId: "lossless-claw",
+          policyFingerprint: "policy-1",
+          projection: {
+            schemaVersion: 0,
+            mode: "thread_bootstrap",
+            epoch: "epoch-1",
+          },
+        },
+      } as never,
+      expectedBinding: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+        },
+      } as never,
+      projection: { mode: "thread_bootstrap", epoch: "epoch-1" },
+      dynamicToolsFingerprint: "[]",
+    });
+
+    expect(decision).toEqual({
+      project: true,
+      reason: CodexNativeThreadLifecycleReason.ProjectionMismatch,
+    });
+  });
+
   it("forces the message dynamic tool for message-tool-only source replies", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

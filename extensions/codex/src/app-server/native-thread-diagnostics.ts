@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -137,9 +138,22 @@ function compactDiagnosticPayload(
     if (typeof value === "number" && !Number.isFinite(value)) {
       continue;
     }
-    payload[key] = value;
+    payload[key] = isUserMcpServersFingerprintKey(key) && typeof value === "string"
+      ? sanitizeUserMcpServersFingerprint(value)
+      : value;
   }
   return payload as CodexNativeThreadLifecycleDiagnostic;
+}
+
+function isUserMcpServersFingerprintKey(key: string): boolean {
+  return key === "userMcpServersFingerprint" || key === "previousUserMcpServersFingerprint";
+}
+
+function sanitizeUserMcpServersFingerprint(value: string): string {
+  if (/^sha256:[a-f0-9]{64}$/u.test(value)) {
+    return value;
+  }
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function compactDiagnosticLogPayload(
