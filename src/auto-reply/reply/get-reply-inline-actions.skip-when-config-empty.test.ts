@@ -648,7 +648,7 @@ describe("handleInlineActions", () => {
     expect(toolExecute).toHaveBeenCalledTimes(1);
   });
 
-  it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
+  it("passes sender identity into inline tool runtimes", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ text: "updated" }));
     createOpenClawToolsMock.mockReturnValue([
@@ -667,6 +667,7 @@ describe("handleInlineActions", () => {
         name: "set_profile",
         skillName: "matrix-profile",
         description: "Set Matrix profile",
+        skillSource: "workspace",
         dispatch: {
           kind: "tool",
           toolName: "message",
@@ -698,7 +699,18 @@ describe("handleInlineActions", () => {
     );
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
-    expect(mockObjectArg(createOpenClawToolsMock, "createOpenClawTools").senderIsOwner).toBe(true);
+    const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
+    expect(toolsArgs).not.toHaveProperty("senderIsOwner");
+    expect(toolsArgs.beforeToolCallHookContext).toMatchObject({
+      cwd: "/tmp",
+      workspaceDir: "/tmp",
+      skillCommand: {
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+        skillSource: "workspace",
+        toolName: "message",
+      },
+    });
     const toolCall = mockCallArgs(toolExecute, "toolExecute");
     expect(toolCall?.[0]).toMatch(/^cmd_/);
     expect(toolCall?.[1]).toEqual({

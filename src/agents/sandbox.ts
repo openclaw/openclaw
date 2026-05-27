@@ -32,12 +32,13 @@ export {
   resolveSandboxRuntimeStatus,
 } from "./sandbox/runtime-status.js";
 
-export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,

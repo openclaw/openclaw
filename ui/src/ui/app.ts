@@ -1,6 +1,7 @@
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -43,9 +44,11 @@ import { createChatSession as createChatSessionInternal } from "./app-render.hel
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
+  handleActivityScroll as handleActivityScrollInternal,
   handleChatScroll as handleChatScrollInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
+  scheduleActivityScroll as scheduleActivityScrollInternal,
   scheduleChatScroll as scheduleChatScrollInternal,
 } from "./app-scroll.ts";
 import {
@@ -67,6 +70,12 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import {
+  createRealtimeTalkConversationState,
+  updateRealtimeTalkConversation,
+  type RealtimeTalkConversationEntry,
+  type RealtimeTalkConversationState,
+} from "./chat/realtime-talk-conversation.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -202,12 +211,25 @@ export class OpenClawApp extends LitElement {
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
+  chatSessionMessageSubscriptionKey: string | null = null;
+  chatSessionMessageSubscriptionRequestedKey: string | null = null;
   currentSessionId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
   @state() chatToolMessages: unknown[] = [];
+  @state() activityEntries: ActivityEntry[] = [];
+  @state() activityFilterText = "";
+  @state() activityStatusFilters: Record<ActivityStatus, boolean> = {
+    running: true,
+    done: true,
+    error: true,
+  };
+  @state() activityToolFilter = "";
+  @state() activityExpandedIds = new Set<string>();
+  @state() activityAutoFollow = true;
+  @state() activityAtBottom = true;
   @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
@@ -228,6 +250,13 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
+  @state() chatSessionPickerOpen = false;
+  @state() chatSessionPickerSurface: "desktop" | "mobile" | null = null;
+  @state() chatSessionPickerQuery = "";
+  @state() chatSessionPickerAppliedQuery = "";
+  @state() chatSessionPickerLoading = false;
+  @state() chatSessionPickerError: string | null = null;
+  @state() chatSessionPickerResult: SessionsListResult | null = null;
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
@@ -238,6 +267,7 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
+  @state() realtimeTalkConversation: RealtimeTalkConversationEntry[] = [];
   @state() realtimeTalkOptionsOpen = false;
   @state() realtimeTalkOptions = {
     provider: "",
@@ -250,6 +280,8 @@ export class OpenClawApp extends LitElement {
     reasoningEffort: "",
   };
   private realtimeTalkSession: RealtimeTalkSession | null = null;
+  private realtimeTalkConversationState: RealtimeTalkConversationState =
+    createRealtimeTalkConversationState();
   private nativeBridgeCleanup: (() => void) | null = null;
   @state() chatManualRefreshInFlight = false;
   @state() chatHeaderControlsHidden = false;
@@ -603,6 +635,7 @@ export class OpenClawApp extends LitElement {
   debugPollInterval: number | null = null;
   sessionsChangedReloadTimer: number | ReturnType<typeof globalThis.setTimeout> | null = null;
   logsScrollFrame: number | null = null;
+  activityScrollFrame: number | null = null;
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
   toolStreamOrder: string[] = [];
@@ -623,18 +656,37 @@ export class OpenClawApp extends LitElement {
     }
   };
   private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {
-    if (e.key !== "Escape" || !this.chatMobileControlsOpen) {
+    if (e.key !== "Escape") {
+      return;
+    }
+    if (this.chatSessionPickerOpen) {
+      e.preventDefault();
+      this.chatSessionPickerOpen = false;
+      this.chatSessionPickerSurface = null;
+      return;
+    }
+    if (!this.chatMobileControlsOpen) {
       return;
     }
     e.preventDefault();
     this.setChatMobileControlsOpen(false, { restoreFocus: true });
   };
   private chatMobileControlsPointerdownHandler = (e: Event) => {
+    const path = e.composedPath();
+    if (this.chatSessionPickerOpen) {
+      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
+        (node) => path.includes(node),
+      );
+      if (!insidePicker) {
+        this.chatSessionPickerOpen = false;
+        this.chatSessionPickerSurface = null;
+      }
+    }
     if (!this.chatMobileControlsOpen) {
       return;
     }
     const wrapper = this.querySelector(".chat-mobile-controls-wrapper");
-    if (wrapper && e.composedPath().includes(wrapper)) {
+    if (wrapper && path.includes(wrapper)) {
       return;
     }
     this.setChatMobileControlsOpen(false);
@@ -739,6 +791,20 @@ export class OpenClawApp extends LitElement {
     );
   }
 
+  handleActivityScroll(event: Event) {
+    handleActivityScrollInternal(
+      this as unknown as Parameters<typeof handleActivityScrollInternal>[0],
+      event,
+    );
+  }
+
+  scheduleActivityScroll(force = false) {
+    scheduleActivityScrollInternal(
+      this as unknown as Parameters<typeof scheduleActivityScrollInternal>[0],
+      force,
+    );
+  }
+
   exportLogs(lines: string[], label: string) {
     exportLogsInternal(lines, label);
   }
@@ -796,6 +862,10 @@ export class OpenClawApp extends LitElement {
 
     const focusTarget = options?.restoreFocus ? this.chatMobileControlsTrigger : null;
     this.chatMobileControlsOpen = false;
+    if (this.chatSessionPickerSurface === "mobile") {
+      this.chatSessionPickerOpen = false;
+      this.chatSessionPickerSurface = null;
+    }
     this.chatMobileControlsTrigger = null;
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
       return;
@@ -1037,6 +1107,7 @@ export class OpenClawApp extends LitElement {
         this.realtimeTalkStatus = "idle";
         this.realtimeTalkDetail = null;
         this.realtimeTalkTranscript = null;
+        this.resetRealtimeTalkConversation();
         return;
       }
     }
@@ -1048,6 +1119,7 @@ export class OpenClawApp extends LitElement {
     this.realtimeTalkStatus = "connecting";
     this.realtimeTalkDetail = null;
     this.realtimeTalkTranscript = null;
+    this.resetRealtimeTalkConversation();
     const session = new RealtimeTalkSession(
       this.client,
       this.sessionKey,
@@ -1061,6 +1133,11 @@ export class OpenClawApp extends LitElement {
         },
         onTranscript: (entry) => {
           this.realtimeTalkTranscript = `${entry.role === "user" ? "You" : "OpenClaw"}: ${entry.text}`;
+          this.realtimeTalkConversationState = updateRealtimeTalkConversation(
+            this.realtimeTalkConversationState,
+            entry,
+          );
+          this.realtimeTalkConversation = this.realtimeTalkConversationState.entries;
         },
       },
       this.buildRealtimeTalkLaunchOptions(),
@@ -1078,6 +1155,11 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
     }
+  }
+
+  resetRealtimeTalkConversation() {
+    this.realtimeTalkConversationState = createRealtimeTalkConversationState();
+    this.realtimeTalkConversation = [];
   }
 
   async steerQueuedChatMessage(id: string) {

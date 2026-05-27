@@ -293,8 +293,15 @@ export async function handleInlineActions(params: {
         provider,
         model,
         senderId: command.senderId,
-        senderIsOwner: command.senderIsOwner,
         currentChannelId: command.channelId,
+        skillCommand: {
+          name: skillInvocation.command.name,
+          skillName: skillInvocation.command.skillName,
+          ...(skillInvocation.command.skillSource
+            ? { skillSource: skillInvocation.command.skillSource }
+            : {}),
+          toolName: dispatch.toolName,
+        },
       });
 
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);

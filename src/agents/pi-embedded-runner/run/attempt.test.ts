@@ -37,6 +37,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  testing as attemptTesting,
 } from "./attempt.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
@@ -127,6 +128,18 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     expect(context.jobId).toBe("job-1");
     expect(context.memoryFlushWritePath).toBe("memory/log.md");
     expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
+  });
+});
+
+describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
+  it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
+    const options = attemptTesting.resolveEmbeddedAttemptSessionWriteLockOptions({
+      config: {},
+      compactionTimeoutMs: 600_000,
+      env: {},
+    });
+
+    expect(options.maxHoldMs).toBe(720_000);
   });
 });
 
@@ -990,6 +1003,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
         provider: "demo-provider",
         id: "demo-model",
       } as never,
+      authProfileId: "demo-provider:oauth",
       authStorage: {
         getApiKey: vi.fn(async () => "demo-runtime-key"),
       },
@@ -1001,7 +1015,32 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       {},
     );
     expect(requireRecord(streamOptions, "stream options").apiKey).toBe("demo-runtime-key");
+    expect(requireRecord(streamOptions, "stream options").authProfileId).toBe(
+      "demo-provider:oauth",
+    );
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses only the runtime-forwarded auth profile for stream provenance", () => {
+    expect(
+      attemptTesting.resolveAttemptStreamAuthProfileId({
+        authProfileId: "openai-codex:raw-session-profile",
+        runtimePlan: {
+          auth: {
+            forwardedAuthProfileId: "openai-codex:forwarded-profile",
+          },
+        } as never,
+      }),
+    ).toBe("openai-codex:forwarded-profile");
+
+    expect(
+      attemptTesting.resolveAttemptStreamAuthProfileId({
+        authProfileId: "openai:non-forwarded-profile",
+        runtimePlan: {
+          auth: {},
+        } as never,
+      }),
+    ).toBeUndefined();
   });
 
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
@@ -2282,7 +2321,109 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("drops signed thinking turns when replay would expose inline sessions_spawn attachments", async () => {
+  it("keeps signed thinking turns that reuse a mutable earlier tool id", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "mutable result" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "call_1", name: "read", input: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "signed result" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toBe(messages);
+  });
+
+  it("drops signed thinking reused ids when their real result is displaced", async () => {
+    const firstAssistant = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+    };
+    const firstResult = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: "mutable result" }],
+    };
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "retry" }],
+    };
+    const messages = [
+      firstAssistant,
+      firstResult,
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          { type: "toolUse", id: "call_1", name: "read", input: {} },
+        ],
+      },
+      userMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "signed result" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toEqual([firstAssistant, firstResult, userMessage]);
+  });
+
+  it("drops signed thinking turns with inline sessions_spawn attachments when the result is missing", async () => {
     const attachmentContent = "SIGNED_THINKING_INLINE_ATTACHMENT";
     const messages = [
       {
@@ -2335,7 +2476,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     ]);
   });
 
-  it("drops signed thinking turns when replay would expose non-content attachment payload fields", async () => {
+  it("drops signed thinking turns with non-content attachment payload fields when the result is missing", async () => {
     const attachmentContent = "SIGNED_THINKING_NESTED_ATTACHMENT";
     const messages = [
       {
@@ -2392,6 +2533,60 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
         content: [{ type: "text", text: "retry" }],
       },
     ]);
+  });
+
+  it("keeps signed thinking turns with sessions_spawn attachments when the tool result is present", async () => {
+    const attachmentContent = "SIGNED_THINKING_PAIRED_ATTACHMENT";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
+            },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "sessions_spawn",
+        content: [{ type: "text", text: "done" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["sessions_spawn"]),
+      {
+        validateAnthropicTurns: true,
+        preserveSignatures: true,
+        dropThinkingBlocks: false,
+      } as never,
+    );
+    const stream = wrapped(
+      { api: "anthropic-messages" } as never,
+      { messages } as never,
+      {} as never,
+    ) as FakeWrappedStream | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn);
+    expect(seenContext.messages).toBe(messages);
   });
 
   it("keeps mutable thinking turns outside anthropic replay-only preservation", async () => {
@@ -3006,10 +3201,6 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     };
     expect(seenContext.messages).toEqual([
       {
-        role: "assistant",
-        content: [{ type: "text", text: "[tool calls omitted]" }],
-      },
-      {
         role: "user",
         content: [{ type: "text", text: "retry" }],
       },
@@ -3600,7 +3791,6 @@ describe("buildAfterTurnRuntimeContext", () => {
           sessionId: "session-123",
           config: {} as OpenClawConfig,
           skillsSnapshot: undefined,
-          senderIsOwner: true,
           provider: "openai-codex",
           modelId: "gpt-5.4",
           thinkLevel: "off",
@@ -3639,7 +3829,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3673,7 +3862,6 @@ describe("buildAfterTurnRuntimeContext", () => {
           },
         } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3712,7 +3900,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3755,7 +3942,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: { plugins: { slots: { contextEngine: "lossless-claw" } } } as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         thinkLevel: "off",
@@ -3787,7 +3973,6 @@ describe("buildAfterTurnRuntimeContext", () => {
         authProfileId: "openai:p1",
         config: {} as OpenClawConfig,
         skillsSnapshot: undefined,
-        senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
         modelId: "gpt-5.4",

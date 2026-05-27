@@ -67,7 +67,7 @@ function createBackendEntry(params: {
             params.id === "claude-cli"
               ? "@anthropic-ai/claude-code"
               : params.id === "codex-cli"
-                ? "@openai/codex@0.130.0"
+                ? "@openai/codex@0.132.0"
                 : params.id === "google-gemini-cli"
                   ? "@google/gemini-cli"
                   : undefined,
@@ -369,7 +369,7 @@ beforeEach(() => {
               sessionArg: "--session-id",
               sessionMode: "always",
               systemPromptFileArg: "--append-system-prompt-file",
-              systemPromptWhen: "first",
+              systemPromptWhen: "always", // fix(#80374): was "first"
             },
           },
         },
@@ -498,7 +498,7 @@ describe("resolveCliBackendLiveTest", () => {
       defaultModelRef: "codex-cli/gpt-5.5",
       defaultImageProbe: true,
       defaultMcpProbe: true,
-      dockerNpmPackage: "@openai/codex@0.130.0",
+      dockerNpmPackage: "@openai/codex@0.132.0",
       dockerBinaryName: "codex",
     });
   });
@@ -585,7 +585,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(builder?.config.resumeArgs).toContain("bypassPermissions");
   });
 
-  it("uses existing exec policy and raw Claude args as permission overrides", () => {
+  it("preserves raw Claude permission args during backend normalization", () => {
     const safe = resolveCliBackendConfig("claude-cli", {
       tools: { exec: { security: "full", ask: "off" } },
       agents: {
@@ -914,7 +914,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "bypassPermissions",
     ]);
     expect(resolved?.config.systemPromptFileArg).toBe("--append-system-prompt-file");
-    expect(resolved?.config.systemPromptWhen).toBe("first");
+    expect(resolved?.config.systemPromptWhen).toBe("always"); // fix(#80374): was "first"
     expect(resolved?.config.sessionArg).toBe("--session-id");
     expect(resolved?.config.sessionMode).toBe("always");
     expect(resolved?.config.input).toBe("stdin");

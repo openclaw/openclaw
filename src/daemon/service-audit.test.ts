@@ -50,6 +50,27 @@ function createGatewayAudit({
   });
 }
 
+async function writeSystemdUnitForAudit(home: string, lines: string[]) {
+  const unitDir = path.join(home, ".config", "systemd", "user");
+  const unitPath = path.join(unitDir, "openclaw-gateway.service");
+  await fs.mkdir(unitDir, { recursive: true });
+  await fs.writeFile(
+    unitPath,
+    [
+      "[Unit]",
+      "Description=OpenClaw Gateway",
+      "[Service]",
+      ...lines,
+      "ExecStart=/usr/bin/node gateway",
+      "",
+      "[Install]",
+      "WantedBy=default.target",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 function expectTokenAudit(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
   {
@@ -212,6 +233,71 @@ describe("auditGatewayServiceConfig", () => {
     expect(issue?.detail).toContain("/opt/pnpm/bin");
   });
 
+  it("accepts an expected active OpenClaw bin even when it looks package-managed", async () => {
+    const expectedServicePath = [
+      "/opt/homebrew/opt/node/bin",
+      "/Users/testuser/Library/pnpm",
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ].join(":");
+
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/Users/testuser" },
+      platform: "darwin",
+      expectedServicePath,
+      command: {
+        programArguments: [
+          "/opt/homebrew/opt/node/bin/node",
+          "/opt/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: { PATH: expectedServicePath },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(false);
+  });
+
+  it("still flags unrelated non-minimal PATH entries beside the expected active bin", async () => {
+    const expectedServicePath = [
+      "/opt/homebrew/opt/node/bin",
+      "/Users/testuser/Library/pnpm",
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ].join(":");
+
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/Users/testuser" },
+      platform: "darwin",
+      expectedServicePath,
+      command: {
+        programArguments: [
+          "/opt/homebrew/opt/node/bin/node",
+          "/opt/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: { PATH: `${expectedServicePath}:/Users/testuser/.asdf/shims` },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+    );
+    expect(issue?.detail).not.toContain("/Users/testuser/Library/pnpm");
+    expect(issue?.detail).toContain("/Users/testuser/.asdf/shims");
+  });
+
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
     const env = {
       HOME: "/tmp/openclaw-testuser",
@@ -311,6 +397,54 @@ describe("auditGatewayServiceConfig", () => {
       serviceToken: "old-token",
     });
     expectTokenAudit(audit, { embedded: true, mismatch: true });
+  });
+
+  it.each(["process", "none"])(
+    `warns when KillMode is %s in explicit unit file`,
+    async (killMode) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+      await writeSystemdUnitForAudit(home, [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=5",
+        `KillMode=${killMode}`,
+      ]);
+
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "linux",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+      expect(
+        audit.issues.some(
+          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not warn when KillMode is control-group", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=control-group",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
+    ).toBe(false);
   });
 
   it("flags embedded service token even when it matches config token", async () => {

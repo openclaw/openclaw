@@ -811,7 +811,7 @@ describe("describeImageWithModel", () => {
     expect(context.messages).toHaveLength(1);
     expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
     expect(options.apiKey).toBe("oauth-test");
-    expect(options.maxTokens).toBe(512);
+    expect(options.maxTokens).toBe(4096);
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(options.timeoutMs).toBeGreaterThan(0);
     expect(options.timeoutMs).toBeLessThanOrEqual(1000);
@@ -1105,13 +1105,13 @@ describe("describeImageWithModel", () => {
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
-  it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
+  it("keeps stable GA gemini 3.1 flash-lite ids during lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3.1-flash-lite-preview");
+      expect(modelId).toBe("gemini-3.1-flash-lite");
       return {
         provider: "google",
-        id: "gemini-3.1-flash-lite-preview",
+        id: "gemini-3.1-flash-lite",
         input: ["text", "image"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
@@ -1121,7 +1121,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash lite ok" }],
@@ -1142,7 +1142,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "flash lite ok",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
     });
     expect(findMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
@@ -1289,5 +1289,78 @@ describe("describeImageWithModel", () => {
     const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
     expect(contentTypes).not.toContain("text");
     expect(contentTypes).toContain("image");
+  });
+
+  it("defaults image-describe maxTokens to 4096 for reasoning-capable VLMs", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "agent-plan",
+        id: "doubao-seed-2.0-pro",
+        input: ["text", "image"],
+        baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "agent-plan",
+      model: "doubao-seed-2.0-pro",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "agent-plan",
+      model: "doubao-seed-2.0-pro",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    expect(options.maxTokens).toBe(4096);
+  });
+
+  it("caps image-describe maxTokens by the resolved model's own maxTokens", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "fake",
+        id: "small-vlm",
+        input: ["text", "image"],
+        baseUrl: "https://example.test",
+        maxTokens: 1024,
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "fake",
+      model: "small-vlm",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "fake",
+      model: "small-vlm",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    expect(options.maxTokens).toBe(1024);
   });
 });

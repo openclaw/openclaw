@@ -1,3 +1,8 @@
+import {
+  hasAcceptedSessionSpawn,
+  type AcceptedSessionSpawn,
+} from "../../accepted-session-spawn.js";
+
 export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
 export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
@@ -12,7 +17,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   aborted: boolean;
   timedOut: boolean;
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt: boolean;
   messagingToolSentTexts: string[];
@@ -20,6 +25,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   messagingToolSentTargets: unknown[];
   successfulCronAdds: number;
   synthesizedPayloadCount: number;
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   heartbeatToolResponse?: unknown;
   clientToolCalls?: Array<unknown>;
   yieldDetected?: boolean;
@@ -65,6 +71,10 @@ function hasCommittedMessagingDeliveryEvidence(
   );
 }
 
+function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
+  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
+}
+
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
@@ -80,11 +90,13 @@ export function resolveAttemptTrajectoryTerminal(
     params.emptyAssistantReplyIsSilent === true ||
     params.didSendDeterministicApprovalPrompt ||
     hasCommittedMessagingDeliveryEvidence(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     params.synthesizedPayloadCount > 0 ||
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
-    params.lastToolError !== undefined;
+    params.lastToolError !== undefined ||
+    hasAsyncStartedToolActivity(params.toolMetas);
 
   if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {
     return {

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -18,7 +17,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -43,8 +42,8 @@ import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { OpenClawSchema } from "./zod-schema.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
@@ -125,10 +124,38 @@ function stripPreservedLegacyRootKeysForValidation(
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
     (entry) => [entry.channelId, entry.schema] as const,
   ),
 );
+const bundledChannelIds = Object.freeze(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false)
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
+    .filter((channelId) => channelId.length > 0),
+);
+const bundledChannelIdSet = new Set(bundledChannelIds);
+const bundledChannelAliases = new Map<string, string>(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
+    (entry) => {
+      const channelId = normalizeLowercaseStringOrEmpty(entry.channelId);
+      if (!channelId) {
+        return [];
+      }
+      return (entry.aliases ?? [])
+        .map((alias) => [normalizeLowercaseStringOrEmpty(alias), channelId] as const)
+        .filter(([alias]) => alias.length > 0);
+    },
+  ),
+);
+
+function normalizeBundledChannelId(raw?: string | null): string | null {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return null;
+  }
+  const resolved = bundledChannelAliases.get(normalized) ?? normalized;
+  return bundledChannelIdSet.has(resolved) ? resolved : null;
+}
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -315,6 +342,31 @@ function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): Allowe
   // config metadata here so we can recover enum hints without touching runtime
   // plugin registries during validation formatting.
   return collectAllowedValuesFromBundledChannelSchemaPath(toConfigPathSegments(record.path));
+}
+
+function appendNumericBoundHint(message: string, record: UnknownIssueRecord): string {
+  const origin = typeof record.origin === "string" ? record.origin : "";
+  if (origin !== "number") {
+    return message;
+  }
+  const inclusive = record.inclusive === true;
+  if (record.code === "too_big") {
+    const maximum = typeof record.maximum === "number" ? record.maximum : undefined;
+    if (maximum !== undefined) {
+      return inclusive
+        ? `${message} (maximum: ${maximum})`
+        : `${message} (must be less than ${maximum})`;
+    }
+  }
+  if (record.code === "too_small") {
+    const minimum = typeof record.minimum === "number" ? record.minimum : undefined;
+    if (minimum !== undefined) {
+      return inclusive
+        ? `${message} (minimum: ${minimum})`
+        : `${message} (must be greater than ${minimum})`;
+    }
+  }
+  return message;
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -527,33 +579,51 @@ function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidatio
   return issues;
 }
 
-function isUnsupportedMutableSecretRefSchemaIssue(params: {
+function formatFilteredUnrecognizedKeyMessage(message: string, keys: string[]): string {
+  const quotedKeys = keys.map((key) => `"${key}"`).join(", ");
+  if (/must not have additional properties/i.test(message)) {
+    return `must not have additional properties: ${quotedKeys}`;
+  }
+  return keys.length === 1 ? `Unrecognized key: ${quotedKeys}` : `Unrecognized keys: ${quotedKeys}`;
+}
+
+function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   issue: ConfigValidationIssue;
   policyIssue: ConfigValidationIssue;
-}): boolean {
+}): ConfigValidationIssue | null {
   const { issue, policyIssue } = params;
   if (issue.path === policyIssue.path) {
-    return /expected string, received object/i.test(issue.message);
+    return /expected string, received object/i.test(issue.message) ? null : issue;
   }
 
   if (!issue.path || !policyIssue.path || !policyIssue.path.startsWith(`${issue.path}.`)) {
-    return false;
+    return issue;
   }
 
   const remainder = policyIssue.path.slice(issue.path.length + 1);
   const childKey = remainder.split(".")[0];
   if (!childKey) {
-    return false;
+    return issue;
   }
 
-  if (!/Unrecognized key/i.test(issue.message)) {
-    return false;
+  if (!/Unrecognized key|must not have additional properties/i.test(issue.message)) {
+    return issue;
   }
   const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   if (unrecognizedKeys.length === 0) {
-    return false;
+    return issue;
   }
-  return unrecognizedKeys.length === 1 && unrecognizedKeys[0] === childKey;
+  if (!unrecognizedKeys.includes(childKey)) {
+    return issue;
+  }
+  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  if (remainingKeys.length === 0) {
+    return null;
+  }
+  return {
+    ...issue,
+    message: formatFilteredUnrecognizedKeyMessage(issue.message, remainingKeys),
+  };
 }
 
 function mergeUnsupportedMutableSecretRefIssues(
@@ -563,12 +633,19 @@ function mergeUnsupportedMutableSecretRefIssues(
   if (policyIssues.length === 0) {
     return schemaIssues;
   }
-  const filteredSchemaIssues = schemaIssues.filter(
-    (issue) =>
-      !policyIssues.some((policyIssue) =>
-        isUnsupportedMutableSecretRefSchemaIssue({ issue, policyIssue }),
-      ),
-  );
+  const filteredSchemaIssues = schemaIssues.flatMap((issue) => {
+    let filteredIssue: ConfigValidationIssue | null = issue;
+    for (const policyIssue of policyIssues) {
+      if (!filteredIssue) {
+        return [];
+      }
+      filteredIssue = filterUnsupportedMutableSecretRefSchemaIssue({
+        issue: filteredIssue,
+        policyIssue,
+      });
+    }
+    return filteredIssue ? [filteredIssue] : [];
+  });
   return [...policyIssues, ...filteredSchemaIssues];
 }
 
@@ -580,6 +657,11 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
+  // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
+  // Append a parenthesized bound alongside Zod's native message,
+  // matching the clarity that enum/union rejections get via (allowed: …).
+  const enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
 
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
@@ -599,12 +681,12 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   }
 
   if (!allowedValuesSummary) {
-    return { path, message };
+    return { path, message: enrichedMessage };
   }
 
   return {
     path,
-    message: appendAllowedValuesHint(message, allowedValuesSummary),
+    message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
     allowedValues: allowedValuesSummary.values,
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
   };
@@ -1006,10 +1088,11 @@ function validateConfigObjectWithPluginsBase(
       return registryInfo;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-    const registry = loadPluginMetadataSnapshot({
+    const registry = resolvePluginMetadataSnapshot({
       config,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env ?? process.env,
+      allowWorkspaceScopedCurrent: true,
     }).manifestRegistry;
     registryInfo = { registry };
     return registryInfo;
@@ -1393,7 +1476,7 @@ function validateConfigObjectWithPluginsBase(
     };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
+  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -1454,7 +1537,7 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const heartbeatChannelIds = new Set<string>();
-  for (const channelId of CHANNEL_IDS) {
+  for (const channelId of bundledChannelIds) {
     heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(channelId));
   }
 
@@ -1471,7 +1554,7 @@ function validateConfigObjectWithPluginsBase(
     if (normalized === "last" || normalized === "none") {
       return;
     }
-    if (normalizeChatChannelId(trimmed)) {
+    if (normalizeBundledChannelId(trimmed)) {
       return;
     }
     if (!heartbeatChannelIds.has(normalized)) {
@@ -1605,6 +1688,7 @@ function validateConfigObjectWithPluginsBase(
       blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
     );
   };
+  const missingOfficialPluginWarningIds = new Set<string>();
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -1632,6 +1716,13 @@ function validateConfigObjectWithPluginsBase(
       const externalInstallWarning =
         opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
+        const normalizedPluginId = normalizePluginId(pluginId);
+        if (!opts.missingMessage && normalizedPluginId) {
+          if (missingOfficialPluginWarningIds.has(normalizedPluginId)) {
+            return;
+          }
+          missingOfficialPluginWarningIds.add(normalizedPluginId);
+        }
         warnings.push({
           path,
           message: externalInstallWarning,

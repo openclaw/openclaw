@@ -16,11 +16,13 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 function createSnapshot(
   params: {
     config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+    registrySource?: PluginMetadataSnapshot["registrySource"];
     workspaceDir?: string;
   } = {},
 ): PluginMetadataSnapshot {
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index: {
       version: 1,
@@ -214,6 +216,15 @@ describe("current plugin metadata snapshot", () => {
     clearCurrentPluginMetadataSnapshot();
 
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  it("keeps derived registry snapshots as the current process snapshot", () => {
+    const persisted = createSnapshot({ registrySource: "persisted" });
+    const derived = createSnapshot({ registrySource: "derived" });
+    setCurrentPluginMetadataSnapshot(persisted);
+    setCurrentPluginMetadataSnapshot(derived);
+
+    expect(getCurrentPluginMetadataSnapshot()).toBe(derived);
   });
 
   it("restores a captured current snapshot state", () => {

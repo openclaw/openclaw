@@ -13,9 +13,12 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
+  sessionId?: string;
+  sessionFile?: string;
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
@@ -116,6 +119,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedPiSessionMock.mockReset();
   state.compactEmbeddedPiSessionMock.mockResolvedValue({
     ok: true,
@@ -228,6 +232,78 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    active.complete();
+  });
+
+  it("runs visible turns with the session id returned by admission", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const { run } = createMinimalRun({
+      runOverrides: { sessionId: "stale-session" },
+      sessionStore,
+    });
+
+    const pending = run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    sessionStore.main = {
+      sessionId: "post-compact-session",
+      sessionFile: "/tmp/post-compact.jsonl",
+      updatedAt: Date.now(),
+    };
+    active.complete();
+    await pending;
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [call] = mockCallArgs(state.runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
+    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+
+  it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const { run, typing } = createMinimalRun({
+      opts: { abortSignal: abortController.signal },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
@@ -1007,6 +1083,158 @@ describe("runReplyAgent typing (heartbeat)", () => {
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
     }
+  });
+
+  it("does not persist active fallback state for internal subagent announce fallback", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      responseUsage: "tokens",
+    };
+    const sessionStore = { main: sessionEntry };
+    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
+    const storePath = join(storeRoot, "sessions.json");
+    await writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+    try {
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "subagent timed out" }],
+        meta: {
+          agentMeta: {
+            usage: {
+              input: 100,
+              output: 50,
+            },
+          },
+        },
+      });
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+        const { run, onFallbackStep } = args;
+        await onFallbackStep?.({
+          fallbackStepType: "fallback_step",
+          fallbackStepFromModel: "openai/gpt-5.5",
+          fallbackStepToModel: "google/gemini-2.5-flash",
+          fallbackStepFromFailureReason: "timeout",
+          fallbackStepFinalOutcome: "succeeded",
+        });
+        return {
+          result: await run("google", "gemini-2.5-flash"),
+          provider: "google",
+          model: "gemini-2.5-flash",
+          attempts: [
+            {
+              provider: "openai-codex",
+              model: "gpt-5.5",
+              error: "codex app-server attempt timed out",
+              reason: "timeout",
+            },
+          ],
+        };
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        runOverrides: {
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:codex:subagent:c34fca91",
+            sourceChannel: "__internal__",
+            sourceTool: "subagent_announce",
+          },
+        },
+      });
+      const res = await run();
+
+      expect(sessionEntry.modelProvider).toBe("openai-codex");
+      expect(sessionEntry.model).toBe("gpt-5.5");
+      expect(sessionEntry.providerOverride).toBeUndefined();
+      expect(sessionEntry.modelOverride).toBeUndefined();
+      expect(sessionEntry.modelOverrideSource).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+      const persistedStore = JSON.parse(await readFile(storePath, "utf-8"));
+      expect(persistedStore.main.modelProvider).toBe("openai-codex");
+      expect(persistedStore.main.model).toBe("gpt-5.5");
+      expect(persistedStore.main.providerOverride).toBeUndefined();
+      expect(persistedStore.main.modelOverride).toBeUndefined();
+      expect(persistedStore.main.modelOverrideSource).toBeUndefined();
+      expect(persistedStore.main.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(persistedStore.main.fallbackNoticeActiveModel).toBeUndefined();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+      expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
+      expect(payloads.some((payload) => payload.text?.includes("Usage:"))).toBe(false);
+    } finally {
+      await rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces empty internal fallback failures without persisting visible fallback state", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+      const { run, onFallbackStep } = args;
+      await onFallbackStep?.({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "openai/gpt-5.5",
+        fallbackStepToModel: "google/gemini-2.5-flash",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepFinalOutcome: "succeeded",
+      });
+      return {
+        result: await run("google", "gemini-2.5-flash"),
+        provider: "google",
+        model: "gemini-2.5-flash",
+        attempts: [
+          {
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            error: "codex app-server attempt timed out",
+            reason: "timeout",
+          },
+        ],
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      runOverrides: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:codex:subagent:c34fca91",
+          sourceChannel: "__internal__",
+          sourceTool: "subagent_announce",
+        },
+      },
+    });
+    const res = await run();
+
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
+    expect(sessionEntry.modelProvider).toBe("openai-codex");
+    expect(sessionEntry.model).toBe("gpt-5.5");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
   });
 
   it("keeps fallback transition notices when block streaming has no final text", async () => {
@@ -1973,7 +2201,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 
@@ -1995,7 +2224,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 

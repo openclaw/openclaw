@@ -42,6 +42,8 @@ openclaw gateway run
     - `openclaw onboard --mode local` and `openclaw setup` are expected to write `gateway.mode=local`. If the file exists but `gateway.mode` is missing, treat that as a broken or clobbered config and repair it instead of assuming local mode implicitly.
     - If the file exists and `gateway.mode` is missing, the Gateway treats that as suspicious config damage and refuses to "guess local" for you.
     - Binding beyond loopback without auth is blocked (safety guardrail).
+    - `lan`, `tailnet`, and `custom` currently resolve over IPv4-only BYOH paths.
+    - IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy if the host itself is IPv6-only.
     - `SIGUSR1` triggers an in-process restart when authorized (`commands.restart` is enabled by default; set `commands.restart: false` to block manual restart, while gateway tool/config apply/update remain allowed).
     - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don't restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
@@ -54,7 +56,7 @@ openclaw gateway run
   WebSocket port (default comes from config/env; usually `18789`).
 </ParamField>
 <ParamField path="--bind <loopback|lan|tailnet|auto|custom>" type="string">
-  Listener bind mode.
+  Listener bind mode. `lan`, `tailnet`, and `custom` currently resolve over IPv4-only paths.
 </ParamField>
 <ParamField path="--auth <token|password>" type="string">
   Auth mode override.
@@ -73,6 +75,9 @@ openclaw gateway run
 </ParamField>
 <ParamField path="--tailscale-reset-on-exit" type="boolean">
   Reset Tailscale serve/funnel config on shutdown.
+</ParamField>
+<ParamField path="--bind custom + gateway.customBindHost" type="string">
+  Expects an IPv4 address today. For IPv6-only BYOH, place an IPv4 sidecar or proxy in front of the Gateway and point OpenClaw at that IPv4 endpoint.
 </ParamField>
 <ParamField path="--allow-unconfigured" type="boolean">
   Allow gateway start without `gateway.mode=local` in config. Bypasses the startup guard for ad-hoc/dev bootstrap only; does not write or repair the config file.
@@ -299,6 +304,7 @@ openclaw gateway status --require-rpc
     - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
     - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
     - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
+    - When probing is enabled, JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the follow-up handshake probe cannot provide version metadata.
     - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
     - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
     - `--deep` also reports a recent Gateway supervisor restart handoff when the service process exited cleanly for an external supervisor restart.

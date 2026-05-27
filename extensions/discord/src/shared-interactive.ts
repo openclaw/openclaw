@@ -60,6 +60,12 @@ export function buildDiscordInteractiveComponents(
                 if (button.url) {
                   spec.url = button.url;
                 }
+                if (button.disabled === true) {
+                  spec.disabled = true;
+                }
+                if (button.reusable === true) {
+                  spec.reusable = true;
+                }
                 return spec;
               }),
           });
@@ -153,6 +159,12 @@ function appendDiscordPresentationButtonBlocks(
         }
         if (button.url) {
           component.url = button.url;
+        }
+        if (button.disabled === true) {
+          component.disabled = true;
+        }
+        if (button.reusable === true) {
+          component.reusable = true;
         }
         return component;
       }),

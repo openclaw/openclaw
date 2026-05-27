@@ -45,6 +45,10 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   shim can be stale.
 - Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
   means brokered AWS today.
+- The brokered AWS default is a Linux developer image in `eu-west-1`; the repo
+  config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
+  If warmup drifts well past the minute-scale path, verify image promotion,
+  region/AZ placement, and FSR state before blaming OpenClaw.
 - For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
   `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
   Testbox policy applies.
@@ -77,6 +81,25 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 Use these only when the task needs an existing non-Linux host. OpenClaw broad
 Linux validation uses the repo Crabbox config unless a provider is explicitly
 requested.
+
+Native brokered Windows is available for Windows-specific proof. Use the AWS
+developer image in `us-west-2` on demand; it has the expected OpenClaw developer
+toolchain and Docker image cache. Keep broad Linux gates on Linux/Testbox unless
+the bug is Windows-specific:
+
+```sh
+../crabbox/bin/crabbox warmup \
+  --provider aws \
+  --target windows \
+  --windows-mode normal \
+  --region us-west-2 \
+  --market on-demand \
+  --timing-json
+```
+
+The hydrate workflow assumes Docker should already be baked into Linux images
+and only installs it as a fallback. Do not add per-run Docker installs to proof
+commands unless the image probe shows Docker is actually missing.
 
 When the user explicitly asks for brokered macOS runners, use Crabbox AWS
 macOS only after confirming the deployed coordinator supports EC2 Mac host
@@ -126,7 +149,7 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
+  "pnpm test:changed"
 ```
 
 Full suite:
@@ -137,8 +160,13 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+  "pnpm verify"
 ```
+
+Use `pnpm verify` when you need check plus full Vitest proof. It emits
+`CRABBOX_PHASE:check` and `CRABBOX_PHASE:test`, making Crabbox summaries show
+which stage failed. Use plain `pnpm test` only when check proof is already
+covered or intentionally skipped.
 
 Focused rerun:
 
@@ -148,7 +176,7 @@ pnpm crabbox:run -- \
   --ttl 240m \
   --timing-json \
   --shell -- \
-  "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test <path-or-filter>"
+  "pnpm test <path-or-filter>"
 ```
 
 Read the JSON summary. Useful fields:
@@ -183,7 +211,7 @@ node scripts/crabbox-wrapper.mjs run \
   --ttl 240m \
   --timing-json \
   -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 OPENCLAW_TESTBOX=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 pnpm check:changed
+  corepack pnpm check:changed
 ```
 
 Read the JSON summary and the Testbox line. Useful fields:
@@ -521,14 +549,14 @@ If brokered AWS cannot dispatch, sync, attach, or stop, retry once with
 
 ```sh
 pnpm crabbox:run -- --debug --timing-json -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed
+  pnpm test:changed
 ```
 
 Full suite:
 
 ```sh
 pnpm crabbox:run -- --debug --timing-json -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test
+  pnpm test
 ```
 
 Auth fallback, only when `blacksmith` says auth is missing:
@@ -568,7 +596,7 @@ Minimal Blacksmith-backed Crabbox run, from repo root:
 
 ```sh
 pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- \
-  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed
+  corepack pnpm test:changed
 ```
 
 Use direct Blacksmith only when Crabbox is the broken layer and you are
@@ -594,7 +622,7 @@ provider deliberately.
 ```sh
 pnpm crabbox:warmup -- --class beast --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
+pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "pnpm test:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
 ```
 

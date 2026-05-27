@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
@@ -25,6 +25,8 @@ const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTAL
   await import("./install.js");
 
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
+let previousNpmGlobalConfig: string | undefined;
+let npmGlobalConfigPath: string;
 
 function successfulSpawn(stdout = "") {
   return {
@@ -223,7 +225,14 @@ function prunePluginLocalOpenClawPeerLinks(npmRoot: string) {
           .map((scopedEntry) => path.join(entryPath, scopedEntry.name))
       : [entryPath];
     for (const packageDir of packageDirs) {
-      fs.rmSync(path.join(packageDir, "node_modules", "openclaw"), {
+      const packageNodeModulesDir = path.join(packageDir, "node_modules");
+      const packageNodeModules = fs.existsSync(packageNodeModulesDir)
+        ? fs.lstatSync(packageNodeModulesDir)
+        : null;
+      if (packageNodeModules && !packageNodeModules.isDirectory()) {
+        continue;
+      }
+      fs.rmSync(path.join(packageNodeModulesDir, "openclaw"), {
         recursive: true,
         force: true,
       });
@@ -409,7 +418,19 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   );
 }
 
+beforeAll(() => {
+  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmGlobalConfigPath = path.join(suiteTempRootTracker.makeTempDir(), "global-npmrc");
+  fs.writeFileSync(npmGlobalConfigPath, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
+});
+
 afterAll(() => {
+  if (previousNpmGlobalConfig === undefined) {
+    delete process.env.NPM_CONFIG_GLOBALCONFIG;
+  } else {
+    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
+  }
   suiteTempRootTracker.cleanup();
 });
 
@@ -424,6 +445,7 @@ beforeEach(() => {
   );
   resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
   vi.unstubAllEnvs();
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
 });
 
 describe("installPluginFromNpmSpec", () => {

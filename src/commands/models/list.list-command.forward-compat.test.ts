@@ -247,9 +247,11 @@ function installModelsListCommandForwardCompatMocks() {
   }));
 
   vi.doMock("../../agents/agent-scope.js", () => ({
+    listAgentEntries: vi.fn(() => []),
     resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
     resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
     resolveDefaultAgentId: vi.fn(() => "main"),
+    resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));
 
   vi.doMock("../../agents/model-catalog.js", () => ({
@@ -614,8 +616,8 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
           provider: "google",
-          id: "gemini-3.1-flash-lite-preview",
-          name: "Gemini 3.1 Flash Lite Preview",
+          id: "gemini-3.1-flash-lite",
+          name: "Gemini 3.1 Flash Lite",
           input: ["text"],
           contextWindow: 1_000_000,
         },
@@ -629,12 +631,12 @@ describe("modelsListCommand forward-compat", () => {
       expectRowKeys(rows, [
         "xiaomi/mimo-v2.5-pro",
         "xiaomi/mimo-v2.5",
-        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite",
       ]);
       expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
       expectRowFields(rows, "xiaomi/mimo-v2.5", { name: "MiMo V2.5" });
-      expectRowFields(rows, "google/gemini-3.1-flash-lite-preview", {
-        name: "Gemini 3.1 Flash Lite Preview",
+      expectRowFields(rows, "google/gemini-3.1-flash-lite", {
+        name: "Gemini 3.1 Flash Lite",
         available: true,
       });
     });

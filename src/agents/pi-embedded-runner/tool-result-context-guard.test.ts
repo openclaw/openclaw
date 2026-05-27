@@ -137,7 +137,9 @@ async function applyMidTurnPrecheckGuardToContext(
 
 function expectPiStyleTruncation(text: string): void {
   expect(text).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-  expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
+  expect(text).toMatch(
+    /\[\.\.\. \d+ more characters truncated; rerun with narrower args if needed\]$/,
+  );
   expect(text).not.toContain("[compacted: tool output removed to free context]");
   expect(text).not.toContain("[compacted: tool output trimmed to free context]");
   expect(text).not.toContain("[truncated: output exceeded context limit]");
@@ -169,7 +171,9 @@ function recordMockArg(
 
 describe("formatContextLimitTruncationNotice", () => {
   it("formats pi-style truncation wording with a count", () => {
-    expect(formatContextLimitTruncationNotice(123)).toBe("[... 123 more characters truncated]");
+    expect(formatContextLimitTruncationNotice(123)).toBe(
+      "[... 123 more characters truncated; rerun with narrower args if needed]",
+    );
   });
 });
 
@@ -500,6 +504,38 @@ describe("installContextEngineLoopHook", () => {
     });
   }
 
+  function installOwnsCompactionHookWithGuard(
+    agent: ReturnType<typeof makeGuardableAgent>,
+    engine: MockedEngine,
+    options: {
+      prePromptCount?: number;
+      contextWindowTokens?: number;
+      contextTokenBudget?: number;
+      reserveTokens?: number;
+      toolResultMaxChars?: number;
+    } = {},
+  ): () => void {
+    const removeEngineHook = installHook(agent, engine, options.prePromptCount);
+    const removeGuard = installToolResultContextGuard({
+      agent,
+      contextWindowTokens: options.contextWindowTokens ?? 200_000,
+      midTurnPrecheck: {
+        enabled: true,
+        contextTokenBudget: options.contextTokenBudget ?? 20_000,
+        reserveTokens: () => options.reserveTokens ?? 12_000,
+        toolResultMaxChars: options.toolResultMaxChars,
+        getSystemPrompt: () => "sys",
+        ...(options.prePromptCount !== undefined
+          ? { getPrePromptMessageCount: () => options.prePromptCount as number }
+          : {}),
+      },
+    });
+    return () => {
+      removeGuard();
+      removeEngineHook();
+    };
+  }
+
   async function callAfterInitialToolResult(
     agent: ReturnType<typeof makeGuardableAgent>,
     options: { includeSecondUser?: boolean; firstResultText?: string } = {},
@@ -529,6 +565,46 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(messages);
     expect(engine.afterTurn).not.toHaveBeenCalled();
     expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("keeps the pressure guard active around ownsCompaction loop assembly", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      toolResultMaxChars: 16_000,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+
+    await expect(callTransform(agent, messages)).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets ownsCompaction assembly resolve pressure before the generic guard checks", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installOwnsCompactionHookWithGuard(agent, engine, {
+      prePromptCount: 1,
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      toolResultMaxChars: 16_000,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "x".repeat(80_000))];
+    const transformed = await callTransform(agent, messages);
+
+    expect(transformed).toBe(compactedView);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
   it("processes the first call when messages already exceed the pre-prompt baseline", async () => {

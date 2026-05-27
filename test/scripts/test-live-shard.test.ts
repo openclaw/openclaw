@@ -4,6 +4,7 @@ import {
   LIVE_TEST_SHARDS,
   RELEASE_LIVE_TEST_SHARDS,
   collectAllLiveTestFiles,
+  parseLiveShardArgs,
   selectLiveShardFiles,
 } from "../../scripts/test-live-shard.mjs";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
@@ -72,6 +73,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
       "src/gateway/gateway-acp-bind.live.test.ts",
       "src/gateway/gateway-cli-backend.live.test.ts",
+      "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts",
       "src/gateway/gateway-codex-bind.live.test.ts",
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);
@@ -118,5 +120,25 @@ describe("scripts/test-live-shard", () => {
 
   it("rejects unknown shard names", () => {
     expect(() => selectLiveShardFiles("native-live-missing")).toThrow(/Unknown live test shard/u);
+  });
+
+  it("parses list mode and rejects unknown live shard options", () => {
+    expect(parseLiveShardArgs(["native-live-src-agents", "--list"])).toEqual({
+      shard: "native-live-src-agents",
+      listOnly: true,
+      passthroughArgs: [],
+    });
+
+    expect(() => parseLiveShardArgs(["--lisst", "native-live-src-agents"])).toThrow(
+      /Unknown option: --lisst/u,
+    );
+  });
+
+  it("preserves Vitest passthrough args after the live shard separator", () => {
+    expect(parseLiveShardArgs(["native-live-test", "--", "-t", "smoke"])).toEqual({
+      shard: "native-live-test",
+      listOnly: false,
+      passthroughArgs: ["-t", "smoke"],
+    });
   });
 });

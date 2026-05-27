@@ -151,6 +151,11 @@ function readDirectErrorCode(err: unknown): string | undefined {
     const trimmed = directCode.trim();
     return trimmed ? trimmed : undefined;
   }
+  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
+  if (typeof detailCode === "string") {
+    const trimmed = detailCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
   const status = (err as { status?: unknown }).status;
   if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
@@ -273,6 +278,9 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   }
   if (isFailoverError(err)) {
     return false;
+  }
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
   }
   return resolveFailoverClassificationFromError(err) === null;
 }

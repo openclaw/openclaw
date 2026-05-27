@@ -247,25 +247,37 @@ if (
   }
 }
 
+const getErrorMessage = (err) =>
+  err && typeof err === "object" && "message" in err && typeof err.message === "string"
+    ? err.message
+    : "";
+
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
 const isDirectModuleNotFoundError = (err, specifier) => {
-  if (!isModuleNotFoundError(err)) {
-    return false;
-  }
+  const message = getErrorMessage(err);
+  const bunSpecifierMiss =
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`);
+  const launcherPath = fileURLToPath(import.meta.url);
+  const bunLauncherImporterMiss =
+    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
-  if ("url" in err && err.url === expectedUrl.href) {
-    return true;
+  const expectedPath = fileURLToPath(expectedUrl);
+  const nodePathMiss =
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`);
+
+  if (isModuleNotFoundError(err)) {
+    if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
+      return true;
+    }
+    return nodePathMiss || (bunSpecifierMiss && bunLauncherImporterMiss);
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  const expectedPath = fileURLToPath(expectedUrl);
-  return (
-    message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
-  );
+  return bunSpecifierMiss && bunLauncherImporterMiss;
 };
 
 const installProcessWarningFilter = async () => {
@@ -328,8 +340,21 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const isBrowserHelpInvocation = (argv) =>
-  argv.length === 4 && argv[2] === "browser" && (argv[3] === "--help" || argv[3] === "-h");
+const resolvePrecomputedCommandHelp = (argv) => {
+  if (argv.length !== 4 || (argv[3] !== "--help" && argv[3] !== "-h")) {
+    return null;
+  }
+  if (argv[2] === "browser") {
+    return { command: "browser", metadataKey: "browserHelpText" };
+  }
+  if (argv[2] === "secrets") {
+    return { command: "secrets", metadataKey: "secretsHelpText" };
+  }
+  if (argv[2] === "nodes") {
+    return { command: "nodes", metadataKey: "nodesHelpText" };
+  }
+  return null;
+};
 
 const isHelpFastPathDisabled = () =>
   process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
@@ -440,11 +465,15 @@ const tryOutputBareRootHelp = async () => {
   return false;
 };
 
-const tryOutputBrowserHelp = () => {
-  if (!isBrowserHelpInvocation(process.argv)) {
+const tryOutputPrecomputedCommandHelp = () => {
+  const commandHelp = resolvePrecomputedCommandHelp(process.argv);
+  if (!commandHelp) {
     return false;
   }
-  const precomputed = loadPrecomputedHelpText("browserHelpText");
+  if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey);
   if (!precomputed) {
     return false;
   }
@@ -455,7 +484,7 @@ const tryOutputBrowserHelp = () => {
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
-  } else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
+  } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {
     await installProcessWarningFilter();

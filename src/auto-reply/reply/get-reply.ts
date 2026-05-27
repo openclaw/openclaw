@@ -7,7 +7,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { modelKey, resolveModelRefFromString } from "../../agents/model-selection.js";
+import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -15,6 +15,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -47,6 +48,7 @@ import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -89,6 +91,8 @@ const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
   () => import("../../link-understanding/apply.runtime.js"),
 );
+
+const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
 const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
 );
@@ -162,6 +166,7 @@ function hasLinkCandidate(ctx: MsgContext): boolean {
 async function applyMediaUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
@@ -213,70 +218,89 @@ export async function getReplyFromConfig(
     isFastTestEnv,
     configOverride,
   });
-  const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
-    isFastTestEnv,
-    configOverride,
-  });
-  const useFastTestRuntime = shouldUseReplyFastTestRuntime({
-    cfg,
-    isFastTestEnv,
-  });
-  const finalized = finalizeInboundContext(ctx);
-  const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
-  const agentSessionKey = targetSessionKey || finalized.SessionKey;
-  const traceAttributes = {
+  // Profiler spans stay inert unless diagnostics enable `profiler` or
+  // `reply.profiler`, so normal replies do not pay per-stage Date.now/array
+  // bookkeeping while we can still split resolver costs on demand.
+  const resolverTiming = createReplyTimingTracker({ log: replyResolverTimingLog, config: cfg });
+  const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
+    shouldUseReplyFastTestBootstrap({
+      isFastTestEnv,
+      configOverride,
+    }),
+  );
+  const useFastTestRuntime = resolverTiming.measureSync("reply.resolve_fast_test_runtime", () =>
+    shouldUseReplyFastTestRuntime({
+      cfg,
+      isFastTestEnv,
+    }),
+  );
+  const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
+    finalizeInboundContext(ctx),
+  );
+  const { agentSessionKey, agentId } = resolverTiming.measureSync(
+    "reply.resolve_agent_scope",
+    () => {
+      const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+      const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
+      return {
+        agentSessionKey: resolvedAgentSessionKey,
+        agentId: resolveSessionAgentId({
+          sessionKey: resolvedAgentSessionKey,
+          config: cfg,
+        }),
+      };
+    },
+  );
+  const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
     surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
     isHeartbeat: opts?.isHeartbeat === true,
     hasMedia: hasInboundMedia(finalized),
-  };
-  const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
-      config: cfg,
-      attributes: traceAttributes,
+  }));
+  const messageId = finalized.MessageSid ?? finalized.MessageSidFirst ?? finalized.MessageSidLast;
+  let resolverTimingSessionKey = agentSessionKey;
+  const logResolverTiming = (outcome: string, reason?: string, error?: string) =>
+    resolverTiming.logIfSlow({
+      message: `reply resolver timings surface=${traceAttributes.surface} messageId=${
+        messageId ?? "unknown"
+      } sessionKey=${resolverTimingSessionKey ?? "unknown"} agentId=${agentId}`,
+      outcome,
+      reason,
+      error,
+      details: {
+        surface: traceAttributes.surface,
+        messageId,
+        sessionKey: resolverTimingSessionKey,
+        agentId,
+      },
     });
-  const agentId = resolveSessionAgentId({
-    sessionKey: agentSessionKey,
-    config: cfg,
-  });
-  const mergedSkillFilter = mergeSkillFilters(
-    opts?.skillFilter,
-    resolveAgentSkillsFilter(cfg, agentId),
+  const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    resolverTiming.measure(name, () =>
+      measureDiagnosticsTimelineSpan(name, run, {
+        phase: "agent-turn",
+        config: cfg,
+        attributes: traceAttributes,
+      }),
+    );
+  const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
+    mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
-  const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
-    cfg,
-    agentId,
-  });
+  const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
+    "reply.resolve_default_model",
+    () =>
+      resolveDefaultModel({
+        cfg,
+        agentId,
+      }),
+  );
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
-  let hasAppliedImageModelOverride = false;
-  let imageModelFallbacksOverride: string[] | undefined;
-  const modelOverrideRaw = normalizeOptionalString(opts?.modelOverride);
-  if (modelOverrideRaw) {
-    const modelOverrideRef = resolveModelRefFromString({
-      raw: modelOverrideRaw,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (modelOverrideRef) {
-      provider = modelOverrideRef.ref.provider;
-      model = modelOverrideRef.ref.model;
-      hasAppliedImageModelOverride = true;
-      imageModelFallbacksOverride = opts?.modelOverrideFallbacks?.filter(
-        (fallback): fallback is string => normalizeOptionalString(fallback) !== undefined,
-      );
-    } else {
-      defaultRuntime.log?.(
-        `[image-model-switch] Failed to resolve image model override ${modelOverrideRaw}; using default model ${modelKey(defaultProvider, defaultModel)}`,
-      );
-    }
-  } else if (opts?.isHeartbeat) {
+  if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
@@ -297,22 +321,34 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspaceDirForNativeCommand = workspaceDirRaw;
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
-  const configuredTypingSeconds =
-    agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
-  const typingIntervalSeconds =
-    typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const typing = createTypingController({
-    onReplyStart: opts?.onReplyStart,
-    onCleanup: opts?.onTypingCleanup,
-    typingIntervalSeconds,
-    silentToken: SILENT_REPLY_TOKEN,
-    log: defaultRuntime.log,
+  const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
+    resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
+      const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+      return {
+        workspaceDirRaw,
+        workspaceDirForNativeCommand: workspaceDirRaw,
+        agentDir: resolveAgentDir(cfg, agentId),
+        timeoutMs: resolveAgentTimeoutMs({
+          cfg,
+          overrideSeconds: opts?.timeoutOverrideSeconds,
+        }),
+      };
+    });
+  const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
+    const configuredTypingSeconds =
+      agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+    const typingIntervalSeconds =
+      typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+    const controller = createTypingController({
+      onReplyStart: opts?.onReplyStart,
+      onCleanup: opts?.onTypingCleanup,
+      typingIntervalSeconds,
+      silentToken: SILENT_REPLY_TOKEN,
+      log: defaultRuntime.log,
+    });
+    opts?.onTypingController?.(controller);
+    return controller;
   });
-  opts?.onTypingController?.(typing);
 
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
@@ -336,6 +372,7 @@ export async function getReplyFromConfig(
       }),
   );
   if (nativeSlashCommandFastReply.handled) {
+    logResolverTiming("completed", "native_slash_command_fast_path");
     return nativeSlashCommandFastReply.reply;
   }
 
@@ -355,6 +392,7 @@ export async function getReplyFromConfig(
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
+        agentId,
         agentDir,
         workspaceDir,
         activeModel: { provider, model },
@@ -409,6 +447,7 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
@@ -474,6 +513,7 @@ export async function getReplyFromConfig(
             }),
           });
         }
+        logResolverTiming("completed", "pending_final_delivery_replay");
         return { text: replayText };
       }
     }
@@ -554,16 +594,13 @@ export async function getReplyFromConfig(
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
-    !hasAppliedImageModelOverride &&
     !staleHeartbeatAutoFallbackOverride
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
   const canApplyAutoFallbackPrimaryProbe =
-    !hasResolvedHeartbeatModelOverride &&
-    !hasAppliedImageModelOverride &&
-    !staleHeartbeatAutoFallbackOverride;
+    !hasResolvedHeartbeatModelOverride && !staleHeartbeatAutoFallbackOverride;
   const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe
     ? resolveAutoFallbackPrimaryProbe({
         entry: sessionEntry,
@@ -577,32 +614,11 @@ export async function getReplyFromConfig(
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasEffectiveSessionModelOverride &&
-    !hasAppliedImageModelOverride &&
     resolvedChannelModelOverride
   ) {
     provider = resolvedChannelModelOverride.ref.provider;
     model = resolvedChannelModelOverride.ref.model;
   }
-  const imageModelOverrideBaseProvider = hasAppliedImageModelOverride
-    ? (() => {
-        if (
-          storedModelOverride?.model &&
-          !hasResolvedHeartbeatModelOverride &&
-          !staleHeartbeatAutoFallbackOverride
-        ) {
-          return storedModelOverride.provider ?? defaultProvider;
-        }
-        if (!hasEffectiveSessionModelOverride && resolvedChannelModelOverride) {
-          return resolvedChannelModelOverride.ref.provider;
-        }
-        const runtimeProvider = normalizeOptionalString(sessionEntry.modelProvider);
-        const runtimeModel = normalizeOptionalString(sessionEntry.model);
-        if (runtimeProvider && runtimeModel) {
-          return runtimeProvider;
-        }
-        return defaultProvider;
-      })()
-    : undefined;
 
   if (
     shouldUseReplyFastDirectiveExecution({
@@ -622,7 +638,8 @@ export async function getReplyFromConfig(
       triggerBodyNormalized,
       commandAuthorized,
     });
-    return await traceGetReplyPhase("reply.run_prepared_reply", () =>
+    logResolverTiming("milestone", "before_fast_directive_prepared_reply");
+    const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
       runPreparedReply({
         ctx,
         sessionCtx,
@@ -664,7 +681,6 @@ export async function getReplyFromConfig(
         perMessageQueueOptions: undefined,
         typing,
         opts: resolvedOpts,
-        defaultProvider,
         defaultModel,
         timeoutMs,
         isNewSession,
@@ -677,12 +693,11 @@ export async function getReplyFromConfig(
         storePath,
         workspaceDir,
         abortedLastRun,
-        hasAppliedImageModelOverride,
-        imageModelOverrideBaseProvider,
-        imageModelFallbacksOverride,
         autoFallbackPrimaryProbe,
       }),
     );
+    logResolverTiming("completed", "fast_directive_prepared_reply");
+    return fastReplyResult;
   }
 
   const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
@@ -711,7 +726,6 @@ export async function getReplyFromConfig(
       aliasIndex,
       provider,
       model,
-      hasOneTurnModelOverride: hasAppliedImageModelOverride,
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: resolvedOpts,
@@ -719,6 +733,7 @@ export async function getReplyFromConfig(
     }),
   );
   if (directiveResult.kind === "reply") {
+    logResolverTiming("completed", "directive_reply");
     return directiveResult.reply;
   }
 
@@ -819,6 +834,7 @@ export async function getReplyFromConfig(
   );
   if (inlineActionResult.kind === "reply") {
     await maybeEmitMissingResetHooks();
+    logResolverTiming("completed", "inline_action_reply");
     return inlineActionResult.reply;
   }
   await maybeEmitMissingResetHooks();
@@ -851,7 +867,6 @@ export async function getReplyFromConfig(
       provider: runProvider,
       model: runModel,
       hasModelDirective: false,
-      hasOneTurnModelOverride: hasAppliedImageModelOverride,
       skipStoredModelOverride: true,
       hasResolvedHeartbeatModelOverride,
       isHeartbeat: opts?.isHeartbeat === true,
@@ -911,6 +926,7 @@ export async function getReplyFromConfig(
         ),
       );
       if (hookResult?.handled) {
+        logResolverTiming("completed", "before_agent_reply_hook");
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
     }
@@ -933,7 +949,8 @@ export async function getReplyFromConfig(
     );
   }
 
-  return await traceGetReplyPhase("reply.run_prepared_reply", () =>
+  logResolverTiming("milestone", "before_run_prepared_reply");
+  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
       ctx,
       sessionCtx,
@@ -965,7 +982,6 @@ export async function getReplyFromConfig(
       perMessageQueueOptions,
       typing,
       opts: resolvedOpts,
-      defaultProvider,
       defaultModel,
       timeoutMs,
       isNewSession,
@@ -978,10 +994,9 @@ export async function getReplyFromConfig(
       storePath,
       workspaceDir,
       abortedLastRun,
-      hasAppliedImageModelOverride,
-      imageModelOverrideBaseProvider,
-      imageModelFallbacksOverride,
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );
+  logResolverTiming("completed", "prepared_reply");
+  return replyResult;
 }

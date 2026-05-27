@@ -29,6 +29,17 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export class FollowupRunDeferredError extends Error {
+  constructor(message = "Follow-up run deferred") {
+    super(message);
+    this.name = "FollowupRunDeferredError";
+  }
+}
+
+export function isFollowupRunDeferredError(error: unknown): error is FollowupRunDeferredError {
+  return error instanceof FollowupRunDeferredError;
+}
+
 export type FollowupRun = {
   prompt: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -86,11 +97,9 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
-    hasOneTurnModelOverride?: boolean;
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
-    imageModelFallbacksOverride?: string[];
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
