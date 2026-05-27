@@ -148,46 +148,53 @@ describe("deepinfra augmentModelCatalog", () => {
     });
   });
 
-  it("skips live discovery and returns only configured entries when ctx.entries already has more DeepInfra rows than the static catalog", async () => {
+  it("still runs live discovery when ctx.entries includes custom DeepInfra rows", async () => {
     resetDeepInfraModelCacheForTest();
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAgentModelEntry("custom/live-model")] }),
+    });
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
     const seededDeepInfraCount = DEEPINFRA_MODEL_CATALOG.length + 5;
-    const entries =
-      (await provider.augmentModelCatalog?.({
-        entries: [
-          ...buildSyntheticDeepInfraEntries(seededDeepInfraCount),
-          { provider: "openai", id: "noise", name: "noise" },
-        ],
-        config: {
-          models: {
-            providers: {
-              deepinfra: {
-                models: [
-                  {
-                    id: "zai-org/GLM-5.1",
-                    name: "configured override",
-                    input: ["text"],
-                    reasoning: true,
-                    contextWindow: 202752,
-                  },
-                ],
+    await withLiveDiscoveryTestEnv(mockFetch, async () => {
+      const entries =
+        (await provider.augmentModelCatalog?.({
+          entries: [
+            ...buildSyntheticDeepInfraEntries(seededDeepInfraCount),
+            { provider: "openai", id: "noise", name: "noise" },
+          ],
+          config: {
+            models: {
+              providers: {
+                deepinfra: {
+                  apiKey: "sk-test",
+                  models: [
+                    {
+                      id: "zai-org/GLM-5.1",
+                      name: "configured override",
+                      input: ["text"],
+                      reasoning: true,
+                      contextWindow: 202752,
+                    },
+                  ],
+                },
               },
             },
           },
-        },
-      } as never)) ?? [];
+        } as never)) ?? [];
 
-    expect(entries).toEqual([
-      {
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(entries[0]).toEqual({
         provider: "deepinfra",
         id: "zai-org/GLM-5.1",
         name: "configured override",
         input: ["text"],
         reasoning: true,
         contextWindow: 202752,
-      },
-    ]);
+      });
+      expect(entries.map((entry) => entry.id)).toContain("custom/live-model");
+    });
   });
 
   it("still fetches when ctx.entries has exactly the static catalog length (static-fallback case)", async () => {

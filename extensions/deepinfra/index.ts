@@ -4,10 +4,7 @@ import {
   readConfiguredProviderCatalogEntries,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import {
-  normalizeProviderId,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
@@ -20,7 +17,6 @@ import { applyDeepInfraConfig } from "./onboard.js";
 import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";
 import {
   DEEPINFRA_DEFAULT_MODEL_REF,
-  DEEPINFRA_MODEL_CATALOG,
   discoverDeepInfraModels,
   getDeepInfraSurfaceFallbackCatalog,
   hasDeepInfraApiKey,
@@ -72,18 +68,11 @@ export default defineSingleProviderPluginEntry({
       run: (ctx: ProviderCatalogContext) => buildDeepInfraApiKeyCatalog(ctx),
       staticRun: async () => ({ provider: buildStaticDeepInfraProvider() }),
     },
-    augmentModelCatalog: async ({ config, entries, env, agentDir }) => {
+    augmentModelCatalog: async ({ config, env, agentDir }) => {
       const configured = readConfiguredProviderCatalogEntries({
         config,
         providerId: PROVIDER_ID,
       });
-      const existingDeepInfraCount = entries.reduce(
-        (count, entry) => (normalizeProviderId(entry.provider) === PROVIDER_ID ? count + 1 : count),
-        0,
-      );
-      if (existingDeepInfraCount > DEEPINFRA_MODEL_CATALOG.length) {
-        return configured;
-      }
       // Gate dynamic discovery on the user having configured a DeepInfra API
       // key (env var, config SecretInput, or auth-profile store).
       // Pre-auth flows keep the curated manifest fallback so the model picker
