@@ -284,18 +284,12 @@ describe("session-compaction-checkpoints", () => {
     } as AssistantMessage);
     const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
     const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
-    const snapshot = await captureCompactionCheckpointSnapshotAsync({
-      sessionManager: session,
-      sessionFile,
-    });
-    const checkpointFile = requireNonEmptyString(
-      snapshot?.sessionFile,
-      "expected checkpoint snapshot file",
+    const checkpointId = "11111111-1111-4111-8111-111111111111";
+    const checkpointFile = path.join(
+      dir,
+      `${path.parse(sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
     );
-    const checkpointId = requireNonEmptyString(
-      path.basename(checkpointFile).match(/\.checkpoint\.([^.]+)\.jsonl$/)?.[1],
-      "expected checkpoint id",
-    );
+    await fs.copyFile(sessionFile, checkpointFile);
     await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
     const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
 
@@ -317,7 +311,7 @@ describe("session-compaction-checkpoints", () => {
       sessionId: session.getSessionId(),
       reason: "manual",
       preCompaction: {
-        sessionId: snapshot?.sessionId,
+        sessionId: session.getSessionId(),
         sessionFile: checkpointFile,
         leafId,
       },
