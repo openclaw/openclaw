@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
@@ -10,6 +11,8 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
   buildVitestRunPlans,
+  findUnmatchedExplicitTestTargets,
+  formatFailedShardDigest,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -125,6 +128,15 @@ function listNormalFullSuiteTestFiles(): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function hasGitGatewayFileListing(cwd: string): boolean {
+  const result = spawnSync("git", ["ls-files", "--", "src/gateway"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 && result.stdout.trim().length > 0;
+}
+
 describe("scripts/test-projects changed-target routing", () => {
   it("maps changed source files into scoped lane targets", () => {
     expect(
@@ -166,6 +178,13 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual({
       mode: "targets",
       targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+    });
+  });
+
+  it("routes Docker pull retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-docker-pull-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-docker-pull-retry.test.ts"],
     });
   });
 
@@ -270,6 +289,20 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(
+        [
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-support.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
+        process.cwd(),
+      ),
+    ).toEqual([]);
   });
 
   it("routes contract roots to separate contract shards", () => {
@@ -550,6 +583,21 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed ui build helpers to their importing tests", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/config/control-ui-chunking.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/control-ui-chunking.test.ts"],
         watchMode: false,
       },
     ]);
@@ -907,6 +955,24 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
+    "test/vitest/vitest.agents-core.config.ts",
+    "test/vitest/vitest.agents-pi-embedded.config.ts",
+    "test/vitest/vitest.agents-support.config.ts",
+    "test/vitest/vitest.agents-tools.config.ts",
+  ])("routes split agents vitest config %s to itself", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: target,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
     "src/gateway/gateway.test.ts",
     "src/gateway/server.startup-matrix-migration.integration.test.ts",
     "src/gateway/sessions-history-http.test.ts",
@@ -1019,6 +1085,7 @@ describe("scripts/test-projects full-suite sharding", () => {
   let normalFullSuiteTestFiles: string[];
   let leafShardPlans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
   let leafShardGatewayTreeReads: unknown[][];
+  let leafShardHasGitGatewayListing: boolean;
 
   beforeAll(async () => {
     [fullSuiteMatches, normalFullSuiteTestFiles] = await Promise.all([
@@ -1030,6 +1097,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     try {
+      leafShardHasGitGatewayListing = hasGitGatewayFileListing(process.cwd());
       const captured = captureReaddirSyncCallsDuring(() =>
         buildFullSuiteVitestRunPlans([], process.cwd()),
       );
@@ -1262,7 +1330,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     const plans = leafShardPlans;
 
-    expect(leafShardGatewayTreeReads).toEqual([]);
+    if (leafShardHasGitGatewayListing) {
+      expect(leafShardGatewayTreeReads).toEqual([]);
+    }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
@@ -1316,7 +1386,9 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.auto-reply-core.config.ts",
       "test/vitest/vitest.auto-reply-top-level.config.ts",
       "test/vitest/vitest.auto-reply-reply.config.ts",
+      "test/vitest/vitest.extension-active-memory.config.ts",
       "test/vitest/vitest.extension-acpx.config.ts",
+      "test/vitest/vitest.extension-codex.config.ts",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
       "test/vitest/vitest.extension-feishu.config.ts",
@@ -1462,6 +1534,44 @@ describe("scripts/test-projects parallel cache paths", () => {
     );
 
     expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+  });
+});
+
+describe("scripts/test-projects failed shard digest", () => {
+  it("prints failed configs with focused rerun commands", () => {
+    expect(
+      formatFailedShardDigest([
+        {
+          code: 1,
+          config: "test/vitest/vitest.extension-codex.config.ts",
+          includePatterns: null,
+          noOutputTimedOut: false,
+          signal: null,
+        },
+      ]),
+    ).toEqual([
+      "[test] failed shard digest (1):",
+      "[test] - test/vitest/vitest.extension-codex.config.ts (exit 1)",
+      "[test]   rerun: node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-codex.config.ts --reporter=verbose",
+    ]);
+  });
+
+  it("prints target-based reruns when a shard used include patterns", () => {
+    expect(
+      formatFailedShardDigest([
+        {
+          code: 143,
+          config: "test/vitest/vitest.unit.config.ts",
+          includePatterns: ["src/foo bar.test.ts"],
+          noOutputTimedOut: true,
+          signal: "SIGTERM",
+        },
+      ]),
+    ).toEqual([
+      "[test] failed shard digest (1):",
+      "[test] - test/vitest/vitest.unit.config.ts (exit 143, signal SIGTERM, no-output timeout) includes='src/foo bar.test.ts'",
+      "[test]   rerun: pnpm test 'src/foo bar.test.ts' -- --reporter=verbose",
+    ]);
   });
 });
 

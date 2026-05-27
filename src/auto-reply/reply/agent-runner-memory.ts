@@ -10,6 +10,10 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import {
+  classifyCompactionReason,
+  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+} from "../../agents/pi-embedded-runner/compact-reasons.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -49,6 +53,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -124,6 +129,14 @@ const memoryDeps = {
   now: () => Date.now(),
 };
 
+function isRecoverableNativeHarnessBindingFailure(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const failure = (result as { failure?: { reason?: unknown } }).failure;
+  return failure?.reason === "missing_thread_binding" || failure?.reason === "stale_thread_binding";
+}
+
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
@@ -165,6 +178,22 @@ function resolveEffectivePromptTokens(
   // Flush gating projects the next input context by adding the previous
   // completion and the current user prompt estimate.
   return base + output + estimate;
+}
+
+function isPreflightCompactionSkipReason(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  // Preflight compaction is a guardrail, not a hard dependency. These classes
+  // mean the context engine found nothing useful to compact, so the reply should
+  // continue instead of surfacing a generic user-facing failure.
+  return (
+    classification === "below_threshold" ||
+    classification === "no_compactable_entries" ||
+    classification === "already_compacted_recently"
+  );
+}
+
+function isDeferredPreflightCompactionReason(reason?: string): boolean {
+  return normalizeOptionalString(reason) === DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON;
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -229,6 +258,19 @@ function resolveFollowupContextConfigProvider(params: {
   runtimePolicySessionKey?: string;
 }): string {
   const provider = params.followupRun.run.provider;
+  return resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: resolveFollowupAgentRuntimeId(params),
+  });
+}
+
+function resolveFollowupAgentRuntimeId(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): string {
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -243,13 +285,10 @@ function resolveFollowupContextConfigProvider(params: {
       ? persistedRuntimeOverride
       : matchingSessionEntry?.agentHarnessId;
   if (persistedRuntimeId) {
-    return resolveContextConfigProviderForRuntime({
-      provider,
-      runtimeId: persistedRuntimeId,
-    });
+    return persistedRuntimeId;
   }
   const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
     config: params.cfg,
     agentId: params.followupRun.run.agentId,
@@ -259,10 +298,17 @@ function resolveFollowupContextConfigProvider(params: {
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
   });
-  return resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: harnessPolicy.runtime,
-  });
+  return harnessPolicy.runtime;
+}
+
+function followupUsesCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): boolean {
+  return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -598,6 +644,11 @@ export async function runPreflightCompactionIfNeeded(params: {
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
+  const deps = {
+    compactEmbeddedPiSession: memoryDeps.compactEmbeddedPiSession,
+    incrementCompactionCount: memoryDeps.incrementCompactionCount,
+    refreshQueuedFollowupSession: memoryDeps.refreshQueuedFollowupSession,
+  };
   if (!params.sessionKey) {
     return params.sessionEntry;
   }
@@ -611,6 +662,23 @@ export async function runPreflightCompactionIfNeeded(params: {
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
   if (params.isHeartbeat || isCli) {
+    return entry ?? params.sessionEntry;
+  }
+  if (
+    followupUsesCodexRuntime({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    })
+  ) {
+    // Codex runtime sessions should reach Codex with their real thread state.
+    // Its harness owns automatic compaction; OpenClaw preflight compaction is
+    // only for non-Codex embedded runtimes.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
+    );
     return entry ?? params.sessionEntry;
   }
 
@@ -693,11 +761,20 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+  });
+  const threshold = Math.max(
+    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
+    serverCompactionThreshold ?? 0,
+  );
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `serverCompactionThreshold=${serverCompactionThreshold ?? "undefined"} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -713,6 +790,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
+    minimumThresholdTokens: serverCompactionThreshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -735,7 +813,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.sessionKey ?? params.followupRun.run.sessionKey,
     { storePath: params.storePath },
   );
-  const result = await memoryDeps.compactEmbeddedPiSession({
+  const result = await deps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey: params.runtimePolicySessionKey,
@@ -755,23 +833,48 @@ export async function runPreflightCompactionIfNeeded(params: {
     skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
     provider: params.followupRun.run.provider,
     model: params.followupRun.run.model,
+    authProfileId: params.followupRun.run.authProfileId,
     agentHarnessId:
       entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
     thinkLevel: params.followupRun.run.thinkLevel,
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
+    deferOwningContextEngineCompaction: false,
+    contextTokenBudget: contextWindowTokens,
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });
 
-  if (!result?.ok || !result.compacted) {
+  if (!result?.ok) {
     const reason = result?.reason ?? "not_compacted";
+    if (isPreflightCompactionSkipReason(reason)) {
+      logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+      return entry ?? params.sessionEntry;
+    }
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    if (isRecoverableNativeHarnessBindingFailure(result)) {
+      logVerbose(
+        `preflightCompaction continuing after recoverable native harness binding failure: sessionKey=${params.sessionKey} reason=${reason}`,
+      );
+      return entry ?? params.sessionEntry;
+    }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
-  await incrementCompactionCount({
+  if (!result.compacted) {
+    const reason = normalizeOptionalString(result.reason);
+    if (isDeferredPreflightCompactionReason(reason)) {
+      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+      throw new Error(`Preflight compaction required but failed: ${reason}`);
+    }
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason ?? "not_compacted"}`,
+    );
+    return entry ?? params.sessionEntry;
+  }
+
+  await deps.incrementCompactionCount({
     cfg: params.cfg,
     sessionEntry: entry,
     sessionStore: params.sessionStore,
@@ -795,7 +898,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     }
     const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
     if (queueKey) {
-      memoryDeps.refreshQueuedFollowupSession({
+      deps.refreshQueuedFollowupSession({
         key: queueKey,
         previousSessionId,
         nextSessionId: entry.sessionId,
@@ -1062,6 +1165,7 @@ export async function runMemoryFlushIfNeeded(params: {
       runId: flushRunId,
       sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
       lane: CommandLane.Main,
+      abortSignal: params.replyOperation.abortSignal,
       resolveAgentHarnessRuntimeOverride: (provider) =>
         resolveMemoryFlushRuntimeOverrideForProvider({
           provider,

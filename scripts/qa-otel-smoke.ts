@@ -1,10 +1,16 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
+
+type CollectorMode = "local" | "docker";
 
 type OtlpAnyValue = {
   stringValue?: string;
@@ -38,6 +44,7 @@ type OtlpResourceSpans = {
 type OtlpSignal = "logs" | "metrics" | "traces";
 
 type CliOptions = {
+  collectorMode: CollectorMode;
   outputDir: string;
   providerMode: string;
   scenarioId: string;
@@ -50,6 +57,7 @@ type CapturedRequest = {
   path: string;
   signal: OtlpSignal;
   bytes: number;
+  contentEncoding?: string;
   status: number;
   spanCount: number;
   metricCount: number;
@@ -71,6 +79,8 @@ type CapturedLogRecord = {
 };
 
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
+const DEFAULT_DOCKER_COLLECTOR_IMAGE =
+  process.env.OPENCLAW_QA_OTEL_COLLECTOR_IMAGE || "otel/opentelemetry-collector:0.104.0";
 const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
   ["/v1/traces", "traces"],
   ["/v1/metrics", "metrics"],
@@ -79,7 +89,6 @@ const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
 const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
   "openclaw.harness.run",
-  "openclaw.model.call",
   "openclaw.context.assembled",
   "openclaw.message.delivery",
 ] as const;
@@ -105,19 +114,22 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
 const DISALLOWED_BODY_NEEDLES = [
   "OTEL-QA-SECRET",
   "OTEL-QA-OK",
-  "agent:qa:otel-trace-smoke",
 ];
+const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
 
 function usage(): string {
-  return `Usage: pnpm qa:otel:smoke [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
+  return `Usage: pnpm qa:otel:smoke [--collector local|docker] [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
 
-Runs a QA-lab scenario with diagnostics-otel enabled against a local OTLP/HTTP
-receiver, then asserts the emitted signal shape and privacy contract.
+Runs a QA-lab scenario with diagnostics-otel enabled, then asserts the emitted
+signal shape and privacy contract. The default collector is an in-process
+OTLP/HTTP receiver. Use --collector docker to put a real OpenTelemetry
+Collector container in front of the receiver.
 `;
 }
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
+    collectorMode: "local",
     outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
     providerMode: "mock-openai",
     scenarioId: DEFAULT_SCENARIO_ID,
@@ -140,6 +152,12 @@ function parseArgs(argv: string[]): CliOptions {
     };
     if (arg === "--output-dir") {
       options.outputDir = readValue();
+    } else if (arg === "--collector") {
+      const value = readValue();
+      if (value !== "local" && value !== "docker") {
+        throw new Error(`--collector must be local or docker, got ${JSON.stringify(value)}`);
+      }
+      options.collectorMode = value;
     } else if (arg === "--provider-mode") {
       options.providerMode = readValue();
     } else if (arg === "--scenario") {
@@ -156,12 +174,37 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
+function disallowedBodyNeedles(options: CliOptions): string[] {
+  const scenarioId = options.scenarioId.trim();
+  const needles = new Set(DISALLOWED_BODY_NEEDLES);
+  if (scenarioId) {
+    needles.add(`agent:qa:${scenarioId}`);
+    needles.add(`Agent:qa:${scenarioId}`);
+  }
+  return [...needles];
+}
+
 async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function decodeRequestBody(body: Buffer, contentEncoding: string | undefined): Buffer {
+  const normalizedEncoding = contentEncoding?.trim().toLowerCase();
+  if (!normalizedEncoding || normalizedEncoding === "identity") {
+    return body;
+  }
+  if (normalizedEncoding === "gzip") {
+    return gunzipSync(body);
+  }
+  throw new Error(`unsupported OTLP content-encoding ${contentEncoding}`);
 }
 
 function normalizeOtlpValue(value: OtlpAnyValue | undefined): string | number | boolean | string[] {
@@ -557,7 +600,9 @@ function startLocalOtlpReceiver() {
       return;
     }
 
-    const body = await readRequestBody(req);
+    const compressedBody = await readRequestBody(req);
+    const contentEncoding = headerValue(req.headers["content-encoding"]);
+    const body = decodeRequestBody(compressedBody, contentEncoding);
     const spans = signal === "traces" ? decodeTraceRequest(body) : [];
     const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
     const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
@@ -576,6 +621,7 @@ function startLocalOtlpReceiver() {
       path: requestPath,
       signal,
       bytes: body.length,
+      contentEncoding,
       status: 200,
       spanCount: spans.length,
       metricCount: metrics.length,
@@ -605,6 +651,172 @@ function startLocalOtlpReceiver() {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+    },
+  };
+}
+
+async function reserveLocalPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to reserve local port");
+  }
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+  return port;
+}
+
+async function canConnectToLocalPort(port: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = new Socket();
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(false);
+    }, 1000);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(true);
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(false);
+    });
+    socket.connect(port, "127.0.0.1");
+  });
+}
+
+async function waitForLocalPort(port: number, timeoutMs: number, readFailure: () => string) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await canConnectToLocalPort(port)) {
+      return;
+    }
+    const failure = readFailure();
+    if (failure) {
+      throw new Error(failure);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`timed out waiting for OpenTelemetry Collector on 127.0.0.1:${port}`);
+}
+
+function tailText(value: string, bytes: number): string {
+  const buffer = Buffer.from(value);
+  if (buffer.length <= bytes) {
+    return value;
+  }
+  return Buffer.concat([Buffer.from("...\n"), buffer.subarray(buffer.length - bytes)]).toString(
+    "utf8",
+  );
+}
+
+async function stopDockerContainer(name: string): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const child = spawn("docker", ["stop", name], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    child.on("close", () => resolve());
+    child.on("error", () => resolve());
+  });
+}
+
+async function startDockerOtelCollector(receiverPort: number) {
+  const collectorPort = await reserveLocalPort();
+  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-otel-collector-"));
+  const configPath = path.join(tempDir, "collector.yaml");
+  const containerName = `openclaw-otel-smoke-${randomUUID()}`;
+  const useHostNetwork = process.platform === "linux";
+  const collectorEndpoint = useHostNetwork ? `127.0.0.1:${collectorPort}` : "0.0.0.0:4318";
+  const receiverEndpoint = useHostNetwork
+    ? `http://127.0.0.1:${receiverPort}`
+    : `http://host.docker.internal:${receiverPort}`;
+  const config = `receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: ${collectorEndpoint}
+exporters:
+  otlphttp/openclaw:
+    endpoint: ${receiverEndpoint}
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlphttp/openclaw]
+    metrics:
+      receivers: [otlp]
+      exporters: [otlphttp/openclaw]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/openclaw]
+`;
+  await writeFile(configPath, config, "utf8");
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  let exitCode: number | null = null;
+  const dockerArgs = [
+    "run",
+    "--rm",
+    "--pull=missing",
+    "--name",
+    containerName,
+    ...(useHostNetwork
+      ? ["--network", "host"]
+      : [
+          "--add-host=host.docker.internal:host-gateway",
+          "-p",
+          `127.0.0.1:${collectorPort}:4318`,
+        ]),
+    "-v",
+    `${configPath}:/etc/otelcol/config.yaml:ro`,
+    DEFAULT_DOCKER_COLLECTOR_IMAGE,
+    "--config=/etc/otelcol/config.yaml",
+  ];
+  const child = spawn(
+    "docker",
+    dockerArgs,
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+  child.on("error", (err) => {
+    stderr.push(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    exitCode = 1;
+  });
+  child.on("close", (code) => {
+    exitCode = code ?? 1;
+  });
+
+  await waitForLocalPort(collectorPort, 60_000, () => {
+    if (exitCode === null) {
+      return "";
+    }
+    const output = [...stdout, ...stderr].join("").trim();
+    return `OpenTelemetry Collector exited before readiness (code=${exitCode})${output ? `:\n${output}` : ""}`;
+  });
+
+  return {
+    port: collectorPort,
+    image: DEFAULT_DOCKER_COLLECTOR_IMAGE,
+    network: useHostNetwork ? "host" : "bridge",
+    output(): string {
+      return tailText([...stdout, ...stderr].join("").trim(), COLLECTOR_OUTPUT_TAIL_BYTES);
+    },
+    async close(): Promise<void> {
+      await stopDockerContainer(containerName);
+      await rm(tempDir, { force: true, recursive: true });
     },
   };
 }
@@ -698,8 +910,63 @@ function capturedValueKind(value: string | number | boolean | string[]): string 
   return Array.isArray(value) ? "array" : typeof value;
 }
 
+function isLatestGenAiModelCallSpan(span: CapturedSpan): boolean {
+  const operationName = span.attributes["gen_ai.operation.name"];
+  const modelName = span.attributes["gen_ai.request.model"];
+  if (typeof operationName !== "string" || typeof modelName !== "string") {
+    return false;
+  }
+  return (
+    span.name === `${operationName} ${modelName}` &&
+    typeof span.attributes["openclaw.provider"] === "string" &&
+    typeof span.attributes["openclaw.model"] === "string"
+  );
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpReceiver>): boolean {
+  const spanNames = new Set(receiver.capturedSpans.map((span) => span.name));
+  const metricNames = new Set(receiver.capturedMetrics.map((metric) => metric.name));
+  return (
+    REQUIRED_SPAN_NAMES.every((name) => spanNames.has(name)) &&
+    receiver.capturedSpans.some(isLatestGenAiModelCallSpan) &&
+    REQUIRED_METRIC_NAMES.every((name) => metricNames.has(name)) &&
+    receiver.capturedLogRecords.length > 0 &&
+    ["traces", "metrics", "logs"].every((signal) =>
+      receiver.capturedRequests.some((request) => request.signal === signal)
+    )
+  );
+}
+
+async function waitForExpectedTelemetry(
+  receiver: ReturnType<typeof startLocalOtlpReceiver>,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (hasRequiredSmokeSignals(receiver)) {
+      return;
+    }
+    await delay(250);
+  }
+}
+
+function formatBoundedList(values: readonly string[], maxItems: number): string {
+  if (values.length === 0) {
+    return "(none)";
+  }
+  const visible = values.slice(0, maxItems);
+  const suffix =
+    values.length > visible.length ? `, ... (${values.length - visible.length} more)` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
 function assertSmoke(params: {
   childExitCode: number;
+  disallowedBodyNeedles: string[];
   spans: CapturedSpan[];
   metrics: CapturedMetric[];
   logRecords: CapturedLogRecord[];
@@ -737,6 +1004,13 @@ function assertSmoke(params: {
       failures.push(`missing required span ${name}`);
     }
   }
+  const modelSpans = params.spans.filter(isLatestGenAiModelCallSpan);
+  if (modelSpans.length === 0) {
+    failures.push("missing required GenAI model-call span");
+  }
+  if (spanNames.has("openclaw.model.call")) {
+    failures.push("legacy openclaw.model.call span exported with GenAI semconv opt-in");
+  }
   const metricNames = new Set(params.metrics.map((metric) => metric.name));
   for (const name of REQUIRED_METRIC_NAMES) {
     if (!metricNames.has(name)) {
@@ -761,8 +1035,10 @@ function assertSmoke(params: {
   if (contentKeys.length > 0) {
     failures.push(`content attributes exported with capture disabled: ${contentKeys.join(", ")}`);
   }
+  if (modelSpans.some((span) => Object.hasOwn(span.attributes, "gen_ai.system"))) {
+    failures.push("legacy gen_ai.system attribute exported on GenAI model-call span");
+  }
 
-  const modelSpans = params.spans.filter((span) => span.name === "openclaw.model.call");
   const modelErrorSpans = modelSpans.filter((span) => {
     const serialized = JSON.stringify(span.attributes);
     return (
@@ -771,9 +1047,6 @@ function assertSmoke(params: {
       serialized.includes("StreamAbandoned")
     );
   });
-  if (modelSpans.length === 0) {
-    failures.push("no openclaw.model.call span was exported");
-  }
   if (modelErrorSpans.length > 0) {
     failures.push("successful QA run exported model-call error attributes");
   }
@@ -785,7 +1058,7 @@ function assertSmoke(params: {
 
   for (const signal of ["traces", "metrics", "logs"] as const) {
     const signalBodies = (params.bodyText[signal] ?? []).join("\n");
-    const leakedNeedles = DISALLOWED_BODY_NEEDLES.filter((needle) =>
+    const leakedNeedles = params.disallowedBodyNeedles.filter((needle) =>
       signalBodies.includes(needle),
     );
     if (leakedNeedles.length > 0) {
@@ -827,19 +1100,38 @@ async function main() {
     `qa-otel-smoke: local OTLP receiver listening on http://127.0.0.1:${port}\n`,
   );
 
+  let collector: Awaited<ReturnType<typeof startDockerOtelCollector>> | undefined;
   let childExitCode = 1;
   try {
-    const child = spawnOpenClaw(buildQaArgs(options), buildQaEnv(port));
+    let exportPort = port;
+    if (options.collectorMode === "docker") {
+      collector = await startDockerOtelCollector(port);
+      exportPort = collector.port;
+      process.stdout.write(
+        `qa-otel-smoke: OpenTelemetry Collector ${collector.image} listening on http://127.0.0.1:${exportPort} (${collector.network} network)\n`,
+      );
+    }
+
+    const child = spawnOpenClaw(buildQaArgs(options), buildQaEnv(exportPort));
     child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     childExitCode = await waitForChild(child);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (childExitCode === 0) {
+      await waitForExpectedTelemetry(receiver, 15_000);
+    } else {
+      await delay(3000);
+    }
   } finally {
-    await receiver.close();
+    try {
+      await collector?.close();
+    } finally {
+      await receiver.close();
+    }
   }
 
   const assertion = assertSmoke({
     childExitCode,
+    disallowedBodyNeedles: disallowedBodyNeedles(options),
     spans: receiver.capturedSpans,
     metrics: receiver.capturedMetrics,
     logRecords: receiver.capturedLogRecords,
@@ -852,6 +1144,7 @@ async function main() {
     outputDir: options.outputDir,
     scenarioId: options.scenarioId,
     providerMode: options.providerMode,
+    collectorMode: options.collectorMode,
     requests: receiver.capturedRequests,
     spanCount: receiver.capturedSpans.length,
     metricCount: receiver.capturedMetrics.length,
@@ -864,6 +1157,13 @@ async function main() {
     disallowedAttributeKeys: assertion.disallowedAttributeKeys,
     contentAttributeKeys: assertion.contentAttributeKeys,
     leakContexts: assertion.leakContexts,
+    collector: collector
+      ? {
+          image: collector.image,
+          network: collector.network,
+          output: assertion.passed ? undefined : collector.output(),
+        }
+      : undefined,
     spans: receiver.capturedSpans.map((span) => ({
       name: span.name,
       parent: span.parent,
@@ -881,10 +1181,28 @@ async function main() {
     for (const failure of assertion.failures) {
       process.stderr.write(`qa-otel-smoke: ${failure}\n`);
     }
+    process.stderr.write(
+      `qa-otel-smoke: captured request counts traces=${assertion.signalRequestCounts.traces} ` +
+        `metrics=${assertion.signalRequestCounts.metrics} logs=${assertion.signalRequestCounts.logs}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured decoded counts spans=${receiver.capturedSpans.length} ` +
+        `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured span names: ${formatBoundedList(assertion.spanNames, 40)}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured metric names: ${formatBoundedList(assertion.metricNames, 40)}\n`,
+    );
     for (const [signal, contexts] of Object.entries(assertion.leakContexts)) {
       for (const context of contexts ?? []) {
         process.stderr.write(`qa-otel-smoke: ${signal} leak context: ${context}\n`);
       }
+    }
+    const collectorOutput = collector?.output();
+    if (collectorOutput) {
+      process.stderr.write(`qa-otel-smoke: collector output:\n${collectorOutput}\n`);
     }
     process.exitCode = 1;
     return;

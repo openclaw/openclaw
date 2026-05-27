@@ -546,12 +546,20 @@ export function registerBrowserAgentSnapshotRoutes(
         const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
         const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-        let observedBrowserState: unknown;
-        if (!usesChromeMcp && pwModule) {
+        if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
+          return jsonError(res, 400, "labels/mode=efficient require format=ai");
+        }
+        if (usesChromeMcp && (plan.selectorValue || plan.frameSelectorValue)) {
+          return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
+        }
+        if (ssrfPolicyOpts.ssrfPolicy) {
           await assertBrowserNavigationResultAllowed({
             url: tab.url,
             ...ssrfPolicyOpts,
           });
+        }
+        let observedBrowserState: unknown;
+        if (!usesChromeMcp && pwModule) {
           observedBrowserState = await pwModule
             .getObservedBrowserStateViaPlaywright({
               cdpUrl: profileCtx.profile.cdpUrl,
@@ -560,23 +568,12 @@ export function registerBrowserAgentSnapshotRoutes(
             })
             .catch(() => undefined);
         }
-        if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {
-          return jsonError(res, 400, "labels/mode=efficient require format=ai");
-        }
         if (usesChromeMcp) {
-          if (plan.selectorValue || plan.frameSelectorValue) {
-            return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
-          }
-          if (ssrfPolicyOpts.ssrfPolicy) {
-            await assertBrowserNavigationResultAllowed({
-              url: tab.url,
-              ...ssrfPolicyOpts,
-            });
-          }
           const snapshot = await takeChromeMcpSnapshot({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
             targetId: tab.targetId,
+            timeoutMs: plan.timeoutMs,
           });
           if (plan.format === "aria") {
             return res.json({
@@ -623,6 +620,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 profile: profileCtx.profile,
                 targetId: tab.targetId,
                 format: "png",
+                timeoutMs: plan.timeoutMs,
               });
               const normalized = await normalizeBrowserScreenshot(labeled, {
                 maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -683,6 +681,7 @@ export function registerBrowserAgentSnapshotRoutes(
             refsMode: plan.refsMode,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             urls: plan.urls,
+            timeoutMs: plan.timeoutMs,
             options: {
               interactive: plan.interactive ?? undefined,
               compact: plan.compact ?? undefined,
@@ -700,6 +699,7 @@ export function registerBrowserAgentSnapshotRoutes(
             return await snapshotRoleViaCdp({
               wsUrl: tab.wsUrl,
               urls: plan.urls,
+              timeoutMs: plan.timeoutMs,
               options: {
                 interactive: plan.interactive ?? undefined,
                 compact: plan.compact ?? undefined,
@@ -725,6 +725,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   targetId: tab.targetId,
                   ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                   urls: plan.urls,
+                  timeoutMs: plan.timeoutMs,
                   ...(typeof plan.resolvedMaxChars === "number"
                     ? { maxChars: plan.resolvedMaxChars }
                     : {}),
@@ -743,6 +744,7 @@ export function registerBrowserAgentSnapshotRoutes(
               targetId: tab.targetId,
               refs: "refs" in snap ? snap.refs : {},
               type: "png",
+              timeoutMs: plan.timeoutMs,
             });
             const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
               maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -797,11 +799,12 @@ export function registerBrowserAgentSnapshotRoutes(
                   cdpUrl: profileCtx.profile.cdpUrl,
                   targetId: tab.targetId,
                   limit: plan.limit,
+                  timeoutMs: plan.timeoutMs,
                   ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 });
               });
             })()
-          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit });
+          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit, timeoutMs: plan.timeoutMs });
 
         const resolved = await Promise.resolve(snap);
         if (!resolved) {

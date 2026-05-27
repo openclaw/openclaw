@@ -11,6 +11,7 @@ import {
 import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -79,9 +80,6 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
     return false;
   }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN)) {
-    return false;
-  }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
     return false;
   }
@@ -111,13 +109,6 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
-    "CI=1",
-    "NODE_OPTIONS=--max-old-space-size=4096",
-    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
-    "OPENCLAW_VITEST_MAX_WORKERS=1",
-    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
-    "OPENCLAW_TESTBOX=1",
-    "OPENCLAW_TESTBOX_REMOTE_RUN=1",
     "corepack",
     "pnpm",
     "check:changed",
@@ -377,11 +368,7 @@ async function runPlanCommand(command, timings) {
 
 export function createPnpmManagedCommand(command, env = process.env) {
   const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (
-    isTruthyEnvFlag(commandEnv.OPENCLAW_TESTBOX_REMOTE_RUN) ||
-    isTruthyEnvFlag(commandEnv.CI) ||
-    isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)
-  ) {
+  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,
@@ -472,8 +459,7 @@ function parseArgs(argv) {
 }
 
 function isDirectRun() {
-  const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 if (isDirectRun()) {

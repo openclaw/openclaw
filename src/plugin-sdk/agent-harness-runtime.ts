@@ -145,6 +145,13 @@ export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export {
+  inspectRuntimeToolInputSchemas,
+  projectRuntimeToolInputSchema,
+  type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjection,
+  type RuntimeToolSchemaDiagnostic,
+} from "../agents/tool-schema-projection.js";
 export type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
@@ -175,11 +182,13 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
+  type BeforeToolCallPolicyDiagnosticState,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,

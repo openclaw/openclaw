@@ -7,12 +7,13 @@ import { inspectPortUsage } from "../infra/ports.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir } from "./paths.js";
+import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -46,18 +47,7 @@ function shouldFallbackToStartupEntry(params: { code: number; detail: string }):
 }
 
 export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
-  const override = env.OPENCLAW_TASK_SCRIPT?.trim();
-  if (override) {
-    return override;
-  }
-  const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
-  if (/[/\\]|\.\./.test(scriptName)) {
-    throw new Error(
-      `OPENCLAW_TASK_SCRIPT_NAME must be a file name only, not a path: ${scriptName}`,
-    );
-  }
-  const stateDir = resolveGatewayStateDir(env);
-  return path.join(stateDir, scriptName);
+  return resolveGatewayTaskScriptPath(env);
 }
 
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
@@ -97,7 +87,7 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
-  return Array.from(new Set([primaryPath, legacyCmdPath]));
+  return uniqueStrings([primaryPath, legacyCmdPath]);
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.

@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -160,7 +163,7 @@ export type PluginManifestContractListKey =
   | "externalAuthProviders"
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
-  | "meetingNotesSourceProviders"
+  | "transcriptSourceProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
@@ -355,9 +358,11 @@ function mergeContractLists(
   left: readonly string[] | undefined,
   right: readonly string[] | undefined,
 ): string[] | undefined {
-  const merged = [...(left ?? []), ...(right ?? [])]
-    .map((value) => value.trim())
-    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  const merged = uniqueStrings(
+    [...(left ?? []), ...(right ?? [])]
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
   return merged.length > 0 ? merged : undefined;
 }
 
@@ -379,7 +384,7 @@ function mergeManifestContracts(
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
     "mediaUnderstandingProviders",
-    "meetingNotesSourceProviders",
+    "transcriptSourceProviders",
     "documentExtractors",
     "imageGenerationProviders",
     "videoGenerationProviders",
@@ -757,19 +762,30 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
-  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
+  const candidatePaths = [
+    params.candidate.rootDir,
+    params.candidate.packageDir,
+    params.candidate.source,
+    params.candidate.setupSource,
+  ]
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  if (trackedPaths.length === 0) {
+  if (trackedPaths.length === 0 || candidatePaths.length === 0) {
     return false;
   }
-  return trackedPaths.some((trackedPath) => {
-    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
+  return candidatePaths.some((candidatePath) => {
+    return trackedPaths.some((trackedPath) => {
+      return candidatePath === trackedPath || isPathInside(trackedPath, candidatePath);
+    });
   });
 }
 

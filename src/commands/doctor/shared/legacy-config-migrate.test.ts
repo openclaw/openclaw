@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
@@ -90,6 +91,275 @@ describe("legacy silent reply config migrate", () => {
       "Removed agents.defaults.silentReplyRewrite",
       "Removed surfaces.telegram.silentReplyRewrite",
     ]);
+  });
+});
+
+describe("profile configured tool section migrate", () => {
+  it("does not add grants when configured sections are the only signal", () => {
+    const raw = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["read", "write"],
+        exec: { security: "allowlist" },
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+  });
+
+  it("does not add missing grants to an unrelated allowlist", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("sets profile full when an allowlist already contains configured-section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "exec", "process"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).toEqual([
+      'Replaced tools.allow entries with profile "messaging" grants plus explicit configured-section grants.',
+      'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
+    ]);
+  });
+
+  it("merges same-scope alsoAllow when it contains explicit configured-section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message"],
+        alsoAllow: ["exec"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "exec"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+    expect(res.changes).toContain("Merged tools.alsoAllow into tools.allow.");
+    expect(res.config?.tools?.allow).not.toContain("process");
+  });
+
+  it("repairs configured-section grants held in allow when alsoAllow is also present", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "exec", "process"],
+        alsoAllow: ["browser"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.allow).toEqual(["message", "browser", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools).not.toHaveProperty("alsoAllow");
+  });
+
+  it("narrows broad allowlists before making them authoritative", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["*"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.allow).toContain("message");
+    expect(res.config?.tools?.allow).toContain("exec");
+    expect(res.config?.tools?.allow).toContain("process");
+    expect(res.config?.tools?.allow).not.toContain("*");
+    expect(res.config?.tools?.allow).not.toContain("read");
+    expect(res.changes).toContain(
+      'Replaced tools.allow entries with profile "messaging" grants plus explicit configured-section grants.',
+    );
+  });
+
+  it("does not treat unrelated globs or plugin allow entries as configured-section grants", () => {
+    const glob = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["sessions_*"],
+        exec: { security: "allowlist" },
+      },
+    });
+    const plugin = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+        allow: ["gmail_search"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(glob.config).toBeNull();
+    expect(plugin.config).toBeNull();
+  });
+
+  it("repairs agent allowlists with explicit configured-section grants under an inherited profile", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              allow: ["message", "exec", "process"],
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.profile).toBe("full");
+    expect(res.config?.agents?.list?.[0]?.tools?.allow).toEqual(["message", "exec", "process"]);
+  });
+
+  it("does not materialize provider grants when no provider grant intent is explicit", () => {
+    const raw = {
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+            },
+          },
+        ],
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+  });
+
+  it("does not report inherited top-level profile provider allowlists as fixable", () => {
+    const raw = {
+      tools: {
+        profile: "messaging",
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            allow: ["message", "exec", "process"],
+          },
+        },
+      },
+    };
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
+  });
+
+  it("sets provider profile full when provider allow already contains configured-section grants", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        exec: { security: "allowlist" },
+        byProvider: {
+          openai: {
+            profile: "messaging",
+            allow: ["message", "exec", "process"],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.byProvider?.openai?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.byProvider?.openai?.profile).toBe("full");
+    expect(res.changes).toContain(
+      'Set tools.byProvider.openai.profile to "full" so tools.byProvider.openai.allow controls explicit configured-section grants directly.',
+    );
+  });
+
+  it("repairs model-scoped provider allowlists with inherited provider profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        byProvider: {
+          qwen: {
+            profile: "messaging",
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "sage",
+            tools: {
+              exec: { security: "allowlist" },
+              byProvider: {
+                "qwen/qwen-plus": {
+                  allow: ["message", "exec", "process"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.allow).toEqual([
+      "message",
+      "exec",
+      "process",
+    ]);
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+      "full",
+    );
+  });
+
+  it("ignores blocked inherited provider keys while resolving provider repairs", () => {
+    const raw = JSON.parse(
+      '{"tools":{"byProvider":{"__proto__":{"profile":"messaging"},"qwen":{"profile":"messaging"}}},"agents":{"list":[{"id":"sage","tools":{"exec":{"security":"allowlist"},"byProvider":{"qwen/qwen-plus":{"allow":["message","exec","process"]}}}}]}}',
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(Object.prototype).not.toHaveProperty("profile");
+    expect(res.config?.agents?.list?.[0]?.tools?.byProvider?.["qwen/qwen-plus"]?.profile).toBe(
+      "full",
+    );
   });
 });
 
@@ -329,6 +599,57 @@ describe("legacy thread binding spawn migrate", () => {
     });
     expect(res.changes).toStrictEqual([
       "Collapsed conflicting channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.accounts.work.threadBindings.spawnSessions (false).",
+    ]);
+  });
+});
+
+describe("legacy Feishu account bot name migrate", () => {
+  it("moves legacy account botName to name", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_xxx",
+              appSecret: "redacted",
+              botName: "Legacy Feishu Bot",
+              domain: "feishu",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.feishu?.accounts?.main).toEqual({
+      appId: "cli_xxx",
+      appSecret: "redacted",
+      name: "Legacy Feishu Bot",
+      domain: "feishu",
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved channels.feishu.accounts.main.botName → channels.feishu.accounts.main.name.",
+    ]);
+  });
+
+  it("removes legacy account botName when name is already set", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              name: "Current Feishu Bot",
+              botName: "Legacy Feishu Bot",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.feishu?.accounts?.main).toEqual({
+      name: "Current Feishu Bot",
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed channels.feishu.accounts.main.botName (channels.feishu.accounts.main.name already set).",
     ]);
   });
 });
@@ -855,9 +1176,12 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toStrictEqual(["Moved heartbeat → agents.defaults.heartbeat."]);
+    expect(res.changes).toStrictEqual([
+      "Moved heartbeat → agents.defaults.heartbeat.",
+      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+    ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
       every: "30m",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
@@ -901,11 +1225,12 @@ describe("legacy migrate heartbeat config", () => {
 
     expect(res.changes).toStrictEqual([
       "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
+      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
     ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
@@ -957,7 +1282,7 @@ describe("legacy migrate heartbeat config", () => {
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
@@ -1138,6 +1463,180 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 });
 
 describe("legacy model compat migrate", () => {
+  it("upgrades retired model refs", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          workspace: "/tmp/claude-3-sonnet",
+          imageModel: "anthropic/claude-haiku-4-5",
+          imageGenerationModel: {
+            primary: "github-copilot/claude-sonnet-4",
+            fallbacks: ["github-copilot/grok-code-fast-1"],
+          },
+          musicGenerationModel: "vercel-ai-gateway/anthropic/claude-opus-4-5",
+          pdfModel: "anthropic/claude-3-5-sonnet",
+          videoGenerationModel: "anthropic/claude-opus-4-10",
+          model: {
+            primary: "anthropic/claude-opus-4-5@anthropic:work",
+            fallbacks: [
+              "anthropic/claude-sonnet-4-20250514",
+              "github-copilot/claude-sonnet-4",
+              "github-copilot/grok-code-fast-1@github:work",
+              "venice/claude-opus-4-5",
+              "vercel-ai-gateway/anthropic/claude-opus-4-5",
+              "anthropic/claude-opus-5-0",
+              "anthropic/claude-sonnet-4-7",
+              "anthropic/claude-opus-4-10",
+              "kilocode/anthropic/claude-sonnet-4",
+              "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+              "openai/gpt-5.5",
+              "openai/gpt-4o",
+              "openai/gpt-4.1-mini",
+              "openai/gpt-5.1-codex-mini",
+              "openai/gpt-5.2-codex",
+              "openai-codex/gpt-5.2",
+              "openai-codex/gpt-5.1-codex-mini",
+              "github-copilot/gpt-4.1",
+              "github-copilot/gpt-5.2",
+              "github-copilot/gpt-5.2-codex",
+              "groq/llama3-70b-8192",
+              "groq/gemma2-9b-it",
+              "groq/moonshotai/kimi-k2-instruct-0905",
+              "xai/grok-code-fast-1",
+              "xai/grok-4-fast-reasoning",
+              "openai/gpt-4o-transcribe",
+              "openai/gpt-4o-mini-tts",
+            ],
+          },
+          models: {
+            "anthropic/claude-haiku-4-5": { alias: "haiku" },
+            "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
+            "github-copilot/claude-opus-4.5": { alias: "copilot-opus" },
+            "openai/gpt-5.2-pro": { alias: "old-pro" },
+            "github-copilot/gpt-5-mini": { alias: "old-mini" },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            config: {
+              summaryModel: "anthropic/claude-3-5-sonnet",
+              dataPath: "/tmp/claude-opus-4-5",
+            },
+            subagent: {
+              allowedModels: ["anthropic/claude-haiku-4-5", "*"],
+            },
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          telegram: {
+            "*": "anthropic/claude-opus-4-5",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "github-copilot/claude-sonnet-4.6",
+      fallbacks: ["github-copilot/gpt-5.4-mini"],
+    });
+    expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
+      "vercel-ai-gateway/anthropic/claude-opus-4-6",
+    );
+    expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.videoGenerationModel).toBe("anthropic/claude-opus-4-10");
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7@anthropic:work",
+      fallbacks: [
+        "anthropic/claude-sonnet-4-6",
+        "github-copilot/claude-sonnet-4.6",
+        "github-copilot/gpt-5.4-mini@github:work",
+        "venice/claude-opus-4-6",
+        "vercel-ai-gateway/anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-5-0",
+        "anthropic/claude-sonnet-4-7",
+        "anthropic/claude-opus-4-10",
+        "kilocode/anthropic/claude-sonnet-4",
+        "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "openai/gpt-5.5",
+        "openai/gpt-5.5",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.3-codex",
+        "openai-codex/gpt-5.5",
+        "openai-codex/gpt-5.4-mini",
+        "github-copilot/gpt-5.5",
+        "github-copilot/gpt-5.5",
+        "github-copilot/gpt-5.3-codex",
+        "groq/llama-3.3-70b-versatile",
+        "groq/llama-3.1-8b-instant",
+        "groq/openai/gpt-oss-120b",
+        "xai/grok-build-0.1",
+        "xai/grok-4.3",
+        "openai/gpt-4o-transcribe",
+        "openai/gpt-4o-mini-tts",
+      ],
+    });
+    expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
+      "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
+      "openai/gpt-5.5-pro": { alias: "old-pro" },
+      "github-copilot/gpt-5.4-mini": { alias: "old-mini" },
+    });
+    expect(
+      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { summaryModel?: string } })
+        ?.config?.summaryModel,
+    ).toBe("anthropic/claude-sonnet-4-6");
+    expect(
+      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { dataPath?: string } })
+        ?.config?.dataPath,
+    ).toBe("/tmp/claude-opus-4-5");
+    expect(
+      (
+        res.config?.plugins?.entries?.["lossless-claw"] as {
+          subagent?: { allowedModels?: string[] };
+        }
+      )?.subagent?.allowedModels,
+    ).toEqual(["anthropic/claude-sonnet-4-6", "*"]);
+    expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
+      'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
+      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5.4-mini"',
+      'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.pdfModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
+      'config.agents.defaults.model.primary from "anthropic/claude-opus-4-5@anthropic:work" to "anthropic/claude-opus-4-7@anthropic:work"',
+      'config.agents.defaults.model.fallbacks.2 from "github-copilot/grok-code-fast-1@github:work" to "github-copilot/gpt-5.4-mini@github:work"',
+      'config.agents.defaults.model.fallbacks.3 from "venice/claude-opus-4-5" to "venice/claude-opus-4-6"',
+      'config.agents.defaults.model.fallbacks.4 from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.model.fallbacks.11 from "openai/gpt-4o" to "openai/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.12 from "openai/gpt-4.1-mini" to "openai/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.13 from "openai/gpt-5.1-codex-mini" to "openai/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.14 from "openai/gpt-5.2-codex" to "openai/gpt-5.3-codex"',
+      'config.agents.defaults.model.fallbacks.15 from "openai-codex/gpt-5.2" to "openai-codex/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.16 from "openai-codex/gpt-5.1-codex-mini" to "openai-codex/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.17 from "github-copilot/gpt-4.1" to "github-copilot/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.18 from "github-copilot/gpt-5.2" to "github-copilot/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.19 from "github-copilot/gpt-5.2-codex" to "github-copilot/gpt-5.3-codex"',
+      'config.agents.defaults.model.fallbacks.20 from "groq/llama3-70b-8192" to "groq/llama-3.3-70b-versatile"',
+      'config.agents.defaults.model.fallbacks.21 from "groq/gemma2-9b-it" to "groq/llama-3.1-8b-instant"',
+      'config.agents.defaults.model.fallbacks.22 from "groq/moonshotai/kimi-k2-instruct-0905" to "groq/openai/gpt-oss-120b"',
+      'config.agents.defaults.model.fallbacks.23 from "xai/grok-code-fast-1" to "xai/grok-build-0.1"',
+      'config.agents.defaults.model.fallbacks.24 from "xai/grok-4-fast-reasoning" to "xai/grok-4.3"',
+      'config.agents.defaults.models key from "github-copilot/claude-opus-4.5" to "github-copilot/claude-opus-4.7"',
+      'config.agents.defaults.models key from "openai/gpt-5.2-pro" to "openai/gpt-5.5-pro"',
+      'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
+      'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
+      'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
+      'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
+    ]);
+  });
+
   it("removes unrecognized model compat thinkingFormat values", () => {
     const res = migrateLegacyConfigForTest({
       models: {

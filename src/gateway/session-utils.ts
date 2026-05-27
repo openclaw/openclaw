@@ -78,6 +78,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -654,7 +655,7 @@ function mergeChildSessionKeys(
   if (!storeChildSessions?.length) {
     return runtimeChildSessions;
   }
-  return Array.from(new Set([...runtimeChildSessions, ...storeChildSessions]));
+  return uniqueStrings([...runtimeChildSessions, ...storeChildSessions]);
 }
 
 function resolveChildSessionKeys(
@@ -1944,6 +1945,7 @@ export function buildGatewaySessionRow(params: {
     model: rowModel,
     agentRuntime,
     contextTokens,
+    contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,

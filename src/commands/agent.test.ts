@@ -259,7 +259,7 @@ function mockConfig(
   storePath: string,
   agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
-  agentsList?: Array<{ id: string; default?: boolean }>,
+  agentsList?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>,
 ) {
   const cfg = {
     agents: {
@@ -432,6 +432,32 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("uses the selected agent thinkingDefault for fresh ingress runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(
+        home,
+        store,
+        {
+          thinkingDefault: "high",
+        },
+        undefined,
+        [{ id: "main", default: true, thinkingDefault: "off" }],
+      );
+
+      await agentCommandFromIngress(
+        {
+          message: "ping",
+          agentId: "main",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
+    });
   });
 
   it("installs a local gateway request scope for embedded agent dispatch", async () => {

@@ -54,13 +54,9 @@ const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
   ANTHROPIC_OPUS_46_MODEL_ID,
   ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-  "claude-opus-4-5",
-  "claude-opus-4.5",
 ] as const;
-const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
-const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   ANTHROPIC_OPUS_46_MODEL_ID,
   ANTHROPIC_OPUS_46_DOT_MODEL_ID,
@@ -76,12 +72,6 @@ const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-opus-4.6",
   "claude-sonnet-4-6",
   "claude-sonnet-4.6",
-  "claude-opus-4-5",
-  "claude-opus-4.5",
-  "claude-sonnet-4-5",
-  "claude-sonnet-4.5",
-  "claude-haiku-4-5",
-  "claude-haiku-4.5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
@@ -287,17 +277,17 @@ function resolveAnthropicForwardCompatModel(
       ctx,
       dashModelId: ANTHROPIC_OPUS_46_MODEL_ID,
       dotModelId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-      dashTemplateId: "claude-opus-4-5",
-      dotTemplateId: "claude-opus-4.5",
-      fallbackTemplateIds: ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS,
+      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
+      dotTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
+      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
     }) ??
     resolveAnthropic46ForwardCompatModel({
       ctx,
       dashModelId: ANTHROPIC_SONNET_46_MODEL_ID,
       dotModelId: ANTHROPIC_SONNET_46_DOT_MODEL_ID,
-      dashTemplateId: "claude-sonnet-4-5",
-      dotTemplateId: "claude-sonnet-4.5",
-      fallbackTemplateIds: ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS,
+      dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
+      dotTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
+      fallbackTemplateIds: [ANTHROPIC_SONNET_46_MODEL_ID, ANTHROPIC_SONNET_46_DOT_MODEL_ID],
     })
   );
 }
@@ -391,6 +381,25 @@ function supportsAnthropicImageInput(modelId: string, modelName?: string): boole
     .some((candidate) => matchesAnthropicModernModel(candidate));
 }
 
+function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
+  if (!supportsAnthropicImageInput(modelId, modelName)) {
+    return undefined;
+  }
+  const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
+  const opus47 = refs.some((ref) =>
+    [ANTHROPIC_OPUS_47_MODEL_ID, ANTHROPIC_OPUS_47_DOT_MODEL_ID].some((prefix) =>
+      normalizeLowercaseStringOrEmpty(ref).startsWith(prefix),
+    ),
+  );
+  return {
+    image: {
+      maxSidePx: opus47 ? 2576 : 1568,
+      preferredSidePx: opus47 ? 2576 : 1568,
+      tokenMode: "provider" as const,
+    },
+  };
+}
+
 function applyAnthropicImageInputCapability(params: {
   modelId: string;
   model: ProviderRuntimeModel;
@@ -411,13 +420,27 @@ function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
   const imageCapableModel = applyAnthropicImageInputCapability(ctx) ?? ctx.model;
+  const mediaInput = resolveAnthropicImageMediaInput(ctx.modelId, imageCapableModel.name);
+  const mediaInputModel = mediaInput
+    ? {
+        ...imageCapableModel,
+        mediaInput: {
+          ...mediaInput,
+          ...imageCapableModel.mediaInput,
+          image: {
+            ...mediaInput.image,
+            ...imageCapableModel.mediaInput?.image,
+          },
+        },
+      }
+    : imageCapableModel;
   const contextWindowModel =
     applyAnthropicGa1MContextWindow({
       config: ctx.config,
       provider: ctx.provider,
       modelId: ctx.modelId,
-      model: imageCapableModel,
-    }) ?? imageCapableModel;
+      model: mediaInputModel,
+    }) ?? mediaInputModel;
   return contextWindowModel === ctx.model ? undefined : contextWindowModel;
 }
 

@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
@@ -23,6 +23,7 @@ import {
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
+  buildGatewayStatusArgsFromHelpText,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
@@ -45,12 +46,17 @@ import {
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
+  maybeBuildOptionalAgentTurnSkipResult,
   parseCrossOsSuiteFilter,
   parseArgs,
   packageHasScript,
   readInstalledVersion,
   readRunnerOverrideEnv,
+  resolveCrossOsAgentTurnOptional,
+  runCommand,
+  resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
+  resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
   resolveProviderConfig,
   resolveDevUpdateVerificationRef,
@@ -87,6 +93,25 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("keeps gateway status RPC probing when help probing is unavailable", () => {
+    expect(buildGatewayStatusArgsFromHelpText("--require-rpc")).toEqual([
+      "gateway",
+      "status",
+      "--require-rpc",
+      "--timeout",
+      String(CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS),
+    ]);
+    expect(buildGatewayStatusArgsFromHelpText("Usage: openclaw gateway status")).toEqual([
+      "gateway",
+      "status",
+    ]);
+    expect(
+      buildGatewayStatusArgsFromHelpText("--require-rpc", {
+        requireRpc: false,
+      }),
+    ).toEqual(["gateway", "status"]);
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
@@ -171,6 +196,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toBe(true);
   });
 
+  it("requires explicit opt-in before cross-OS agent turns become optional", () => {
+    expect(resolveCrossOsAgentTurnOptional({})).toBe(false);
+    expect(resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "1" })).toBe(
+      true,
+    );
+    expect(
+      resolveCrossOsAgentTurnOptional({ OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL: "false" }),
+    ).toBe(false);
+  });
+
   it("detects embedded fallback agent turns as non-gateway proof", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-fallback-"));
     const logPath = join(dir, "agent.log");
@@ -236,6 +271,46 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           join(dir, "missing.log"),
         ),
       ).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("only skips opted-in cross-OS live agent turns after retry exhaustion", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-skip-retry-"));
+    try {
+      const logPath = join(dir, "agent.log");
+      const error = new Error("gateway request timeout for agent after 210000ms");
+
+      expect(
+        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
+          attempt: 1,
+          maxAttempts: 2,
+          optional: true,
+        }),
+      ).toBeNull();
+      expect(
+        maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
+          attempt: 2,
+          maxAttempts: 2,
+          optional: false,
+        }),
+      ).toBeNull();
+
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, logPath, {
+        attempt: 2,
+        maxAttempts: 2,
+        optional: true,
+      });
+
+      expect(skipped?.status).toBe(0);
+      expect(JSON.parse(skipped?.stdout ?? "{}")).toEqual({
+        status: "skipped",
+        reason: "cross-os live agent turn unavailable after retry",
+      });
+      expect(readFileSync(logPath, "utf8")).toContain(
+        "skipping optional cross-OS live agent turn after retryable failure",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -689,6 +764,73 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(normalizeWindowsCommandShimPath(String.raw`C:\Program Files\nodejs\node.exe`)).toBe(
       String.raw`C:\Program Files\nodejs\node.exe`,
     );
+  });
+
+  it("wraps Windows cmd shims without Node shell argv", () => {
+    expect(
+      resolveCommandSpawnInvocation(
+        String.raw`C:\Program Files\nodejs\npm.cmd`,
+        ["view", "openclaw@latest", "version"],
+        {
+          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\cmd.exe`,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        String.raw`""C:\Program Files\nodejs\npm.cmd" view openclaw@latest version"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("wraps installed Windows CLI cmd fallbacks without Node shell argv", () => {
+    expect(
+      resolveInstalledCliInvocation(
+        win32.join(String.raw`C:\OpenClaw Prefix`, "openclaw.cmd"),
+        ["gateway", "run", "--port", "1234"],
+        {
+          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\cmd.exe`,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        String.raw`""C:\OpenClaw Prefix\openclaw.cmd" gateway run --port 1234"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("runs resolved command invocations and writes command logs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(process.execPath, ["-e", "process.stdout.write('ok')"], {
+        cwd: dir,
+        env: process.env,
+        logPath,
+      });
+
+      expect(result).toMatchObject({
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+      });
+      expect(readFileSync(logPath, "utf8")).toContain("start command=");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("derives the installed prefix from resolved CLI paths", () => {

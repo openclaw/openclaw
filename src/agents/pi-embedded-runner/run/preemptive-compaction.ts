@@ -1,4 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
+import { isRecord } from "../../../shared/record-coerce.js";
 import { estimateStringChars } from "../../../utils/cjk-chars.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
 import {
@@ -72,10 +74,6 @@ function estimateIdentifierTokenPressure(
     return estimateStringTokenPressure(String(value), charsPerToken);
   }
   return estimateJsonPayloadTokenPressure(value, charsPerToken);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function estimateContentBlockTokenPressure(
@@ -352,4 +350,45 @@ export function formatPrePromptPrecheckLog(params: {
     `unwindowedMessages=${params.unwindowedMessageCount ?? params.messageCount} ` +
     `sessionFile=${params.sessionFile}`
   );
+}
+
+export function buildPrePromptContextBudgetStatus(params: {
+  result: PreemptiveCompactionDecision;
+  provider: string;
+  modelId: string;
+  messageCount: number;
+  unwindowedMessageCount?: number;
+  contextTokenBudget: number;
+  reserveTokens: number;
+  sessionId?: string;
+  now?: number;
+}): SessionContextBudgetStatus {
+  const { result } = params;
+  const remainingPromptBudgetTokens = Math.max(
+    0,
+    result.promptBudgetBeforeReserve - result.estimatedPromptTokens,
+  );
+  return {
+    schemaVersion: 1,
+    source: "pre-prompt-estimate",
+    updatedAt: params.now ?? Date.now(),
+    provider: params.provider,
+    model: params.modelId,
+    route: result.route,
+    shouldCompact: result.shouldCompact,
+    estimatedPromptTokens: result.estimatedPromptTokens,
+    contextTokenBudget: Math.max(1, Math.floor(params.contextTokenBudget)),
+    promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
+    reserveTokens: Math.max(0, Math.floor(params.reserveTokens)),
+    effectiveReserveTokens: result.effectiveReserveTokens,
+    remainingPromptBudgetTokens,
+    overflowTokens: result.overflowTokens,
+    toolResultReducibleChars: result.toolResultReducibleChars,
+    messageCount: Math.max(0, Math.floor(params.messageCount)),
+    unwindowedMessageCount: Math.max(
+      0,
+      Math.floor(params.unwindowedMessageCount ?? params.messageCount),
+    ),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  };
 }

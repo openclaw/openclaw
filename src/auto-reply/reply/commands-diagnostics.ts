@@ -453,6 +453,7 @@ async function executeCodexDiagnosticsAddon(
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,
+    authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
     from: params.command.from,

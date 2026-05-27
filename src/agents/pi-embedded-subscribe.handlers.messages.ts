@@ -16,6 +16,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -56,6 +57,47 @@ function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): b
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "openai-responses" || api === "azure-openai-responses";
+}
+
+function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function extractStandaloneMessageToolText(
+  text: string,
+  params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
+): string | undefined {
+  try {
+    const record = asRecord(JSON.parse(text.trim()) as unknown);
+    const args = asRecord(record?.arguments);
+    const hasRoute = Boolean(
+      normalizeOptionalString(args?.target) ||
+      normalizeOptionalString(args?.to) ||
+      normalizeOptionalString(args?.channel) ||
+      normalizeOptionalString(args?.accountId) ||
+      Array.isArray(args?.targets),
+    );
+    if (
+      normalizeOptionalString(record?.name) !== "message" ||
+      normalizeOptionalString(args?.action) !== "send" ||
+      (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
+    ) {
+      return undefined;
+    }
+    return normalizeOptionalString(args?.message);
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveAssistantStreamItemId(params: {
@@ -254,7 +296,7 @@ export function readPendingToolMediaReply(
   }
   return {
     mediaUrls: state.pendingToolMediaUrls.length
-      ? Array.from(new Set(state.pendingToolMediaUrls))
+      ? uniqueStrings(state.pendingToolMediaUrls)
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
@@ -288,7 +330,7 @@ function mergeReplyDirectiveResults(
   if (!second) {
     return first;
   }
-  const mediaUrls = Array.from(new Set([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]));
+  const mediaUrls = uniqueStrings([...(first.mediaUrls ?? []), ...(second.mediaUrls ?? [])]);
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
@@ -682,9 +724,16 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
   warnIfAssistantEmittedToolText(ctx, assistantMessage);
+  const visibleText =
+    extractStandaloneMessageToolText(rawVisibleText, {
+      allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
+      allowCurrentSourceReply:
+        ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+        ctx.builtinToolNames?.has("message") === true,
+    }) ?? rawVisibleText;
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }, { final: true }),
+    text: ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =

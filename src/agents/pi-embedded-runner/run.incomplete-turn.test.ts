@@ -1302,6 +1302,40 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 
+  it("does not surface incomplete-turn error while an async media task is running", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            meta: 'generate prompt="a portrait"',
+            asyncStarted: true,
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "image_generate",
+              input: { action: "generate", prompt: "a portrait" },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 1,
@@ -1592,6 +1626,54 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("retries empty openai-codex-responses turns with non-zero output tokens (#85364)", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelApi: "openai-codex-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [],
+          usage: { input: 24794, output: 111, cacheRead: 4608, totalTokens: 29513 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("retries empty openai-responses turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+          usage: { input: 5000, output: 200, totalTokens: 5200 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
   it("retries generic empty OpenAI-compatible turns from custom endpoints", () => {
@@ -1914,6 +1996,17 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         toolMetas: [],
         didSendViaMessagingTool: false,
         messagingToolSentTexts: ["Delivered through the message tool."],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats async-started background tools as replay-invalid side effects", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });

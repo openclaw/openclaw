@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn<() => Promise<ModelCatalogEntry[]>>(),
+  loadModelCatalog: vi.fn<(params?: unknown) => Promise<ModelCatalogEntry[]>>(),
 }));
 
 const modelAuthMocks = vi.hoisted(() => ({
@@ -92,6 +92,21 @@ describe("prepared provider auth state", () => {
     const secondLookup =
       modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[1]?.[0].runtimeLookup;
     expect(firstLookup).toBe(secondLookup);
+  });
+
+  it("uses the read-only model catalog while warming provider auth", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+
+    await warmCurrentProviderAuthState(cfg);
+
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      readOnly: true,
+    });
   });
 
   it("hasAuthForModelProvider returns the prepared answer after warm and falls through to compute after clear", async () => {

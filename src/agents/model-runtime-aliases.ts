@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -141,6 +142,20 @@ export function isCliRuntimeAlias(runtime: string | undefined): boolean {
   return normalized ? CLI_RUNTIME_ALIASES.has(normalizeProviderId(normalized)) : false;
 }
 
+export function isCliRuntimeAliasForProvider(params: {
+  runtime: string | undefined;
+  provider: string | undefined;
+}): boolean {
+  const runtime = params.runtime?.trim();
+  const provider = params.provider?.trim();
+  if (!runtime || !provider) {
+    return false;
+  }
+  return CLI_RUNTIME_BY_PROVIDER.has(
+    `${normalizeProviderId(provider)}:${normalizeProviderId(runtime)}`,
+  );
+}
+
 function canonicalizeRuntimeAliasProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
   return (
@@ -168,18 +183,42 @@ export function areRuntimeModelRefsEquivalent(left: string, right: string): bool
   );
 }
 
+export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
+  runtimeAliasModelEquivalent: boolean;
+  selectedAuthLabel?: string;
+  activeAuthLabel?: string;
+}): boolean {
+  if (!params.runtimeAliasModelEquivalent) {
+    return false;
+  }
+  const selectedAuth = normalizeOptionalLowercaseString(params.selectedAuthLabel);
+  const activeAuth = normalizeOptionalLowercaseString(params.activeAuthLabel);
+  if (!activeAuth || activeAuth === "unknown") {
+    return false;
+  }
+  return (
+    selectedAuth === "unknown" ||
+    (Boolean(selectedAuth?.startsWith("api-key")) &&
+      (activeAuth.startsWith("oauth") || activeAuth.startsWith("token")))
+  );
+}
+
 function resolveConfiguredRuntime(params: {
   cfg?: OpenClawConfig;
   provider: string;
   agentId?: string;
   modelId?: string;
-}): string | undefined {
-  return resolveModelRuntimePolicy({
+}): { runtime?: string; matchedProvider?: string } {
+  const policy = resolveModelRuntimePolicy({
     config: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
     agentId: params.agentId,
-  }).policy?.id?.trim();
+  });
+  return {
+    runtime: policy.policy?.id?.trim() || undefined,
+    matchedProvider: policy.matchedProvider,
+  };
 }
 
 function resolveProfileRuntimeAlias(params: {
@@ -263,12 +302,16 @@ export function resolveCliRuntimeExecutionProvider(params: {
   authProfileId?: string;
 }): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const runtime = resolveConfiguredRuntime({ ...params, provider });
+  const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
   if (runtime === "pi") {
     return undefined;
   }
   if (!runtime || runtime === "auto") {
     return resolveCliRuntimeFromAuthProfile({ ...params, provider });
   }
-  return CLI_RUNTIME_BY_PROVIDER.get(`${provider}:${runtime}`)?.runtime;
+  const effectiveProvider = provider || normalizeProviderId(matchedProvider ?? "");
+  if (!effectiveProvider) {
+    return undefined;
+  }
+  return CLI_RUNTIME_BY_PROVIDER.get(`${effectiveProvider}:${runtime}`)?.runtime;
 }

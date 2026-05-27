@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 
@@ -121,6 +122,7 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
   chatToolMessages: Record<string, unknown>[];
+  activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
 };
@@ -168,6 +170,7 @@ function createHost(): TestGatewayHost {
     chatMessages: [],
     chatQueue: [],
     chatToolMessages: [],
+    activityEntries: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
@@ -966,6 +969,17 @@ describe("connectGateway", () => {
       runId: "external-run-1",
       sessionKey: "main",
     });
+    expect(host.activityEntries).toHaveLength(1);
+    expect(host.activityEntries[0]).toMatchObject({
+      toolCallId: "session-tool-1",
+      runId: "external-run-1",
+      sessionKey: "main",
+      toolName: "exec",
+      status: "running",
+      hiddenArgumentCount: 1,
+      summary: "exec running; 1 argument hidden",
+    });
+    expect(JSON.stringify(host.activityEntries[0])).not.toContain("pwd");
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
@@ -1128,6 +1142,55 @@ describe("connectGateway", () => {
         content: [{ type: "text", text: "Final answer" }],
       },
     ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps source-reply finals live even when message tool events were seen", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-with-message-tool";
+    host.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+    ];
+    emitToolResultEvent(client);
+    expect(host.toolStreamOrder).toHaveLength(1);
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-with-message-tool",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(host.toolStreamOrder).toHaveLength(1);
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 

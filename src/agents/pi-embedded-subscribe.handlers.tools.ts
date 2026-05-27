@@ -20,11 +20,16 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
@@ -48,6 +53,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./pi-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -70,6 +76,11 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const TRACE_REQUIRED_PARAM_GROUPS = {
+  read: [{ keys: ["path", "file_path"], label: "path" }],
+  write: REQUIRED_PARAM_GROUPS.write,
+  edit: REQUIRED_PARAM_GROUPS.edit,
+} satisfies Record<string, readonly RequiredParamGroup[]>;
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -99,6 +110,85 @@ function loadMediaParse(): Promise<MediaParseModule> {
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
   return beforeToolCallModuleLoader.load();
 }
+
+function getRequiredParamGroupsForTool(
+  toolName: string,
+): readonly RequiredParamGroup[] | undefined {
+  return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
+}
+
+function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
+  const groups = getRequiredParamGroupsForTool(toolName);
+  if (!groups?.length) {
+    return [];
+  }
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  if (!record) {
+    return groups.map((group) => group.label ?? group.keys.join(" or "));
+  }
+  return groups
+    .filter((group) => {
+      const satisfied =
+        group.validator?.(record) ??
+        group.keys.some((key) => {
+          const value = record[key];
+          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
+        });
+      return !satisfied;
+    })
+    .map((group) => group.label ?? group.keys.join(" or "));
+}
+
+function buildToolExecutionStartTraceMeta(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}): Record<string, unknown> {
+  const args = params.args;
+  const argsType = Array.isArray(args) ? "array" : typeof args;
+  const argsKeys =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? Object.keys(args as Record<string, unknown>).toSorted()
+      : undefined;
+  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
+  return {
+    event: "embedded_tool_execution_start",
+    tags: ["tool_start", "embedded", "trace"],
+    runId: params.ctx.params.runId,
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    argsType,
+    ...(argsKeys?.length ? { argsKeys } : {}),
+    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
+    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
+    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
+    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
+  };
+}
+
+function traceToolExecutionStart(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}) {
+  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
+    return;
+  }
+  params.ctx.log.trace(
+    "embedded run tool start",
+    buildToolExecutionStartTraceMeta({
+      ctx: params.ctx,
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      args: params.args,
+    }),
+  );
+}
+
+const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
+const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_CHARS + 1;
 
 type ToolStartRecord = {
   startTime: number;
@@ -193,13 +283,12 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 }
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const details = (result as { details?: unknown }).details;
-  return details && typeof details === "object" && !Array.isArray(details)
-    ? (details as Record<string, unknown>)
-    : undefined;
+  return readRecordField(asOptionalObjectRecord(result)?.details);
+}
+
+function isAsyncStartedToolResult(result: unknown): boolean {
+  const details = readToolResultDetailsRecord(result);
+  return details?.async === true && details.status === "started";
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
@@ -427,12 +516,6 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function readRecordField(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readStringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -532,13 +615,14 @@ async function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
   result: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
 ): Promise<string[]> {
   const { splitMediaFromOutput } = await loadMediaParse();
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -707,7 +791,12 @@ async function emitToolResultOutput(params: {
   const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
-    ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
+    ? filterToolResultMediaUrls(
+        rawToolName,
+        mediaReply.mediaUrls,
+        result,
+        ctx.trustedLocalMediaToolNames,
+      )
     : [];
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
@@ -725,6 +814,7 @@ async function emitToolResultOutput(params: {
           rawToolName,
           outputText,
           result,
+          ctx.trustedLocalMediaToolNames,
         );
       }
     }
@@ -786,6 +876,7 @@ export function handleToolExecutionStart(
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
+    traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -797,10 +888,50 @@ export function handleToolExecutionStart(
             : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
-        const argsPreview = readStringValue(args)?.slice(0, 200);
-        ctx.log.warn(
-          `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
+        const argsType = typeof args;
+        const rawArgsPreview = readStringValue(args);
+        const argsPreview = sanitizeForConsole(
+          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
+          TOOL_START_WARNING_PREVIEW_MAX_CHARS,
         );
+        const safeRunId = sanitizeForConsole(runId) ?? "-";
+        const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
+        const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
+        const safeAgentId = sanitizeForConsole(ctx.params.agentId);
+        const consoleMessageParts = [
+          "read tool called without path:",
+          `runId=${safeRunId}`,
+          `toolCallId=${sanitizeForConsole(toolCallId) ?? "tool-call"}`,
+          `argsType=${argsType}`,
+        ];
+        if (safeSessionKey) {
+          consoleMessageParts.push(`sessionKey=${safeSessionKey}`);
+        }
+        if (safeSessionId) {
+          consoleMessageParts.push(`sessionId=${safeSessionId}`);
+        }
+        if (safeAgentId) {
+          consoleMessageParts.push(`agentId=${safeAgentId}`);
+        }
+        if (argsPreview) {
+          consoleMessageParts.push(`argsPreview=${argsPreview}`);
+        }
+        const consoleMessage = consoleMessageParts.join(" ");
+        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}${
+          argsPreview ? ` argsPreview=${argsPreview}` : ""
+        }`;
+        ctx.log.warn(message, {
+          event: "embedded_read_tool_start_warning",
+          tags: ["tool_start", "read", "embedded", "validation"],
+          runId: ctx.params.runId,
+          toolCallId,
+          argsType,
+          ...(safeSessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+          ...(safeSessionId ? { sessionId: ctx.params.sessionId } : {}),
+          ...(safeAgentId ? { agentId: ctx.params.agentId } : {}),
+          ...(argsPreview ? { argsPreview } : {}),
+          consoleMessage,
+        });
       }
     }
 
@@ -1027,7 +1158,12 @@ export async function handleToolExecutionEnd(
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
-  ctx.state.toolMetas.push({ toolName, meta });
+  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  ctx.state.toolMetas.push({
+    toolName,
+    meta,
+    ...(asyncStarted ? { asyncStarted: true } : {}),
+  });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
@@ -1068,7 +1204,10 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
-  if (completedMutatingAction || acceptedSessionSpawn) {
+  if (asyncStarted) {
+    ctx.state.hadDeterministicSideEffect = true;
+  }
+  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -1130,7 +1269,11 @@ export async function handleToolExecutionEnd(
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
     const response = normalizeHeartbeatToolResponse(result?.details);
     if (response) {
+      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
+      if (isFirstHeartbeatResponse) {
+        void ctx.params.onHeartbeatToolResponse?.(response);
+      }
     }
   }
 

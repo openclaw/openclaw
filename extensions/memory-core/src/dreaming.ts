@@ -20,25 +20,17 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import {
-  generateAndAppendDreamNarrative,
-  type NarrativePhaseData,
-  runDetachedDreamNarrative,
-} from "./dreaming-narrative.js";
-import { runDreamingSweepPhases } from "./dreaming-phases.js";
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
   includesSystemEventToken,
   normalizeTrimmedString,
 } from "./dreaming-shared.js";
-import {
-  applyShortTermPromotions,
-  repairShortTermPromotionArtifacts,
-  rankShortTermPromotionCandidates,
-} from "./short-term-promotion.js";
 
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 const STARTUP_CRON_RETRY_DELAY_MS = 5_000;
@@ -371,7 +363,7 @@ function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
     }
   }
 
-  return Array.from(new Set(keys));
+  return uniqueStrings(keys);
 }
 
 function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {
@@ -497,7 +489,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   cfg?: OpenClawConfig;
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  subagent?: OpenClawPluginApi["runtime"]["subagent"];
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -551,6 +543,21 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let failedWorkspaces = 0;
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
+  const [
+    { writeDeepDreamingReport },
+    { generateAndAppendDreamNarrative, runDetachedDreamNarrative },
+    { runDreamingSweepPhases },
+    {
+      applyShortTermPromotions,
+      repairShortTermPromotionArtifacts,
+      rankShortTermPromotionCandidates,
+    },
+  ] = await Promise.all([
+    import("./dreaming-markdown.js"),
+    import("./dreaming-narrative.js"),
+    import("./dreaming-phases.js"),
+    import("./short-term-promotion.js"),
+  ]);
   for (const workspaceDir of workspaces) {
     try {
       const sweepNowMs = Date.now();

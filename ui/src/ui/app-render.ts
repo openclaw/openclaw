@@ -56,6 +56,7 @@ import {
   saveConfig,
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
+  updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
@@ -145,8 +146,8 @@ import {
   type Tab,
 } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
-import "./components/dashboard-header.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   isSubagentSessionKey,
@@ -154,6 +155,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
+import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
@@ -356,6 +358,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
 // Lazy-loaded view modules are deferred so the initial bundle stays small.
 // The shared loader renders visible fallback states instead of leaving a tab blank.
 const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
+const lazyActivity = createLazyView(() => import("./views/activity.ts"), notifyLazyViewChanged);
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
@@ -1161,7 +1164,7 @@ export function renderApp(state: AppViewState) {
     formValue: state.configForm,
     originalValue: state.configFormOriginal,
     onRawChange: (next: string) => {
-      state.configRaw = next;
+      updateConfigRawValue(state, next);
     },
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
@@ -1196,7 +1199,10 @@ export function renderApp(state: AppViewState) {
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
-    rawAvailable: typeof state.configSnapshot?.raw === "string",
+    rawAvailable:
+      typeof state.configSnapshot?.raw === "string" ||
+      !!state.configSnapshot?.config ||
+      !!state.configForm,
   } satisfies Omit<
     ConfigProps,
     | "formMode"
@@ -1836,7 +1842,11 @@ export function renderApp(state: AppViewState) {
           </div>
         </aside>
       </div>
-      <main class="content ${isChat ? "content--chat" : ""}">
+      <main
+        class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
+          ? "content--logs"
+          : ""}"
+      >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
               ${state.updateStatusBanner.text}
@@ -1959,6 +1969,55 @@ export function renderApp(state: AppViewState) {
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview({ refresh: true }),
             })
+          : nothing}
+        ${state.tab === "activity"
+          ? renderLazyView(lazyActivity, (m) =>
+              m.renderActivity({
+                entries: state.activityEntries,
+                filterText: state.activityFilterText,
+                statusFilters: state.activityStatusFilters,
+                toolFilter: state.activityToolFilter,
+                expandedIds: state.activityExpandedIds,
+                autoFollow: state.activityAutoFollow,
+                onFilterTextChange: (next) => (state.activityFilterText = next),
+                onToolFilterChange: (next) => (state.activityToolFilter = next),
+                onStatusToggle: (status, enabled) => {
+                  state.activityStatusFilters = {
+                    ...state.activityStatusFilters,
+                    [status]: enabled,
+                  };
+                },
+                onToggleAutoFollow: (next) => {
+                  state.activityAutoFollow = next;
+                  if (next) {
+                    state.scheduleActivityScroll(true);
+                  }
+                },
+                onClear: () => {
+                  state.activityEntries = [];
+                  state.activityExpandedIds = new Set();
+                  state.activityAtBottom = true;
+                },
+                onExpandAll: () => {
+                  state.activityExpandedIds = new Set(
+                    state.activityEntries.map((entry) => entry.id),
+                  );
+                },
+                onCollapseAll: () => {
+                  state.activityExpandedIds = new Set();
+                },
+                onEntryToggle: (id, open) => {
+                  const next = new Set(state.activityExpandedIds);
+                  if (open) {
+                    next.add(id);
+                  } else {
+                    next.delete(id);
+                  }
+                  state.activityExpandedIds = next;
+                },
+                onScroll: (event) => state.handleActivityScroll(event),
+              }),
+            )
           : nothing}
         ${state.tab === "instances"
           ? renderLazyView(lazyInstances, (m) =>
@@ -2447,7 +2506,7 @@ export function renderApp(state: AppViewState) {
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
                   const existing = Array.isArray(entry?.skills)
-                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                    ? normalizeStringEntries(entry.skills)
                     : undefined;
                   const base = existing ?? allSkills;
                   const next = new Set(base);
@@ -2496,7 +2555,7 @@ export function renderApp(state: AppViewState) {
                   void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
-                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const normalized = normalizeStringEntries(fallbacks);
                   const currentConfig = getCurrentConfigValue();
                   const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
                   const effectivePrimary =
