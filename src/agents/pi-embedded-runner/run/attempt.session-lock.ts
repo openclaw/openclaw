@@ -27,7 +27,10 @@ type SessionWriteLockRunOptions = {
 };
 
 type SessionEventProcessor = {
+  _handleAgentEvent?: AwaitableSessionEventHandler;
   _processAgentEvent?: (event: unknown) => Promise<void>;
+  _disconnectFromAgent?: () => void;
+  _reconnectToAgent?: () => void;
   _extensionRunner?: {
     hasHandlers?: (eventType: string) => boolean;
   };
@@ -87,7 +90,13 @@ function sessionHasExtensionHandlers(session: SessionEventProcessor, eventType: 
 
 function eventMayReachTranscriptWriters(session: SessionEventProcessor, event: unknown): boolean {
   const type = (event as { type?: unknown } | null)?.type;
-  if (type === "message_update" || type === "message_end" || type === "agent_end") {
+  if (
+    type === "message" ||
+    type === "custom_message" ||
+    type === "message_update" ||
+    type === "message_end" ||
+    type === "agent_end"
+  ) {
     return true;
   }
   if (typeof type !== "string") {
@@ -708,11 +717,39 @@ export function installSessionEventWriteLock(params: {
 }): void {
   installAwaitableSessionEventQueue(params.session);
   const session = params.session as SessionEventProcessor;
-  const original = session["_processAgentEvent"];
-  if (
-    typeof original !== "function" ||
-    session["__openclawSessionEventWriteLockInstalled"] === true
-  ) {
+  if (session["__openclawSessionEventWriteLockInstalled"] === true) {
+    return;
+  }
+
+  const originalHandleAgentEvent = session["_handleAgentEvent"];
+  if (typeof originalHandleAgentEvent === "function") {
+    const canReconnect =
+      typeof session["_disconnectFromAgent"] === "function" &&
+      typeof session["_reconnectToAgent"] === "function";
+    if (canReconnect) {
+      session["_disconnectFromAgent"]?.();
+    }
+    session["__openclawSessionEventWriteLockInstalled"] = true;
+    session["_handleAgentEvent"] = async function lockedHandleAgentEvent(
+      this: unknown,
+      event: unknown,
+      signal?: unknown,
+    ) {
+      if (!eventMayReachTranscriptWriters(session, event)) {
+        return await originalHandleAgentEvent.call(this, event, signal);
+      }
+      return await params.withSessionWriteLock(
+        async () => await originalHandleAgentEvent.call(this, event, signal),
+      );
+    };
+    if (canReconnect) {
+      session["_reconnectToAgent"]?.();
+    }
+    return;
+  }
+
+  const originalProcessAgentEvent = session["_processAgentEvent"];
+  if (typeof originalProcessAgentEvent !== "function") {
     return;
   }
   session["__openclawSessionEventWriteLockInstalled"] = true;
@@ -721,9 +758,11 @@ export function installSessionEventWriteLock(params: {
     event: unknown,
   ) {
     if (!eventMayReachTranscriptWriters(session, event)) {
-      return await original.call(this, event);
+      return await originalProcessAgentEvent.call(this, event);
     }
-    return await params.withSessionWriteLock(async () => await original.call(this, event));
+    return await params.withSessionWriteLock(
+      async () => await originalProcessAgentEvent.call(this, event),
+    );
   };
 }
 

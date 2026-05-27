@@ -1118,6 +1118,8 @@ describe("embedded attempt session lock lifecycle", () => {
       },
     });
 
+    await session["_processAgentEvent"]({ type: "custom_message" });
+    await session["_processAgentEvent"]({ type: "message" });
     await session["_processAgentEvent"]({ type: "message_update" });
     await session["_processAgentEvent"]({ type: "tool_execution_end" });
     await session["_processAgentEvent"]({ type: "message_end" });
@@ -1125,6 +1127,8 @@ describe("embedded attempt session lock lifecycle", () => {
     await session["_processAgentEvent"]({});
 
     expect(processed).toEqual([
+      "custom_message",
+      "message",
       "message_update",
       "tool_execution_end",
       "message_end",
@@ -1132,9 +1136,37 @@ describe("embedded attempt session lock lifecycle", () => {
       undefined,
     ]);
     expect(hasHandlers).toHaveBeenCalledWith("tool_execution_end");
-    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(5);
     expect(acquireSessionWriteLock).toHaveBeenCalledWith(lockOptions);
-    expect(releases).toEqual(["released", "released", "released"]);
+    expect(releases).toEqual(["released", "released", "released", "released", "released"]);
+  });
+
+  it("locks the real Pi agent event handler for transcript-writing events", async () => {
+    const locked: string[] = [];
+    const handled: Array<string | undefined> = [];
+    const session = {
+      _agentEventQueue: Promise.resolve(),
+      _disconnectFromAgent: vi.fn(),
+      _reconnectToAgent: vi.fn(),
+      _handleAgentEvent(event: { type?: string }) {
+        handled.push(event.type);
+      },
+    };
+
+    installSessionEventWriteLock({
+      session,
+      withSessionWriteLock: async (run) => {
+        locked.push("lock");
+        return await run();
+      },
+    });
+
+    await Promise.resolve(session["_handleAgentEvent"]({ type: "message" }));
+    await Promise.resolve(session["_handleAgentEvent"]({ type: "custom_message" }));
+    await Promise.resolve(session["_handleAgentEvent"]({ type: "tool_execution_end" }));
+
+    expect(handled).toEqual(["message", "custom_message", "tool_execution_end"]);
+    expect(locked).toEqual(["lock", "lock"]);
   });
 
   it("makes the Pi event listener await locked session event processing", async () => {
@@ -1167,16 +1199,65 @@ describe("embedded attempt session lock lifecycle", () => {
     const result = handleAgentEvent({ type: "message_end" }) as unknown as Promise<unknown>;
 
     expect(result).toHaveProperty("then");
-    expect(events).toEqual(["disconnect", "reconnect", "handle:message_end"]);
+    expect(events).toEqual([
+      "disconnect",
+      "reconnect",
+      "disconnect",
+      "reconnect",
+      "lock",
+      "handle:message_end",
+    ]);
 
     await result;
 
     expect(events).toEqual([
       "disconnect",
       "reconnect",
-      "handle:message_end",
+      "disconnect",
+      "reconnect",
       "lock",
+      "handle:message_end",
       "process:message_end",
+    ]);
+  });
+
+  it("reconnects the Pi listener to the final locked event handler", async () => {
+    const events: string[] = [];
+    let subscribed: ((event: { type?: string }) => unknown) | undefined;
+    const session = {
+      _agentEventQueue: Promise.resolve(),
+      _disconnectFromAgent: vi.fn(() => {
+        events.push("disconnect");
+        subscribed = undefined;
+      }),
+      _reconnectToAgent: vi.fn(() => {
+        events.push("reconnect");
+        subscribed = session["_handleAgentEvent"];
+      }),
+      _handleAgentEvent(event: { type?: string }) {
+        events.push(`handle:${event.type}`);
+      },
+    };
+
+    installSessionEventWriteLock({
+      session,
+      withSessionWriteLock: async (run) => {
+        events.push("lock");
+        return await run();
+      },
+    });
+
+    const result = subscribed?.({ type: "message" });
+    expect(result).toHaveProperty("then");
+    await Promise.resolve(result);
+
+    expect(events).toEqual([
+      "disconnect",
+      "reconnect",
+      "disconnect",
+      "reconnect",
+      "lock",
+      "handle:message",
     ]);
   });
 
