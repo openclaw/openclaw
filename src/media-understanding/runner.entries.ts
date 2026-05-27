@@ -241,7 +241,7 @@ async function resolveCliOutput(params: {
           : commandId === "node"
             ? resolveNodeWhisperWrapperOutputPath(params.args, params.mediaPath)
             : null;
-  const fileOutputAuthoritative = commandId === "node" && fileOutputPath !== null;
+  const fileOutputAuthoritative = fileOutputPath !== null;
   if (fileOutputPath) {
     try {
       const content = (await fs.readFile(fileOutputPath, "utf8")).trim();
