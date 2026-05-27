@@ -342,6 +342,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
+    <Warning>
+      **Interactive-control tradeoff on Android.** While a native `sendMessageDraft` preview is active, the Telegram Android client (observed on `v12.7.3`) replaces the user's send button with a loading/ellipsis control. The user cannot send a follow-up message or a steering command (for example `/steer please stop`) from that chat until the bot draft finishes. This is intended Telegram-client behavior, [confirmed by Telegram Bugs](https://t.me/bugs?startapp=c-62189), not an OpenClaw transport bug. Telegram iOS and Telegram Desktop were not observed to lock the composer the same way.
+
+      Use the non-native preview path (`streaming.preview.toolProgress: true` with `nativeToolProgress: false`) for interactive workflows that rely on `/steer`, `/stop`, mid-turn corrections, or other user-initiated steering. The non-native path keeps tool-progress visible through the regular editable preview message and leaves the Telegram composer unlocked.
+    </Warning>
+
     To keep the edited preview for answer text but hide tool-progress lines, set:
 
     ```json
