@@ -458,35 +458,6 @@ export {
   resolveEmbeddedAgentStreamFn,
 };
 
-function collectTrustedPluginLocalMediaToolNames(params: {
-  tools: Array<{ name?: string }>;
-}): Set<string> {
-  const trusted = new Set<string>();
-  for (const tool of params.tools) {
-    const toolName = tool.name?.trim();
-    if (!toolName) {
-      continue;
-    }
-    const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
-    if (meta?.trustedLocalMedia === true) {
-      trusted.add(toolName);
-    }
-  }
-  return trusted;
-}
-
-function collectTrustedLocalMediaToolNames(params: {
-  coreBuiltinToolNames: ReadonlySet<string>;
-  trustedPluginToolNames: ReadonlySet<string>;
-}): Set<string> {
-  return new Set([
-    ...[...params.coreBuiltinToolNames].filter((toolName) =>
-      isCoreToolResultMediaTrustedName(toolName),
-    ),
-    ...params.trustedPluginToolNames,
-  ]);
-}
-
 function logRuntimeToolSchemaQuarantine(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly Parameters<typeof getPluginToolMeta>[0][];
@@ -2096,7 +2067,6 @@ export async function runEmbeddedAttempt(
           catalogRef: toolSearchCatalogRef,
           toolHookContext: catalogToolHookContext,
         });
-    toolSearchCatalogApplied = true;
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
       config: params.config,

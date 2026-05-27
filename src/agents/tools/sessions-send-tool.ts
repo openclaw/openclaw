@@ -20,13 +20,13 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { listAgentIds } from "../agent-scope.js";
-import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
-  type EmbeddedPiQueueMessageOptions,
-  formatEmbeddedPiQueueFailureSummary,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  type EmbeddedAgentQueueMessageOptions,
+  formatEmbeddedAgentQueueFailureSummary,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-} from "../pi-embedded-runner/runs.js";
+} from "../embedded-agent-runner/runs.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
   readLatestAssistantReplySnapshot,
@@ -188,13 +188,13 @@ async function startAgentRun(params: {
     const messageText =
       typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
     if (activeRunSessionId && fallbackSessionKey && messageText) {
-      const queueOptions: EmbeddedPiQueueMessageOptions = {
+      const queueOptions: EmbeddedAgentQueueMessageOptions = {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
         waitForTranscriptCommit: true,
       };
-      let queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+      let queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
         activeRunSessionId,
         messageText,
         queueOptions,
@@ -202,7 +202,7 @@ async function startAgentRun(params: {
       if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
         const bestEffortQueueOptions = { ...queueOptions };
         delete bestEffortQueueOptions.waitForTranscriptCommit;
-        queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+        queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
           activeRunSessionId,
           messageText,
           bestEffortQueueOptions,
@@ -230,7 +230,7 @@ async function startAgentRun(params: {
         };
       } catch (err) {
         const queueSummary =
-          formatEmbeddedPiQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
+          formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
         throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`, {
           cause: err,
         });
