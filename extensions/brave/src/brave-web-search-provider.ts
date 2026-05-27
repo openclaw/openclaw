@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   SearchConfigRecord,
@@ -81,7 +82,7 @@ function resolveLegacyTopLevelBraveCredential(
   return { path: "tools.web.search.apiKey", value: search.apiKey };
 }
 
-function resolveConfiguredBraveCredential(config: unknown): unknown {
+function resolveConfiguredBraveCredential(config: OpenClawConfig | undefined): unknown {
   return (
     resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey ??
     resolveLegacyTopLevelBraveCredential(config)?.value
