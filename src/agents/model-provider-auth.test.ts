@@ -477,8 +477,9 @@ describe("prepared provider auth state", () => {
     });
   });
 
-  it("skips off-main-thread warm when plugin synthetic auth lookup is incomplete", async () => {
+  it("keeps off-main-thread warm partial when plugin synthetic auth lookup is incomplete", async () => {
     const cfg = {} as OpenClawConfig;
+    authProfilesMocks.getRuntimeAuthProfileStoreSnapshot.mockReturnValue(undefined);
     modelAuthMocks.createRuntimeProviderAuthLookup.mockReturnValueOnce({
       envApiKey: {
         aliasMap: {},
@@ -492,7 +493,27 @@ describe("prepared provider auth state", () => {
 
     await warmCurrentProviderAuthStateOffMainThread(cfg, { runWorker });
 
-    expect(runWorker).not.toHaveBeenCalled();
+    expect(runWorker).toHaveBeenCalledWith({
+      cfg,
+      runtimeAuthLookups: [
+        {
+          agentId: "default",
+          lookup: {
+            envApiKey: {
+              aliasMap: {},
+              candidateMap: {},
+              authEvidenceMap: {},
+            },
+            syntheticAuthProviderRefs: [],
+            syntheticAuthProviderRefsComplete: false,
+          },
+        },
+      ],
+      omitFalseProviderAuth: true,
+      timeoutMs: 120_000,
+      isCancelled: expect.any(Function),
+      workerUrl: undefined,
+    });
   });
 
   it("terminates the off-main-thread warm worker when cancellation fires", async () => {

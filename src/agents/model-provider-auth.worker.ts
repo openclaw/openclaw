@@ -16,6 +16,7 @@ type ProviderAuthWarmWorkerInput = {
     agentId: string;
     lookup: RuntimeProviderAuthLookup;
   }>;
+  omitFalseProviderAuth?: boolean;
 };
 
 type ProviderAuthWarmWorkerResult =
@@ -36,7 +37,9 @@ function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
     (!("runtimeAuthStores" in value) ||
       Array.isArray((value as { runtimeAuthStores?: unknown }).runtimeAuthStores)) &&
     (!("runtimeAuthLookups" in value) ||
-      Array.isArray((value as { runtimeAuthLookups?: unknown }).runtimeAuthLookups))
+      Array.isArray((value as { runtimeAuthLookups?: unknown }).runtimeAuthLookups)) &&
+    (!("omitFalseProviderAuth" in value) ||
+      typeof (value as { omitFalseProviderAuth?: unknown }).omitFalseProviderAuth === "boolean")
   );
 }
 
@@ -58,6 +61,7 @@ export async function runProviderAuthWarmWorkerInput(
       runtimeAuthLookups: new Map(
         input.runtimeAuthLookups?.map(({ agentId, lookup }) => [agentId, lookup]),
       ),
+      omitFalseProviderAuth: input.omitFalseProviderAuth,
     });
     return {
       status: "ok",

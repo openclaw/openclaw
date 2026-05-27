@@ -71,6 +71,7 @@ type ProviderAuthWarmWorkerRunner = (params: {
   cfg: OpenClawConfig;
   runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
   runtimeAuthLookups?: ProviderAuthWarmRuntimeAuthLookup[];
+  omitFalseProviderAuth?: boolean;
   timeoutMs: number;
   isCancelled: () => boolean;
   workerUrl?: URL;
@@ -319,6 +320,7 @@ export async function buildCurrentProviderAuthStateSnapshot(
     isCancelled?: () => boolean;
     readOnlyAuthStore?: boolean;
     runtimeAuthLookups?: ReadonlyMap<string, RuntimeProviderAuthLookup>;
+    omitFalseProviderAuth?: boolean;
   } = {},
 ): Promise<ProviderAuthWarmSnapshot> {
   const isWarmStale = () => options.isCancelled?.() === true;
@@ -380,11 +382,12 @@ export async function buildCurrentProviderAuthStateSnapshot(
       });
       if (
         !value &&
-        shouldOmitFalsePreparedAuthForProcessSyntheticProvider({
-          cfg,
-          provider,
-          runtimeAuthLookup,
-        })
+        (options.omitFalseProviderAuth ||
+          shouldOmitFalsePreparedAuthForProcessSyntheticProvider({
+            cfg,
+            provider,
+            runtimeAuthLookup,
+          }))
       ) {
         continue;
       }
@@ -510,27 +513,30 @@ function collectProviderAuthWarmRuntimeAuthStores(
   return entries;
 }
 
-function collectProviderAuthWarmRuntimeAuthLookups(
-  cfg: OpenClawConfig,
-): ProviderAuthWarmRuntimeAuthLookup[] | null {
+function collectProviderAuthWarmRuntimeAuthLookups(cfg: OpenClawConfig): {
+  entries: ProviderAuthWarmRuntimeAuthLookup[];
+  omitFalseProviderAuth: boolean;
+} {
   const entries: ProviderAuthWarmRuntimeAuthLookup[] = [];
+  let omitFalseProviderAuth = false;
   for (const agentId of listAgentIds(cfg)) {
     const lookup = createRuntimeProviderAuthLookup({
       cfg,
       workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     });
     if (lookup.syntheticAuthProviderRefsComplete === false) {
-      return null;
+      omitFalseProviderAuth = true;
     }
     entries.push({ agentId, lookup });
   }
-  return entries;
+  return { entries, omitFalseProviderAuth };
 }
 
 function runProviderAuthWarmWorker(params: {
   cfg: OpenClawConfig;
   runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
   runtimeAuthLookups?: ProviderAuthWarmRuntimeAuthLookup[];
+  omitFalseProviderAuth?: boolean;
   timeoutMs: number;
   isCancelled: () => boolean;
   workerUrl?: URL;
@@ -542,6 +548,7 @@ function runProviderAuthWarmWorker(params: {
       ...(params.runtimeAuthLookups?.length
         ? { runtimeAuthLookups: params.runtimeAuthLookups }
         : {}),
+      ...(params.omitFalseProviderAuth ? { omitFalseProviderAuth: true } : {}),
     },
   });
   worker.unref?.();
@@ -651,13 +658,13 @@ export async function warmCurrentProviderAuthStateOffMainThread(
   }
   const runtimeAuthStores = collectProviderAuthWarmRuntimeAuthStores(cfg);
   const runtimeAuthLookups = collectProviderAuthWarmRuntimeAuthLookups(cfg);
-  if (runtimeAuthLookups === null) {
-    return;
-  }
   const snapshot = await (options.runWorker ?? runProviderAuthWarmWorker)({
     cfg,
     ...(runtimeAuthStores.length ? { runtimeAuthStores } : {}),
-    ...(runtimeAuthLookups.length ? { runtimeAuthLookups } : {}),
+    ...(runtimeAuthLookups.entries.length
+      ? { runtimeAuthLookups: runtimeAuthLookups.entries }
+      : {}),
+    ...(runtimeAuthLookups.omitFalseProviderAuth ? { omitFalseProviderAuth: true } : {}),
     timeoutMs: options.timeoutMs ?? PROVIDER_AUTH_WARM_WORKER_TIMEOUT_MS,
     isCancelled: isWarmStale,
     workerUrl: options.workerUrl,
