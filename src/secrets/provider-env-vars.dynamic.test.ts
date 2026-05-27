@@ -8,6 +8,7 @@ import {
   PROVIDER_ENV_VARS,
   resolveProviderAuthEnvVarCandidates,
   resolveProviderAuthEvidence,
+  resolveProviderAuthLookupMaps,
 } from "./provider-env-vars.js";
 
 type MockManifestRegistry = {
@@ -621,6 +622,51 @@ describe("provider env vars dynamic manifest metadata", () => {
     resolveProviderAuthEnvVarCandidates({ config: {} });
 
     // Verify it was only called once, proving alias resolution reused the snapshot and did not perform a second cold load!
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves alias, env, and evidence lookup maps from one metadata snapshot", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+          providerAuthAliases: {
+            "fireworks-plan": "fireworks",
+          },
+          setup: {
+            providers: [
+              {
+                id: "fireworks",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "FIREWORKS_CREDENTIALS",
+                    credentialMarker: "fireworks-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+
+    expect(lookupMaps.aliasMap["fireworks-plan"]).toBe("fireworks");
+    expect(lookupMaps.envCandidateMap["fireworks-plan"]).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "FIREWORKS_CREDENTIALS",
+        credentialMarker: "fireworks-local-credentials",
+      },
+    ]);
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
   });
 
