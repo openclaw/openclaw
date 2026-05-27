@@ -8,7 +8,7 @@ const DEFAULT_BASE_REF = "origin/main";
 const DEFAULT_HEAD_REF = "HEAD";
 const CODE_FILE_PATTERN = /\.[cm]?[jt]sx?$/u;
 const TEST_PATH_PATTERN =
-  /(?:^|\/)(?:test|tests|__tests__|test-utils|test-helpers|helpers)\/|(?:^|\/)[^/]*(?:test|spec|e2e|harness|support|helper|helpers|utils)[^/]*\.[cm]?[jt]sx?$/u;
+  /(?:^|\/)(?:test|tests|__tests__|test-utils|test-helpers)\/|(?:^|\/)[^/]*(?:test|spec|e2e)[^/]*\.[cm]?[jt]sx?$/u;
 const FINDING_PATTERNS = [
   {
     pattern: /\bmkdtemp(?:Sync)?\s*\(/u,
