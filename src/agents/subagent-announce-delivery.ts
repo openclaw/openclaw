@@ -222,42 +222,39 @@ function resolveCompactionSteerRetryDelaysMs() {
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
 
-// Wake an active requester run, retrying through two transient outcomes:
-// - transcript_commit_wait_unsupported: retry once without the transcript-commit
-//   wait (best-effort steering for runtimes that cannot wait for commit).
-// - compacting: the run becomes steerable again once compaction finishes, so
-//   wait through compaction and retry the same wake, bounded by cancellation and
-//   a finite backoff schedule (well within the delivery timeout).
-// Both the steer path and the generated-completion active wake use this helper so
-// the retry behavior stays consistent. Other failure reasons are returned as-is
-// for the caller's existing fallback handling. The two transient retries are
-// handled in a single loop so a run that compacts and then reports
-// transcript_commit_wait_unsupported still gets the best-effort retry.
+// Wake an active requester run through transient compacting and transcript-wait
+// outcomes. Both active-wake call sites use one loop so delivery deadlines and
+// best-effort transcript retry stay consistent.
 async function resolveActiveWakeWithRetries(
   sessionId: string,
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
 ): Promise<EmbeddedAgentQueueMessageOutcome> {
-  let currentOptions = wakeOptions;
-  let outcome = await resolveQueueEmbeddedAgentMessageOutcome(
-    sessionId,
-    message,
-    currentOptions,
-  );
-  const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
-  let compactionRetryIndex = 0;
-  // Bound compaction waiting by the delivery timeout (the window the issue asks
-  // us to wait within), not just the fixed backoff schedule: a compaction that
-  // finishes after the schedule is exhausted but still inside the delivery
-  // timeout should keep being retried. The backoff schedule controls the gap
-  // between attempts; once it is exhausted the last delay is reused until the
-  // deadline. A missing/zero timeout falls back to the bounded schedule only.
+  // Bound the whole active wake by the caller's delivery window. Each retry
+  // passes only the remaining window into transcript-commit waiting so a
+  // near-deadline retry cannot add another full timeout.
   const compactionDeadlineMs =
-    typeof wakeOptions.deliveryTimeoutMs === "number" &&
-    wakeOptions.deliveryTimeoutMs > 0
+    typeof wakeOptions.deliveryTimeoutMs === "number" && wakeOptions.deliveryTimeoutMs > 0
       ? Date.now() + wakeOptions.deliveryTimeoutMs
       : undefined;
+  let currentOptions = wakeOptions;
+  const resolveRetryOptions = (): EmbeddedAgentQueueMessageOptions | undefined => {
+    if (compactionDeadlineMs === undefined) {
+      return currentOptions;
+    }
+    const remainingDeliveryTimeoutMs = compactionDeadlineMs - Date.now();
+    if (remainingDeliveryTimeoutMs <= 0) {
+      return undefined;
+    }
+    return {
+      ...currentOptions,
+      deliveryTimeoutMs: remainingDeliveryTimeoutMs,
+    };
+  };
+  let outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+  const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
+  let compactionRetryIndex = 0;
   for (;;) {
     if (outcome.queued || signal?.aborted) {
       break;
@@ -269,19 +266,17 @@ async function resolveActiveWakeWithRetries(
       const bestEffortOptions = { ...currentOptions };
       delete bestEffortOptions.waitForTranscriptCommit;
       currentOptions = bestEffortOptions;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(
-        sessionId,
-        message,
-        currentOptions,
-      );
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
     }
     if (outcome.reason === "compacting") {
-      const withinDeadline =
-        compactionDeadlineMs === undefined
+      const remainingDeliveryTimeoutMs =
+        compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
+      const canRetry =
+        remainingDeliveryTimeoutMs === undefined
           ? compactionRetryIndex < compactionRetryDelaysMs.length
-          : Date.now() < compactionDeadlineMs;
-      if (!withinDeadline) {
+          : remainingDeliveryTimeoutMs > 0;
+      if (!canRetry) {
         break;
       }
       // Use the next scheduled backoff delay; once the schedule is exhausted,
@@ -294,10 +289,10 @@ async function resolveActiveWakeWithRetries(
       // not sleep past the deadline (which would overrun the delivery timeout).
       // If no time remains, stop retrying and let the fallback handle it.
       const delayMs =
-        compactionDeadlineMs === undefined
+        remainingDeliveryTimeoutMs === undefined
           ? scheduledDelayMs
-          : Math.min(scheduledDelayMs, compactionDeadlineMs - Date.now());
-      if (delayMs <= 0 && compactionDeadlineMs !== undefined) {
+          : Math.min(scheduledDelayMs, remainingDeliveryTimeoutMs);
+      if (delayMs <= 0 && remainingDeliveryTimeoutMs !== undefined) {
         break;
       }
       await waitForAnnounceRetryDelay(delayMs, signal);
@@ -305,11 +300,11 @@ async function resolveActiveWakeWithRetries(
         break;
       }
       compactionRetryIndex += 1;
-      outcome = await resolveQueueEmbeddedAgentMessageOutcome(
-        sessionId,
-        message,
-        currentOptions,
-      );
+      const retryOptions = resolveRetryOptions();
+      if (!retryOptions) {
+        break;
+      }
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, retryOptions);
       continue;
     }
     break;

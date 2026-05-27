@@ -626,6 +626,7 @@ describe("resolveSubagentCompletionOrigin", () => {
 describe("deliverSubagentAnnouncement active requester steering", () => {
   async function deliverSteeredAnnouncement(params: {
     mode?: "followup" | "collect" | "interrupt";
+    announceTimeoutMs?: number;
     queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
     requesterOrigin?: {
       channel?: string;
@@ -646,6 +647,17 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         params.queueEmbeddedAgentMessageWithOutcome ?? createQueueOutcomeMock(true),
       getRuntimeConfig: () =>
         ({
+          ...(params.announceTimeoutMs !== undefined
+            ? {
+                agents: {
+                  defaults: {
+                    subagents: {
+                      announceTimeoutMs: params.announceTimeoutMs,
+                    },
+                  },
+                },
+              }
+            : {}),
           messages: {
             queue: {
               mode: params.mode ?? "followup",
@@ -805,17 +817,14 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
-      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
-        2,
-        "paperclip-session",
-        "child done",
-        {
-          steeringMode: "all",
-          debounceMs: 0,
-          waitForTranscriptCommit: true,
-          deliveryTimeoutMs: 120_000,
-        },
-      );
+      const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+      expectRecordFields(retryOptions, {
+        steeringMode: "all",
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+      });
+      expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
+      expect(retryOptions.deliveryTimeoutMs).toBeLessThan(120_000);
     } finally {
       if (previousTestFast === undefined) {
         delete process.env.OPENCLAW_TEST_FAST;
@@ -853,6 +862,53 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 
       expect(callGateway).not.toHaveBeenCalled();
       expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(6);
+    } finally {
+      if (previousTestFast === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousTestFast;
+      }
+    }
+  });
+
+  it("passes the remaining delivery window into compaction retries (86566)", async () => {
+    const previousTestFast = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      const queueEmbeddedAgentMessageWithOutcome = vi
+        .fn<QueueEmbeddedAgentMessageWithOutcome>()
+        .mockImplementationOnce((sessionId: string) => ({
+          queued: false,
+          sessionId,
+          reason: "compacting",
+          gatewayHealth: "live",
+        }))
+        .mockImplementationOnce((sessionId: string) => ({
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+        }));
+      const callGateway = await deliverSteeredAnnouncement({
+        announceTimeoutMs: 500,
+        queueEmbeddedAgentMessageWithOutcome,
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
+      });
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+      const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+      expectRecordFields(retryOptions, {
+        steeringMode: "all",
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+      });
+      expect(retryOptions.deliveryTimeoutMs).toBeGreaterThan(0);
+      expect(retryOptions.deliveryTimeoutMs).toBeLessThan(500);
     } finally {
       if (previousTestFast === undefined) {
         delete process.env.OPENCLAW_TEST_FAST;
