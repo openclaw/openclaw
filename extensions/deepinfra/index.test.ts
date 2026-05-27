@@ -2,9 +2,14 @@ import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { describe, expect, it, vi } from "vitest";
 import deepinfraPlugin from "./index.js";
-import { DEEPINFRA_MODEL_CATALOG, resetDeepInfraModelCacheForTest } from "./provider-models.js";
+import {
+  DEEPINFRA_MODEL_CATALOG,
+  DEEPINFRA_MODELS_URL,
+  resetDeepInfraModelCacheForTest,
+} from "./provider-models.js";
 
 function buildSyntheticDeepInfraEntries(count: number) {
   return Array.from({ length: count }, (_unused, index) => ({
@@ -12,6 +17,59 @@ function buildSyntheticDeepInfraEntries(count: number) {
     id: `synthetic/model-${index}`,
     name: `synthetic/model-${index}`,
   }));
+}
+
+function buildDeepInfraCatalogContext(): ProviderCatalogContext {
+  return {
+    config: {},
+    env: {},
+    agentDir: "/tmp/openclaw-agent",
+    resolveProviderApiKey: () => ({ apiKey: "profile-key" }),
+    resolveProviderAuth: () => ({
+      apiKey: "profile-key",
+      mode: "api_key",
+      source: "profile",
+    }),
+  };
+}
+
+function makeAgentModelEntry(id = "profile/live-model") {
+  return {
+    id,
+    object: "model",
+    owned_by: "deepinfra",
+    metadata: {
+      description: id,
+      context_length: 32768,
+      max_tokens: 4096,
+      pricing: { input_tokens: 1, output_tokens: 2 },
+      tags: ["chat"],
+    },
+  };
+}
+
+async function withLiveDiscoveryTestEnv(
+  mockFetch: ReturnType<typeof vi.fn>,
+  runAssertions: () => Promise<void>,
+) {
+  const env = { ...process.env };
+  delete process.env.NODE_ENV;
+  delete process.env.VITEST;
+  delete process.env.DEEPINFRA_API_KEY;
+  vi.stubGlobal("fetch", mockFetch);
+
+  try {
+    await runAssertions();
+  } finally {
+    for (const key of ["NODE_ENV", "VITEST", "DEEPINFRA_API_KEY"]) {
+      if (env[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = env[key];
+      }
+    }
+    vi.unstubAllGlobals();
+  }
 }
 
 describe("deepinfra augmentModelCatalog", () => {
@@ -131,6 +189,29 @@ describe("deepinfra capability registration", () => {
     expect(captured.memoryEmbeddingProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
     expect(captured.speechProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+  });
+
+  it("uses profile-resolved API keys for live text catalog discovery", async () => {
+    resetDeepInfraModelCacheForTest();
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [makeAgentModelEntry()] }),
+    });
+    const captured = createCapturedPluginRegistration();
+    deepinfraPlugin.register(captured.api);
+    const provider = captured.providers[0];
+    if (!provider) {
+      throw new Error("expected DeepInfra provider registration");
+    }
+
+    await withLiveDiscoveryTestEnv(mockFetch, async () => {
+      const result = await provider.catalog.run(buildDeepInfraCatalogContext());
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(mockFetch.mock.calls[0]?.[0]).toBe(DEEPINFRA_MODELS_URL);
+      expect(result?.provider.apiKey).toBe("profile-key");
+      expect(result?.provider.models.map((model) => model.id)).toEqual(["profile/live-model"]);
+    });
   });
 });
 

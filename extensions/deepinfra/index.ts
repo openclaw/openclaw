@@ -1,4 +1,5 @@
 import {
+  type ProviderCatalogContext,
   type ConfiguredProviderCatalogEntry,
   readConfiguredProviderCatalogEntries,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -13,14 +14,10 @@ import {
 } from "openclaw/plugin-sdk/provider-stream";
 import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
-import {
-  listDeepInfraImageGenCatalog,
-  listDeepInfraVideoGenCatalog,
-} from "./surface-model-catalogs.js";
 import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildDeepInfraMemoryEmbeddingAdapter } from "./memory-embedding-adapter.js";
 import { applyDeepInfraConfig } from "./onboard.js";
-import { buildDeepInfraProvider, buildStaticDeepInfraProvider } from "./provider-catalog.js";
+import { buildDeepInfraApiKeyCatalog, buildStaticDeepInfraProvider } from "./provider-catalog.js";
 import {
   DEEPINFRA_DEFAULT_MODEL_REF,
   DEEPINFRA_MODEL_CATALOG,
@@ -29,6 +26,10 @@ import {
   hasDeepInfraApiKey,
 } from "./provider-models.js";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
+import {
+  listDeepInfraImageGenCatalog,
+  listDeepInfraVideoGenCatalog,
+} from "./surface-model-catalogs.js";
 import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "deepinfra";
@@ -67,8 +68,9 @@ export default defineSingleProviderPluginEntry({
       },
     ],
     catalog: {
-      buildProvider: buildDeepInfraProvider,
-      buildStaticProvider: buildStaticDeepInfraProvider,
+      order: "simple",
+      run: (ctx: ProviderCatalogContext) => buildDeepInfraApiKeyCatalog(ctx),
+      staticRun: async () => ({ provider: buildStaticDeepInfraProvider() }),
     },
     augmentModelCatalog: async ({ config, entries, env, agentDir }) => {
       const configured = readConfiguredProviderCatalogEntries({
