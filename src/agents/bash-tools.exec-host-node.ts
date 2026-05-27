@@ -65,9 +65,6 @@ export async function executeNodeHostCommand(
     ask: params.ask,
     host: "node",
   });
-  if (params.boundNode && params.requestedNode && params.boundNode !== params.requestedNode) {
-    throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
-  }
   const nodeQuery = params.boundNode || params.requestedNode;
   const nodes = await listNodes({});
   if (nodes.length === 0) {
@@ -86,6 +83,24 @@ export async function executeNodeHostCommand(
       );
     }
     throw err;
+  }
+  // Guard: if both a bound node and a requested node are provided, verify they resolve to
+  // the same canonical node ID. Raw string comparison is intentionally avoided because
+  // selectors can be a full node ID, display name, IP, or ID prefix — all valid forms for
+  // the same physical node. Compare resolved IDs so e.g. a display-name request against a
+  // full-ID-configured bound node is allowed rather than falsely rejected.
+  if (params.boundNode && params.requestedNode) {
+    let boundNodeId: string;
+    let requestedNodeId: string;
+    try {
+      boundNodeId = resolveNodeIdFromList(nodes, params.boundNode, false);
+      requestedNodeId = resolveNodeIdFromList(nodes, params.requestedNode, false);
+    } catch {
+      throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
+    }
+    if (boundNodeId !== requestedNodeId) {
+      throw new Error(`exec node not allowed (bound to ${params.boundNode})`);
+    }
   }
   const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
   const supportsSystemRun = Array.isArray(nodeInfo?.commands)

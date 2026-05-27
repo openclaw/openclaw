@@ -23,6 +23,7 @@ const preparedPlan = vi.hoisted(() => ({
 
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const listNodesMock = vi.hoisted(() => vi.fn());
+const resolveNodeIdFromListMock = vi.hoisted(() => vi.fn(() => "node-1"));
 const parsePreparedSystemRunPayloadMock = vi.hoisted(() => vi.fn());
 const requiresExecApprovalMock = vi.hoisted(() => vi.fn(() => true));
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
@@ -139,7 +140,7 @@ vi.mock("./tools/gateway.js", () => ({
 
 vi.mock("./tools/nodes-utils.js", () => ({
   listNodes: listNodesMock,
-  resolveNodeIdFromList: vi.fn(() => "node-1"),
+  resolveNodeIdFromList: resolveNodeIdFromListMock,
 }));
 
 vi.mock("../logger.js", () => ({
@@ -234,6 +235,8 @@ describe("executeNodeHostCommand", () => {
     );
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
+    resolveNodeIdFromListMock.mockReset();
+    resolveNodeIdFromListMock.mockReturnValue("node-1");
     registerExecApprovalRequestForHostOrThrowMock.mockReset();
   });
 
@@ -318,5 +321,66 @@ describe("executeNodeHostCommand", () => {
       );
     });
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  describe("bound node guard", () => {
+    it("allows requestedNode when it resolves to the same canonical ID as boundNode (display-name vs full-id)", async () => {
+      // Both selectors resolve to the same canonical node ID — this must NOT throw.
+      // Before the fix, raw string comparison ("full-node-id-abc" !== "home-wsl-debian") would
+      // have rejected this valid request.
+      resolveNodeIdFromListMock.mockImplementation((_nodes: unknown, query?: string) => {
+        // nodeQuery = boundNode (takes precedence), both selectors map to "node-1"
+        if (!query || query === "full-node-id-abc" || query === "home-wsl-debian") {
+          return "node-1";
+        }
+        throw new Error(`unexpected query: ${String(query)}`);
+      });
+      requiresExecApprovalMock.mockReturnValue(false);
+
+      const result = await executeNodeHostCommand({
+        command: "echo hi",
+        workdir: "/tmp",
+        env: {},
+        security: "full",
+        ask: "off",
+        boundNode: "full-node-id-abc",
+        requestedNode: "home-wsl-debian",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+      });
+
+      expect(result.details?.status).toBe("completed");
+    });
+
+    it("rejects requestedNode when it resolves to a different canonical ID than boundNode", async () => {
+      // nodeQuery = boundNode = "home-wsl-debian" → resolves to "node-1".
+      // requestedNode = "remote-ubuntu" → resolves to "node-2".
+      // The guard must detect this mismatch and throw.
+      resolveNodeIdFromListMock.mockImplementation((_nodes: unknown, query?: string) => {
+        if (!query || query === "home-wsl-debian") {
+          return "node-1";
+        }
+        if (query === "remote-ubuntu") {
+          return "node-2";
+        }
+        return "node-1";
+      });
+
+      await expect(
+        executeNodeHostCommand({
+          command: "echo hi",
+          workdir: "/tmp",
+          env: {},
+          security: "full",
+          ask: "off",
+          boundNode: "home-wsl-debian",
+          requestedNode: "remote-ubuntu",
+          defaultTimeoutSec: 30,
+          approvalRunningNoticeMs: 0,
+          warnings: [],
+        }),
+      ).rejects.toThrow("exec node not allowed (bound to home-wsl-debian)");
+    });
   });
 });
