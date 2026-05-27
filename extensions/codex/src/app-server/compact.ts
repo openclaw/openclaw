@@ -122,7 +122,7 @@ async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
-  if (params.trigger && params.trigger !== "manual") {
+  if (params.trigger !== "manual") {
     embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

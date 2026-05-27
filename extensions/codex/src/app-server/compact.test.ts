@@ -65,6 +65,7 @@ function startSandboxedCompaction(sessionFile: string) {
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
+    trigger: "manual",
     config: { agents: { defaults: { sandbox: { mode: "all" } } } },
   });
 }
@@ -75,6 +76,7 @@ function startNodeExecCompaction(sessionFile: string) {
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
+    trigger: "manual",
     config: { tools: { exec: { host: "node", node: "worker-1" } } },
   });
 }
@@ -150,6 +152,34 @@ describe("maybeCompactCodexAppServerSession", () => {
       skipped: true,
       reason: "non_manual_trigger",
       trigger: "budget",
+    });
+  });
+
+  it("skips native app-server compaction when trigger is omitted", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        currentTokenCount: 789,
+      }),
+    );
+
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(result.result?.tokensBefore).toBe(789);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      skipped: true,
+      reason: "non_manual_trigger",
+      trigger: "unknown",
     });
   });
 
@@ -308,6 +338,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:main:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       config: {
         agents: {
           defaults: {
@@ -343,6 +374,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:sara:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       config: {
         agents: {
           list: [
@@ -384,6 +416,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:nik:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       config: {
         agents: {
           defaults: {
@@ -432,6 +465,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:lossless:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       contextEngine,
       config: {
         plugins: {
@@ -485,6 +519,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:lossless-child:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       contextEngine,
       config: {
         plugins: {
@@ -541,6 +576,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       sessionKey: "agent:main:session-1",
       sessionFile,
       workspaceDir: tempDir,
+      trigger: "manual",
       authProfileId: "openai-codex:runtime",
     });
 
