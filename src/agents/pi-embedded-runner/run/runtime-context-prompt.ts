@@ -9,23 +9,20 @@ export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
-type RuntimeContextSession = {
-  sendCustomMessage: (
-    message: {
-      customType: string;
-      content: string;
-      display: boolean;
-      details?: Record<string, unknown>;
-    },
-    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
-  ) => Promise<void>;
-};
-
 type RuntimeContextPromptParts = {
   prompt: string;
   runtimeContext?: string;
   runtimeOnly?: boolean;
   runtimeSystemContext?: string;
+};
+
+export type RuntimeContextCustomMessage = {
+  role: "custom";
+  customType: string;
+  content: string;
+  display: false;
+  details: { source: "openclaw-runtime-context" };
+  timestamp: number;
 };
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
@@ -116,21 +113,19 @@ export function buildRuntimeEventSystemContext(runtimeContext: string): string {
   return buildRuntimeContextMessageContent({ runtimeContext, kind: "runtime-event" });
 }
 
-export async function queueRuntimeContextForNextTurn(params: {
-  session: RuntimeContextSession;
-  runtimeContext?: string;
-}): Promise<void> {
-  const runtimeContext = params.runtimeContext?.trim();
-  if (!runtimeContext) {
-    return;
+export function buildRuntimeContextCustomMessage(
+  runtimeContext: string | undefined,
+): RuntimeContextCustomMessage | undefined {
+  const trimmedRuntimeContext = runtimeContext?.trim();
+  if (!trimmedRuntimeContext) {
+    return undefined;
   }
-  await params.session.sendCustomMessage(
-    {
-      customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-      content: runtimeContext,
-      display: false,
-      details: { source: "openclaw-runtime-context" },
-    },
-    { deliverAs: "nextTurn" },
-  );
+  return {
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    content: buildRuntimeContextSystemContext(trimmedRuntimeContext),
+    display: false,
+    details: { source: "openclaw-runtime-context" },
+    timestamp: Date.now(),
+  };
 }

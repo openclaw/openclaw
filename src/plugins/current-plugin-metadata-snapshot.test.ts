@@ -177,6 +177,34 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
   });
 
+  it("rejects an exact cached config object after in-place policy changes", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+
+    config.plugins.allow = ["other"];
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+  });
+
+  it("rejects an exact cached env object after in-place root changes", () => {
+    const config = {};
+    const snapshot = createSnapshot({ config });
+    const env = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
+
+    env.HOME = "/home/requested";
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeUndefined();
+  });
+
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
     const sourceConfig = { channels: { telegram: { botToken: "token" } } };
     const autoEnabledConfig = {

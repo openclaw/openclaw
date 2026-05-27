@@ -264,6 +264,39 @@ describe("toOpenAiChatCompletionsUsage", () => {
       total_tokens: 7,
     });
   });
+
+  it("forwards cached_tokens via prompt_tokens_details when cache was hit", () => {
+    expect(
+      toOpenAiChatCompletionsUsage({
+        input: 594,
+        output: 79,
+        cacheRead: 30848,
+        cacheWrite: 0,
+        total: 31521,
+      }),
+    ).toEqual({
+      prompt_tokens: 31442,
+      completion_tokens: 79,
+      total_tokens: 31521,
+      prompt_tokens_details: { cached_tokens: 30848 },
+    });
+  });
+
+  it("omits prompt_tokens_details when no cache was read", () => {
+    const result = toOpenAiChatCompletionsUsage({
+      input: 1000,
+      output: 50,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 1050,
+    });
+    expect(result).toEqual({
+      prompt_tokens: 1000,
+      completion_tokens: 50,
+      total_tokens: 1050,
+    });
+    expect("prompt_tokens_details" in result).toBe(false);
+  });
 });
 
 describe("hasNonzeroUsage", () => {
