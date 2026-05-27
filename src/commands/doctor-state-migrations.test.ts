@@ -874,6 +874,47 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:slack:channel:C123"]).toBeUndefined();
   });
 
+  it("preserves Matrix room and thread casing during canonicalization", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      "agent:main:Matrix:Channel:!Mixed:Example.Org:Thread:$EventABC": {
+        sessionId: "matrix",
+        updatedAt: 10,
+      },
+    });
+
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
+    expect(store["agent:main:matrix:channel:!Mixed:Example.Org:thread:$EventABC"]?.sessionId).toBe(
+      "matrix",
+    );
+    expect(store["agent:main:matrix:channel:!mixed:example.org:thread:$eventabc"]).toBeUndefined();
+  });
+
+  it("preserves unscoped legacy Matrix room casing when scoping to an agent", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      "Matrix:Channel:!Mixed:Example.Org": { sessionId: "matrix", updatedAt: 10 },
+    });
+
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
+    expect(store["agent:main:matrix:channel:!Mixed:Example.Org"]?.sessionId).toBe("matrix");
+    expect(store["agent:main:matrix:channel:!mixed:example.org"]).toBeUndefined();
+  });
+
   it("auto-migrates when only target sessions contain legacy keys", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
