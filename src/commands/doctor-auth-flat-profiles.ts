@@ -12,6 +12,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { note } from "../terminal/note.js";
@@ -400,7 +401,6 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
   return result;
 }
 
-
 type CanonicalApiKeyAliasRepair = {
   authPath: string;
   raw: Record<string, unknown>;
@@ -425,13 +425,12 @@ function resolveCanonicalApiKeyAliasRepair(
     const type = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
     const hasApiKeyField = readNonEmptyString(value["api_key"]) !== undefined;
     const hasCanonicalKey = readNonEmptyString(value.key) !== undefined;
-    if (type === "api_key" && hasApiKeyField && !hasCanonicalKey) {
+    const hasCanonicalKeyRef = coerceSecretRef(value.keyRef) !== null;
+    if (type === "api_key" && hasApiKeyField && !hasCanonicalKey && !hasCanonicalKeyRef) {
       profileIds.push(profileId);
     }
   }
-  return profileIds.length > 0
-    ? { authPath: candidate.authPath, raw, profileIds }
-    : null;
+  return profileIds.length > 0 ? { authPath: candidate.authPath, raw, profileIds } : null;
 }
 
 function backupCanonicalApiKeyAlias(authPath: string, now: () => number): string {
@@ -464,7 +463,7 @@ export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
       `- ${shortenHomePath(entry.authPath)} has ${entry.profileIds.length} profile(s) using the non-canonical "api_key" field; the canonical field is "key".`,
   );
   noteLines.push(
-    `- Runtime auth parsing only reads the canonical "key" field, so these profiles are silently skipped; ${formatCliCommand("openclaw doctor --fix")} rewrites "api_key" to "key" with a backup.`,
+    `- Runtime auth parsing only reads canonical "key" and "keyRef" fields, so these profiles are silently skipped; ${formatCliCommand("openclaw doctor --fix")} rewrites "api_key" to "key" with a backup.`,
   );
   note(noteLines.join("\n"), "Auth profiles");
 
