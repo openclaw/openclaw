@@ -14,7 +14,7 @@ describe("read tool", () => {
       },
     });
 
-    const result = await tool.execute("call-1", { path });
+    const result = await tool.execute("call-1", { path }, undefined, undefined, {} as never);
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text).toContain(`sed -n '1p' '${path}' | head -c ${DEFAULT_MAX_BYTES}`);

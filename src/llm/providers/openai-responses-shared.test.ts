@@ -1,6 +1,14 @@
+import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import type { Model, Tool } from "../types.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
+
+type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
+
+function expectResponsesFunctionTool(tool: OpenAIResponsesTool | undefined): ResponsesFunctionTool {
+  expect(tool).toHaveProperty("type", "function");
+  return tool as ResponsesFunctionTool;
+}
 
 const nativeOpenAIModel = {
   id: "gpt-5.5",
@@ -67,8 +75,9 @@ describe("convertResponsesTools", () => {
       { model: nativeOpenAIModel },
     );
 
-    expect(converted[0]?.strict).toBe(false);
-    expect(converted[0]?.parameters).toEqual({
+    const tool = expectResponsesFunctionTool(converted[0]);
+    expect(tool.strict).toBe(false);
+    expect(tool.parameters).toEqual({
       type: "object",
       additionalProperties: false,
       properties: { path: { type: "string" } },
@@ -88,8 +97,9 @@ describe("convertResponsesTools", () => {
       { model: proxyOpenAIModel },
     );
 
-    expect(converted[0]).not.toHaveProperty("strict");
-    expect(converted[0]?.parameters).toEqual({
+    const tool = expectResponsesFunctionTool(converted[0]);
+    expect(tool).not.toHaveProperty("strict");
+    expect(tool.parameters).toEqual({
       type: "object",
       properties: {},
     });
@@ -107,9 +117,8 @@ describe("convertResponsesTools", () => {
       parameters: {},
     } satisfies Tool;
 
-    expect(convertResponsesTools([zeta, alpha]).map((tool) => tool.name)).toEqual([
-      "alpha",
-      "zeta",
-    ]);
+    expect(
+      convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
+    ).toEqual(["alpha", "zeta"]);
   });
 });

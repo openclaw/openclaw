@@ -29,17 +29,21 @@ describe("Anthropic provider", () => {
   it("keeps Cloudflare AI Gateway upstream provider auth on the Anthropic API key", async () => {
     const model = {
       id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
       provider: "cloudflare-ai-gateway",
       api: "anthropic-messages",
-      baseUrl:
-        "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
+      baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
       maxTokens: 4096,
       headers: {
         "cf-aig-authorization": "Bearer gateway-token",
       },
     } satisfies Model<"anthropic-messages">;
     const context = {
-      messages: [{ role: "user", content: "hello" }],
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
     } satisfies Context;
 
     streamAnthropic(model, context, {

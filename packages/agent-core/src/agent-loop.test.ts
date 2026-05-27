@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
-import type {
-  AgentContext,
-  AgentEvent,
-  AgentLoopConfig,
-  AgentMessage,
-  Model,
-  StreamFn,
-} from "./types.js";
+import type { Message, Model } from "./llm.js";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, StreamFn } from "./types.js";
 
 const model: Model = {
   id: "test-model",
@@ -24,7 +18,7 @@ const model: Model = {
 
 const config: AgentLoopConfig = {
   model,
-  convertToLlm: (messages) => messages,
+  convertToLlm: (messages) => messages as Message[],
 };
 
 const failingStreamFn: StreamFn = async () => {

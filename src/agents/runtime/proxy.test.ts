@@ -13,13 +13,19 @@ const usage: Usage = {
 
 const model: Model = {
   id: "test-model",
+  name: "Test Model",
   provider: "test",
   api: "openai-responses",
+  baseUrl: "https://example.test",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1024,
   maxTokens: 1024,
 };
 
 const context: Context = {
-  messages: [{ role: "user", content: "hello" }],
+  messages: [{ role: "user", content: "hello", timestamp: 1 }],
 };
 
 function responseFromText(text: string): Response {
@@ -40,7 +46,7 @@ describe("streamProxy", () => {
   });
 
   it("flushes a final SSE frame without a trailing newline", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       responseFromText(
         `data: ${JSON.stringify({
           type: "done",
@@ -51,11 +57,12 @@ describe("streamProxy", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const stream = streamProxy(model, context, {
+    const options = {
       authToken: "token",
       headers: { Authorization: "Bearer upstream", "x-api-key": "secret" },
       proxyUrl: "https://proxy.example",
-    });
+    };
+    const stream = streamProxy(model, context, options);
     const events = [];
     for await (const event of stream) {
       events.push(event);
