@@ -1,0 +1,32 @@
+name: check-build-trigger-paths
+
+# Class-fix per rockie-workspace#915: verify that every explicit COPY
+# source in Dockerfile.multitenant is covered by on.push.paths in
+# build-runtime-image.yml. The instance-fix (rockie-workspace#914)
+# expanded the trigger to cover src/, ui/, qa/, packages/, etc.; this
+# guard prevents the same drift from re-emerging.
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile.multitenant"
+      - ".github/workflows/build-runtime-image.yml"
+      - "scripts/check-build-trigger-paths.py"
+      - ".github/workflows/check-build-trigger-paths.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.multitenant"
+      - ".github/workflows/build-runtime-image.yml"
+      - "scripts/check-build-trigger-paths.py"
+      - ".github/workflows/check-build-trigger-paths.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - run: python3 scripts/check-build-trigger-paths.py
