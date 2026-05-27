@@ -203,9 +203,10 @@ describe("deepinfra capability registration", () => {
     if (!provider?.catalog) {
       throw new Error("expected DeepInfra provider registration");
     }
+    const catalog = provider.catalog;
 
     await withLiveDiscoveryTestEnv(mockFetch, async () => {
-      const result = await provider.catalog.run(buildDeepInfraCatalogContext());
+      const result = await catalog.run(buildDeepInfraCatalogContext());
       if (!result || !("provider" in result)) {
         throw new Error("expected single-provider DeepInfra catalog result");
       }
