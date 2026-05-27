@@ -47,6 +47,7 @@ let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
+let pendingRestartSessionKey: string | undefined;
 let pendingRestartSkipDeferral = false;
 let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
@@ -67,6 +68,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
   pendingRestartEmitHooks = undefined;
+  pendingRestartSessionKey = undefined;
   pendingRestartSkipDeferral = false;
   pendingRestartPreparing = false;
 }
@@ -440,10 +442,28 @@ export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): numb
   return Math.floor(timeoutMs);
 }
 
-function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
-  if (hooks) {
-    pendingRestartEmitHooks = hooks;
+// Returns true when the new hooks took ownership of the pending restart slot.
+// Coalesced callers from a different sessionKey are rejected to prevent the
+// cross-session continuation overwrite documented in #86742 (CWE-200).
+function updatePendingRestartEmitHooks(
+  hooks: RestartEmitHooks | undefined,
+  sessionKey: string | undefined,
+): boolean {
+  if (!hooks) {
+    return true;
   }
+  if (
+    pendingRestartSessionKey !== undefined &&
+    sessionKey !== undefined &&
+    pendingRestartSessionKey !== sessionKey
+  ) {
+    return false;
+  }
+  pendingRestartEmitHooks = hooks;
+  if (sessionKey !== undefined) {
+    pendingRestartSessionKey = sessionKey;
+  }
+  return true;
 }
 
 async function emitPreparedGatewayRestart(
@@ -452,6 +472,10 @@ async function emitPreparedGatewayRestart(
   intent?: GatewayRestartIntent,
 ): Promise<void> {
   let nextHooks = hooks ?? pendingRestartEmitHooks;
+  // Keep pendingRestartSessionKey alive across the await beforeEmit() window:
+  // a different-session caller that coalesces while preparation runs would
+  // otherwise slip past the updatePendingRestartEmitHooks session guard and
+  // chain its own hooks (#86742, the CWE-200 in-flight preparation race).
   if (!hooks) {
     pendingRestartEmitHooks = undefined;
   }
@@ -474,6 +498,9 @@ async function emitPreparedGatewayRestart(
     }
     nextHooks = pendingRestartEmitHooks;
     pendingRestartEmitHooks = undefined;
+  }
+  if (!hooks) {
+    pendingRestartSessionKey = undefined;
   }
 
   const emitted = emitGatewayRestart(reasonOverride, intent);
@@ -716,6 +743,10 @@ export type ScheduledRestart = {
   mode: "emit" | "signal" | "supervisor";
   coalesced: boolean;
   cooldownMsApplied: number;
+  // True iff the caller's emitHooks own the pending restart slot. Coalesced
+  // requests from a different sessionKey are rejected to protect the existing
+  // session's continuation (#86742).
+  emitHooksQueued: boolean;
 };
 
 export function scheduleGatewaySigusr1Restart(opts?: {
@@ -723,6 +754,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   reason?: string;
   audit?: RestartAuditInfo;
   emitHooks?: RestartEmitHooks;
+  sessionKey?: string;
   skipDeferral?: boolean;
   skipCooldown?: boolean;
 }): ScheduledRestart {
@@ -765,6 +797,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       mode,
       coalesced: true,
       cooldownMsApplied,
+      // SIGUSR1 already emitted; the new caller's hooks cannot run for this cycle.
+      emitHooksQueued: false,
     };
   }
 
@@ -777,6 +811,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
       pendingRestartEmitHooks = opts?.emitHooks;
+      pendingRestartSessionKey = opts?.sessionKey;
       void emitPreparedGatewayRestart(undefined, reason);
       return {
         ok: true,
@@ -787,6 +822,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         mode,
         coalesced: false,
         cooldownMsApplied,
+        emitHooksQueued: opts?.emitHooks !== undefined,
       };
     }
     const shouldUpgradeToSkipDeferral = skipDeferral && !pendingRestartSkipDeferral;
@@ -806,7 +842,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
-      updatePendingRestartEmitHooks(opts?.emitHooks);
+      const emitHooksQueued = updatePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey);
+      if (opts?.emitHooks && !emitHooksQueued) {
+        restartLog.warn(
+          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+        );
+      }
       return {
         ok: true,
         pid: process.pid,
@@ -816,6 +857,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         mode,
         coalesced: true,
         cooldownMsApplied,
+        emitHooksQueued,
       };
     }
   }
@@ -823,6 +865,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
   pendingRestartEmitHooks = opts?.emitHooks;
+  pendingRestartSessionKey = opts?.sessionKey;
   pendingRestartSkipDeferral = skipDeferral;
   pendingRestartTimer = setTimeout(
     () => {
@@ -860,6 +903,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     mode,
     coalesced: false,
     cooldownMsApplied,
+    emitHooksQueued: opts?.emitHooks !== undefined,
   };
 }
 
