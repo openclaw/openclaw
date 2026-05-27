@@ -2362,6 +2362,34 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("normalizes mixed-case session DM scope before checking ingress policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      session: { dmScope: "Per-Channel-Peer" },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          session: { requireDmScope: "per-channel-peer" },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
+
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/ingress-dm-scope-unapproved",
+        }),
+      ]),
+    );
+  });
+
   it("applies channel-scoped ingress claims to matching channel posture", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

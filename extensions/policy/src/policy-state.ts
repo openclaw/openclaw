@@ -461,7 +461,7 @@ export function scanPolicyIngress(cfg: Record<string, unknown>): readonly Policy
   const channelDefaultsSource = "oc://openclaw.config/channels/defaults";
   const entries: PolicyIngressEvidence[] = [];
   const session = isRecord(cfg.session) ? cfg.session : {};
-  const dmScope = readString(session.dmScope);
+  const dmScope = readString(session.dmScope)?.toLowerCase();
   entries.push({
     id: "session-dm-scope",
     kind: "sessionDmScope",
