@@ -110,6 +110,16 @@ describe("canSubmitTuiChatMessage", () => {
     ).toBe(false);
   });
 
+  it("allows gateway stop text while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
   it("blocks submits with pending optimistic state", () => {
     expect(
       canSubmitTuiChatMessage({
