@@ -32,6 +32,8 @@ export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
+const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
+const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
 const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
@@ -149,6 +151,7 @@ type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
     | "qmd-index-missing"
@@ -182,6 +185,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedOverflowEntries: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };
@@ -256,6 +260,13 @@ function normalizeSnippet(raw: string): string {
     return "";
   }
   return trimmed.replace(/\s+/g, " ");
+}
+
+function truncateShortTermSnippet(snippet: string): string {
+  if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
+    return snippet;
+  }
+  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function consumeDreamingLeadPrefix(snippet: string): string {
@@ -497,7 +508,10 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
           ? entry.claimHash.trim()
           : undefined;
-      const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
+      const snippet =
+        typeof entry.snippet === "string"
+          ? truncateShortTermSnippet(normalizeSnippet(entry.snippet))
+          : "";
       if (snippet && isContaminatedDreamingSnippet(snippet)) {
         continue;
       }
@@ -548,6 +562,51 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso,
     entries,
   };
+}
+
+function parseStoreTimestampMs(value: string | undefined): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
+  const lastDiff =
+    parseStoreTimestampMs(b.lastRecalledAt) - parseStoreTimestampMs(a.lastRecalledAt);
+  if (lastDiff !== 0) {
+    return lastDiff;
+  }
+  const signalDiff = totalSignalCountForEntry(b) - totalSignalCountForEntry(a);
+  if (signalDiff !== 0) {
+    return signalDiff;
+  }
+  const totalScoreDiff = b.totalScore - a.totalScore;
+  if (totalScoreDiff !== 0) {
+    return totalScoreDiff;
+  }
+  const maxScoreDiff = b.maxScore - a.maxScore;
+  if (maxScoreDiff !== 0) {
+    return maxScoreDiff;
+  }
+  const promotedDiff = parseStoreTimestampMs(b.promotedAt) - parseStoreTimestampMs(a.promotedAt);
+  if (promotedDiff !== 0) {
+    return promotedDiff;
+  }
+  return a.key.localeCompare(b.key);
+}
+
+function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore): number {
+  const entries = Object.entries(store.entries);
+  if (entries.length <= SHORT_TERM_RECALL_MAX_ENTRIES) {
+    return 0;
+  }
+  const retained = entries
+    .toSorted(([, a], [, b]) => compareShortTermRecallRetention(a, b))
+    .slice(0, SHORT_TERM_RECALL_MAX_ENTRIES);
+  store.entries = Object.fromEntries(retained.toSorted(([a], [b]) => a.localeCompare(b)));
+  return entries.length - retained.length;
 }
 
 function toFinitePositive(value: unknown, fallback: number): number {
@@ -787,10 +846,12 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   try {
-    return normalizeStore(
+    const store = normalizeStore(
       await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
       nowIso,
     );
+    enforceShortTermRecallStoreRetention(store);
+    return store;
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return emptyStore(nowIso);
@@ -884,6 +945,7 @@ async function writePhaseSignalStore(
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+  enforceShortTermRecallStoreRetention(store);
   await ensureShortTermArtifactsDir(workspaceDir);
   await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
     trailingNewline: true,
@@ -977,8 +1039,9 @@ export async function recordShortTermRecalls(params: {
 
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
-      const snippet = normalizeSnippet(result.snippet);
-      if (!snippet || isContaminatedDreamingSnippet(snippet)) {
+      const rawSnippet = normalizeSnippet(result.snippet);
+      const snippet = truncateShortTermSnippet(rawSnippet);
+      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
         continue;
       }
       const claimHash = snippet ? buildClaimHash(snippet) : undefined;
@@ -1082,11 +1145,12 @@ export async function recordGroundedShortTermCandidates(params: {
   }
   const relevant = params.items
     .map((item) => {
-      const snippet = normalizeSnippet(item.snippet);
+      const rawSnippet = normalizeSnippet(item.snippet);
+      const snippet = truncateShortTermSnippet(rawSnippet);
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
-        !snippet ||
-        isContaminatedDreamingSnippet(snippet) ||
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1901,8 +1965,9 @@ export async function auditShortTermPromotionArtifacts(params: {
       const nowIso = new Date().toISOString();
       const parsed = JSON.parse(raw) as unknown;
       const store = normalizeStore(parsed, nowIso);
+      const normalizedEntryCount = Object.keys(store.entries).length;
       updatedAt = store.updatedAt;
-      entryCount = Object.keys(store.entries).length;
+      entryCount = normalizedEntryCount;
       promotedCount = Object.values(store.entries).filter((entry) =>
         Boolean(entry.promotedAt),
       ).length;
@@ -1923,6 +1988,14 @@ export async function auditShortTermPromotionArtifacts(params: {
           severity: "warn",
           code: "recall-store-invalid",
           message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
+          fixable: true,
+        });
+      }
+      if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
+        issues.push({
+          severity: "warn",
+          code: "recall-store-over-limit",
+          message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
           fixable: true,
         });
       }
@@ -2028,6 +2101,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   const nowIso = new Date().toISOString();
   let rewroteStore = false;
   let removedInvalidEntries = 0;
+  let removedOverflowEntries = 0;
   let removedStaleLock = false;
 
   try {
@@ -2080,6 +2154,7 @@ export async function repairShortTermPromotionArtifacts(params: {
         updatedAt: normalized.updatedAt,
         entries: nextEntries,
       };
+      removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
       const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
       if (comparableRaw !== `${raw.trimEnd()}\n`) {
         await writeStore(workspaceDir, {
@@ -2098,6 +2173,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   return {
     changed: rewroteStore || removedStaleLock,
     removedInvalidEntries,
+    removedOverflowEntries,
     rewroteStore,
     removedStaleLock,
   };
@@ -2158,5 +2234,7 @@ export const testing = {
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
   lineRangeOverlapsDreamingFence,
+  SHORT_TERM_RECALL_MAX_ENTRIES,
+  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
 };
 export { testing as __testing };

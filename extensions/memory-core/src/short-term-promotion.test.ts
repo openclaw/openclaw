@@ -89,6 +89,14 @@ describe("short-term promotion", () => {
     return candidate.promotedAt;
   }
 
+  async function readRecallStoreEntries(
+    workspaceDir: string,
+  ): Promise<Record<string, { snippet?: unknown; totalScore?: unknown }>> {
+    const raw = await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8");
+    const store = JSON.parse(raw) as { entries?: Record<string, { snippet?: unknown }> };
+    return store.entries ?? {};
+  }
+
   async function expectEnoent(promise: Promise<unknown>): Promise<void> {
     await expect(promise).rejects.toHaveProperty("code", "ENOENT");
   }
@@ -176,6 +184,39 @@ describe("short-term promotion", () => {
       const raw = await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8");
       expect(raw).toContain("memory/daily notes/2026-04-03.md");
       expect(raw).toContain("memory/日记/2026-04-04.md");
+    });
+  });
+
+  it("caps short-term recall store entries and snippets during normal recording", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES as number;
+      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS as number;
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "bounded recall",
+        results: Array.from({ length: maxEntries + 5 }, (_, index) => ({
+          path: "memory/2026-04-03.md",
+          source: "memory" as const,
+          startLine: index + 1,
+          endLine: index + 1,
+          score: 0.1 + index / (maxEntries + 5),
+          snippet: `Recall entry ${index} ${"x".repeat(maxSnippetChars + 100)}`,
+        })),
+      });
+
+      const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(maxEntries);
+      expect(entries.every((entry) => String(entry.snippet ?? "").length <= maxSnippetChars)).toBe(
+        true,
+      );
+      expect(
+        entries.some((entry) => String(entry.snippet ?? "").startsWith("Recall entry 0 ")),
+      ).toBe(false);
+      expect(
+        entries.some((entry) =>
+          String(entry.snippet ?? "").startsWith(`Recall entry ${maxEntries + 4} `),
+        ),
+      ).toBe(true);
     });
   });
 
@@ -1881,6 +1922,70 @@ describe("short-term promotion", () => {
       };
       expect(repairedRaw.entries.good?.conceptTags).toContain("router");
       expect(repairedRaw.entries.good?.recallDays).toEqual(["2026-04-04"]);
+    });
+  });
+
+  it("audits and repairs oversized recall stores", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const maxEntries = __testing.SHORT_TERM_RECALL_MAX_ENTRIES as number;
+      const maxSnippetChars = __testing.SHORT_TERM_RECALL_MAX_SNIPPET_CHARS as number;
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: Object.fromEntries(
+              Array.from({ length: maxEntries + 3 }, (_, index) => [
+                `entry-${index}`,
+                {
+                  key: `entry-${index}`,
+                  path: "memory/2026-04-01.md",
+                  startLine: index + 1,
+                  endLine: index + 1,
+                  source: "memory",
+                  snippet: `Oversized recall ${index} ${"x".repeat(maxSnippetChars + 100)}`,
+                  recallCount: 1,
+                  dailyCount: 0,
+                  groundedCount: 0,
+                  totalScore: index,
+                  maxScore: 0.75,
+                  firstRecalledAt: "2026-04-01T00:00:00.000Z",
+                  lastRecalledAt: new Date(
+                    Date.parse("2026-04-01T00:00:00.000Z") + index,
+                  ).toISOString(),
+                  queryHashes: [`q-${index}`],
+                  recallDays: ["2026-04-01"],
+                  conceptTags: [],
+                },
+              ]),
+            ),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditBefore.entryCount).toBe(maxEntries + 3);
+      expect(auditBefore.issues.map((issue) => issue.code)).toContain("recall-store-over-limit");
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(repair.removedOverflowEntries).toBe(3);
+
+      const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(maxEntries);
+      expect(entries.every((entry) => String(entry.snippet ?? "").length <= maxSnippetChars)).toBe(
+        true,
+      );
+      expect(
+        entries.some((entry) => String(entry.snippet ?? "").startsWith("Oversized recall 0 ")),
+      ).toBe(false);
     });
   });
 
