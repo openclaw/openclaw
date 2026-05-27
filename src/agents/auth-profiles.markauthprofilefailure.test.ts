@@ -209,7 +209,7 @@ describe("markAuthProfileFailure", () => {
       expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
     });
   });
-  it("records overloaded failures in the cooldown bucket", async () => {
+  it("records overloaded failures without making the profile unusable", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       await markAuthProfileFailure({
         store,
@@ -219,7 +219,8 @@ describe("markAuthProfileFailure", () => {
       });
 
       const stats = store.usageStats?.["anthropic:default"];
-      expect(typeof stats?.cooldownUntil).toBe("number");
+      expect(stats?.cooldownUntil).toBeUndefined();
+      expect(stats?.cooldownReason).toBe("overloaded");
       expect(stats?.disabledUntil).toBeUndefined();
       expect(stats?.disabledReason).toBeUndefined();
       expect(stats?.failureCounts?.overloaded).toBe(1);
