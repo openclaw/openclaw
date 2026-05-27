@@ -81,6 +81,16 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
   const reason = normalizeCompactionReason(evt.reason);
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = false;
+  // After every compaction (retry or not), discard messaging-tool sent-text
+  // tracking from the completed run.  Without this, stale entries survive
+  // into the next run and cause `isMessagingToolDuplicateNormalized` to
+  // false-positive on block-reply dedup — silently dropping legitimate
+  // final replies when a previous run called `message(action=send)` or
+  // `sessions_send` and the new text shares a normalized substring.
+  ctx.state.messagingToolSentTexts.length = 0;
+  ctx.state.messagingToolSentTextsNormalized.length = 0;
+  ctx.state.messagingToolSentTargets.length = 0;
+  ctx.state.messagingToolSentMediaUrls.length = 0;
   const willRetry = Boolean(evt.willRetry);
   // Increment counter whenever compaction actually produced a result,
   // regardless of willRetry.  Overflow-triggered compaction sets willRetry=true
