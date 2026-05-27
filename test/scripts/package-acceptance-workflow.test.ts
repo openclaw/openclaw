@@ -154,9 +154,17 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"');
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
     expect(hydrateWindowsPnpm.run).toContain("--ignore-scripts=true");
+    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"');
+    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"');
+    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
+    expect(hydrateWindowsPnpm.run).toContain(
+      "$Value | Out-File -FilePath $Path -Encoding utf8 -Append",
+    );
     expect(hydrateWindowsPnpm.run).toContain('"--filter",');
     expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
     expect(hydrateWindowsPnpm.run).not.toContain("Remove-Item -Recurse -Force");
+    expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_ENV");
+    expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_PATH");
     expect(hydrateWindowsPnpm.run).toContain("corepack enable --install-directory $env:PNPM_HOME");
     expect(hydrateWindowsPnpm.run).toContain("pnpm @installArgs");
     expect(hydrateWindowsPnpm.run).toContain(
