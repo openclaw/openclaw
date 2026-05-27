@@ -37,6 +37,9 @@ function installStandaloneRegistry(
   const cacheKey = resolvePluginRegistryLoadCacheKey(params.loadOptions);
   const mode = resolveRuntimeSubagentMode(params.loadOptions);
   setActivePluginRegistry(registry, cacheKey, mode, params.loadOptions.workspaceDir);
+  if (params.loadOptions.toolDiscovery && registry.channels.length === 0) {
+    return;
+  }
   switch (params.surface) {
     case "active":
       break;
