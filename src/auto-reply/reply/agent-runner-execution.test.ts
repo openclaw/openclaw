@@ -1131,7 +1131,7 @@ describe("runAgentTurnWithFallback", () => {
 
   it("passes the reply abort signal to fallback orchestration and candidates", async () => {
     const { replyOperation } = createMockReplyOperation();
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
     });
@@ -1147,8 +1147,8 @@ describe("runAgentTurnWithFallback", () => {
       "runWithModelFallback params",
     );
     const embeddedCall = requireRecord(
-      state.runEmbeddedPiAgentMock.mock.calls[0]?.[0],
-      "runEmbeddedPiAgent params",
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
     );
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
@@ -2467,7 +2467,7 @@ describe("runAgentTurnWithFallback", () => {
         ({
           sessionId: "session",
           updatedAt: Date.now(),
-          agentRuntimeOverride: "openclaw",
+          agentRuntimeOverride: "codex",
         }) as SessionEntry,
     });
 
@@ -2475,16 +2475,16 @@ describe("runAgentTurnWithFallback", () => {
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
       provider: "openai",
       model: "gpt-5.4",
-      agentHarnessId: "openclaw",
+      agentHarnessId: "codex",
     });
   });
 
   it("honors agent session runtime overrides before CLI runtime aliases", async () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude-opus-4-7"),
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
       attempts: [],
     }));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -2494,8 +2494,8 @@ describe("runAgentTurnWithFallback", () => {
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const followupRun = createFollowupRun();
-    followupRun.run.provider = "anthropic";
-    followupRun.run.model = "claude-opus-4-7";
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.4";
     followupRun.run.config = {
       agents: {
         defaults: {
@@ -2510,16 +2510,16 @@ describe("runAgentTurnWithFallback", () => {
         ({
           sessionId: "session",
           updatedAt: Date.now(),
-          agentRuntimeOverride: "openclaw",
+          agentRuntimeOverride: "codex",
         }) as SessionEntry,
     });
 
     expect(result.kind).toBe("success");
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-      agentHarnessId: "openclaw",
+      provider: "openai",
+      model: "gpt-5.4",
+      agentHarnessId: "codex",
     });
   });
 
@@ -4895,7 +4895,7 @@ describe("runAgentTurnWithFallback", () => {
   it.each(["group", "channel"] as const)(
     "keeps classified non-transient failures visible in Discord %s chats",
     async (chatType) => {
-      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(
         new Error('No API key found for provider "openai"'),
       );
 
@@ -4924,7 +4924,7 @@ describe("runAgentTurnWithFallback", () => {
   it.each(["group", "channel"] as const)(
     "keeps rate-limit fallback copy out of Discord %s chats",
     async (chatType) => {
-      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
 
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
       const result = await runAgentTurnWithFallback(
@@ -4948,7 +4948,7 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it("surfaces rate-limit fallback copy in Discord group chats when silentReply.group is disallow", async () => {
-    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
 
     const followupRun = createFollowupRun();
     followupRun.run.config = {

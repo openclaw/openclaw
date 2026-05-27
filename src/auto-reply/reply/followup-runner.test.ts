@@ -566,7 +566,7 @@ describe("createFollowupRunner reply-lane admission", () => {
       MediaPath: "/tmp/image.png",
       MediaType: "image/png",
     } as never;
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done" }],
       meta: {},
     });
@@ -587,8 +587,8 @@ describe("createFollowupRunner reply-lane admission", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
     const recorder = requireRecord(call.userTurnTranscriptRecorder, "embedded user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
   });
