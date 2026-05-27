@@ -393,6 +393,14 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
   });
 
+  it("validates gateway call timeout before opening a transport", async () => {
+    callGateway.mockClear();
+    await expectGatewayExit(["gateway", "call", "health", "--timeout", "nope", "--json"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
+  });
+
   it("validates gateway ports and handles force/start errors", async () => {
     // Invalid port
     await expectGatewayExit(["gateway", "--port", "0", "--token", "test-token"]);
