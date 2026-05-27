@@ -19,6 +19,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
+  supportsPromptCacheKey?: boolean,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -29,13 +30,19 @@ export function resolveCacheRetention(
     hasExplicitCacheConfig,
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
+  // OpenAI-compatible completions backends (oMLX, llama.cpp, etc.) opt into
+  // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
+  // flag they sit outside the anthropic/google family gates, so issue #81281
+  // dropped the user's explicit `cacheRetention` before the transport layer
+  // could emit it. Proxies that route non-cacheable models via the same
+  // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
+  // the flag unset, so the existing family gate still applies to them.
+  const cacheKeyEligible = supportsPromptCacheKey === true;
 
-  // Honor an explicit user-provided cacheRetention regardless of provider
-  // family. OpenAI-compatible completions backends (oMLX, llama.cpp, etc.)
-  // opt in to prompt caching via compat.supportsPromptCacheKey: true, and
-  // their users set cacheRetention to control prefix caching. Dropping the
-  // explicit value silently here meant the transport layer never received
-  // the user's choice (issue #81281).
+  if (!family && !googleEligible && !cacheKeyEligible) {
+    return undefined;
+  }
+
   const newVal = extraParams?.cacheRetention;
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
@@ -47,10 +54,6 @@ export function resolveCacheRetention(
   }
   if (legacy === "1h" && (family || googleEligible)) {
     return "long";
-  }
-
-  if (!family && !googleEligible) {
-    return undefined;
   }
 
   return family === "anthropic-direct" ? "short" : undefined;
