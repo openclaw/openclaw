@@ -4,6 +4,7 @@ import {
   buildCurrentInboundPromptContextPrefix,
   buildRuntimeContextCustomMessage,
   buildRuntimeContextSystemContext,
+  resolveAttemptEmptyTranscriptMode,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 
@@ -140,5 +141,69 @@ describe("runtime context prompt submission", () => {
 
     expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
     expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
+  });
+
+  describe("resolveAttemptEmptyTranscriptMode", () => {
+    // The runtime-event mode routes the trigger payload through
+    // `runtimeSystemContext` (the system prompt) because cron/heartbeat triggers
+    // have no user-authored content. When a `before_prompt_build` hook supplies
+    // `prependContext` or `appendContext`, that content is user-prompt by
+    // contract, so the empty-transcript fallback must switch to "model-prompt"
+    // or the hook's text leaks into the system prompt. (#87163)
+    it("returns runtime-event by default", () => {
+      expect(resolveAttemptEmptyTranscriptMode({})).toBe("runtime-event");
+    });
+
+    it("returns model-prompt when next-user persistence is suppressed", () => {
+      expect(resolveAttemptEmptyTranscriptMode({ suppressNextUserMessagePersistence: true })).toBe(
+        "model-prompt",
+      );
+    });
+
+    it("returns model-prompt when a hook supplied prependContext", () => {
+      expect(
+        resolveAttemptEmptyTranscriptMode({
+          hookPromptBuildResult: { prependContext: "user-visible note" },
+        }),
+      ).toBe("model-prompt");
+    });
+
+    it("returns model-prompt when a hook supplied appendContext", () => {
+      expect(
+        resolveAttemptEmptyTranscriptMode({
+          hookPromptBuildResult: { appendContext: "user-visible note" },
+        }),
+      ).toBe("model-prompt");
+    });
+
+    it("returns runtime-event when only system-prompt hook fields are present", () => {
+      expect(
+        resolveAttemptEmptyTranscriptMode({
+          hookPromptBuildResult: { prependContext: "", appendContext: "" },
+        }),
+      ).toBe("runtime-event");
+    });
+
+    it("chained with resolveRuntimeContextPromptParts: hook prependContext lands in user prompt on empty transcript (#87163)", () => {
+      // Heartbeat/cron-style trigger where params.prompt is empty. After the
+      // `before_prompt_build` hook runs, effectivePrompt contains the hook's
+      // prependContext. The transcript-prompt is empty (no user-authored
+      // message). Without the fix this hits the runtimeOnly branch and the
+      // hook contribution ends up in `runtimeSystemContext` (system prompt).
+      const hookResult = { prependContext: "Plugin context for THIS turn." };
+      const effectivePrompt = `${hookResult.prependContext}\n\n`;
+
+      const parts = resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: "",
+        emptyTranscriptMode: resolveAttemptEmptyTranscriptMode({
+          hookPromptBuildResult: hookResult,
+        }),
+      });
+
+      expect(parts.runtimeOnly).toBeUndefined();
+      expect(parts.runtimeSystemContext).toBeUndefined();
+      expect(parts.prompt).toContain("Plugin context for THIS turn.");
+    });
   });
 });

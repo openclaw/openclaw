@@ -417,6 +417,7 @@ import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   type RuntimeContextCustomMessage,
+  resolveAttemptEmptyTranscriptMode,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -4003,9 +4004,10 @@ export async function runEmbeddedAttempt(
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
-            emptyTranscriptMode: params.suppressNextUserMessagePersistence
-              ? "model-prompt"
-              : "runtime-event",
+            emptyTranscriptMode: resolveAttemptEmptyTranscriptMode({
+              suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+              hookPromptBuildResult: hookResult,
+            }),
           });
           const promptForModel = buildCurrentInboundPrompt({
             context: params.currentInboundContext,

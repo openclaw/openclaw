@@ -27,6 +27,33 @@ export type RuntimeContextCustomMessage = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
+/**
+ * Decide which empty-transcript fallback mode to use when calling
+ * `resolveRuntimeContextPromptParts`. When the request explicitly suppresses
+ * next-user-message persistence, or when a `before_prompt_build` hook has
+ * contributed visible user-prompt content via `prependContext` / `appendContext`,
+ * the prompt is no longer purely runtime-generated and must be submitted as a
+ * model prompt so the hook's contract holds: those fields land in the user
+ * prompt, not in `runtimeSystemContext` (the system prompt). (#87163)
+ */
+export function resolveAttemptEmptyTranscriptMode(params: {
+  suppressNextUserMessagePersistence?: boolean;
+  hookPromptBuildResult?: {
+    prependContext?: string;
+    appendContext?: string;
+  };
+}): EmptyTranscriptMode {
+  if (params.suppressNextUserMessagePersistence) {
+    return "model-prompt";
+  }
+  const prepend = params.hookPromptBuildResult?.prependContext;
+  const append = params.hookPromptBuildResult?.appendContext;
+  if ((prepend && prepend.length > 0) || (append && append.length > 0)) {
+    return "model-prompt";
+  }
+  return "runtime-event";
+}
+
 export function buildCurrentInboundPromptContextPrefix(
   context: CurrentInboundPromptContext | undefined,
 ): string {
