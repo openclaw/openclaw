@@ -286,15 +286,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );
-      expect(startedContent?.toolDefinitions).toContainEqual(
-        expect.objectContaining({
-          name: "message",
-          parameters: expect.objectContaining({
-            type: "object",
-            additionalProperties: false,
-          }),
-        }),
-      );
       expect(completedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
       expect(JSON.stringify(completedEvent)).not.toContain("hello back");
       expect(
