@@ -265,7 +265,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         turnCompletionIdleTimeoutMs: 5,
       });
       await harness.waitForMethod("turn/start");
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       await vi.waitFor(
         () =>
