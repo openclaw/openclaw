@@ -118,13 +118,14 @@ describe("channel-broker SDK", () => {
       ],
     };
 
-    expect(resolveBrokerPlatformCapabilities({ capabilities, platform: "microsoft-teams" }))
-      .toEqual({
-        platform: "microsoft-teams",
-        delivery: { text: true, thread: true },
-        live: { draftPreview: true },
-        receive: { webhook: true },
-      });
+    expect(
+      resolveBrokerPlatformCapabilities({ capabilities, platform: "microsoft-teams" }),
+    ).toEqual({
+      platform: "microsoft-teams",
+      delivery: { text: true, thread: true },
+      live: { draftPreview: true },
+      receive: { webhook: true },
+    });
     expect(
       brokerPlatformSupports({
         capabilities,
