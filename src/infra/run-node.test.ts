@@ -123,6 +123,11 @@ function createFakeProcess() {
   }) as unknown as NodeJS.Process;
 }
 
+// Launcher plumbing tests do not need the real runtime artifact copier.
+async function skipRuntimePostBuild(): Promise<void> {
+  return;
+}
+
 function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
   return mock.mock.calls[0];
 }
@@ -401,6 +406,7 @@ describe("run-node script", () => {
             OPENCLAW_RUNNER_LOG: "0",
           },
           spawn,
+          runRuntimePostBuild: skipRuntimePostBuild,
           execPath: process.execPath,
           platform: process.platform,
         });
@@ -493,6 +499,7 @@ describe("run-node script", () => {
           OPENCLAW_RUNNER_LOG: "0",
         },
         spawn,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       });
@@ -549,6 +556,7 @@ describe("run-node script", () => {
         spawn,
         stderr: mutedStream,
         stdout: mutedStream,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
@@ -609,6 +617,7 @@ describe("run-node script", () => {
         spawn,
         stdout,
         stderr,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       } as Parameters<typeof runNodeMain>[0] & {
@@ -664,6 +673,7 @@ describe("run-node script", () => {
         spawn,
         stderr,
         stdout,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
@@ -721,6 +731,7 @@ describe("run-node script", () => {
         },
         spawn,
         spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
         process: createFakeProcess(),
@@ -780,6 +791,7 @@ describe("run-node script", () => {
         },
         spawn,
         spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
         process: createFakeProcess(),
@@ -822,6 +834,7 @@ describe("run-node script", () => {
         },
         spawn,
         spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       });
@@ -856,6 +869,7 @@ describe("run-node script", () => {
         spawn,
         stderr: mutedStream,
         stdout: mutedStream,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
@@ -888,6 +902,7 @@ describe("run-node script", () => {
         spawn,
         stderr: mutedStream,
         stdout: mutedStream,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
         platform: process.platform,
       } as Parameters<typeof runNodeMain>[0] & { stdout: NodeJS.WriteStream });
@@ -913,7 +928,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: "",
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
@@ -942,7 +962,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: "",
       });
-      const exitCode = await runQaCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runQaCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
@@ -975,7 +1000,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: "",
       });
-      const exitCode = await runQaCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runQaCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
@@ -1528,6 +1558,7 @@ describe("run-node script", () => {
         },
         process: fakeProcess,
         spawn,
+        runRuntimePostBuild: skipRuntimePostBuild,
         execPath: process.execPath,
       });
 
@@ -1560,7 +1591,12 @@ describe("run-node script", () => {
       });
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder();
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
@@ -1627,7 +1663,12 @@ describe("run-node script", () => {
         gitHead: "def456\n",
         gitStatus: "",
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
@@ -1688,7 +1729,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: ` M ${EXTENSION_README}\n`,
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
@@ -2521,7 +2567,12 @@ describe("run-node script", () => {
       });
 
       const { spawnCalls, spawn, spawnSync } = createSpawnRecorder();
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
@@ -2544,7 +2595,12 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: "",
       });
-      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([

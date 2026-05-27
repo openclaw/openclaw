@@ -12,6 +12,7 @@ import {
   buildVitestArgs,
   buildVitestRunPlans,
   findUnmatchedExplicitTestTargets,
+  formatFailedShardDigest,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -1533,6 +1534,44 @@ describe("scripts/test-projects parallel cache paths", () => {
     );
 
     expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+  });
+});
+
+describe("scripts/test-projects failed shard digest", () => {
+  it("prints failed configs with focused rerun commands", () => {
+    expect(
+      formatFailedShardDigest([
+        {
+          code: 1,
+          config: "test/vitest/vitest.extension-codex.config.ts",
+          includePatterns: null,
+          noOutputTimedOut: false,
+          signal: null,
+        },
+      ]),
+    ).toEqual([
+      "[test] failed shard digest (1):",
+      "[test] - test/vitest/vitest.extension-codex.config.ts (exit 1)",
+      "[test]   rerun: node scripts/run-vitest.mjs run --config test/vitest/vitest.extension-codex.config.ts --reporter=verbose",
+    ]);
+  });
+
+  it("prints target-based reruns when a shard used include patterns", () => {
+    expect(
+      formatFailedShardDigest([
+        {
+          code: 143,
+          config: "test/vitest/vitest.unit.config.ts",
+          includePatterns: ["src/foo bar.test.ts"],
+          noOutputTimedOut: true,
+          signal: "SIGTERM",
+        },
+      ]),
+    ).toEqual([
+      "[test] failed shard digest (1):",
+      "[test] - test/vitest/vitest.unit.config.ts (exit 143, signal SIGTERM, no-output timeout) includes='src/foo bar.test.ts'",
+      "[test]   rerun: pnpm test 'src/foo bar.test.ts' -- --reporter=verbose",
+    ]);
   });
 });
 

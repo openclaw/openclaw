@@ -40,6 +40,7 @@ import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
@@ -65,6 +66,7 @@ import {
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
+  resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
@@ -83,6 +85,23 @@ const prepareDeps = {
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
 };
+
+const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
+  opus: "claude-opus-4-7",
+  "opus-4.7": "claude-opus-4-7",
+  "opus-4-7": "claude-opus-4-7",
+  "opus-4.6": "claude-opus-4-6",
+  "opus-4-6": "claude-opus-4-6",
+  sonnet: "claude-sonnet-4-6",
+  "sonnet-4.6": "claude-sonnet-4-6",
+  "sonnet-4-6": "claude-sonnet-4-6",
+};
+
+function resolveClaudeCliContextModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
+}
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -170,12 +189,26 @@ export async function prepareCliRunContext(
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  const isClaudeCli = isClaudeCliProvider(params.provider);
+  const modelContextTokens = isClaudeCli
+    ? resolveContextTokensForModel({
+        cfg: params.config,
+        provider: params.provider,
+        model: resolveClaudeCliContextModelId(modelId),
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      })
+    : undefined;
   const contextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
     provider: params.provider,
     modelId,
+    modelContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
+  const autoReseedHistoryChars = isClaudeCli
+    ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
+    : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
@@ -470,6 +503,7 @@ export async function prepareCliRunContext(
           rawTranscriptReseedReason,
         }),
         prompt: preparedPrompt,
+        maxHistoryChars: autoReseedHistoryChars,
       })
     : undefined;
   systemPrompt = appendModelIdentitySystemPrompt({

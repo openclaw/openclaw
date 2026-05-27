@@ -107,6 +107,22 @@ function readNpmGlobalConfigPath(
   env: NodeJS.ProcessEnv,
   scope: NpmFreshnessConfigScope,
 ): string | null {
+  const scopedGlobalConfig = resolveScopedGlobalNpmrc(scope);
+  if (scopedGlobalConfig) {
+    return scopedGlobalConfig;
+  }
+  const configuredGlobalConfig = resolveEnvPath(
+    env,
+    "NPM_CONFIG_GLOBALCONFIG",
+    "npm_config_globalconfig",
+  );
+  if (configuredGlobalConfig) {
+    return configuredGlobalConfig;
+  }
+  const configuredPrefix = resolveEnvPath(env, "NPM_CONFIG_PREFIX", "npm_config_prefix");
+  if (configuredPrefix) {
+    return path.join(configuredPrefix, "etc", "npmrc");
+  }
   const cacheKey = buildNpmGlobalConfigPathCacheKey(env, scope);
   if (NPM_GLOBAL_CONFIG_PATH_CACHE.has(cacheKey)) {
     return NPM_GLOBAL_CONFIG_PATH_CACHE.get(cacheKey) ?? null;

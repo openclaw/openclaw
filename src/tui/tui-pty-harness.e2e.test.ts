@@ -240,6 +240,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
 
@@ -311,7 +312,20 @@ async function writeTuiPtyFixtureScript(dir: string) {
           const runId = opts.runId ?? "run-pty-fixture";
           const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
+          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
+            if (isXaiLimitProof) {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "error",
+                  errorMessage: xaiLimitError,
+                },
+              });
+              return;
+            }
             const sourceReplyPayloads = isSourceReplyProof
               ? buildEmbeddedRunPayloads({
                   assistantTexts: [],
@@ -530,6 +544,20 @@ describe.sequential("TUI PTY harness", () => {
         (entry) =>
           entry.method === "sourceReplyMetadata" &&
           objectFieldEquals(entry, "text", "VISIBLE_TUI_SOURCE_REPLY_PROOF"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "preserves xAI account limit errors in terminal output",
+    async () => {
+      await fixture.run.write("xai limit proof\r");
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.output()).not.toContain("Run /auth");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
       );
     },
     TEST_TIMEOUT_MS,

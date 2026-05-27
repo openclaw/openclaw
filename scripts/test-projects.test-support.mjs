@@ -243,6 +243,7 @@ const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
+const FAILED_SHARD_DIGEST_LIMIT = 12;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
@@ -2089,6 +2090,75 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
 
 export function writeVitestIncludeFile(filePath, includePatterns) {
   fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
+}
+
+function shellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function formatFailedShardRerunCommand(failure) {
+  const includePatterns = failure.includePatterns ?? [];
+  if (includePatterns.length > 0) {
+    return ["pnpm", "test", ...includePatterns.map(shellQuote), "--", "--reporter=verbose"].join(
+      " ",
+    );
+  }
+  return [
+    "node",
+    "scripts/run-vitest.mjs",
+    "run",
+    "--config",
+    shellQuote(failure.config),
+    "--reporter=verbose",
+  ].join(" ");
+}
+
+function formatFailedShardStatus(failure) {
+  const details = [];
+  if (failure.code !== undefined && failure.code !== null) {
+    details.push(`exit ${failure.code}`);
+  }
+  if (failure.signal) {
+    details.push(`signal ${failure.signal}`);
+  }
+  if (failure.noOutputTimedOut) {
+    details.push("no-output timeout");
+  }
+  return details.length > 0 ? ` (${details.join(", ")})` : "";
+}
+
+export function formatFailedShardDigest(failures, options = {}) {
+  if (failures.length === 0) {
+    return [];
+  }
+
+  const limit = options.limit ?? FAILED_SHARD_DIGEST_LIMIT;
+  const orderedFailures = failures.toSorted((left, right) => {
+    const leftOrder = typeof left.order === "number" ? left.order : Number.MAX_SAFE_INTEGER;
+    const rightOrder = typeof right.order === "number" ? right.order : Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || left.config.localeCompare(right.config);
+  });
+  const shown = orderedFailures.slice(0, limit);
+  const lines = [`[test] failed shard digest (${failures.length}):`];
+  for (const failure of shown) {
+    const includes =
+      failure.includePatterns?.length > 0
+        ? ` includes=${failure.includePatterns.map(shellQuote).join(",")}`
+        : "";
+    lines.push(`[test] - ${failure.config}${formatFailedShardStatus(failure)}${includes}`);
+    lines.push(`[test]   rerun: ${formatFailedShardRerunCommand(failure)}`);
+  }
+  if (shown.length < failures.length) {
+    lines.push(`[test] - ... ${failures.length - shown.length} more failed shard(s) omitted`);
+  }
+  return lines;
 }
 
 export function buildVitestArgs(args, cwd = process.cwd()) {
