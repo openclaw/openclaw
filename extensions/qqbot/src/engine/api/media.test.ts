@@ -47,9 +47,13 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     });
   });
 
-  it.each([MediaFileType.IMAGE, MediaFileType.VIDEO, MediaFileType.FILE])(
-    "preserves public HTTPS %s URL uploads with the generic SSRF guard",
-    async (fileType) => {
+  it.each([
+    { fileType: MediaFileType.IMAGE, url: "https://cdn.example.com/assets/photo.png" },
+    { fileType: MediaFileType.VIDEO, url: "http://cdn.example.com/assets/video.mp4" },
+    { fileType: MediaFileType.FILE, url: "http://cdn.example.com/assets/report.pdf" },
+  ])(
+    "preserves public HTTP(S) $fileType URL uploads with the generic SSRF guard",
+    async ({ fileType, url }) => {
       const client = mockApiClient();
       const tokenManager = mockTokenManager();
       const api = new MediaApi(client, tokenManager);
@@ -59,7 +63,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         "user-openid",
         fileType,
         { appId: "app-id", clientSecret: "client-secret" },
-        { url: "https://cdn.example.com/assets/photo.png" },
+        { url },
       );
 
       expect(result).toBe(UPLOAD_RESPONSE);
@@ -72,7 +76,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         {
           file_type: fileType,
           srv_send_msg: false,
-          url: "https://cdn.example.com/assets/photo.png",
+          url,
         },
         {
           redactBodyKeys: ["file_data"],
@@ -102,7 +106,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("rejects non-HTTPS direct-upload URLs before calling the QQ API", async () => {
+  it("rejects non-HTTP direct-upload URLs before calling the QQ API", async () => {
     const client = mockApiClient();
     const tokenManager = mockTokenManager();
     const api = new MediaApi(client, tokenManager);
@@ -113,9 +117,9 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
         "user-openid",
         MediaFileType.IMAGE,
         { appId: "app-id", clientSecret: "client-secret" },
-        { url: "http://media.qq.com/assets/photo.png" },
+        { url: "ftp://media.qq.com/assets/photo.png" },
       ),
-    ).rejects.toThrow("Direct-upload media URL must use HTTPS");
+    ).rejects.toThrow("Direct-upload media URL must use HTTP or HTTPS");
 
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(tokenManager.getAccessToken).not.toHaveBeenCalled();
@@ -159,7 +163,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       "user-openid",
       MediaFileType.IMAGE,
       { appId: "app-id", clientSecret: "client-secret" },
-      { url: "https://93.184.216.34/assets/photo.png" },
+      { url: "http://93.184.216.34/assets/photo.png" },
     );
 
     expect(result).toBe(UPLOAD_RESPONSE);
@@ -170,7 +174,7 @@ describe("MediaApi.uploadMedia direct URL uploads", () => {
       {
         file_type: MediaFileType.IMAGE,
         srv_send_msg: false,
-        url: "https://93.184.216.34/assets/photo.png",
+        url: "http://93.184.216.34/assets/photo.png",
       },
       {
         redactBodyKeys: ["file_data"],

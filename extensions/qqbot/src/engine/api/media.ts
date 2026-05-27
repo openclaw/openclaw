@@ -59,8 +59,8 @@ async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
     throw new Error("Direct-upload media URL must be a valid URL");
   }
 
-  if (parsed.protocol !== "https:") {
-    throw new Error("Direct-upload media URL must use HTTPS");
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTP or HTTPS");
   }
 
   // urlDirectUpload is documented as public-URL support. Use the generic
