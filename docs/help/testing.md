@@ -69,7 +69,8 @@ migration visibility, `node scripts/report-test-temp-creations.mjs` reports new
 bare temp-dir creation in added diff lines without blocking existing cleanup
 styles. Its file scope intentionally follows the same test-path classification
 used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
-filename heuristic.
+filename heuristic. `check:changed` runs this report for changed test paths as a
+warning-only CI signal; findings are GitHub warning annotations, not failures.
 
 When debugging real providers/models (requires real creds):
 

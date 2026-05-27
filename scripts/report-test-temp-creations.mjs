@@ -38,6 +38,7 @@ Options:
 
 Outputs:
   Human mode prints findings to stderr and exits 0 unless --fail-on-findings is set.
+  GitHub Actions mode prints warning annotations and exits 0 unless --fail-on-findings is set.
   JSON mode prints an array of { file, line, reason, source } to stdout.
 
 Examples:
@@ -54,6 +55,30 @@ function normalizePath(filePath) {
 
 function isTestFile(filePath) {
   return isChangedLaneTestPath(filePath);
+}
+
+function isTruthyEnvFlag(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function escapeGithubCommandValue(value) {
+  return String(value).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+}
+
+function escapeGithubCommandProperty(value) {
+  return escapeGithubCommandValue(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+}
+
+export function formatGithubWarning(finding) {
+  const file = escapeGithubCommandProperty(finding.file);
+  const line = escapeGithubCommandProperty(finding.line);
+  const message = escapeGithubCommandValue(
+    `${finding.reason}: prefer test/helpers/temp-dir.ts for new test-owned temp directories.`,
+  );
+  return `::warning file=${file},line=${line}::${message}`;
 }
 
 function parseArgs(argv) {
@@ -141,6 +166,7 @@ export async function main(argv, io) {
   const args = parseArgs(argv ?? process.argv.slice(2));
   const stdout = io?.stdout ?? process.stdout;
   const stderr = io?.stderr ?? process.stderr;
+  const env = io?.env ?? process.env;
   if (args.help) {
     stdout.write(usage());
     return 0;
@@ -151,6 +177,10 @@ export async function main(argv, io) {
     stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
   } else if (findings.length === 0) {
     stderr.write("No new bare test temp-directory creation patterns found.\n");
+  } else if (isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+    for (const finding of findings) {
+      stderr.write(`${formatGithubWarning(finding)}\n`);
+    }
   } else {
     stderr.write("New bare test temp-directory creation patterns:\n");
     for (const finding of findings) {

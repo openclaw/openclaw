@@ -2,7 +2,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectTempCreationFindingsFromDiff } from "../../scripts/report-test-temp-creations.mjs";
+import {
+  collectTempCreationFindingsFromDiff,
+  formatGithubWarning,
+} from "../../scripts/report-test-temp-creations.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
@@ -116,6 +119,19 @@ describe("report-test-temp-creations", () => {
     expect(output).toContain("Usage: node scripts/report-test-temp-creations.mjs");
     expect(output).toContain("Outputs:");
     expect(output).toContain("Examples:");
+  });
+
+  it("formats GitHub warning annotations for CI report mode", () => {
+    expect(
+      formatGithubWarning({
+        file: "test/helpers/temp,fixture.ts",
+        line: 12,
+        reason: "new mkdtemp temp directory creation",
+        source: "const tempRoot = fs.mkdtempSync();",
+      }),
+    ).toBe(
+      "::warning file=test/helpers/temp%2Cfixture.ts,line=12::new mkdtemp temp directory creation: prefer test/helpers/temp-dir.ts for new test-owned temp directories.",
+    );
   });
 
   it("exits non-zero for staged findings when requested", () => {
