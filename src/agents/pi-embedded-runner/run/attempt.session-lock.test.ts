@@ -1295,4 +1295,110 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(events).toEqual(["queue-drained", "lock", "hook-start", "hook-end"]);
   });
+  it("creates backup before releasing lock for prompt", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLock = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+
+    const backupPath = `${sessionFile}.prompt-bak`;
+    const backupExists = await fs.stat(backupPath).then(() => true).catch(() => false);
+    expect(backupExists).toBe(true);
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
+  it("restores from backup on non-benign file change", async () => {
+    const sessionFile = await createTempSessionFile();
+    const originalContent = await fs.readFile(sessionFile, "utf8");
+    const acquireSessionWriteLock = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    
+    // Simulate non-benign external write
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+    const tamperedContent = await fs.readFile(sessionFile, "utf8");
+    expect(tamperedContent).not.toEqual(originalContent);
+
+    // Reacquire should restore from backup instead of throwing
+    await controller.reacquireAfterPrompt();
+    
+    const restoredContent = await fs.readFile(sessionFile, "utf8");
+    expect(restoredContent).toEqual(originalContent);
+    expect(controller.hasSessionTakeover()).toBe(false);
+    
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
+  it("cleans up backup after successful reacquire", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLock = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    const backupPath = `${sessionFile}.prompt-bak`;
+    expect(await fs.stat(backupPath).then(() => true).catch(() => false)).toBe(true);
+
+    await controller.reacquireAfterPrompt();
+    expect(await fs.stat(backupPath).then(() => true).catch(() => false)).toBe(false);
+    
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
+  it("throws takeover error when backup restore also fails", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLock = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    
+    // Simulate non-benign external write
+    await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
+    
+    // Simulate missing/deleted backup
+    const backupPath = `${sessionFile}.prompt-bak`;
+    await fs.unlink(backupPath);
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+    
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+  });
+
+  it("cleans up backup on dispose", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLock = vi.fn(async () => ({ release: vi.fn(async () => {}) }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    const backupPath = `${sessionFile}.prompt-bak`;
+    expect(await fs.stat(backupPath).then(() => true).catch(() => false)).toBe(true);
+
+    // Dispose without reacquiring
+    await controller.dispose();
+    expect(await fs.stat(backupPath).then(() => true).catch(() => false)).toBe(false);
+  });
 });
