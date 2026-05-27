@@ -56,6 +56,7 @@ function isTestFile(filePath) {
   return (
     normalizedPath.startsWith("test/") ||
     normalizedPath.startsWith("src/test-utils/") ||
+    /(?:^|\/)(?:__tests__|tests)\//u.test(normalizedPath) ||
     TEST_FILE_PATTERN.test(normalizedPath)
   );
 }
