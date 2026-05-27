@@ -840,6 +840,33 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("preserves non-auth 403 responses from realtime client secret requests", async () => {
+    const directLookingKey = "sk-test-direct-looking-valid-key"; // pragma: allowlist secret
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse(
+        {
+          error: {
+            code: "model_access_denied",
+            message: "Project does not have access to the requested Realtime model.",
+          },
+        },
+        { status: 403 },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await expect(
+      provider.createBrowserSession({
+        providerConfig: { apiKey: directLookingKey },
+        instructions: "Be concise.",
+      }),
+    ).rejects.toThrow("OpenAI Realtime client secret failed (403)");
+  });
+
   it("fails closed when keychain refs cannot be resolved", async () => {
     vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_MISSING_TEST");
     execFileSyncMock.mockImplementationOnce(() => {

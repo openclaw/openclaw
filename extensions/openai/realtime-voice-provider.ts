@@ -384,13 +384,12 @@ function isOpenAIRealtimeAuthFailure(error: unknown): boolean {
   const code = typeof rawCode === "string" ? rawCode.toLowerCase() : "";
   const message =
     error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return (
-    status === 401 ||
-    status === 403 ||
+  const hasInvalidApiKeyDetail =
     code === "invalid_api_key" ||
     message.includes("invalid_api_key") ||
-    message.includes("incorrect api key provided") ||
-    message.includes("unexpected server response: 401")
+    message.includes("incorrect api key provided");
+  return (
+    status === 401 || hasInvalidApiKeyDetail || message.includes("unexpected server response: 401")
   );
 }
 
