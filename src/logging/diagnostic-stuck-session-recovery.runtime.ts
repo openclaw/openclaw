@@ -9,7 +9,10 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
-import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
+import {
+  clearDiagnosticSessionActivity,
+  getDiagnosticSessionActivitySnapshot,
+} from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
   formatStoppedCronSessionDiagnosticFields,
@@ -79,6 +82,33 @@ function formatRecoveryContext(
     fields.push(`laneQueued=${extra.queuedCount}`);
   }
   return fields.join(" ");
+}
+
+function clearRecoveredDiagnosticActivity(
+  params: StuckSessionRecoveryParams,
+  reason: string,
+): void {
+  const result = clearDiagnosticSessionActivity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    reason,
+  });
+  if (
+    result.activeEmbeddedRunsCleared === 0 &&
+    result.activeToolsCleared === 0 &&
+    result.activeModelCallsCleared === 0
+  ) {
+    return;
+  }
+  diag.warn(
+    `stuck session recovery cleared diagnostic activity: sessionId=${
+      params.sessionId ?? "unknown"
+    } sessionKey=${params.sessionKey ?? "unknown"} reason=${reason} activeEmbeddedRunsCleared=${
+      result.activeEmbeddedRunsCleared
+    } activeToolsCleared=${result.activeToolsCleared} activeModelCallsCleared=${
+      result.activeModelCallsCleared
+    }`,
+  );
 }
 
 export async function recoverStuckDiagnosticSession(
@@ -252,6 +282,7 @@ export async function recoverStuckDiagnosticSession(
 
     if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
       const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
+      clearRecoveredDiagnosticActivity(params, `stuck_recovery:${action}`);
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
       );
@@ -289,6 +320,7 @@ export async function recoverStuckDiagnosticSession(
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;
     }
+    clearRecoveredDiagnosticActivity(params, "stuck_recovery:no_active_work");
     const outcome: StuckSessionRecoveryOutcome = {
       status: "noop",
       action: "none",

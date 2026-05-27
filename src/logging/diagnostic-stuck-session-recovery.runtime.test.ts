@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile: vi.fn(),
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
   waitForEmbeddedAgentRunEnd: vi.fn(),
+  clearDiagnosticSessionActivity: vi.fn(),
   getDiagnosticSessionActivitySnapshot: vi.fn(),
   diag: {
     debug: vi.fn(),
@@ -68,6 +69,7 @@ vi.mock("./diagnostic-runtime.js", () => ({
 }));
 
 vi.mock("./diagnostic-run-activity.js", () => ({
+  clearDiagnosticSessionActivity: mocks.clearDiagnosticSessionActivity,
   getDiagnosticSessionActivitySnapshot: mocks.getDiagnosticSessionActivitySnapshot,
 }));
 
@@ -98,6 +100,13 @@ function resetMocks() {
   mocks.resolveActiveEmbeddedRunHandleSessionIdBySessionFile.mockReset();
   mocks.resolveEmbeddedSessionLane.mockClear();
   mocks.waitForEmbeddedAgentRunEnd.mockReset();
+  mocks.clearDiagnosticSessionActivity.mockReset();
+  mocks.clearDiagnosticSessionActivity.mockReturnValue({
+    activeEmbeddedRunsCleared: 0,
+    activeToolsCleared: 0,
+    activeModelCallsCleared: 0,
+    activitiesCleared: 0,
+  });
   mocks.getDiagnosticSessionActivitySnapshot.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
   mocks.diag.debug.mockReset();
@@ -453,9 +462,49 @@ describe("stuck session recovery", () => {
     });
 
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(mocks.clearDiagnosticSessionActivity).toHaveBeenCalledWith({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      reason: "stuck_recovery:no_active_work",
+    });
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=noop action=none sessionId=stale-session sessionKey=agent:main:main lane=session:agent:main:main reason=no_active_work",
     ]);
+  });
+
+  it("clears orphaned diagnostic tool activity when recovery releases stale queued state", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+    mocks.clearDiagnosticSessionActivity.mockReturnValue({
+      activeEmbeddedRunsCleared: 0,
+      activeToolsCleared: 1,
+      activeModelCallsCleared: 0,
+      activitiesCleared: 1,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "stale-tool-session",
+      sessionKey: "agent:main:telegram:group:1",
+      ageMs: 180_000,
+      queueDepth: 2,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      sessionId: "stale-tool-session",
+      sessionKey: "agent:main:telegram:group:1",
+    });
+    expect(mocks.clearDiagnosticSessionActivity).toHaveBeenCalledWith({
+      sessionId: "stale-tool-session",
+      sessionKey: "agent:main:telegram:group:1",
+      reason: "stuck_recovery:release_lane",
+    });
+    expect(warnLogMessages()).toContain(
+      "stuck session recovery cleared diagnostic activity: sessionId=stale-tool-session sessionKey=agent:main:telegram:group:1 reason=stuck_recovery:release_lane activeEmbeddedRunsCleared=0 activeToolsCleared=1 activeModelCallsCleared=0",
+    );
   });
 
   it("clears stale queued processing state even when the lane has no active work", async () => {
