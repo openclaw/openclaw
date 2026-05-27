@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -15,6 +15,14 @@ import {
   registerHealthCheck,
 } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
+
+const mocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(async () => []),
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+}));
 
 const runtime = { log() {}, error() {}, exit() {} };
 
@@ -85,6 +93,8 @@ describe("registerCoreHealthChecks", () => {
   beforeEach(() => {
     clearHealthChecksForTest();
     resetCoreHealthChecksForTest();
+    mocks.loadModelCatalog.mockClear();
+    mocks.loadModelCatalog.mockResolvedValue([]);
   });
 
   it("registers the built-in health checks once", () => {
@@ -270,6 +280,25 @@ describe("registerCoreHealthChecks", () => {
         message: expect.stringContaining("Gateway bound"),
       }),
     );
+  });
+
+  it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
+
+    await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
   });
 
   it("converts workspace suggestions into info findings", async () => {

@@ -131,6 +131,16 @@ function resolveCodexAppServerAuthProfileStore(params: {
   authProfileStore?: AuthProfileStore;
   config?: AuthProfileOrderConfig;
 }): AuthProfileStore {
+  if (params.authProfileStore) {
+    const providedProfileId = resolveCodexAppServerAuthProfileId({
+      authProfileId: params.authProfileId,
+      store: params.authProfileStore,
+      config: params.config,
+    });
+    if (providedProfileId && params.authProfileStore.profiles[providedProfileId]) {
+      return params.authProfileStore;
+    }
+  }
   const overlaidStore = ensureCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,

@@ -287,13 +287,12 @@ openclaw_e2e_terminate_gateways() {
 }
 openclaw_e2e_start_mock_openai() { MOCK_PORT="$1" node scripts/e2e/mock-openai-server.mjs >"$2" 2>&1 & printf '%s\n' "$!"; }
 openclaw_e2e_wait_mock_openai() {
-  local port="$1" attempts="${2:-80}" _
-  local probe="fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
   for _ in $(seq 1 "$attempts"); do
-    node -e "$probe" "$port" && return 0
+    openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms" && return 0
     sleep 0.1
   done
-  node -e "$probe" "$port"
+  openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms"
 }
 openclaw_e2e_start_gateway() { node "$1" gateway --port "$2" --bind loopback --allow-unconfigured >"$3" 2>&1 & printf '%s\n' "$!"; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
@@ -322,8 +321,27 @@ openclaw_e2e_probe_tcp() {
     socket.on("error", () => { clearTimeout(timeout); process.exit(1); });
   ' "$1" "$2" "${3:-400}"
 }
+openclaw_e2e_probe_http() {
+  node --input-type=module -e '
+    const expected = process.argv[2] ?? "ok";
+    const timeoutMs = Number(process.argv[3] ?? 400);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let exitCode = 1;
+    try {
+      const response = await fetch(process.argv[1], { signal: controller.signal });
+      const passed = expected === "ok" ? response.ok : response.status === Number(expected);
+      exitCode = passed ? 0 : 1;
+    } catch {
+      exitCode = 1;
+    } finally {
+      clearTimeout(timer);
+    }
+    process.exit(exitCode);
+  ' "$1" "${2:-ok}" "${3:-400}"
+}
 openclaw_e2e_probe_http_status() {
-  node -e 'fetch(process.argv[1]).then(r=>process.exit(r.status===Number(process.argv[2])?0:1)).catch(()=>process.exit(1))' "$1" "${2:-200}"
+  openclaw_e2e_probe_http "$1" "${2:-200}" "${3:-400}"
 }
 openclaw_e2e_assert_file() { [ -f "$1" ] || { echo "Missing file: $1"; exit 1; }; }
 openclaw_e2e_assert_dir() { [ -d "$1" ] || { echo "Missing dir: $1"; exit 1; }; }

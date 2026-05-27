@@ -4315,9 +4315,14 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
         : undefined,
     modelApi: params.model.api,
     modelContextWindowTokens: params.model.contextWindow,
-    modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
-      workspaceDir: input.effectiveWorkspace,
-    }),
+    modelAuthMode: resolveModelAuthMode(
+      params.model.provider,
+      params.config,
+      params.toolAuthProfileStore ?? params.authProfileStore,
+      {
+        workspaceDir: input.effectiveWorkspace,
+      },
+    ),
     suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
     hookChannelId: resolveCodexAppServerHookChannelId(params, input.sandboxSessionKey),
