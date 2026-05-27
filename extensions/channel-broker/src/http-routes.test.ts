@@ -5,11 +5,11 @@ import type { BrokerInboundEventV1 } from "openclaw/plugin-sdk/channel-broker";
 import { BROKER_PROTOCOL_VERSION, createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveChannelBrokerAccount } from "./accounts.js";
 import {
   handleChannelBrokerInboundHttpRequest,
   registerChannelBrokerHttpRoutes,
 } from "./http-routes.js";
-import { resolveChannelBrokerAccount } from "./accounts.js";
 import {
   receiveBrokerInboundEvent,
   resetChannelBrokerRuntimeForTest,
@@ -22,9 +22,7 @@ type MockResponse = ServerResponse & {
   headers: Record<string, string>;
 };
 
-type OpenKeyedStoreMock = ReturnType<
-  typeof createPluginRuntimeMock
->["state"]["openKeyedStore"] & {
+type OpenKeyedStoreMock = ReturnType<typeof createPluginRuntimeMock>["state"]["openKeyedStore"] & {
   callCount(): number;
   ageRecords(ms: number): void;
 };
@@ -309,7 +307,9 @@ describe("channel-broker HTTP routes", () => {
       status: "rejected",
       message: "activation_skipped",
     });
-    expect(pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(
+      pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ).not.toHaveBeenCalled();
   });
 
   it("ignores malformed broker mention booleans before group activation", async () => {
@@ -342,7 +342,9 @@ describe("channel-broker HTTP routes", () => {
       status: "rejected",
       message: "activation_skipped",
     });
-    expect(pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(
+      pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ).not.toHaveBeenCalled();
   });
 
   it("dispatches mentioned group broker messages with mention access facts", async () => {
@@ -968,7 +970,9 @@ describe("channel-broker HTTP routes", () => {
         throw new Error("missing broker durable delivery hook");
       }
       expect(resolved.delivery.durable({ text: "done" }, { kind: "final" })).toEqual(
-        expect.objectContaining({ to: "broker:telegram:-100123?conversationType=thread&threadId=77" }),
+        expect.objectContaining({
+          to: "broker:telegram:-100123?conversationType=thread&threadId=77",
+        }),
       );
       throw new Error("kernel durable send failed");
     });
@@ -1328,7 +1332,9 @@ describe("channel-broker HTTP routes", () => {
         throw new Error("missing broker durable delivery hook");
       }
       expect(resolved.delivery.durable({ text: "done" }, { kind: "final" })).toEqual(
-        expect.objectContaining({ to: "broker:telegram:-100123?conversationType=thread&threadId=77" }),
+        expect.objectContaining({
+          to: "broker:telegram:-100123?conversationType=thread&threadId=77",
+        }),
       );
       await resolved.delivery.onDelivered?.(
         { text: "done" },
@@ -1506,6 +1512,30 @@ describe("channel-broker HTTP routes", () => {
 
     await handleChannelBrokerInboundHttpRequest({
       cfg: brokerConfig(),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: true,
+      status: "ignored",
+      reason: "self_sender",
+    });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores self-originated inbound events when the payload omits accountId", async () => {
+    const body = inboundBody("acme", {
+      accountId: undefined,
+      sender: { id: "acme", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: ["acme"] }),
       req: createRequest({ body, signature: sign(body, "broker-secret") }),
       res,
     });

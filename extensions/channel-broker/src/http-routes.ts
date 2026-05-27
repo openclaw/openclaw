@@ -88,8 +88,13 @@ function isSenderAllowed(params: {
   return allowed.some((entry) => candidates.has(entry));
 }
 
-function isSelfOriginatedEvent(event: BrokerInboundEventV1): boolean {
-  return event.accountId ? event.sender.id === event.accountId : false;
+function isSelfOriginatedEvent(params: {
+  account: ResolvedChannelBrokerAccount;
+  event: BrokerInboundEventV1;
+}): boolean {
+  const nativeAccountId =
+    normalizeOptionalString(params.event.accountId) ?? params.account.accountId;
+  return params.event.sender.id === nativeAccountId;
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -125,9 +130,7 @@ function parseInboundEvent(value: unknown): BrokerInboundEventV1 {
   return normalizeBrokerInboundEvent(value as BrokerInboundEventV1);
 }
 
-function inboundReceiveStatusCode(
-  result: Awaited<ReturnType<typeof receiveBrokerInboundEvent>>,
-) {
+function inboundReceiveStatusCode(result: Awaited<ReturnType<typeof receiveBrokerInboundEvent>>) {
   switch (result.status) {
     case "accepted":
       return 202;
@@ -204,7 +207,7 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     });
   }
   event = accountScopedEvent.event;
-  if (isSelfOriginatedEvent(event)) {
+  if (isSelfOriginatedEvent({ account, event })) {
     return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "self_sender" });
   }
   if (!isSenderAllowed({ account, event })) {
