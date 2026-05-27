@@ -1,0 +1,8 @@
+{
+  "id": "diffs-language-pack",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Diff Viewer Language Pack",
+  "description": "Adds syntax highlighting for languages outside the default diffs viewer set."
+}

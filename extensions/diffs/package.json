@@ -8,17 +8,23 @@
   },
   "type": "module",
   "scripts": {
-    "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js && node -e \"let fs=require('fs'),p='assets/viewer-runtime.js',s=fs.readFileSync(p,'utf8').replace(/[ \\\\t]+$/gm,'');fs.writeFileSync(p,s)\""
+    "build:viewer": "bun scripts/build-viewer.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "1.2.2",
     "@pierre/theme": "1.0.3",
+    "@shikijs/core": "3.23.0",
+    "@shikijs/engine-javascript": "3.23.0",
+    "@shikijs/engine-oniguruma": "3.23.0",
+    "@shikijs/langs": "3.23.0",
     "playwright-core": "1.60.0",
+    "shiki": "3.23.0",
     "typebox": "1.1.38",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "esbuild": "0.28.0"
   },
   "openclaw": {
     "extensions": [
@@ -32,6 +38,9 @@
     },
     "compat": {
       "pluginApi": ">=2026.5.26"
+    },
+    "assetScripts": {
+      "build": "pnpm build:viewer"
     },
     "build": {
       "openclawVersion": "2026.5.26",
