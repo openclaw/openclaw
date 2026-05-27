@@ -200,6 +200,7 @@ export const ar: TranslationMap = {
     inherit: "وراثة",
     defaultOption: "الافتراضي ({value})",
     offExplicit: "إيقاف (صريح)",
+    auto: "auto",
     on: "تشغيل",
     off: "متوقف",
     full: "كامل",

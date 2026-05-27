@@ -199,6 +199,7 @@ export const en: TranslationMap = {
     inherit: "inherit",
     defaultOption: "Default ({value})",
     offExplicit: "off (explicit)",
+    auto: "auto",
     on: "on",
     off: "off",
     full: "full",

@@ -85,7 +85,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (typeof entry?.fastMode === "boolean") {
+  if (entry?.fastMode === "auto") {
+    flags.push("fast:auto");
+  } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;

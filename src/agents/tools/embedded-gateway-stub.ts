@@ -12,6 +12,10 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
+import {
+  normalizeFastMode,
+  type FastMode,
+} from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readPositiveIntegerParam } from "./common.js";
 
@@ -126,7 +130,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionId: string | undefined;
   messages: unknown[];
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
 }> {
   const rt = await getRuntime();
@@ -196,7 +200,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionId,
     messages: bounded.messages,
     thinkingLevel: entry?.thinkingLevel as string | undefined,
-    fastMode: entry?.fastMode as boolean | undefined,
+    fastMode: normalizeFastMode(entry?.fastMode),
     verboseLevel: entry?.verboseLevel as string | undefined,
   };
 }

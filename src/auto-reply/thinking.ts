@@ -25,6 +25,7 @@ export {
 export type {
   ElevatedLevel,
   ElevatedMode,
+  FastMode,
   NoticeLevel,
   ReasoningLevel,
   TraceLevel,

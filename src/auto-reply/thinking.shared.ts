@@ -1,11 +1,13 @@
 /** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
 import {
+  type FastMode,
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 
 export { normalizeFastMode };
+export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
 export type ThinkLevel =

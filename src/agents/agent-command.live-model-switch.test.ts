@@ -328,8 +328,43 @@ vi.mock("../routing/session-key.js", async () => {
   );
   return {
     ...actual,
+    classifySessionKeyShape: (key?: string | null) => {
+      const raw = key?.trim() ?? "";
+      if (!raw) {
+        return "missing";
+      }
+      if (raw.startsWith("agent:") && raw.split(":").length >= 3) {
+        return "agent";
+      }
+      return raw.startsWith("agent:") ? "malformed_agent" : "legacy_or_alias";
+    },
+    isSubagentSessionKey: () => false,
+    isUnscopedSessionKeySentinel: (key?: string | null) => {
+      const lowered = key?.trim().toLowerCase();
+      return lowered === "global" || lowered === "unknown";
+    },
     normalizeAgentId: (id: string) => id,
     normalizeMainKey: (key?: string | null) => key?.trim() || "main",
+    scopeLegacySessionKeyToAgent: ({
+      agentId,
+      mainKey,
+      sessionKey,
+    }: {
+      agentId?: string;
+      mainKey?: string;
+      sessionKey?: string;
+    }) => {
+      const raw = sessionKey?.trim() ?? "";
+      if (!raw) {
+        return undefined;
+      }
+      if (!agentId || raw.startsWith("agent:")) {
+        return raw;
+      }
+      const normalizedMainKey = mainKey?.trim() || "main";
+      const scopedKey = raw.toLowerCase() === normalizedMainKey ? normalizedMainKey : raw;
+      return `agent:${agentId}:${scopedKey}`;
+    },
   };
 });
 
@@ -3052,6 +3087,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "claude",
       reason: "format",
     });
+  });
+
+  it("keeps one fast auto start timestamp across model fallback attempts", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+            "openai/gpt-5.4": { params: { fastMode: "auto", fastAutoOnSeconds: 45 } },
+          },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 0,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    } as SessionEntry;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const fallbackResult = await params.run("openai", "gpt-5.4");
+      return {
+        result: fallbackResult,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock
+      .mockResolvedValueOnce(makeEmptyResult("anthropic", "claude"))
+      .mockResolvedValueOnce(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const firstAttempt = requireRecord(mockCallArg(state.runAgentAttemptMock, 0), "first attempt");
+    const secondAttempt = requireRecord(
+      mockCallArg(state.runAgentAttemptMock, 1),
+      "second attempt",
+    );
+    expect(firstAttempt.fastMode).toBe("auto");
+    expect(secondAttempt.fastMode).toBe("auto");
+    expect(firstAttempt.fastModeAutoOnSeconds).toBe(30);
+    expect(secondAttempt.fastModeAutoOnSeconds).toBe(45);
+    expect(typeof firstAttempt.fastModeStartedAtMs).toBe("number");
+    expect(secondAttempt.fastModeStartedAtMs).toBe(firstAttempt.fastModeStartedAtMs);
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {
