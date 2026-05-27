@@ -7,6 +7,11 @@ import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
   testing,
@@ -24,6 +29,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
+  updateActiveEmbeddedRunSessionFile,
   waitForActiveEmbeddedRuns,
 } from "./runs.js";
 
@@ -51,6 +57,8 @@ describe("pi-embedded runner run registry", () => {
   afterEach(() => {
     testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
+    resetDiagnosticSessionStateForTest();
+    setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
   });
 
@@ -105,6 +113,27 @@ describe("pi-embedded runner run registry", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("records active run session files in diagnostic state for heartbeat recovery", () => {
+    setDiagnosticsEnabledForProcess(true);
+    const sessionFile = "/tmp/openclaw-run-registry-session.jsonl";
+    const handle = createRunHandle();
+
+    setActiveEmbeddedRun("session-file-diagnostics", handle, "agent:main:visible", sessionFile);
+
+    expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
+      sessionFile,
+    );
+
+    updateActiveEmbeddedRunSessionFile(
+      "session-file-diagnostics",
+      "/tmp/openclaw-run-registry-rotated.jsonl",
+    );
+
+    expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
+      "/tmp/openclaw-run-registry-rotated.jsonl",
+    );
   });
 
   it("passes steering options to active embedded runs", () => {

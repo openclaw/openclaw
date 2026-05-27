@@ -16,6 +16,7 @@ import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
+  updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -589,6 +590,7 @@ export function setActiveEmbeddedRun(
   logSessionStateChange({
     sessionId,
     sessionKey,
+    sessionFile,
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
@@ -617,6 +619,7 @@ export function updateActiveEmbeddedRunSessionFile(
   }
   clearActiveRunSessionFiles(sessionId);
   setActiveRunSessionFile(sessionFile, sessionId);
+  updateDiagnosticSessionFile({ sessionId, sessionFile });
 }
 
 export function clearActiveEmbeddedRun(
@@ -635,7 +638,13 @@ export function clearActiveEmbeddedRun(
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId, sessionFile);
-    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
+    logSessionStateChange({
+      sessionId,
+      sessionKey,
+      sessionFile,
+      state: "idle",
+      reason: "run_completed",
+    });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
