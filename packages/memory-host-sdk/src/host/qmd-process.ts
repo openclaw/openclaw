@@ -241,10 +241,6 @@ class CliCommandError extends Error {
   }
 }
 
-function isCliCommandError(err: unknown): err is CliCommandError {
-  return err instanceof CliCommandError;
-}
-
 function formatCliCommandFailureMessage(params: {
   commandSummary: string;
   code: number | null;
