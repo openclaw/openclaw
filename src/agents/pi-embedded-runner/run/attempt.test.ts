@@ -528,6 +528,49 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(retryInput[3]?.content).toEqual([{ type: "text", text: "retry ask" }]);
   });
 
+  it("keeps prompt-local runtime context before the active user in existing sessions", () => {
+    const promptInput = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "old ask" }],
+        timestamp: 0,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old answer" }],
+        timestamp: 1,
+      },
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "current runtime context",
+        display: false,
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "visible ask" }],
+        timestamp: 3,
+      },
+    ];
+
+    const modelInput = normalizeMessagesForLlmBoundary(
+      promptInput as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<Record<string, unknown>>;
+
+    expect(modelInput.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "custom",
+      "user",
+    ]);
+    expect(modelInput[2]).toMatchObject({
+      customType: "openclaw.runtime-context",
+      content: "current runtime context",
+    });
+    expect(modelInput[3]?.content).toEqual([{ type: "text", text: "visible ask" }]);
+  });
+
   it("keeps only safe blocked metadata at the LLM boundary", () => {
     const input = [
       {

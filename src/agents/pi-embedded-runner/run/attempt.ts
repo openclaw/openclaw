@@ -1024,7 +1024,15 @@ function installRuntimeContextMessageForPrompt(params: {
   if (!message) {
     return () => undefined;
   }
-  const install = () => {
+  const installBeforePrompt = () => {
+    if (!session.messages.includes(message)) {
+      session.agent.state.messages = appendRuntimeContextMessageForPrompt({
+        message,
+        messages: session.messages,
+      });
+    }
+  };
+  const installBeforeRetry = () => {
     if (!session.messages.includes(message)) {
       session.agent.state.messages = insertRuntimeContextMessageForPrompt({
         message,
@@ -1032,18 +1040,33 @@ function installRuntimeContextMessageForPrompt(params: {
       });
     }
   };
-  install();
+  installBeforePrompt();
   const agent = session.agent;
-  const originalContinue = Reflect.get(agent, "continue", agent).bind(agent) as () => Promise<void>;
-  agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
-    // Pi overflow recovery can rebuild state from the persisted branch before retrying.
-    install();
-    return originalContinue();
-  };
+  const originalContinue = Reflect.get(agent, "continue", agent) as unknown;
+  if (typeof originalContinue === "function") {
+    const continueWithAgent = originalContinue.bind(agent) as () => Promise<void>;
+    agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
+      // Pi overflow recovery can rebuild state from the persisted branch before retrying.
+      installBeforeRetry();
+      return continueWithAgent();
+    };
+  }
   return () => {
-    agent.continue = originalContinue;
+    if (typeof originalContinue === "function") {
+      agent.continue = originalContinue as typeof agent.continue;
+    }
     session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
   };
+}
+
+function appendRuntimeContextMessageForPrompt(params: {
+  message: RuntimeContextCustomMessage;
+  messages: AgentMessage[];
+}): AgentMessage[] {
+  if (params.messages.includes(params.message)) {
+    return params.messages;
+  }
+  return [...params.messages, params.message];
 }
 
 function insertRuntimeContextMessageForPrompt(params: {
