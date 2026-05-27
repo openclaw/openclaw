@@ -2088,7 +2088,7 @@ export async function runEmbeddedAttempt(
       sessionId: params.sessionId,
     });
     effectiveTools = [...toolSearchSchemaProjection.tools];
-    if (toolSearch.compacted) {
+    if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
         codeModeControlsEnabledForRun
