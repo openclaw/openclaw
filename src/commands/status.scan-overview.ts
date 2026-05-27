@@ -145,6 +145,7 @@ export async function collectStatusScanOverview(params: {
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
   includeChannelSetupRuntimeFallback?: boolean;
+  channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   includeChannelSecretTargets?: boolean;
   skipConfigPluginValidation?: boolean;
@@ -279,6 +280,9 @@ export async function collectStatusScanOverview(params: {
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
           liveChannelStatus: channelsStatus,
+          ...(params.channelCredentialResolutionSkipped === true
+            ? { credentialResolutionSkipped: true }
+            : {}),
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

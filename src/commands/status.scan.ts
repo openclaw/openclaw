@@ -54,6 +54,7 @@ export async function scanStatus(
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
         includeLiveChannelStatus: isFullScan,
         includeChannelSetupRuntimeFallback: isFullScan,
+        channelCredentialResolutionSkipped: !isFullScan,
         includeChannelSecretTargets: isFullScan ? undefined : false,
         fetchGitUpdate: isFullScan,
         includeRegistryUpdate: isFullScan,

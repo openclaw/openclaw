@@ -115,6 +115,7 @@ describe("scanStatus", () => {
         includeSetupFallbackPlugins: false,
         sourceConfig,
         liveChannelStatus: null,
+        credentialResolutionSkipped: true,
       },
     ]);
   });
@@ -162,6 +163,7 @@ describe("scanStatus", () => {
         includeSetupFallbackPlugins: false,
         sourceConfig: cfg,
         liveChannelStatus: null,
+        credentialResolutionSkipped: true,
       },
     ]);
   });

@@ -102,6 +102,20 @@ describe("buildChannelsTable", () => {
     expect(row?.detail).toContain("unavailable");
   });
 
+  it("does not warn on SecretRef credentials when credential resolution was skipped", async () => {
+    const table = await buildChannelsTable(
+      { channels: { discord: { enabled: true } } },
+      { credentialResolutionSkipped: true },
+    );
+
+    const row = table.rows.find((entry) => entry.id === "discord");
+    expect(row?.state).toBe("ok");
+    expect(row?.detail).toBe("configured");
+    const detailRow = table.details[0]?.rows[0];
+    expect(detailRow?.Status).toBe("UNKNOWN");
+    expect(detailRow?.Notes).toContain("credential not checked");
+  });
+
   it("shows configured official external channels when the plugin is missing", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.missingOfficialExternalChannels.add("feishu");
