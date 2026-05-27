@@ -643,6 +643,38 @@ export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
   drainBatchSize: number;
 };
 
+export type DiagnosticTaskFlowCreatedEvent = DiagnosticBaseEvent & {
+  type: "task.flow.created";
+  flowId: string;
+  syncMode: string;
+  ownerKey: string;
+  goal: string;
+  controllerId?: string;
+  tags?: Record<string, string>;
+};
+
+export type DiagnosticTaskFlowTransitionEvent = DiagnosticBaseEvent & {
+  type: "task.flow.transition";
+  flowId: string;
+  syncMode: string;
+  ownerKey: string;
+  goal: string;
+  previousStatus: string;
+  status: string;
+  currentStep?: string;
+  controllerId?: string;
+  tags?: Record<string, string>;
+  durationMs?: number;
+};
+
+export type DiagnosticTaskFlowDeletedEvent = DiagnosticBaseEvent & {
+  type: "task.flow.deleted";
+  flowId: string;
+  ownerKey: string;
+  previousStatus: string;
+  tags?: Record<string, string>;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -693,7 +725,10 @@ export type DiagnosticEventPayload =
   | DiagnosticLogRecordEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
-  | DiagnosticFailoverEvent;
+  | DiagnosticFailoverEvent
+  | DiagnosticTaskFlowCreatedEvent
+  | DiagnosticTaskFlowTransitionEvent
+  | DiagnosticTaskFlowDeletedEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

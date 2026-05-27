@@ -113,6 +113,7 @@ function createBoundTaskFlowRuntime(params: {
         currentStep: input.currentStep,
         stateJson: input.stateJson,
         waitJson: input.waitJson,
+        tags: input.tags,
         cancelRequestedAt: input.cancelRequestedAt,
         createdAt: input.createdAt,
         updatedAt: input.updatedAt,

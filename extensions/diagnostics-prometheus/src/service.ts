@@ -334,7 +334,9 @@ function modelCallLabels(evt: {
   };
 }
 
-function modelFailoverLabels(evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>): LabelSet {
+function modelFailoverLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>,
+): LabelSet {
   return {
     from_model: lowCardinalityLabel(evt.fromModel),
     from_provider: lowCardinalityLabel(evt.fromProvider),
@@ -429,7 +431,9 @@ function webhookLabels(
   };
 }
 
-function sessionStuckLabels(evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>): LabelSet {
+function sessionStuckLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>,
+): LabelSet {
   return {
     reason: lowCardinalityLabel(evt.reason, "none"),
     state: evt.state,
@@ -463,13 +467,56 @@ function livenessLabels(
   };
 }
 
-function payloadLargeLabels(evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>): LabelSet {
+function payloadLargeLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>,
+): LabelSet {
   return {
     action: evt.action,
     channel: lowCardinalityLabel(evt.channel, "none"),
     plugin: lowCardinalityLabel(evt.pluginId, "none"),
     reason: lowCardinalityLabel(evt.reason, "none"),
     surface: lowCardinalityLabel(evt.surface, "unknown"),
+  };
+}
+
+const TERMINAL_TASK_FLOW_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "lost",
+  "blocked",
+]);
+
+function isTerminalTaskFlowStatus(status: string): boolean {
+  return TERMINAL_TASK_FLOW_STATUSES.has(status);
+}
+
+function taskFlowLabels(evt: { syncMode: string; tags?: Record<string, string> }): LabelSet {
+  const labels: LabelSet = {
+    sync_mode: lowCardinalityLabel(evt.syncMode),
+  };
+  if (evt.tags) {
+    for (const [key, value] of Object.entries(evt.tags)) {
+      if (
+        typeof key === "string" &&
+        typeof value === "string" &&
+        LOW_CARDINALITY_VALUE_RE.test(key) &&
+        LOW_CARDINALITY_VALUE_RE.test(value)
+      ) {
+        labels[`tag_${key}`] = value;
+      }
+    }
+  }
+  return labels;
+}
+
+function taskFlowTransitionLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "task.flow.transition" }>,
+): LabelSet {
+  return {
+    ...taskFlowLabels(evt),
+    status: lowCardinalityLabel(evt.status),
+    previous_status: lowCardinalityLabel(evt.previousStatus),
   };
 }
 
@@ -981,6 +1028,34 @@ function recordDiagnosticEvent(
         numericValue(evt.bytes),
         BYTE_BUCKETS,
       );
+      return;
+    case "task.flow.created":
+      store.counter(
+        "openclaw_task_flow_created_total",
+        "Task flows created by sync mode.",
+        taskFlowLabels(evt),
+      );
+      return;
+    case "task.flow.transition":
+      store.counter(
+        "openclaw_task_flow_transition_total",
+        "Task flow status transitions.",
+        taskFlowTransitionLabels(evt),
+      );
+      if (isTerminalTaskFlowStatus(evt.status)) {
+        store.histogram(
+          "openclaw_task_flow_duration_seconds",
+          "Task flow duration from creation to terminal status in seconds.",
+          taskFlowTransitionLabels(evt),
+          seconds(evt.durationMs),
+        );
+      }
+      return;
+    case "task.flow.deleted":
+      store.counter("openclaw_task_flow_deleted_total", "Task flow deletions.", {
+        ...taskFlowLabels({ syncMode: "unknown", tags: evt.tags }),
+        previous_status: lowCardinalityLabel(evt.previousStatus),
+      });
       return;
     default:
       return;

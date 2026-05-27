@@ -140,6 +140,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_memory_pressure_total`                 | counter   | `level`, `reason`                                                                         |
 | `openclaw_telemetry_exporter_total`              | counter   | `exporter`, `reason`, `signal`, `status`                                                  |
 | `openclaw_prometheus_series_dropped_total`       | counter   | none                                                                                      |
+| `openclaw_task_flow_created_total`               | counter   | `sync_mode`, `tag_*`                                                                      |
+| `openclaw_task_flow_transition_total`            | counter   | `previous_status`, `status`, `sync_mode`, `tag_*`                                         |
+| `openclaw_task_flow_duration_seconds`            | histogram | `previous_status`, `status`, `sync_mode`, `tag_*`                                         |
+| `openclaw_task_flow_deleted_total`               | counter   | `previous_status`, `sync_mode`, `tag_*`                                                   |
 
 ## Label policy
 

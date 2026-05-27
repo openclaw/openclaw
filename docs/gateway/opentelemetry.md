@@ -296,6 +296,13 @@ Liveness warnings also emit:
 - `openclaw.tool.loop.iterations` (counter, attrs: `openclaw.toolName`, `openclaw.outcome`)
 - `openclaw.tool.loop.duration_ms` (histogram, attrs: `openclaw.toolName`, `openclaw.outcome`)
 
+### Task flow lifecycle
+
+- `openclaw.task.flow.created` (counter, attrs: `openclaw.task.flow.sync_mode`, `openclaw.task.flow.owner_key`, `openclaw.task.flow.tag.*`)
+- `openclaw.task.flow.transitions` (counter, attrs: `openclaw.task.flow.sync_mode`, `openclaw.task.flow.owner_key`, `openclaw.task.flow.status`, `openclaw.task.flow.previous_status`, `openclaw.task.flow.tag.*`)
+- `openclaw.task.flow.duration_ms` (histogram, attrs: same as `openclaw.task.flow.transitions`, recorded on terminal statuses only)
+- `openclaw.task.flow.deleted` (counter, attrs: `openclaw.task.flow.owner_key`, `openclaw.task.flow.previous_status`, `openclaw.task.flow.tag.*`)
+
 ## Exported spans
 
 - `openclaw.model.usage`

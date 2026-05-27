@@ -898,11 +898,7 @@ function assignOtelModelContentAttributes(
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.system_prompt",
-      content?.systemPrompt,
-    );
+    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
   }
 }
 
@@ -1475,13 +1471,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Tool execution duration",
         },
       );
-      const toolExecutionBlockedCounter = meter.createCounter(
-        "openclaw.tool.execution.blocked",
-        {
-          unit: "1",
-          description: "Tool executions blocked by policy or sandbox diagnostics",
-        },
-      );
+      const toolExecutionBlockedCounter = meter.createCounter("openclaw.tool.execution.blocked", {
+        unit: "1",
+        description: "Tool executions blocked by policy or sandbox diagnostics",
+      });
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
         unit: "ms",
         description: "Exec process duration",
@@ -1563,6 +1556,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const telemetryExporterCounter = meter.createCounter("openclaw.telemetry.exporter.events", {
         unit: "1",
         description: "Diagnostic telemetry exporter lifecycle and failure events",
+      });
+      const taskFlowCreatedCounter = meter.createCounter("openclaw.task.flow.created", {
+        unit: "1",
+        description: "Task flows created by sync mode",
+      });
+      const taskFlowTransitionCounter = meter.createCounter("openclaw.task.flow.transitions", {
+        unit: "1",
+        description: "Task flow status transitions",
+      });
+      const taskFlowDurationHistogram = meter.createHistogram("openclaw.task.flow.duration_ms", {
+        unit: "ms",
+        description: "Task flow duration from creation to terminal status",
+      });
+      const taskFlowDeletedCounter = meter.createCounter("openclaw.task.flow.deleted", {
+        unit: "1",
+        description: "Task flow deletions",
       });
 
       let recordLogRecord:
@@ -2897,6 +2906,73 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
       };
 
+      const TASK_FLOW_TERMINAL_STATUSES = new Set([
+        "succeeded",
+        "failed",
+        "cancelled",
+        "lost",
+        "blocked",
+      ]);
+
+      const taskFlowAttrs = (
+        evt: { syncMode: string; ownerKey: string; tags?: Record<string, string> },
+        extra?: Record<string, string>,
+      ): Record<string, string> => {
+        const attrs: Record<string, string> = {
+          "openclaw.task.flow.sync_mode": lowCardinalityAttr(evt.syncMode, "unknown"),
+          "openclaw.task.flow.owner_key": lowCardinalityAttr(evt.ownerKey, "unknown"),
+          ...extra,
+        };
+        if (evt.tags) {
+          for (const [key, value] of Object.entries(evt.tags)) {
+            if (
+              typeof key === "string" &&
+              typeof value === "string" &&
+              LOW_CARDINALITY_VALUE_RE.test(key) &&
+              LOW_CARDINALITY_VALUE_RE.test(value)
+            ) {
+              attrs[`openclaw.task.flow.tag.${key}`] = value;
+            }
+          }
+        }
+        return attrs;
+      };
+
+      const recordTaskFlowCreated = (
+        evt: Extract<DiagnosticEventPayload, { type: "task.flow.created" }>,
+      ) => {
+        taskFlowCreatedCounter.add(1, taskFlowAttrs(evt));
+      };
+
+      const recordTaskFlowTransition = (
+        evt: Extract<DiagnosticEventPayload, { type: "task.flow.transition" }>,
+      ) => {
+        const attrs = taskFlowAttrs(evt, {
+          "openclaw.task.flow.status": evt.status,
+          "openclaw.task.flow.previous_status": evt.previousStatus,
+        });
+        taskFlowTransitionCounter.add(1, attrs);
+        if (
+          TASK_FLOW_TERMINAL_STATUSES.has(evt.status) &&
+          typeof evt.durationMs === "number" &&
+          evt.durationMs >= 0
+        ) {
+          taskFlowDurationHistogram.record(evt.durationMs, attrs);
+        }
+      };
+
+      const recordTaskFlowDeleted = (
+        evt: Extract<DiagnosticEventPayload, { type: "task.flow.deleted" }>,
+      ) => {
+        taskFlowDeletedCounter.add(
+          1,
+          taskFlowAttrs(
+            { syncMode: "unknown", ownerKey: evt.ownerKey, tags: evt.tags },
+            { "openclaw.task.flow.previous_status": evt.previousStatus },
+          ),
+        );
+      };
+
       const recordExecProcessCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "exec.process.completed" }>,
       ) => {
@@ -3208,6 +3284,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "model.failover":
               recordModelFailover(evt, metadata);
+              return;
+            case "task.flow.created":
+              recordTaskFlowCreated(evt);
+              return;
+            case "task.flow.transition":
+              recordTaskFlowTransition(evt);
+              return;
+            case "task.flow.deleted":
+              recordTaskFlowDeleted(evt);
               return;
           }
         } catch (err) {

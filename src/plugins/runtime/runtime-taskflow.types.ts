@@ -60,6 +60,7 @@ export type BoundTaskFlowRuntime = {
     currentStep?: string | null;
     stateJson?: JsonValue | null;
     waitJson?: JsonValue | null;
+    tags?: Record<string, string> | null;
     cancelRequestedAt?: number | null;
     createdAt?: number;
     updatedAt?: number;

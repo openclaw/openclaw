@@ -536,6 +536,21 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.model = event.fromModel;
       assignReasonCode(record, event.reason);
       break;
+    case "task.flow.created":
+      record.source = event.flowId;
+      record.action = event.syncMode;
+      break;
+    case "task.flow.transition":
+      record.source = event.flowId;
+      record.action = event.syncMode;
+      record.outcome = event.status;
+      record.durationMs = event.durationMs;
+      assignReasonCode(record, event.previousStatus);
+      break;
+    case "task.flow.deleted":
+      record.source = event.flowId;
+      assignReasonCode(record, event.previousStatus);
+      break;
   }
 
   return record;
