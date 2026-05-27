@@ -8,11 +8,10 @@
   },
   "type": "module",
   "scripts": {
-    "build:viewer": "bun scripts/build-viewer.mjs"
+    "build:viewer": "node scripts/build-viewer.mjs"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*",
-    "esbuild": "0.28.0"
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [

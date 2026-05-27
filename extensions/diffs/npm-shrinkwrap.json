@@ -10,12 +10,8 @@
       "dependencies": {
         "@pierre/diffs": "1.2.2",
         "@pierre/theme": "1.0.3",
-        "@shikijs/core": "3.23.0",
-        "@shikijs/engine-javascript": "3.23.0",
-        "@shikijs/engine-oniguruma": "3.23.0",
         "@shikijs/langs": "3.23.0",
         "playwright-core": "1.60.0",
-        "shiki": "3.23.0",
         "typebox": "1.1.38",
         "zod": "4.4.3"
       }

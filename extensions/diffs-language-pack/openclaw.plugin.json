@@ -4,5 +4,10 @@
     "onStartup": true
   },
   "name": "Diff Viewer Language Pack",
-  "description": "Adds syntax highlighting for languages outside the default diffs viewer set."
+  "description": "Adds syntax highlighting for languages outside the default diffs viewer set.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
 }

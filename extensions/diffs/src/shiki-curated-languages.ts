@@ -19,6 +19,13 @@ const php = () => import("@shikijs/langs/php");
 const sql = () => import("@shikijs/langs/sql");
 const docker = () => import("@shikijs/langs/docker");
 
+type CuratedLanguageInfo = {
+  readonly id: string;
+  readonly name: string;
+  readonly aliases?: readonly string[];
+  readonly import: () => Promise<unknown>;
+};
+
 export const bundledLanguagesInfo = [
   { id: "javascript", name: "JavaScript", aliases: ["js", "mjs", "cjs"], import: javascript },
   { id: "typescript", name: "TypeScript", aliases: ["ts", "mts", "cts"], import: typescript },
@@ -40,14 +47,19 @@ export const bundledLanguagesInfo = [
   { id: "php", name: "PHP", import: php },
   { id: "sql", name: "SQL", import: sql },
   { id: "docker", name: "Docker", aliases: ["dockerfile"], import: docker },
-] as const;
+] as const satisfies readonly CuratedLanguageInfo[];
 
 export const bundledLanguagesBase = Object.fromEntries(
   bundledLanguagesInfo.map((language) => [language.id, language.import]),
 );
+export function getBundledLanguageAliases(
+  language: (typeof bundledLanguagesInfo)[number],
+): readonly string[] {
+  return "aliases" in language ? language.aliases : [];
+}
 export const bundledLanguagesAlias = Object.fromEntries(
-  bundledLanguagesInfo.flatMap(
-    (language) => language.aliases?.map((alias) => [alias, language.import]) ?? [],
+  bundledLanguagesInfo.flatMap((language) =>
+    getBundledLanguageAliases(language).map((alias) => [alias, language.import]),
   ),
 );
 export const bundledLanguages = {

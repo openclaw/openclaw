@@ -219,6 +219,15 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1
+      '@shikijs/core':
+        specifier: 3.23.0
+        version: 3.23.0
+      '@shikijs/engine-javascript':
+        specifier: 3.23.0
+        version: 3.23.0
+      '@shikijs/engine-oniguruma':
+        specifier: 3.23.0
+        version: 3.23.0
       '@types/express':
         specifier: 5.0.6
         version: 5.0.6
@@ -237,6 +246,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.7
         version: 4.1.7(@vitest/browser@4.1.7)(vitest@4.1.7)
+      esbuild:
+        specifier: 0.28.0
+        version: 0.28.0
       jscpd:
         specifier: 4.2.3
         version: 4.2.3
@@ -255,6 +267,9 @@ importers:
       oxlint-tsgolint:
         specifier: 0.23.0
         version: 0.23.0
+      shiki:
+        specifier: 3.23.0
+        version: 3.23.0
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
@@ -597,24 +612,12 @@ importers:
       '@pierre/theme':
         specifier: 1.0.3
         version: 1.0.3
-      '@shikijs/core':
-        specifier: 3.23.0
-        version: 3.23.0
-      '@shikijs/engine-javascript':
-        specifier: 3.23.0
-        version: 3.23.0
-      '@shikijs/engine-oniguruma':
-        specifier: 3.23.0
-        version: 3.23.0
       '@shikijs/langs':
         specifier: 3.23.0
         version: 3.23.0
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
-      shiki:
-        specifier: 3.23.0
-        version: 3.23.0
       typebox:
         specifier: 1.1.38
         version: 1.1.38
@@ -625,18 +628,12 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      esbuild:
-        specifier: 0.28.0
-        version: 0.28.0
 
   extensions/diffs-language-pack:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
-      esbuild:
-        specifier: 0.28.0
-        version: 0.28.0
 
   extensions/discord:
     dependencies:
