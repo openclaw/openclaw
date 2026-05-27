@@ -257,6 +257,8 @@ export async function loginOpenAICodexOAuth(params: {
   oauth: ProviderAuthContext["oauth"];
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
@@ -324,16 +326,19 @@ export async function loginOpenAICodexOAuth(params: {
       onAuth,
       onPrompt,
       originator: openAICodexOAuthOriginator,
-      onManualCodeInput: createManualCodeInputHandler({
-        isRemote,
-        onPrompt,
-        runtime,
-        updateProgress,
-        stopProgress,
-        waitForLoginToSettle,
-        hasBrowserAuthStarted: () => browserAuthStarted,
-      }),
+      onManualCodeInput:
+        params.onManualCodeInput ??
+        createManualCodeInputHandler({
+          isRemote,
+          onPrompt,
+          runtime,
+          updateProgress,
+          stopProgress,
+          waitForLoginToSettle,
+          hasBrowserAuthStarted: () => browserAuthStarted,
+        }),
       onProgress: (msg: string) => updateProgress(msg),
+      signal: params.signal,
     });
     stopProgress("OpenAI OAuth complete");
     return creds ?? null;
