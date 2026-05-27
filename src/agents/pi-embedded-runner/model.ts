@@ -1132,7 +1132,7 @@ export function resolveModel(
   const modelRegistry =
     options?.modelRegistry ??
     cachedStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir);
+    discoverModels(authStorage, resolvedAgentDir, { config: cfg });
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
     provider: normalizedRef.provider,
@@ -1205,7 +1205,7 @@ export async function resolveModelAsync(
     options?.modelRegistry ??
     emptyDiscoveryStores?.modelRegistry ??
     cachedStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir);
+    discoverModels(authStorage, resolvedAgentDir, { config: cfg });
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider: normalizedRef.provider,

@@ -44,8 +44,20 @@ describe("secrets runtime state", () => {
       const statePath = resolveAuthStatePath(agentDir);
       fs.writeFileSync(authPath, `${JSON.stringify(authStore("sk-new"))}\n`);
       const stat = fs.statSync(authPath);
+      // NOTE: cache key here mirrors the option-sensitive key used by store.ts
+      // for { syncExternalCli: false } — the test populates the cached store
+      // that loadAuthProfileStoreForRuntime should observe.
       writeCachedAuthProfileStore({
-        authPath,
+        cacheKey: JSON.stringify({
+          allowKeychainPrompt: null,
+          authPath,
+          config: null,
+          externalCli: null,
+          externalCliProfileIds: null,
+          externalCliProviderIds: null,
+          syncExternalCli: false,
+          version: 2,
+        }),
         authMtimeMs: stat.mtimeMs,
         stateMtimeMs: fs.existsSync(statePath) ? fs.statSync(statePath).mtimeMs : null,
         store: authStore("sk-old"),
