@@ -10,6 +10,7 @@ export type SlackSystemEventTestOverrides = {
   allowFrom?: string[];
   channelType?: "im" | "channel";
   channelUsers?: string[];
+  channelsConfig?: SlackMonitorContext["channelsConfig"];
   reactionMode?: "off" | "own" | "all" | "allowlist";
   reactionAllowlist?: Array<string | number>;
   userNames?: Record<string, string>;
@@ -25,20 +26,34 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
   };
   const ctx = {
     app,
-    runtime: { error: () => {} },
+    accountId: "default",
+    runtime: { error: () => {}, log: () => {} },
     botUserId: "U_BOT",
     botId: "B_BOT",
     dmEnabled: true,
     dmPolicy: overrides?.dmPolicy ?? "open",
     defaultRequireMention: true,
-    channelsConfig: overrides?.channelUsers
-      ? {
-          C1: {
-            users: overrides.channelUsers,
-            enabled: true,
-          },
-        }
-      : undefined,
+    channelsConfig:
+      overrides?.channelsConfig ??
+      (overrides?.channelUsers
+        ? {
+            C1: {
+              users: overrides.channelUsers,
+              enabled: true,
+            },
+          }
+        : undefined),
+    channelsConfigKeys: Object.keys(
+      overrides?.channelsConfig ??
+        (overrides?.channelUsers
+          ? {
+              C1: {
+                users: overrides.channelUsers,
+                enabled: true,
+              },
+            }
+          : {}),
+    ),
     groupPolicy: "open",
     allowFrom: overrides?.allowFrom ?? [],
     allowNameMatching: false,

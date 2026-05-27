@@ -2,6 +2,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberMocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
+  mutateConfigFile: vi.fn(),
+  getOptionalSlackRuntime: vi.fn(),
 }));
 let registerSlackMemberEvents: typeof import("./members.js").registerSlackMemberEvents;
 let initSlackHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
@@ -12,6 +14,9 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
+}));
+vi.mock("../../runtime.js", () => ({
+  getOptionalSlackRuntime: () => memberMocks.getOptionalSlackRuntime(),
 }));
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -24,10 +29,11 @@ type MemberCaseArgs = {
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
 };
 
-function makeMemberEvent(overrides?: { channel?: string; user?: string }) {
+function makeMemberEvent(overrides?: { channel?: string; user?: string; inviter?: string }) {
   return {
     type: "member_joined_channel",
     user: overrides?.user ?? "U1",
+    ...(overrides?.inviter ? { inviter: overrides.inviter } : {}),
     channel: overrides?.channel ?? "D1",
     event_ts: "123.456",
   };
@@ -76,6 +82,13 @@ describe("registerSlackMemberEvents", () => {
 
   beforeEach(() => {
     memberMocks.enqueue.mockClear();
+    memberMocks.mutateConfigFile.mockReset();
+    memberMocks.getOptionalSlackRuntime.mockReset();
+    memberMocks.getOptionalSlackRuntime.mockReturnValue({
+      config: {
+        mutateConfigFile: memberMocks.mutateConfigFile,
+      },
+    });
   });
 
   const cases: Array<{ name: string; args: MemberCaseArgs; calls: number }> = [
@@ -140,5 +153,68 @@ describe("registerSlackMemberEvents", () => {
     await runMemberCase({ trackEvent });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a channel allowlist entry when an allowlisted user invites OpenClaw", async () => {
+    await runMemberCase({
+      overrides: {
+        allowFrom: ["U_OWNER"],
+        channelType: "channel",
+        userNames: { U_OWNER: "owner" },
+      },
+      event: makeMemberEvent({
+        channel: "CNEW",
+        user: "U_BOT",
+        inviter: "U_OWNER",
+      }),
+    });
+
+    expect(memberMocks.mutateConfigFile).toHaveBeenCalledTimes(1);
+    const call = memberMocks.mutateConfigFile.mock.calls[0]?.[0] as {
+      mutate: (draft: Record<string, unknown>) => void;
+    };
+    const draft: Record<string, unknown> = {
+      channels: {
+        slack: {
+          accounts: {
+            default: {},
+          },
+        },
+      },
+    };
+    call.mutate(draft);
+    expect(draft).toMatchObject({
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              channels: {
+                CNEW: {
+                  enabled: true,
+                  requireMention: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(memberMocks.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not add a channel allowlist entry for a non-allowlisted inviter", async () => {
+    await runMemberCase({
+      overrides: {
+        allowFrom: ["U_OWNER"],
+        channelType: "channel",
+      },
+      event: makeMemberEvent({
+        channel: "CNEW",
+        user: "U_BOT",
+        inviter: "U_ATTACKER",
+      }),
+    });
+
+    expect(memberMocks.mutateConfigFile).not.toHaveBeenCalled();
   });
 });

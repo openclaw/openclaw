@@ -36,6 +36,7 @@ export type SlackReactionEvent = {
 export type SlackMemberChannelEvent = {
   type: "member_joined_channel" | "member_left_channel";
   user?: string;
+  inviter?: string;
   channel?: string;
   channel_type?: SlackMessageEvent["channel_type"];
   event_ts?: string;
