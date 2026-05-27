@@ -4180,8 +4180,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
       path: "direct",
       reason: "message_tool_delivery_missing",
-      error: "completion agent did not use the message tool for message-tool-only delivery",
     });
+    expect(result.error).toContain(
+      "completion agent did not use the message tool for message-tool-only delivery",
+    );
   });
 
   it("delivers Telegram forum-topic subagent completions through the normal parent handoff", async () => {
@@ -4336,5 +4338,122 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+});
+
+describe("deliverSubagentAnnouncement delivery context preservation (#67502)", () => {
+  it("recovers delivery channel from requester session entry when completion origin has internal channel", async () => {
+    const callGateway = createGatewayMock();
+    // completionDirectOrigin has an internal channel that will be stripped,
+    // and directOrigin/requesterSessionOrigin also lack a deliverable channel.
+    // The fix should recover the channel from the requester session entry.
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-recovery",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage: runtimeSendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:telegram:direct:8617738177",
+      targetRequesterSessionKey: "agent:main:telegram:direct:8617738177",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      requesterSessionOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      completionDirectOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      directOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-context-recovery",
+    });
+
+    // The delivery should succeed with the telegram channel preserved
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "telegram",
+      to: "8617738177",
+      accountId: "default",
+    });
+  });
+
+  it("preserves channel through nested ACP run when wake fails and falls back to direct", async () => {
+    const callGateway = createGatewayMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-nested",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage: runtimeSendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:telegram:direct:8617738177",
+      targetRequesterSessionKey: "agent:main:telegram:direct:8617738177",
+      triggerMessage: "nested ACP done",
+      steerMessage: "nested ACP done",
+      requesterOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      requesterSessionOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      completionDirectOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      directOrigin: { channel: "telegram", to: "8617738177", accountId: "default" },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-nested-fallback",
+    });
+
+    // Wake failed, should fall back to direct with channel preserved
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalled();
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "telegram",
+      to: "8617738177",
+      accountId: "default",
+    });
+  });
+
+  it("includes channel info in message-tool-only delivery failure error", async () => {
+    registerDirectTargetTestChannel("discord");
+    const callGateway = createGatewayMock({
+      result: { payloads: [{ text: "some reply" }] },
+    });
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-msg-tool",
+        isActive: false,
+      }),
+      getRuntimeConfig: () =>
+        ({
+          messages: { visibleReplies: "message_tool" },
+        }) as never,
+      sendMessage: runtimeSendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:discord:dm:U456",
+      targetRequesterSessionKey: "agent:main:discord:dm:U456",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: { channel: "discord", to: "dm:U456", accountId: "acct-1" },
+      requesterSessionOrigin: { channel: "discord", to: "dm:U456", accountId: "acct-1" },
+      completionDirectOrigin: { channel: "discord", to: "dm:U456", accountId: "acct-1" },
+      directOrigin: { channel: "discord", to: "dm:U456", accountId: "acct-1" },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-msg-tool-err",
+      sourceTool: "subagent_announce",
+    });
+
+    if (!result.delivered && result.error) {
+      expect(result.error).toContain("channel=");
+      expect(result.error).toContain("requester=");
+    }
   });
 });

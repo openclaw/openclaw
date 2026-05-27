@@ -1177,6 +1177,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
+    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
     // Merge completionDirectOrigin with directOrigin so that missing fields
     // (channel, to, accountId) fall back to the originating session's
     // lastChannel / lastTo. Without this, a completion origin that carries a
@@ -1187,13 +1188,33 @@ async function sendSubagentAnnounceDirectly(params: {
       directOrigin,
       requesterSessionOrigin,
     );
-    const effectiveDirectOrigin = params.expectsCompletionMessage
+    const effectiveDirectOriginCandidate = params.expectsCompletionMessage
       ? mergeDeliveryContext(externalCompletionDirectOrigin, completionExternalFallbackOrigin)
       : directOrigin;
+    // When stripping a non-deliverable channel leaves the effective origin
+    // without a channel, recover from the requester session entry. Without
+    // this, nested ACP completions silently lose their delivery target when
+    // the completion origin carried an internal channel that got stripped
+    // and neither directOrigin nor requesterSessionOrigin provide a
+    // deliverable channel. (Fixes remaining sub-issue from #67502.)
+    const effectiveDirectOrigin =
+      params.expectsCompletionMessage && !effectiveDirectOriginCandidate?.channel && requesterEntry
+        ? mergeDeliveryContext(
+            effectiveDirectOriginCandidate,
+            normalizeDeliveryContext({
+              channel:
+                requesterEntry.channel ??
+                requesterEntry.lastChannel ??
+                requesterEntry.origin?.provider,
+              to: requesterEntry.lastTo,
+              accountId: requesterEntry.lastAccountId ?? requesterEntry.origin?.accountId,
+              threadId: requesterEntry.lastThreadId ?? requesterEntry.origin?.threadId,
+            }),
+          )
+        : effectiveDirectOriginCandidate;
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -1202,6 +1223,19 @@ async function sendSubagentAnnounceDirectly(params: {
           threadId: effectiveDirectOrigin?.threadId,
         })
       : { deliver: false };
+    // Warn when a completion should be delivered externally but the resolved
+    // delivery context lacks a channel. This makes silent message loss
+    // detectable in gateway logs. (#67502)
+    if (
+      params.expectsCompletionMessage &&
+      !params.requesterIsSubagent &&
+      !deliveryTarget.deliver &&
+      !effectiveDirectOrigin?.channel
+    ) {
+      defaultRuntime.log(
+        `[warn] Subagent completion delivery context has no deliverable channel; response may be lost. requester=${params.targetRequesterSessionKey} completionChannel=${completionDirectOrigin?.channel ?? "none"} directChannel=${directOrigin?.channel ?? "none"} sessionChannel=${requesterSessionOrigin?.channel ?? "none"} entryChannel=${requesterEntry?.channel ?? requesterEntry?.lastChannel ?? "none"}`,
+      );
+    }
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
       : undefined;
@@ -1559,11 +1593,13 @@ async function sendSubagentAnnounceDirectly(params: {
           return textDelivery;
         }
       }
+      const deliveryChannel =
+        effectiveDirectOrigin?.channel ?? sessionOnlyOriginChannel ?? "unknown";
       return {
         delivered: false,
         path: "direct",
         reason: "message_tool_delivery_missing",
-        error: "completion agent did not use the message tool for message-tool-only delivery",
+        error: `completion agent did not use the message tool for message-tool-only delivery; channel=${deliveryChannel} requester=${params.targetRequesterSessionKey}`,
       };
     }
     if (
