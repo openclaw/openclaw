@@ -52,7 +52,8 @@ function normalizePath(filePath) {
 }
 
 function isTestFile(filePath) {
-  return TEST_FILE_PATTERN.test(normalizePath(filePath));
+  const normalizedPath = normalizePath(filePath);
+  return normalizedPath.startsWith("test/helpers/") || TEST_FILE_PATTERN.test(normalizedPath);
 }
 
 function parseArgs(argv) {
