@@ -55,7 +55,15 @@ describe("isSilentReplyPayloadText", () => {
         "think\nCav is talking about a follow-up conversation.\nI will stay quiet here.NO_REPLY",
       ),
     ).toBe(true);
+    expect(
+      isSilentReplyPayloadText("think\nCav is talking about a follow-up conversation.\nNO_REPLY"),
+    ).toBe(true);
     expect(isSilentReplyPayloadText("<think>internal reasoning</think>\nNO_REPLY")).toBe(true);
+    expect(
+      isSilentReplyPayloadText(
+        "<think>internal reasoning</think>\nI will stay quiet here.NO_REPLY",
+      ),
+    ).toBe(true);
     expect(isSilentReplyPayloadText("<think>internal reasoning NO_REPLY")).toBe(true);
   });
 
@@ -63,6 +71,16 @@ describe("isSilentReplyPayloadText", () => {
     expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
     expect(
       isSilentReplyPayloadText("<think>internal reasoning</think>\nHere is the answer.\nNO_REPLY"),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "<think>internal reasoning</think>\nYou should not reply to that email.\nNO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "<think>internal reasoning</think>\nHere is the answer: I will stay quiet in the meeting, but you should still send the agenda.NO_REPLY",
+      ),
     ).toBe(false);
   });
 });
