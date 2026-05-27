@@ -45,6 +45,11 @@ describe("report-test-temp-creations", () => {
       "+++ b/test/helpers/temp-fixture.ts",
       "@@ -1,0 +2,1 @@",
       "+" + "const tempRoot = fs." + "mkdtemp" + 'Sync("case-");',
+      "diff --git a/src/test-utils/temp-fixture.ts b/src/test-utils/temp-fixture.ts",
+      "--- a/src/test-utils/temp-fixture.ts",
+      "+++ b/src/test-utils/temp-fixture.ts",
+      "@@ -1,0 +2,1 @@",
+      "+" + "const tempRoot = fs." + "mkdtemp" + 'Sync("case-");',
     ].join("\n");
 
     expect(collectTempCreationFindingsFromDiff(diff)).toEqual([
@@ -68,6 +73,12 @@ describe("report-test-temp-creations", () => {
       },
       {
         file: "test/helpers/temp-fixture.ts",
+        line: 2,
+        reason: "new mkdtemp temp directory creation",
+        source: 'const tempRoot = fs.mkdtempSync("case-");',
+      },
+      {
+        file: "src/test-utils/temp-fixture.ts",
         line: 2,
         reason: "new mkdtemp temp directory creation",
         source: 'const tempRoot = fs.mkdtempSync("case-");',

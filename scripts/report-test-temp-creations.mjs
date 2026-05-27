@@ -53,7 +53,11 @@ function normalizePath(filePath) {
 
 function isTestFile(filePath) {
   const normalizedPath = normalizePath(filePath);
-  return normalizedPath.startsWith("test/helpers/") || TEST_FILE_PATTERN.test(normalizedPath);
+  return (
+    normalizedPath.startsWith("test/") ||
+    normalizedPath.startsWith("src/test-utils/") ||
+    TEST_FILE_PATTERN.test(normalizedPath)
+  );
 }
 
 function parseArgs(argv) {
