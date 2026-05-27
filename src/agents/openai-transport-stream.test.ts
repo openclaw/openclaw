@@ -2575,6 +2575,79 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
+  it("strips native Codex encrypted reasoning replay even when provenance matches", () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-codex-responses">;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+                openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
+                  model,
+                  {
+                    authProfileId: "openai-codex:oauth",
+                    sessionId: "session-123",
+                  },
+                ),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+  });
+
   it("preserves prior Responses replay item ids for custom Codex-compatible responses", () => {
     const model = {
       id: "gpt-5.4",
