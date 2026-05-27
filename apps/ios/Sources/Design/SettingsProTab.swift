@@ -801,10 +801,6 @@ extension SettingsProTab {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-                Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
-                    .onChange(of: self.discoveryDebugLogsEnabled) { _, enabled in
-                        self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
-                    }
                 SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -909,7 +905,7 @@ extension SettingsProTab {
                     .onChange(of: self.discoveryDebugLogsEnabled) { _, enabled in
                         self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
                     }
-                Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
+                Toggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
                 NavigationLink {
                     GatewayDiscoveryDebugLogView()
                 } label: {
