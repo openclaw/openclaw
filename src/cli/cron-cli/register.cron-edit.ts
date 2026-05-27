@@ -37,7 +37,7 @@ const assignIf = (
   }
 };
 
-async function loadCronJobForEditSchedulePatch(
+async function loadCronJobForEditPatch(
   opts: Record<string, unknown>,
   id: string,
 ): Promise<CronJob | undefined> {
@@ -160,18 +160,19 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.announce && typeof opts.deliver === "boolean") {
             throw new Error("Choose --announce or --no-deliver (not multiple).");
           }
-          if (
-            Boolean(opts.announce) &&
-            typeof opts.channel === "string" &&
-            normalizeMessageChannel(opts.channel) === INTERNAL_MESSAGE_CHANNEL
-          ) {
-            throw new Error(
-              `Webchat is not a deliverable channel: --announce --channel webchat will always fail at fire time. ` +
-                `Use --session session:agent:<id>:main --message "<task>" --no-deliver to wake the agent's main ` +
-                `session at fire time and let the reply render in webchat naturally. ` +
-                `See docs/automation/cron-jobs.md “Webchat is not an announce target”.`,
-            );
-          }
+          let existingCronJobLoaded = false;
+          let existingCronJobForPatch: CronJob | undefined;
+          const getExistingCronJobForPatch = async (): Promise<CronJob> => {
+            if (!existingCronJobLoaded) {
+              existingCronJobForPatch = await loadCronJobForEditPatch(opts, String(id));
+              existingCronJobLoaded = true;
+            }
+            if (!existingCronJobForPatch) {
+              throw new Error(`unknown cron job id: ${id}`);
+            }
+            return existingCronJobForPatch;
+          };
+
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
             patch.name = opts.name;
@@ -237,10 +238,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
-            if (!existing) {
-              throw new Error(`unknown cron job id: ${id}`);
-            }
+            const existing = await getExistingCronJobForPatch();
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
           }
 
@@ -342,6 +340,33 @@ export function registerCronEditCommand(cron: Command) {
               delivery.bestEffort = opts.bestEffortDeliver;
             }
             patch.delivery = delivery;
+
+            // Validate the EFFECTIVE merged delivery shape: the gateway merges
+            // delivery-target-only patches into the existing job's delivery
+            // object, so a delivery-target-only patch with `--channel webchat`
+            // can still flip an existing `announce` job to webchat without
+            // ever passing --announce. Also covers the deprecated --deliver
+            // spelling because it sets patch mode to "announce".
+            const targetsWebchat =
+              typeof delivery.channel === "string" &&
+              normalizeMessageChannel(delivery.channel) === INTERNAL_MESSAGE_CHANNEL;
+            if (targetsWebchat) {
+              const patchMode = typeof delivery.mode === "string" ? delivery.mode : undefined;
+              const effectiveMode =
+                patchMode ?? (await getExistingCronJobForPatch()).delivery?.mode ?? "none";
+              if (effectiveMode === "announce") {
+                const reason =
+                  patchMode === "announce"
+                    ? "--announce --channel webchat"
+                    : "--channel webchat on an existing announce job";
+                throw new Error(
+                  `Webchat is not a deliverable channel: ${reason} will always fail at fire time. ` +
+                    `Use --session session:agent:<id>:main --message "<task>" --no-deliver to wake the agent's main ` +
+                    `session at fire time and let the reply render in webchat naturally. ` +
+                    `See docs/automation/cron-jobs.md “Webchat is not an announce target”.`,
+                );
+              }
+            }
           }
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

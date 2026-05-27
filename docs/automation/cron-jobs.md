@@ -177,21 +177,6 @@ When an agent creates an isolated reminder from an active chat, OpenClaw stores 
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
 
-## Output language
-
-Cron jobs do not infer a reply language from channel, locale, or previous
-messages. Put the language rule in the scheduled message or template:
-
-```bash
-openclaw cron edit <jobId> \
-  --message "Summarize the updates. Respond in Chinese; keep URLs, code, and product names unchanged."
-```
-
-For template files, keep the language instruction in the rendered prompt and
-verify placeholders such as `{{language}}` are filled before the job runs. If
-the output mixes languages, make the rule explicit, for example: "Use Chinese
-for narrative text and keep technical terms in English."
-
 ### Webchat is not an announce target
 
 Webchat is the internal session-bound surface (`INTERNAL_MESSAGE_CHANNEL`), not a channel plugin. It has no outbound `deliver(...)` path the cron runner can call — webchat receives replies live, through the session event broadcast over the connected WebSocket. A cron configured with `--announce --channel webchat` will always fail at fire time with `"Channel is required (no configured channels detected)"`, even when a webchat tab is open and listening on the targeted session.
@@ -232,6 +217,21 @@ openclaw cron add \
 At fire time the gateway wakes session `agent:coli:main` with the message as a fresh user turn. The agent computes a reply and emits it into the session; any subscribed webchat tab renders the reply. No `sessions_send` is needed when the cron output should land in the agent's _own_ main session. Use `--session isolated` and have the agent call `sessions_send` from the turn when the output should cross sessions.
 
 A CLI-level guardrail (`cron add` / `cron edit`) and a runtime typed error (`WebchatNotDeliverableError` from `resolveMessageChannelSelection`) both reject `--announce --channel webchat` so the misconfiguration cannot reach the runtime delivery path. RPC and raw `jobs.json` callers hit the runtime error; the CLI surfaces an equivalent rejection at create time.
+
+## Output language
+
+Cron jobs do not infer a reply language from channel, locale, or previous
+messages. Put the language rule in the scheduled message or template:
+
+```bash
+openclaw cron edit <jobId> \
+  --message "Summarize the updates. Respond in Chinese; keep URLs, code, and product names unchanged."
+```
+
+For template files, keep the language instruction in the rendered prompt and
+verify placeholders such as `{{language}}` are filled before the job runs. If
+the output mixes languages, make the rule explicit, for example: "Use Chinese
+for narrative text and keep technical terms in English."
 
 Failure notifications follow a separate destination path:
 
