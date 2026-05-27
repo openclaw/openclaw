@@ -75,6 +75,7 @@ export type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
   generationMismatchGraceExpiresAtMs?: number;
+  generationMismatchGraceAcceptedGeneration?: string;
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
@@ -540,7 +541,7 @@ export async function invokeNativeHookRelay(
   if (params.requireGeneration) {
     const generation = readNonEmptyString(params.generation, "generation");
     if (generation !== registration.generation) {
-      if (!canAcceptNativeHookRelayGenerationMismatch(registration)) {
+      if (!canAcceptNativeHookRelayGenerationMismatch(registration, generation)) {
         throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       }
       log.debug("native hook relay accepted bootstrap generation mismatch", {
@@ -678,9 +679,17 @@ function removeNativeHookRelayInvocations(relayId: string): void {
 
 function canAcceptNativeHookRelayGenerationMismatch(
   registration: NativeHookRelayRegistration,
+  generation: string,
 ): boolean {
   const expiresAtMs = registration.generationMismatchGraceExpiresAtMs;
-  return typeof expiresAtMs === "number" && Date.now() <= expiresAtMs;
+  if (typeof expiresAtMs !== "number" || Date.now() > expiresAtMs) {
+    return false;
+  }
+  if (registration.generationMismatchGraceAcceptedGeneration) {
+    return registration.generationMismatchGraceAcceptedGeneration === generation;
+  }
+  registration.generationMismatchGraceAcceptedGeneration = generation;
+  return true;
 }
 
 function pruneExpiredNativeHookRelays(now = Date.now()): void {

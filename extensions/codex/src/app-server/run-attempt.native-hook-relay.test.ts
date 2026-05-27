@@ -527,6 +527,21 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: "different-legacy-generation",
+        event: "pre_tool_use",
+        requireGeneration: true,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "unexpected-stale-generation",
+          tool_input: { command: "pwd" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
 
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;

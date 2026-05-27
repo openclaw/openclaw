@@ -772,6 +772,21 @@ describe("native hook relay registry", () => {
       runId: "run-1",
       event: "pre_tool_use",
     });
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: "different-stale-generation",
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
   });
 
   it("rejects bootstrap generation mismatches after the grace window", async () => {
