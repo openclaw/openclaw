@@ -1,6 +1,5 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -29,10 +28,7 @@ function canPersistInternalDirective(params: {
   gatewayClientScopes?: string[];
 }): boolean {
   if (params.gatewayClientScopes === undefined) {
-    const hasChannelContext =
-      normalizeOptionalString(params.messageProvider) !== undefined ||
-      normalizeOptionalString(params.surface) !== undefined;
-    return !hasChannelContext;
+    return true;
   }
   return params.gatewayClientScopes.includes("operator.admin");
 }
