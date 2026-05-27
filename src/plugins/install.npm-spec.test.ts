@@ -51,6 +51,10 @@ function npmPackArchiveMetadataArgv(archivePath: string): string[] {
   return ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"];
 }
 
+function commandKey(argv: readonly string[]): string {
+  return argv.join("\0");
+}
+
 function resolveManagedFileDependency(npmRoot: string, dependencySpec: string): string | null {
   if (!dependencySpec.startsWith("file:")) {
     return null;
@@ -264,13 +268,23 @@ function mockNpmViewAndInstall(params: {
 
 function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
+  const packPackagesByArgv = new Map(
+    packages
+      .filter((pkg) => pkg.packArchivePath)
+      .map((pkg) => [commandKey(npmPackArchiveMetadataArgv(pkg.packArchivePath ?? "")), pkg]),
+  );
+  const viewPackagesByArgv = new Map(
+    packages.filter((pkg) => pkg.spec).map((pkg) => [commandKey(npmViewArgv(pkg.spec ?? "")), pkg]),
+  );
+  const versionsPackagesByArgv = new Map(
+    packages
+      .filter((pkg) => pkg.versions)
+      .map((pkg) => [commandKey(npmViewVersionsArgv(pkg.packageName)), pkg]),
+  );
   runCommandWithTimeoutMock.mockImplementation(
     async (argv: string[], options?: { cwd?: string }) => {
-      const packPackage = packages.find(
-        (pkg) =>
-          pkg.packArchivePath &&
-          JSON.stringify(argv) === JSON.stringify(npmPackArchiveMetadataArgv(pkg.packArchivePath)),
-      );
+      const argvKey = commandKey(argv);
+      const packPackage = packPackagesByArgv.get(argvKey);
       if (packPackage) {
         return successfulSpawn(
           JSON.stringify([
@@ -287,9 +301,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           ]),
         );
       }
-      const viewPackage = packages.find(
-        (pkg) => pkg.spec && JSON.stringify(argv) === JSON.stringify(npmViewArgv(pkg.spec)),
-      );
+      const viewPackage = viewPackagesByArgv.get(argvKey);
       if (viewPackage) {
         return successfulSpawn(
           JSON.stringify({
@@ -302,9 +314,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           }),
         );
       }
-      const versionsPackage = packages.find(
-        (pkg) => JSON.stringify(argv) === JSON.stringify(npmViewVersionsArgv(pkg.packageName)),
-      );
+      const versionsPackage = versionsPackagesByArgv.get(argvKey);
       if (versionsPackage) {
         return successfulSpawn(
           JSON.stringify(versionsPackage.versions ?? [versionsPackage.version]),

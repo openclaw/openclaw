@@ -1230,6 +1230,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let isNewSession = false;
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
+      let skipAgentInitialSessionTouch = false;
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
@@ -1548,42 +1549,47 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (storePath && !suppressVisibleSessionEffects) {
           const requestedStoreKey = requestedSessionKey;
           let deniedBySendPolicy = false;
-          const persisted = await updateSessionStore(storePath, (store) => {
-            const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-              cfg,
-              key: requestedStoreKey,
-              store,
-            });
-            const freshEntry = store[primaryKey];
-            patchBuild = buildSessionPatch(freshEntry);
-            const effectivePatch =
-              recoveredSessionStartedAt !== undefined &&
-              freshEntry?.sessionStartedAt === undefined &&
-              freshEntry?.sessionId === entry?.sessionId
-                ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                : patchBuild.patch;
-            const merged = mergeSessionEntry(freshEntry, effectivePatch);
-            const sendPolicy =
-              request.deliver === true
-                ? resolveSendPolicy({
-                    cfg,
-                    entry: merged,
-                    sessionKey: canonicalKey,
-                    channel: merged?.channel,
-                    chatType: merged?.chatType,
-                  })
-                : "allow";
-            if (sendPolicy === "deny") {
-              deniedBySendPolicy = true;
+          const persisted = await updateSessionStore(
+            storePath,
+            (store) => {
+              const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+                cfg,
+                key: requestedStoreKey,
+                store,
+              });
+              const freshEntry = store[primaryKey];
+              patchBuild = buildSessionPatch(freshEntry);
+              const effectivePatch =
+                recoveredSessionStartedAt !== undefined &&
+                freshEntry?.sessionStartedAt === undefined &&
+                freshEntry?.sessionId === entry?.sessionId
+                  ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
+                  : patchBuild.patch;
+              const merged = mergeSessionEntry(freshEntry, effectivePatch);
+              const sendPolicy =
+                request.deliver === true
+                  ? resolveSendPolicy({
+                      cfg,
+                      entry: merged,
+                      sessionKey: canonicalKey,
+                      channel: merged?.channel,
+                      chatType: merged?.chatType,
+                    })
+                  : "allow";
+              if (sendPolicy === "deny") {
+                deniedBySendPolicy = true;
+                return merged;
+              }
+              store[primaryKey] = merged;
               return merged;
-            }
-            store[primaryKey] = merged;
-            return merged;
-          });
+            },
+            { takeCacheOwnership: true },
+          );
           if (persisted) {
             sessionEntry = persisted;
             resolvedSessionId = sessionEntry.sessionId;
           }
+          skipAgentInitialSessionTouch = touchInteraction;
           if (deniedBySendPolicy) {
             respond(
               false,
@@ -2056,6 +2062,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               internalEvents: request.internalEvents,
               inputProvenance,
               sessionEffects,
+              skipInitialSessionTouch: skipAgentInitialSessionTouch,
               preserveUserFacingSessionModelState,
               sourceReplyDeliveryMode: request.sourceReplyDeliveryMode,
               disableMessageTool: request.disableMessageTool,
