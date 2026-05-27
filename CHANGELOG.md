@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: make the CPU scenario checker fail when completed Gateway runs report hot CPU observations instead of only writing them to artifacts.
 - CLI: bound startup-memory probes so a hung startup command fails with timeout guidance instead of hanging the memory gate indefinitely.
 - File transfer: wrap fetched file text and metadata as external content so untrusted contents cannot inject prompt instructions or spoof external-content markers.
+- ClickClack: apply configured `allowFrom` sender allowlists before inbound agent dispatch so blocked senders cannot trigger model requests or command-authorized turns. Thanks @mmaps.
 
 ## 2026.5.26
 
