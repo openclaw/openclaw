@@ -753,7 +753,7 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrations({ detected });
 
     expect(result.warnings).toStrictEqual([
-      "Stopped migrating Test capped cache because plugin state cap evicted scope:first; left legacy source in place",
+      "Skipped migrating Test capped cache because plugin state has room for 1 of 2 missing entries; left legacy source in place",
     ]);
     expect(result.changes).not.toContain("Migrated 2 Test capped cache entries → plugin state");
     expect(result.changes).not.toContain(

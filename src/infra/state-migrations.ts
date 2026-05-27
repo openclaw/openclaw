@@ -19,7 +19,11 @@ import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import {
+  countPluginStateLiveEntries,
+  createPluginStateKeyedStore,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+} from "../plugin-state/plugin-state-store.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -164,13 +168,15 @@ async function runLegacyMigrationPlans(
   for (const plan of plans) {
     if (plan.kind === "plugin-state-import") {
       await withPluginStateImportEnv(plan, async () => {
-        let storeEntries: Array<{ key: string }> = [];
+        let storeEntries: Array<{ key: string; value: unknown }> = [];
+        let pluginEntryCount = 0;
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
           maxEntries: plan.maxEntries,
         });
         try {
           storeEntries = await store.entries();
+          pluginEntryCount = countPluginStateLiveEntries(plan.pluginId);
         } catch (err) {
           warnings.push(
             `Failed reading ${plan.label} plugin state before migration: ${String(err)}`,
@@ -178,9 +184,23 @@ async function runLegacyMigrationPlans(
           return;
         }
         const existingKeys = new Set(storeEntries.map(({ key }) => key));
+        const existingValuesByKey = new Map(storeEntries.map(({ key, value }) => [key, value]));
         const expectedKeys = new Set(existingKeys);
         let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
         const entries = await plan.readEntries();
+        const missingEntries = entries.filter(
+          ({ key }) => !existingKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+        );
+        const pluginRemainingCapacity = Math.max(
+          0,
+          MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
+        );
+        if (missingEntries.length > pluginRemainingCapacity) {
+          warnings.push(
+            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntries.length} missing entries; left legacy source in place`,
+          );
+          return;
+        }
         let imported = 0;
         const importedKeys: string[] = [];
         for (const entry of entries) {
@@ -202,6 +222,9 @@ async function runLegacyMigrationPlans(
                 await store.delete(importedKey);
               }
               await store.delete(targetKey);
+              if (existingValuesByKey.has(missingKey)) {
+                await store.register(missingKey, existingValuesByKey.get(missingKey));
+              }
               warnings.push(
                 `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
               );

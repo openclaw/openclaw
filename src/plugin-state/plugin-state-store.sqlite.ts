@@ -627,6 +627,20 @@ export function pluginStateEntries(params: {
   }
 }
 
+export function countPluginStateLiveEntries(pluginId: string): number {
+  try {
+    const { statements } = openPluginStateDatabase("entries");
+    return countRow(statements.countLivePlugin.get(pluginId, Date.now()) as CountRow | undefined);
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "entries",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to count plugin state entries.",
+    );
+  }
+}
+
 export function pluginStateClear(params: { pluginId: string; namespace: string }): void {
   try {
     const { statements } = openPluginStateDatabase("clear");
