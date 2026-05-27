@@ -103,6 +103,10 @@ function toPosixPath(filePath: string): string {
   return filePath.split(sep).join("/");
 }
 
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function getOpenClawDocsClassification(
   absolutePath: string,
 ): CompactReadClassification | undefined {
@@ -333,7 +337,7 @@ export function createReadToolDefinition(
               if (truncation.firstLineExceedsLimit) {
                 // First line alone exceeds the byte limit. Point the model at a bash fallback.
                 const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
-                outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
+                outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
                 details = { truncation };
               } else if (truncation.truncated) {
                 // Truncation occurred. Build an actionable continuation notice.
