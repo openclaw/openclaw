@@ -140,14 +140,24 @@ export function resolveSessionStoreEntry(params: {
     : exactEntry;
   const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalizedKey);
   const hasExactEntry = exactKeyWins && usableExactEntry !== undefined;
-  let existing =
-    usableExactEntry ??
-    foldedLegacyEntry ??
-    (legacyKeySet.size > 0 &&
+  const fallbackLegacyEntry =
+    legacyKeySet.size > 0 &&
     !hasMismatchedCaseSensitiveDeliveryProof(params.store[trimmedKey], normalizedKey)
       ? params.store[trimmedKey]
-      : undefined);
+      : undefined;
+  let existing = exactKeyWins
+    ? (usableExactEntry ?? foldedLegacyEntry ?? fallbackLegacyEntry)
+    : undefined;
   let existingUpdatedAt = existing?.updatedAt ?? 0;
+  if (!exactKeyWins) {
+    for (const candidate of [usableExactEntry, foldedLegacyEntry, fallbackLegacyEntry]) {
+      const candidateUpdatedAt = candidate?.updatedAt ?? 0;
+      if (candidate && (!existing || candidateUpdatedAt > existingUpdatedAt)) {
+        existing = candidate;
+        existingUpdatedAt = candidateUpdatedAt;
+      }
+    }
+  }
   for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
     if (candidateKey === normalizedKey) {
       continue;

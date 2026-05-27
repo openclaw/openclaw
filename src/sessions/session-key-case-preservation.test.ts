@@ -344,6 +344,29 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(r.existing).toBe(signalEntry);
   });
 
+  it("keeps freshest legacy lowercase Signal group aliases", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const mixedKey = `agent:main:signal:group:${mixedGroupId}`;
+    const lowerKey = mixedKey.toLowerCase();
+    const staleCanonical = {
+      sessionId: "stale-signal-canonical",
+      updatedAt: 100,
+    } as unknown as SessionEntry;
+    const freshLegacy = {
+      sessionId: "fresh-signal-legacy",
+      updatedAt: 200,
+    } as unknown as SessionEntry;
+    const store: Record<string, SessionEntry> = {
+      [mixedKey]: staleCanonical,
+      [lowerKey]: freshLegacy,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: mixedKey });
+
+    expect(r.legacyKeys).toContain(lowerKey);
+    expect(r.existing).toBe(freshLegacy);
+  });
+
   it("keeps freshest alias ordering for ordinary lowercase-canonical channels", () => {
     const canonicalKey = "agent:main:telegram:group:mixedcase";
     const legacyAliasKey = "agent:main:telegram:group:MixedCase";
