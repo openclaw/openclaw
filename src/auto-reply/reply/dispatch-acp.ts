@@ -1,12 +1,16 @@
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../acp/runtime/errors.js";
-import { resolveAcpThreadSessionDetailLines } from "../../acp/runtime/session-identifiers.js";
+import {
+  resolveAcpSessionCwd,
+  resolveAcpThreadSessionDetailLines,
+} from "../../acp/runtime/session-identifiers.js";
 import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import {
+  isMissingAcpSessionCwd,
   isAcpStaleSessionError,
   unbindStaleAcpSessionBindings,
 } from "../../acp/runtime/stale-session.js";
@@ -175,8 +179,12 @@ export type AcpDispatchAttemptResult = {
 async function maybeUnbindStaleBoundConversations(params: {
   targetSessionKey: string;
   error: { code: string; message: string };
+  sessionCwd?: string;
 }): Promise<void> {
-  if (!isAcpStaleSessionError(params.error)) {
+  const isStale =
+    isAcpStaleSessionError(params.error) ||
+    (params.error.code === "ACP_SESSION_INIT_FAILED" && isMissingAcpSessionCwd(params.sessionCwd));
+  if (!isStale) {
     return;
   }
   try {
@@ -603,6 +611,8 @@ export async function tryDispatchAcpReply(params: {
     await maybeUnbindStaleBoundConversations({
       targetSessionKey: canonicalSessionKey,
       error: acpError,
+      sessionCwd:
+        acpResolution.kind === "ready" ? resolveAcpSessionCwd(acpResolution.meta) : undefined,
     });
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 export const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
 const STALE_ACP_SESSION_MESSAGE_RE =
@@ -7,6 +9,17 @@ export function isAcpStaleSessionError(params: { code: string; message: string }
   return (
     params.code === "ACP_SESSION_INIT_FAILED" && STALE_ACP_SESSION_MESSAGE_RE.test(params.message)
   );
+}
+
+export function isMissingAcpSessionCwd(cwd: string | undefined): boolean {
+  if (!cwd?.trim()) {
+    return false;
+  }
+  try {
+    return !fs.statSync(cwd).isDirectory();
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
 }
 
 export async function unbindStaleAcpSessionBindings(params: {
