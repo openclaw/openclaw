@@ -7,7 +7,7 @@ export const zh_CN: TranslationMap = {
     ok: "正常",
     yes: "是",
     no: "否",
-    active: "启用中",
+    active: "活跃",
     loading: "加载中…",
     refreshing: "刷新中…",
     online: "在线",
