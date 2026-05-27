@@ -552,14 +552,14 @@ struct OpenClawChatComposer: View {
                 .frame(width: self.sendButtonSize, height: self.sendButtonSize)
                 .background(
                     RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .fill(self.viewModel.canSendDraft ? self.sendButtonFill : Color.secondary
+                        .fill(self.viewModel.canSend ? self.sendButtonFill : Color.secondary
                             .opacity(0.32)))
                 .overlay(
                     RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(self.viewModel.canSendDraft ? 0.18 : 0.08), lineWidth: 1))
+                        .strokeBorder(Color.white.opacity(self.viewModel.canSend ? 0.18 : 0.08), lineWidth: 1))
                 .contentShape(RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous))
                 .accessibilityLabel("Send message")
-                .disabled(!self.viewModel.canSendDraft)
+                .disabled(!self.viewModel.canSend)
             }
         }
     }

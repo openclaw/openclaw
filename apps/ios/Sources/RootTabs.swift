@@ -111,7 +111,7 @@ struct RootTabs: View {
                 .tabItem { Label("Agent", systemImage: "person.2.fill") }
                 .tag(AppTab.agent)
 
-            SettingsProTab(openFullSettings: { self.presentedSheet = .settings })
+            SettingsProTab()
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
         }

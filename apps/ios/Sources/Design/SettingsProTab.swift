@@ -1,3 +1,4 @@
+import Network
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -5,29 +6,62 @@ import UserNotifications
 
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
+    @AppStorage("node.displayName") private var displayName: String = "iOS Node"
+    @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
+    @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkModeProviderSelection.storageKey) private var talkProviderSelectionRaw: String =
+        TalkModeProviderSelection.gatewayDefault.rawValue
+    @AppStorage(TalkModeRealtimeVoiceSelection.storageKey) private var talkRealtimeVoiceSelectionRaw: String = ""
+    @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
+    @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
     @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
         TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
+    @AppStorage("gateway.autoconnect") private var gatewayAutoConnect: Bool = false
+    @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
+    @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
+    @AppStorage("gateway.manual.port") private var manualGatewayPort: Int = 18789
+    @AppStorage("gateway.manual.tls") private var manualGatewayTLS: Bool = true
+    @AppStorage("gateway.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
+    @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
+    @AppStorage("gateway.setupCode") private var setupCode: String = ""
+    @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
+    @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
+    @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
     @State private var isReconnectingGateway = false
     @State private var isRefreshingGateway = false
     @State private var isChangingLocationMode = false
+    @State private var connectingGatewayID: String?
+    @State private var selectedAgentPickerId = ""
+    @State private var gatewayToken = ""
+    @State private var gatewayPassword = ""
+    @State private var manualGatewayPortText = ""
+    @State private var setupStatusText: String?
+    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State private var defaultShareInstruction = ""
+    @State private var showGatewayProblemDetails = false
+    @State private var showQRScanner = false
+    @State private var scannerError: String?
+    @State private var showResetOnboardingAlert = false
+    @State private var suppressCredentialPersist = false
     @State private var locationStatusText: String?
     @State private var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State private var notificationStatusText = "Checking"
     @State private var notificationActionText = "Request Access"
-    var openFullSettings: () -> Void
 
     private enum SettingsRoute: Hashable {
         case gateway
         case permissions
+        case voice
         case diagnostics
         case privacy
         case notifications
@@ -55,19 +89,93 @@ struct SettingsProTab: View {
             }
             .task {
                 self.previousLocationModeRaw = self.locationModeRaw
+                self.syncSettingsState()
                 self.refreshNotificationSettings()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
+                    self.syncSettingsState()
                     self.refreshNotificationSettings()
                 }
             }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)
             }
+            .onChange(of: self.selectedAgentPickerId) { _, newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
+            }
+            .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
+                if newValue != self.selectedAgentPickerId {
+                    self.selectedAgentPickerId = newValue
+                }
+            }
+            .onChange(of: self.gatewayToken) { _, newValue in
+                self.persistGatewayToken(newValue)
+            }
+            .onChange(of: self.gatewayPassword) { _, newValue in
+                self.persistGatewayPassword(newValue)
+            }
+            .onChange(of: self.defaultShareInstruction) { _, newValue in
+                ShareToAgentSettings.saveDefaultInstruction(newValue)
+            }
+        }
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(
+                    problem: gatewayProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(gatewayProblem),
+                    onPrimaryAction: {
+                        Task { await self.handleGatewayProblemPrimaryAction(gatewayProblem) }
+                    })
+            }
+        }
+        .sheet(isPresented: self.$showQRScanner) {
+            NavigationStack {
+                QRScannerView(
+                    onGatewayLink: { link in
+                        self.handleScannedGatewayLink(link)
+                    },
+                    onError: { error in
+                        self.showQRScanner = false
+                        self.setupStatusText = "Scanner error: \(error)"
+                        self.scannerError = error
+                    },
+                    onDismiss: {
+                        self.showQRScanner = false
+                    })
+                    .ignoresSafeArea()
+                    .navigationTitle("Scan QR Code")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Cancel") { self.showQRScanner = false }
+                        }
+                    }
+            }
+        }
+        .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
+            Button("Reset", role: .destructive) {
+                self.resetOnboarding()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+        }
+        .alert(
+            "QR Scanner Unavailable",
+            isPresented: Binding(
+                get: { self.scannerError != nil },
+                set: { if !$0 { self.scannerError = nil } }))
+        {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(self.scannerError ?? "")
         }
     }
+}
 
+extension SettingsProTab {
     private var settingsHeader: some View {
         Text("Settings")
             .font(.system(size: 28, weight: .bold))
@@ -188,6 +296,11 @@ struct SettingsProTab: View {
                 detail: self.permissionsDetail,
                 route: .permissions)
             self.settingsListRow(
+                icon: "waveform",
+                title: "Voice & Talk",
+                detail: self.voiceDetail,
+                route: .voice)
+            self.settingsListRow(
                 icon: "globe",
                 title: "Diagnostics",
                 detail: self.diagnosticsDetail,
@@ -250,6 +363,8 @@ struct SettingsProTab: View {
                         self.gatewayDestination
                     case .permissions:
                         self.permissionsDestination
+                    case .voice:
+                        self.voiceDestination
                     case .diagnostics:
                         self.diagnosticsDestination
                     case .privacy:
@@ -270,6 +385,10 @@ struct SettingsProTab: View {
 
     private var gatewayDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                self.gatewayProblemCard(gatewayProblem)
+            }
+
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
@@ -294,7 +413,11 @@ struct SettingsProTab: View {
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
 
-            self.fullSettingsButton("Gateway setup", detail: "Pairing codes, manual host, TLS, and discovery logs.")
+            self.agentSelectionCard
+            self.gatewaySetupCard
+            self.discoveredGatewaysCard
+            self.manualGatewayCard
+            self.gatewayAdvancedCard
         }
     }
 
@@ -314,9 +437,22 @@ struct SettingsProTab: View {
                 detail: "Keep the screen awake while OpenClaw is open.",
                 isOn: self.$preventSleep)
 
-            self.fullSettingsButton(
-                "More permissions",
-                detail: "Contacts, calendar, reminders, and advanced device access.")
+            self.privacyAccessCard
+        }
+    }
+
+    private var voiceDestination: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            self.detailStatusCard(
+                icon: "waveform",
+                title: "Voice & Talk",
+                detail: self.appModel.talkMode.gatewayTalkVoiceModeTitle,
+                value: self.voiceDetail,
+                color: self.talkEnabled || self.voiceWakeEnabled ? OpenClawBrand.accent : .secondary)
+
+            self.voiceFeatureCard
+            self.talkVoiceSettingsCard
+            self.shareSettingsCard
         }
     }
 
@@ -353,7 +489,7 @@ struct SettingsProTab: View {
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
 
-            self.fullSettingsButton("Discovery logs", detail: "Open the full diagnostics and debug log view.")
+            self.diagnosticsAdvancedCard
         }
     }
 
@@ -380,9 +516,7 @@ struct SettingsProTab: View {
                 detail: "Allow active Talk sessions to continue while the app is backgrounded.",
                 isOn: self.$talkBackgroundEnabled)
 
-            self.fullSettingsButton(
-                "Privacy & access",
-                detail: "Contacts, calendar, reminders, and system privacy permissions.")
+            self.privacyAccessCard
         }
     }
 
@@ -436,7 +570,7 @@ struct SettingsProTab: View {
                 self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
             }
 
-            self.fullSettingsButton("Advanced settings", detail: "Open the complete system settings form.")
+            self.deviceIdentityCard
         }
     }
 
@@ -535,6 +669,323 @@ struct SettingsProTab: View {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    private var agentSelectionCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Active Agent")
+                    .font(.subheadline.weight(.semibold))
+                Picker("Agent", selection: self.$selectedAgentPickerId) {
+                    Text("Default").tag("")
+                    let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
+                        let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        Text(name.isEmpty ? agent.id : name).tag(agent.id)
+                    }
+                }
+                Text("Controls which agent Chat and Talk use.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var gatewaySetupCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Setup Code")
+                    .font(.subheadline.weight(.semibold))
+                TextField("Paste setup code", text: self.$setupCode)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                HStack(spacing: 10) {
+                    self.gatewayActionButton(
+                        title: "Scan QR",
+                        icon: "qrcode.viewfinder",
+                        color: OpenClawBrand.accent,
+                        isBusy: self.connectingGatewayID != nil)
+                    {
+                        self.openGatewayQRScanner()
+                    }
+                    self.gatewayActionButton(
+                        title: "Connect",
+                        icon: "bolt.horizontal.circle",
+                        color: OpenClawBrand.ok,
+                        isBusy: self.connectingGatewayID == "manual")
+                    {
+                        Task { await self.applySetupCodeAndConnect() }
+                    }
+                    .disabled(self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let status = self.setupStatusLine {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if let warning = self.tailnetWarningText {
+                    Text(warning)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var discoveredGatewaysCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Discovered Gateways")
+                    .font(.subheadline.weight(.semibold))
+                if self.gatewayController.gateways.isEmpty {
+                    Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(self.gatewayController.gateways) { gateway in
+                        self.discoveredGatewayRow(gateway)
+                        if gateway.id != self.gatewayController.gateways.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: gateway.name)
+                    .font(.subheadline.weight(.semibold))
+                Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button {
+                Task { await self.connect(gateway) }
+            } label: {
+                if self.connectingGatewayID == gateway.id {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Connect")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(self.connectingGatewayID != nil)
+        }
+    }
+
+    private var manualGatewayCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
+                TextField("Host", text: self.$manualGatewayHost)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                TextField("Port", text: self.manualPortBinding)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                Toggle("Use TLS", isOn: self.$manualGatewayTLS)
+                self.gatewayActionButton(
+                    title: "Connect Manual",
+                    icon: "network",
+                    color: OpenClawBrand.accent,
+                    isBusy: self.connectingGatewayID == "manual")
+                {
+                    Task { await self.connectManual() }
+                }
+                .disabled(self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !self.manualPortIsValid)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var gatewayAdvancedCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
+                Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
+                    .onChange(of: self.discoveryDebugLogsEnabled) { _, enabled in
+                        self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
+                    }
+                SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Gateway Password", text: self.$gatewayPassword)
+                    .textFieldStyle(.roundedBorder)
+                Button("Reset Onboarding", role: .destructive) {
+                    self.showResetOnboardingAlert = true
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var voiceFeatureCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                self.settingsToggle("Voice Wake", isOn: self.$voiceWakeEnabled) { enabled in
+                    self.appModel.setVoiceWakeEnabled(enabled)
+                }
+                self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
+                    self.appModel.setTalkEnabled(enabled)
+                }
+                Picker("Speech Language", selection: self.$talkSpeechLocale) {
+                    ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                        Text(option.label).tag(option.id)
+                    }
+                }
+                self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
+                self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
+                NavigationLink {
+                    VoiceWakeWordsSettingsView()
+                } label: {
+                    self.simpleSettingsRow(
+                        title: "Wake Words",
+                        value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var talkVoiceSettingsCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Provider", selection: self.talkProviderSelectionBinding) {
+                    ForEach(TalkModeProviderSelection.allCases) { option in
+                        Text(option.label).tag(option.rawValue)
+                    }
+                }
+                if self.shouldShowRealtimeVoicePicker {
+                    Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
+                        Text("Gateway Default").tag("")
+                        ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
+                            Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                        }
+                    }
+                }
+                self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                Divider()
+                self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
+                Divider()
+                self.detailRow("API Key", value: self.talkApiKeyStatus)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var shareSettingsCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Show Talk Control", isOn: self.$talkButtonEnabled)
+                TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                    .lineLimit(2...5)
+                    .textInputAutocapitalization(.sentences)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    Task { await self.appModel.runSharePipelineSelfTest() }
+                } label: {
+                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                }
+                .buttonStyle(.bordered)
+                Text(self.appModel.lastShareEventText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var privacyAccessCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            PrivacyAccessSectionView()
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var diagnosticsAdvancedCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
+                    .onChange(of: self.discoveryDebugLogsEnabled) { _, enabled in
+                        self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
+                    }
+                Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
+                NavigationLink {
+                    GatewayDiscoveryDebugLogView()
+                } label: {
+                    self.simpleSettingsRow(title: "Discovery Logs", value: self.gatewayController.discoveryStatusText)
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var deviceIdentityCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Device Name", text: self.$displayName)
+                    .textFieldStyle(.roundedBorder)
+                self.detailRow("Instance ID", value: self.instanceId)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func gatewayProblemCard(_ problem: GatewayConnectionProblem) -> some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            GatewayProblemBanner(
+                problem: problem,
+                primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
+                onPrimaryAction: {
+                    Task { await self.handleGatewayProblemPrimaryAction(problem) }
+                },
+                onShowDetails: {
+                    self.showGatewayProblemDetails = true
+                })
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func settingsToggle(
+        _ title: String,
+        isOn: Binding<Bool>,
+        onChange: ((Bool) -> Void)? = nil) -> some View
+    {
+        Toggle(title, isOn: isOn)
+            .onChange(of: isOn.wrappedValue) { _, enabled in
+                onChange?(enabled)
+            }
+    }
+
+    private func simpleSettingsRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer(minLength: 8)
+            Text(value)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .font(.subheadline)
+    }
+}
+
+extension SettingsProTab {
     private func detailStatusCard(
         icon: String,
         title: String,
@@ -655,30 +1106,6 @@ struct SettingsProTab: View {
         .frame(height: 42)
     }
 
-    private func fullSettingsButton(_ title: String, detail: String) -> some View {
-        Button(action: self.openFullSettings) {
-            HStack(spacing: 12) {
-                ProIconBadge(systemName: "slider.horizontal.3", color: OpenClawBrand.accent)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .buttonStyle(.plain)
-        .padding(14)
-        .proPanelSurface(tint: OpenClawBrand.accent, radius: SettingsLayout.cardRadius, isProminent: true)
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
     private func reconnectGateway() async {
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
@@ -693,6 +1120,190 @@ struct SettingsProTab: View {
         self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
         self.gatewayController.restartDiscovery()
         await self.appModel.refreshGatewayOverviewIfConnected()
+    }
+
+    private func syncSettingsState() {
+        self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
+        self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
+        self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstanceId.isEmpty else { return }
+        self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
+        self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    private func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
+        self.connectingGatewayID = gateway.id
+        defer { self.connectingGatewayID = nil }
+        self.manualGatewayEnabled = false
+        GatewaySettingsStore.savePreferredGatewayStableID(gateway.stableID)
+        GatewaySettingsStore.saveLastDiscoveredGatewayStableID(gateway.stableID)
+        if let err = await self.gatewayController.connectWithDiagnostics(gateway) {
+            self.setupStatusText = err
+        }
+    }
+
+    private func applySetupCodeAndConnect() async {
+        self.setupStatusText = nil
+        guard self.applySetupCode() else { return }
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let port = self.resolvedManualPort(host: host) else {
+            self.setupStatusText = "Failed: invalid port"
+            return
+        }
+        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        self.setupStatusText = "Setup code applied. Connecting..."
+        await self.connectManual()
+    }
+
+    @discardableResult
+    private func applySetupCode() -> Bool {
+        let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else {
+            self.setupStatusText = "Paste a setup code to continue."
+            return false
+        }
+        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
+            return false
+        }
+        self.applyGatewayLink(link)
+        return true
+    }
+
+    private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
+        self.manualGatewayHost = link.host
+        self.manualGatewayPort = link.port
+        self.manualGatewayPortText = String(link.port)
+        self.manualGatewayTLS = link.tls
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            GatewayOnboardingReset.prepareForBootstrapPairing(appModel: self.appModel, instanceId: instanceId)
+        }
+        if !instanceId.isEmpty {
+            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: instanceId)
+        }
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
+            if !instanceId.isEmpty {
+                GatewaySettingsStore.saveGatewayToken(setupAuth.token, instanceId: instanceId)
+            }
+        }
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
+            if !instanceId.isEmpty {
+                GatewaySettingsStore.saveGatewayPassword(setupAuth.password, instanceId: instanceId)
+            }
+        }
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
+    }
+
+    private func openGatewayQRScanner() {
+        self.appModel.disconnectGateway()
+        self.connectingGatewayID = nil
+        self.setupStatusText = "Opening QR scanner..."
+        self.showQRScanner = true
+    }
+
+    private func handleScannedGatewayLink(_ link: GatewayConnectDeepLink) {
+        self.showQRScanner = false
+        self.setupCode = ""
+        self.applyGatewayLink(link)
+        self.setupStatusText = "QR loaded. Connecting to \(link.host):\(link.port)..."
+        Task { await self.connectAfterScannedGatewayLink() }
+    }
+
+    private func connectAfterScannedGatewayLink() async {
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let port = self.resolvedManualPort(host: host) else {
+            self.setupStatusText = "Failed: invalid port"
+            return
+        }
+        guard await self.preflightGateway(host: host, port: port, useTLS: self.manualGatewayTLS) else { return }
+        await self.connectManual()
+    }
+
+    private func connectManual() async {
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            self.setupStatusText = "Failed: host required"
+            return
+        }
+        guard self.manualPortIsValid else {
+            self.setupStatusText = "Failed: invalid port"
+            return
+        }
+        self.connectingGatewayID = "manual"
+        self.manualGatewayEnabled = true
+        defer { self.connectingGatewayID = nil }
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
+            token: self.gatewayToken,
+            pendingOverride: self.pendingManualAuthOverride,
+            password: self.gatewayPassword)
+        self.pendingManualAuthOverride = nil
+        await self.gatewayController.connectManual(
+            host: host,
+            port: self.manualGatewayPort,
+            useTLS: self.manualGatewayTLS,
+            authOverride: authOverride)
+    }
+
+    private func preflightGateway(host: String, port: Int, useTLS: Bool) async -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if Self.isTailnetHostOrIP(trimmed), !Self.hasTailnetIPv4() {
+            self.setupStatusText = "Tailscale is off on this iPhone. Turn it on, then try again."
+            return false
+        }
+        self.setupStatusText = "Checking gateway reachability..."
+        let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
+        if !ok {
+            self.setupStatusText = "Can't reach gateway at \(trimmed):\(port). Check Tailscale or LAN."
+        }
+        return ok
+    }
+
+    private func resetOnboarding() {
+        self.connectingGatewayID = nil
+        self.setupStatusText = nil
+        self.setupCode = ""
+        self.gatewayAutoConnect = false
+        self.suppressCredentialPersist = true
+        defer { self.suppressCredentialPersist = false }
+        self.gatewayToken = ""
+        self.gatewayPassword = ""
+        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+        self.onboardingComplete = false
+        self.hasConnectedOnce = false
+        self.manualGatewayEnabled = false
+        self.manualGatewayHost = ""
+        self.onboardingRequestID += 1
+    }
+
+    private func retryGatewayConnectionFromProblem() async {
+        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
+            await self.connectManual()
+        } else {
+            await self.gatewayController.connectLastKnown()
+        }
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        if problem.suggestsOnboardingReset { return "Reset onboarding" }
+        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
+        if problem.suggestsOnboardingReset {
+            self.resetOnboarding()
+            return
+        }
+        if problem.canTrustRotatedCertificate {
+            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
+            return
+        }
+        await self.retryGatewayConnectionFromProblem()
     }
 
     private func handleLocationModeChange(_ newValue: String) {
@@ -778,6 +1389,24 @@ struct SettingsProTab: View {
         }
     }
 
+    private func persistGatewayToken(_ value: String) {
+        guard !self.suppressCredentialPersist else { return }
+        let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instanceId.isEmpty else { return }
+        GatewaySettingsStore.saveGatewayToken(
+            value.trimmingCharacters(in: .whitespacesAndNewlines),
+            instanceId: instanceId)
+    }
+
+    private func persistGatewayPassword(_ value: String) {
+        guard !self.suppressCredentialPersist else { return }
+        let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instanceId.isEmpty else { return }
+        GatewaySettingsStore.saveGatewayPassword(
+            value.trimmingCharacters(in: .whitespacesAndNewlines),
+            instanceId: instanceId)
+    }
+
     private func openSystemSettings() {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
@@ -787,11 +1416,126 @@ struct SettingsProTab: View {
         switch route {
         case .gateway: "Gateway"
         case .permissions: "Permissions"
+        case .voice: "Voice & Talk"
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
         case .about: "About"
         }
+    }
+
+    private var manualPortBinding: Binding<String> {
+        Binding(
+            get: { self.manualGatewayPortText },
+            set: { newValue in
+                let filtered = newValue.filter(\.isNumber)
+                self.manualGatewayPortText = filtered
+                self.manualGatewayPort = Int(filtered) ?? 0
+            })
+    }
+
+    private var manualPortIsValid: Bool {
+        if self.manualGatewayPortText.isEmpty { return true }
+        return self.manualGatewayPort >= 1 && self.manualGatewayPort <= 65535
+    }
+
+    private func resolvedManualPort(host: String) -> Int? {
+        if self.manualGatewayPort > 0 {
+            return self.manualGatewayPort <= 65535 ? self.manualGatewayPort : nil
+        }
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if self.manualGatewayTLS, trimmed.lowercased().hasSuffix(".ts.net") {
+            return 443
+        }
+        return 18789
+    }
+
+    private var setupStatusLine: String? {
+        if let problem = self.appModel.lastGatewayProblem {
+            return problem.message
+        }
+        let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
+        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if !trimmedSetup.isEmpty { return trimmedSetup }
+        if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
+        return gatewayStatus
+    }
+
+    private var tailnetWarningText: String? {
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, Self.isTailnetHostOrIP(host), !Self.hasTailnetIPv4() else { return nil }
+        return "This gateway is on your tailnet. Turn on Tailscale on this iPhone, then tap Connect."
+    }
+
+    private func friendlyGatewayMessage(from raw: String) -> String? {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.contains("pairing required") {
+            return "Pairing required. Run /pair approve in your OpenClaw chat, then connect again."
+        }
+        if lower.contains("device nonce required") || lower.contains("device nonce mismatch") {
+            return "Secure handshake failed. Check Tailscale, then connect again."
+        }
+        if lower.contains("timed out") {
+            return "Connection timed out. Make sure Tailscale is connected, then try again."
+        }
+        if lower.contains("unauthorized role") {
+            return "Connected, but some controls are restricted for nodes. This is expected."
+        }
+        return nil
+    }
+
+    private var shouldShowRealtimeVoicePicker: Bool {
+        let providerSelection = TalkModeProviderSelection.resolved(self.talkProviderSelectionRaw)
+        return providerSelection == .openAIRealtime || self.appModel.talkMode.gatewayTalkUsesRealtime
+    }
+
+    private var talkProviderSelectionBinding: Binding<String> {
+        Binding(
+            get: { self.talkProviderSelectionRaw },
+            set: { newValue in
+                let selection = TalkModeProviderSelection.resolved(newValue)
+                self.talkProviderSelectionRaw = selection.rawValue
+                self.appModel.setTalkProviderSelection(selection.rawValue)
+            })
+    }
+
+    private var talkRealtimeVoiceSelectionBinding: Binding<String> {
+        Binding(
+            get: { self.talkRealtimeVoiceSelectionRaw },
+            set: { newValue in
+                let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(newValue) ?? ""
+                self.talkRealtimeVoiceSelectionRaw = voice
+                self.appModel.setTalkRealtimeVoiceSelection(voice)
+            })
+    }
+
+    private var talkSpeakerphoneBinding: Binding<Bool> {
+        Binding(
+            get: { self.talkSpeakerphoneEnabled },
+            set: { newValue in
+                self.talkSpeakerphoneEnabled = newValue
+                self.appModel.setTalkSpeakerphoneEnabled(newValue)
+            })
+    }
+
+    private var talkApiKeyStatus: String {
+        guard self.appModel.talkMode.gatewayTalkConfigLoaded else { return "Not loaded" }
+        return self.appModel.talkMode.gatewayTalkApiKeyConfigured ? "Configured" : "Not configured"
+    }
+
+    private func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
+        var lines: [String] = []
+        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
+        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
+        let gw = gateway.gatewayPort.map(String.init)
+        let canvas = gateway.canvasPort.map(String.init)
+        if gw != nil || canvas != nil {
+            lines.append("Ports: gateway \(gw ?? "-") / canvas \(canvas ?? "-")")
+        }
+        return lines.isEmpty ? [gateway.debugID] : lines
     }
 
     private var gatewayConnected: Bool {
@@ -812,6 +1556,13 @@ struct SettingsProTab: View {
         if self.locationModeRaw != OpenClawLocationMode.off.rawValue { enabled += 1 }
         if self.preventSleep { enabled += 1 }
         return "\(enabled) enabled"
+    }
+
+    private var voiceDetail: String {
+        if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
+        if self.talkEnabled { return "Talk on" }
+        if self.voiceWakeEnabled { return "Wake on" }
+        return "Off"
     }
 
     private var diagnosticsDetail: String {
@@ -835,6 +1586,51 @@ struct SettingsProTab: View {
         case .whileUsing: "While Using"
         case .always: "Always"
         }
+    }
+
+    private static func hasTailnetIPv4() -> Bool {
+        var addrList: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&addrList) == 0, let first = addrList else { return false }
+        defer { freeifaddrs(addrList) }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            let isUp = (flags & IFF_UP) != 0
+            let isLoopback = (flags & IFF_LOOPBACK) != 0
+            let family = ptr.pointee.ifa_addr.pointee.sa_family
+            if !isUp || isLoopback || family != UInt8(AF_INET) { continue }
+            var addr = ptr.pointee.ifa_addr.pointee
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let result = getnameinfo(
+                &addr,
+                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST)
+            guard result == 0 else { continue }
+            let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
+            if self.isTailnetIPv4(ip) { return true }
+        }
+        return false
+    }
+
+    private static func isTailnetHostOrIP(_ host: String) -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.") { return true }
+        return self.isTailnetIPv4(trimmed)
+    }
+
+    private static func isTailnetIPv4(_ ip: String) -> Bool {
+        let parts = ip.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        let octets = parts.compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        let a = octets[0]
+        let b = octets[1]
+        guard (0...255).contains(a), (0...255).contains(b) else { return false }
+        return a == 100 && b >= 64 && b <= 127
     }
 }
 
