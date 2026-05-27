@@ -2036,6 +2036,15 @@ export async function runCodexAppServerAttempt(
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const cleanupStartedThreadBeforeTurnReturn = async () => {
+    nativeHookRelay?.unregister();
+    nativeHookRelay = undefined;
+    await releaseSandboxExecEnvironment();
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    releaseSharedClientLease?.();
+    releaseSharedClientLease = undefined;
+    startupClientForCleanup = undefined;
+  };
   let codexEnvironmentSelection: CodexTurnEnvironmentParams[] | undefined;
   let codexExecutionCwd = effectiveWorkspace;
   let codexSandboxPolicy: CodexSandboxPolicy | undefined;
@@ -2357,20 +2366,20 @@ export async function runCodexAppServerAttempt(
             threadId: thread.threadId,
             timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
           });
-          await releaseSandboxExecEnvironment();
-          params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-          releaseSharedClientLease?.();
-          releaseSharedClientLease = undefined;
+          await cleanupStartedThreadBeforeTurnReturn();
           return providerBoundaryPrecheckFailure;
         }
       } catch (error) {
-        params.abortSignal?.removeEventListener("abort", abortFromUpstream);
         if (runAbortController.signal.aborted || isAbortLikeError(error)) {
-          await releaseSandboxExecEnvironment();
-          releaseSharedClientLease?.();
-          releaseSharedClientLease = undefined;
+          await clearCodexAppServerBinding(activeSessionFile);
+          await unsubscribeCodexThreadBestEffort(client, {
+            threadId: thread.threadId,
+            timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+          });
+          await cleanupStartedThreadBeforeTurnReturn();
           return buildPreStartAbortResult(error);
         }
+        params.abortSignal?.removeEventListener("abort", abortFromUpstream);
         throw error;
       }
       systemPromptReport = buildCurrentSystemPromptReport();

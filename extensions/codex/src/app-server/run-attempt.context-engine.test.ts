@@ -6,6 +6,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
+  nativeHookRelayTesting,
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   queueAgentHarnessMessage,
   type HarnessContextEngine as ContextEngine,
@@ -311,6 +312,22 @@ function getRequestInputTextAt(
     .join("\n");
 }
 
+function extractRelayIdFromThreadRequest(params: unknown): string {
+  const config = (params as { config?: Record<string, unknown> }).config;
+  const entries = config?.["hooks.PreToolUse"];
+  if (!Array.isArray(entries)) {
+    throw new Error("pre-tool hook config missing");
+  }
+  const command = (entries as Array<{ hooks?: Array<{ command?: string }> }>)
+    .flatMap((entry) => entry.hooks ?? [])
+    .find((hook) => typeof hook.command === "string")?.command;
+  const match = command?.match(/--relay-id ([^ ]+)/);
+  if (!match?.[1]) {
+    throw new Error(`relay id missing from command: ${command}`);
+  }
+  return match[1];
+}
+
 type CodexNativeThreadLifecycleEvent = Extract<
   DiagnosticEventPayload,
   { type: "codex.native_thread.lifecycle" }
@@ -337,6 +354,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
+    nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetDiagnosticEventsForTest();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -1568,7 +1586,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 16_000;
 
-    const result = await runCodexAppServerAttempt(params);
+    const result = await runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
 
     expect(result.promptError).toBe(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
     expect(result.promptErrorSource).toBe("precheck");
@@ -1576,6 +1596,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(2);
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/resume",
       "thread/start",
