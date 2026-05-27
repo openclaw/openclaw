@@ -133,6 +133,360 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["held"]);
   });
 
+  it("releaseHeldLockForAbort and dispose are idempotent in succession (#86816)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    await controller.releaseHeldLockForAbort();
+    await controller.releaseHeldLockForAbort();
+    await controller.dispose();
+    await controller.dispose();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for pending timeout abort release before dispose resolves (#86816)", async () => {
+    let markHeldReleaseStarted!: () => void;
+    const heldReleaseStarted = new Promise<void>((resolve) => {
+      markHeldReleaseStarted = resolve;
+    });
+    let unblockHeldRelease!: () => void;
+    const heldReleaseCanFinish = new Promise<void>((resolve) => {
+      unblockHeldRelease = resolve;
+    });
+    const release = vi.fn(async () => {
+      markHeldReleaseStarted();
+      await heldReleaseCanFinish;
+    });
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    const abortRelease = controller.releaseHeldLockForAbort();
+    await heldReleaseStarted;
+    let disposeSettled = false;
+    const dispose = controller.dispose().then(() => {
+      disposeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(disposeSettled).toBe(false);
+
+    unblockHeldRelease();
+    await abortRelease;
+    await dispose;
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for pending timeout abort release before prompt release resolves (#86816)", async () => {
+    let markHeldReleaseStarted!: () => void;
+    const heldReleaseStarted = new Promise<void>((resolve) => {
+      markHeldReleaseStarted = resolve;
+    });
+    let unblockHeldRelease!: () => void;
+    const heldReleaseCanFinish = new Promise<void>((resolve) => {
+      unblockHeldRelease = resolve;
+    });
+    const release = vi.fn(async () => {
+      markHeldReleaseStarted();
+      await heldReleaseCanFinish;
+    });
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    const abortRelease = controller.releaseHeldLockForAbort();
+    await heldReleaseStarted;
+    let promptReleaseSettled = false;
+    const promptRelease = controller.releaseForPrompt().then(() => {
+      promptReleaseSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(promptReleaseSettled).toBe(false);
+
+    unblockHeldRelease();
+    await abortRelease;
+    await promptRelease;
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for pending timeout abort release before prompt reacquire (#86816)", async () => {
+    const events: string[] = [];
+    let markHeldReleaseStarted!: () => void;
+    const heldReleaseStarted = new Promise<void>((resolve) => {
+      markHeldReleaseStarted = resolve;
+    });
+    let unblockHeldRelease!: () => void;
+    const heldReleaseCanFinish = new Promise<void>((resolve) => {
+      unblockHeldRelease = resolve;
+    });
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          events.push("held-release-start");
+          markHeldReleaseStarted();
+          await heldReleaseCanFinish;
+          events.push("held-release-end");
+        }),
+      })
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          events.push("reacquired-release");
+        }),
+      });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    const abortRelease = controller.releaseHeldLockForAbort();
+    await heldReleaseStarted;
+    const reacquire = controller.reacquireAfterPrompt();
+    await Promise.resolve();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+
+    unblockHeldRelease();
+    await abortRelease;
+    await reacquire;
+    await controller.dispose();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["held-release-start", "held-release-end", "reacquired-release"]);
+  });
+
+  it("waits for active retained-lock writes before abort release (#86816)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+    let finishWrite!: () => void;
+    const writeCanFinish = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+
+    const activeWrite = controller.withSessionWriteLock(async () => {
+      markWriteStarted();
+      await writeCanFinish;
+    });
+    await writeStarted;
+
+    let abortReleaseSettled = false;
+    const abortRelease = controller.releaseHeldLockForAbort().then(() => {
+      abortReleaseSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(release).not.toHaveBeenCalled();
+    expect(abortReleaseSettled).toBe(false);
+
+    finishWrite();
+    await activeWrite;
+    await abortRelease;
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks retained-lock use before the retained acquisition resolves (#86816)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+    let finishWrite!: () => void;
+    const writeCanFinish = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+
+    const activeWrite = controller.withSessionWriteLock(async () => {
+      await writeCanFinish;
+    });
+    let abortReleaseSettled = false;
+    const abortRelease = controller.releaseHeldLockForAbort().then(() => {
+      abortReleaseSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(release).not.toHaveBeenCalled();
+    expect(abortReleaseSettled).toBe(false);
+
+    finishWrite();
+    await activeWrite;
+    await abortRelease;
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for active retained-lock writes before cleanup takes the lock (#86816)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+    let finishWrite!: () => void;
+    const writeCanFinish = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+
+    const activeWrite = controller.withSessionWriteLock(async () => {
+      markWriteStarted();
+      await writeCanFinish;
+    });
+    await writeStarted;
+
+    let cleanupAcquired = false;
+    const cleanupLockPromise = controller.acquireForCleanup().then((lock) => {
+      cleanupAcquired = true;
+      return lock;
+    });
+    await Promise.resolve();
+
+    expect(cleanupAcquired).toBe(false);
+    expect(release).not.toHaveBeenCalled();
+
+    finishWrite();
+    await activeWrite;
+    const cleanupLock = await cleanupLockPromise;
+    await cleanupLock.release();
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reacquires cleanup lock when timeout abort already released the held lock (#86816)", async () => {
+    const events: string[] = [];
+    let markHeldReleaseStarted!: () => void;
+    const heldReleaseStarted = new Promise<void>((resolve) => {
+      markHeldReleaseStarted = resolve;
+    });
+    let unblockHeldRelease!: () => void;
+    const heldReleaseCanFinish = new Promise<void>((resolve) => {
+      unblockHeldRelease = resolve;
+    });
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          events.push("held-release-start");
+          markHeldReleaseStarted();
+          await heldReleaseCanFinish;
+          events.push("held-release-end");
+        }),
+      })
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          events.push("cleanup-release");
+        }),
+      });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    const abortRelease = controller.releaseHeldLockForAbort();
+    await heldReleaseStarted;
+    const cleanupLockPromise = controller.acquireForCleanup();
+    await Promise.resolve();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+
+    unblockHeldRelease();
+    await abortRelease;
+    const cleanupLock = await cleanupLockPromise;
+    await cleanupLock.release();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["held-release-start", "held-release-end", "cleanup-release"]);
+  });
+
+  it("keeps cleanup waiting while timeout abort owns the held-lock drain (#86816)", async () => {
+    const events: string[] = [];
+    let finishWrite!: () => void;
+    const writeCanFinish = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    let markHeldReleaseStarted!: () => void;
+    const heldReleaseStarted = new Promise<void>((resolve) => {
+      markHeldReleaseStarted = resolve;
+    });
+    let unblockHeldRelease!: () => void;
+    const heldReleaseCanFinish = new Promise<void>((resolve) => {
+      unblockHeldRelease = resolve;
+    });
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          events.push("held-release-start");
+          markHeldReleaseStarted();
+          await heldReleaseCanFinish;
+          events.push("held-release-end");
+        }),
+      })
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          events.push("cleanup-release");
+        }),
+      });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    const activeWrite = controller.withSessionWriteLock(async () => {
+      markWriteStarted();
+      await writeCanFinish;
+    });
+    await writeStarted;
+    const abortRelease = controller.releaseHeldLockForAbort();
+    const cleanupLockPromise = controller.acquireForCleanup();
+
+    finishWrite();
+    await activeWrite;
+    await heldReleaseStarted;
+    await Promise.resolve();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["held-release-start"]);
+
+    unblockHeldRelease();
+    await abortRelease;
+    const cleanupLock = await cleanupLockPromise;
+    await cleanupLock.release();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["held-release-start", "held-release-end", "cleanup-release"]);
+  });
+
   it("dispose does not double-release a lock already handed to cleanup", async () => {
     const releases: string[] = [];
     const acquireSessionWriteLock = vi
