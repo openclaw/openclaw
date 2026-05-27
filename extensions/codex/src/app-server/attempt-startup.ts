@@ -95,7 +95,7 @@ export async function startCodexAttemptThread(params: {
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
-  spawnedBy: string | null | undefined;
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
   let releaseSharedClientLease: (() => void) | undefined;
