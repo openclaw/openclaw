@@ -1009,6 +1009,90 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test("ties browser operator tokens to the shared gateway auth generation", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "browser-1",
+        publicKey: "public-key-browser-1",
+        role: "operator",
+        scopes: ["operator.read"],
+        clientId: "openclaw-control-ui",
+        clientMode: "webchat",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(
+      request.request.requestId,
+      {
+        callerScopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    const legacy = await getPairedDevice("browser-1", baseDir);
+    const legacyToken = requireToken(legacy?.tokens?.operator?.token);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-1",
+        token: legacyToken,
+        role: "operator",
+        scopes: ["operator.read"],
+        sharedGatewayAuthGeneration: "generation-a",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "issuer-missing" });
+
+    const tagged = await ensureDeviceToken({
+      deviceId: "browser-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "generation-a" },
+      baseDir,
+    });
+    expect(tagged?.token).not.toBe(legacyToken);
+    expect(tagged?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "generation-a",
+    });
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-1",
+        token: tagged?.token ?? "",
+        role: "operator",
+        scopes: ["operator.read"],
+        sharedGatewayAuthGeneration: "generation-a",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-1",
+        token: tagged?.token ?? "",
+        role: "operator",
+        scopes: ["operator.read"],
+        sharedGatewayAuthGeneration: "generation-b",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "issuer-mismatch" });
+  });
+
+  test("keeps legacy non-browser operator tokens usable across generation checks", async () => {
+    const { baseDir, token } = await setupOperatorToken(["operator.read"]);
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.read"],
+        sharedGatewayAuthGeneration: "generation-a",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   test("normalizes legacy node token scopes back to [] on re-approval", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedNodeDevice(baseDir);

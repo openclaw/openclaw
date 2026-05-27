@@ -26,6 +26,16 @@ const OLD_TOKEN = "shared-token-old";
 const NEW_TOKEN = "shared-token-new";
 const DEFERRED_RESTART_DELAY_MS = 1_000;
 const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_AUTH_ROTATION_SECRET_REF";
+const CONTROL_UI_CLIENT = {
+  id: "openclaw-control-ui",
+  version: "1.0.0",
+  platform: "browser",
+  mode: "webchat",
+} as const;
+
+function browserOrigin() {
+  return `http://127.0.0.1:${port}`;
+}
 
 let port = 0;
 
@@ -74,6 +84,36 @@ async function openDeviceTokenWs(): Promise<WebSocket> {
     scopes: ["operator.admin"],
   });
   return ws;
+}
+
+async function openBrowserDeviceTokenWs(): Promise<{
+  ws: WebSocket;
+  deviceToken: string;
+  identityPath: string;
+}> {
+  const identityPath = path.join(
+    os.tmpdir(),
+    `openclaw-shared-auth-browser-${process.pid}-${port}.json`,
+  );
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+    headers: { origin: browserOrigin() },
+  });
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve) => ws.once("open", resolve));
+  const payload = await connectOk(ws, {
+    token: OLD_TOKEN,
+    client: CONTROL_UI_CLIENT,
+    deviceIdentityPath: identityPath,
+    scopes: ["operator.admin"],
+  });
+  const deviceToken = (payload as { auth?: { deviceToken?: unknown } }).auth?.deviceToken;
+  expect(typeof deviceToken).toBe("string");
+  const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+  const { getPairedDevice } = await import("../infra/device-pairing.js");
+  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const paired = await getPairedDevice(identity.deviceId);
+  expect(paired?.tokens?.operator?.issuer?.kind).toBe("shared-gateway-auth");
+  return { ws, deviceToken: String(deviceToken), identityPath };
 }
 
 async function closeWsAndWait(ws: WebSocket, timeoutMs = 2_000): Promise<void> {
@@ -164,6 +204,11 @@ describe("gateway shared auth rotation", () => {
     } finally {
       await closeWsAndWait(ws);
     }
+  });
+
+  it("tags browser device tokens minted from shared token auth", async () => {
+    const { ws } = await openBrowserDeviceTokenWs();
+    await closeWsAndWait(ws);
   });
 });
 

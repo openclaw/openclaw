@@ -911,7 +911,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               role,
               scopes,
             }),
-          verifyDeviceToken,
+          verifyDeviceToken: async (params) =>
+            await verifyDeviceToken({
+              ...params,
+              sharedGatewayAuthGeneration:
+                getRequiredSharedGatewaySessionGeneration?.() ??
+                resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies),
+            }),
         }));
         pairingLocality = resolvePairingLocality({
           connectParams,
@@ -935,11 +941,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
-          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
-            resolvedAuth,
-            trustedProxies,
-          );
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
+        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
+          : undefined;
+        if (usesSharedGatewayAuth) {
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
@@ -1320,9 +1327,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const shouldIssueDeviceToken = !trustedProxyAuthOk;
+        const issuer =
+          sharedGatewaySessionGeneration &&
+          (isBrowserOperatorUiClient(connectParams.client) || isWebchat)
+            ? {
+                kind: "shared-gateway-auth" as const,
+                generation: sharedGatewaySessionGeneration,
+              }
+            : undefined;
         const deviceToken =
           shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
-            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            ? await ensureDeviceToken({ deviceId: device.id, role, scopes, issuer })
             : null;
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
@@ -1401,11 +1416,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
-        const usesSharedGatewayAuth =
-          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
-        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
-          : undefined;
         const isTrustedApprovalRuntime =
           scopes.includes(APPROVALS_SCOPE) &&
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
