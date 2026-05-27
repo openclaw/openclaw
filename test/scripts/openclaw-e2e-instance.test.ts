@@ -5,7 +5,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const helperPath = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
-const hostPath = process.env.PATH?.trim() || "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin";
+const hostPath = [
+  path.dirname(process.execPath),
+  "/usr/local/bin",
+  "/opt/homebrew/bin",
+  "/usr/bin",
+  "/bin",
+].join(path.delimiter);
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
@@ -50,6 +56,31 @@ function expectShellSuccess(result: ReturnType<typeof spawnSync>) {
   expect(result.status, result.stderr || result.stdout || result.error?.message).toBe(0);
 }
 
+function writePackageFixture(packagePath: string): void {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-package-"));
+  try {
+    const packageDir = path.join(root, "package");
+    fs.mkdirSync(packageDir);
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "openclaw-e2e-fixture", version: "0.0.0" }),
+    );
+    execFileSync("tar", ["-czf", packagePath, "-C", root, "package"]);
+  } finally {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
+}
+
+function writeNodeShim(binDir: string): void {
+  const nodePath = path.join(binDir, "node");
+  try {
+    fs.symlinkSync(process.execPath, nodePath);
+  } catch {
+    fs.writeFileSync(nodePath, `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`);
+    fs.chmodSync(nodePath, 0o755);
+  }
+}
+
 describe("scripts/lib/openclaw-e2e-instance.sh", () => {
   it("sources decoded test-state scripts", () => {
     const result = runHelper(base64('export OPENCLAW_E2E_INSTANCE_TEST="ok"\n'));
@@ -81,15 +112,20 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
-      fs.writeFileSync(packagePath, "");
+      writePackageFixture(packagePath);
       fs.writeFileSync(
         path.join(tempDir, "timeout"),
         [
           "#!/bin/sh",
           "set -eu",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then',
+          "  exit 0",
+          "fi",
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -118,6 +154,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+            OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
           }),
         },
       );
@@ -142,7 +179,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
-      fs.writeFileSync(packagePath, "");
+      writePackageFixture(packagePath);
       fs.writeFileSync(
         path.join(tempDir, "timeout"),
         [
@@ -153,7 +190,9 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           "fi",
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -182,6 +221,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+            OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
           }),
         },
       );
@@ -205,15 +245,20 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
-      fs.writeFileSync(packagePath, "");
+      writePackageFixture(packagePath);
       fs.writeFileSync(
         path.join(tempDir, "gtimeout"),
         [
           "#!/bin/bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then',
+          "  exit 0",
+          "fi",
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -242,6 +287,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
+            OPENCLAW_TEST_NPM_BIN: path.join(tempDir, "npm"),
           }),
         },
       );
@@ -264,8 +310,8 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
-      const nodeBinDir = path.dirname(process.execPath);
-      fs.writeFileSync(packagePath, "");
+      writePackageFixture(packagePath);
+      writeNodeShim(tempDir);
       fs.writeFileSync(
         path.join(tempDir, "npm"),
         ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
@@ -285,7 +331,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         {
           encoding: "utf8",
           env: shellTestEnv({
-            PATH: `${tempDir}:${nodeBinDir}`,
+            PATH: tempDir,
             OPENCLAW_CURRENT_PACKAGE_TGZ: packagePath,
             OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "42s",
             OPENCLAW_TEST_NPM_ARGS: npmArgsPath,
@@ -306,7 +352,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
   it("bounds commands with the Node watchdog when timeout is unavailable", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-"));
     try {
-      const nodeBinDir = path.dirname(process.execPath);
+      writeNodeShim(tempDir);
       const startedAt = Date.now();
       const result = spawnSync(
         "/bin/bash",
@@ -321,7 +367,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         {
           encoding: "utf8",
           env: shellTestEnv({
-            PATH: `${tempDir}:${nodeBinDir}`,
+            PATH: tempDir,
           }),
           timeout: 5_000,
         },
@@ -395,9 +441,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "fixture-command" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_COMMAND_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -427,10 +476,11 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         {
           encoding: "utf8",
           env: shellTestEnv({
-            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            PATH: `${tempDir}:${hostPath}`,
             OPENCLAW_E2E_COMMAND_TIMEOUT: "17s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
+            OPENCLAW_TEST_COMMAND_BIN: path.join(tempDir, "fixture-command"),
           }),
         },
       );
@@ -457,9 +507,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           `while [ "$#" -gt 0 ] && [ "$1" != ${shellQuote(path.join(tempDir, "openclaw"))} ]; do shift; done`,
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_OPENCLAW_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -490,10 +543,11 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         {
           encoding: "utf8",
           env: shellTestEnv({
-            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            PATH: `${tempDir}:${hostPath}`,
             OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
+            OPENCLAW_TEST_OPENCLAW_BIN: path.join(tempDir, "openclaw"),
           }),
         },
       );
@@ -519,9 +573,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         [
           "#!/usr/bin/env bash",
           "set -euo pipefail",
+          'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
           'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
           'while [ "$#" -gt 0 ] && [ "$1" != "script" ]; do shift; done',
-          'exec "$@"',
+          '[ "$#" -gt 0 ] || exit 127',
+          "shift",
+          'exec "$OPENCLAW_TEST_SCRIPT_BIN" "$@"',
           "",
         ].join("\n"),
       );
@@ -551,10 +608,11 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         {
           encoding: "utf8",
           env: shellTestEnv({
-            PATH: `${tempDir}:${process.env.PATH ?? ""}`,
+            PATH: `${tempDir}:${hostPath}`,
             OPENCLAW_E2E_COMMAND_TIMEOUT: "31s",
             OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
             OPENCLAW_TEST_SCRIPT_ARGS: scriptArgsPath,
+            OPENCLAW_TEST_SCRIPT_BIN: path.join(tempDir, "script"),
           }),
         },
       );

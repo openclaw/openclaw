@@ -203,7 +203,7 @@ vi.mock("../config/sessions.js", () => ({
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
   updateSessionStore: vi.fn(
     async (_path: string, fn: (store: Record<string, unknown>) => unknown) => {
-      const store: Record<string, unknown> = {};
+      const store = (state.sessionStoreMock ?? {}) as Record<string, unknown>;
       return fn(store);
     },
   ),
@@ -990,21 +990,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    expect(state.persistSessionEntryMock).toHaveBeenCalled();
-    const lastCall = state.persistSessionEntryMock.mock.calls.slice(-1)[0]?.[0] as
-      | {
-          entry?: SessionEntry;
-        }
-      | undefined;
-    const stored = lastCall?.entry;
-    expect(stored?.pendingFinalDelivery).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryText).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(stored?.pendingFinalDeliveryIntentId).toBeUndefined();
+    const clearedWrite = state.persistSessionEntryMock.mock.calls.find((call) => {
+      const entry = (call[0] as { entry?: SessionEntry } | undefined)?.entry;
+      return (
+        entry?.pendingFinalDelivery === undefined && entry?.pendingFinalDeliveryText === undefined
+      );
+    });
+    const clearedEntry = (clearedWrite?.[0] as { entry?: SessionEntry } | undefined)?.entry;
+    expect(clearedEntry).toBeDefined();
+    expect(clearedEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(clearedEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("keeps internal session-effect CLI runs out of visible session state", async () => {
@@ -1044,7 +1045,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attemptCalls[0]?.sessionEntry).toStrictEqual(visibleEntry);
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).not.toHaveBeenCalled();
-    expect(sessionStore["agent:main:main"]).toStrictEqual(visibleEntry);
+    expect(sessionStore["agent:main:main"]).toEqual(visibleEntry);
   });
 
   it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {

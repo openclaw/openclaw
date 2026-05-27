@@ -192,6 +192,11 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars: mocks.getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -1891,6 +1896,28 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
+  it("rejects partial image generate count before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--count", "2x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--count must be a positive integer");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial image generate timeout before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--timeout-ms must be a finite number");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
   it("routes audio transcribe through transcription, not realtime", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -2468,6 +2495,19 @@ describe("capability cli", () => {
         config: resolvedConfig,
       }),
     );
+  });
+
+  it("rejects partial web search limit before provider dispatch", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "web", "search", "--query", "ping", "--limit", "3x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--limit must be a positive integer");
+    expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
   });
 
   it("uses the infer web search provider override when resolving SecretRefs", async () => {

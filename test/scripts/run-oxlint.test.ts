@@ -1,14 +1,15 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
-  filterSparseMissingOxlintTargets,
-  shouldPrepareExtensionPackageBoundaryArtifacts,
-} from "../../scripts/run-oxlint.mjs";
-import {
   createOxlintShards,
   createWindowsExtensionShards,
   resolveWindowsExtensionChunkSize,
+  shouldRunOxlintShardsSerial,
 } from "../../scripts/run-oxlint-shards.mjs";
+import {
+  filterSparseMissingOxlintTargets,
+  shouldPrepareExtensionPackageBoundaryArtifacts,
+} from "../../scripts/run-oxlint.mjs";
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
@@ -57,8 +58,63 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
-    expect(shardedLintRunner).toContain('process.platform === "win32"');
+    expect(shardedLintRunner).toContain('platform === "win32"');
     expect(shardedLintRunner).toContain("runShardsSerial");
+  });
+
+  it("serializes broad oxlint shards on constrained local hosts", () => {
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: {},
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps oxlint shards parallel for CI and explicit full-speed runs", () => {
+    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
+
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: constrainedHost,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
+        platform: "linux",
+        hostResources: constrainedHost,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { OPENCLAW_LOCAL_CHECK_MODE: "full" },
+        platform: "linux",
+        hostResources: constrainedHost,
+      }),
+    ).toBe(false);
+  });
+
+  it("honors explicit oxlint shard serial overrides", () => {
+    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "1", CI: "true" },
+        platform: "linux",
+        hostResources: roomyHost,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" },
+        platform: "linux",
+        hostResources: roomyHost,
+      }),
+    ).toBe(false);
   });
 
   it("chunks extension oxlint shards on Windows", () => {
@@ -130,10 +186,12 @@ describe("run-oxlint", () => {
 
   it("keeps the default Windows oxlint extension chunk size for invalid overrides", () => {
     expect(resolveWindowsExtensionChunkSize({})).toBe(8);
-    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }))
-      .toBe(8);
-    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }))
-      .toBe(8);
+    expect(
+      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }),
+    ).toBe(8);
+    expect(
+      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }),
+    ).toBe(8);
   });
 
   it("filters tracked targets missing from sparse checkouts", () => {

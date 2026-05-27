@@ -5508,6 +5508,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let action: String
     public let status: AnyCodable?
     public let error: String?
+    public let errorreason: AnyCodable?
     public let summary: String?
     public let diagnostics: [String: AnyCodable]?
     public let delivered: Bool?
@@ -5531,6 +5532,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         action: String,
         status: AnyCodable?,
         error: String?,
+        errorreason: AnyCodable? = nil,
         summary: String?,
         diagnostics: [String: AnyCodable]?,
         delivered: Bool?,
@@ -5553,6 +5555,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.action = action
         self.status = status
         self.error = error
+        self.errorreason = errorreason
         self.summary = summary
         self.diagnostics = diagnostics
         self.delivered = delivered
@@ -5577,6 +5580,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case action
         case status
         case error
+        case errorreason = "errorReason"
         case summary
         case diagnostics
         case delivered

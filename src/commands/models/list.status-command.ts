@@ -18,8 +18,7 @@ import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js"
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import {
   listProviderEnvAuthLookupKeys,
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import {
@@ -34,10 +33,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
 } from "../../agents/openai-codex-routing.js";
-import {
-  resolveProviderAuthAliasMap,
-  resolveProviderIdForAuth,
-} from "../../agents/provider-auth-aliases.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -364,9 +360,8 @@ export async function modelsStatusCommand(
       env: process.env,
       metadataSnapshot,
     };
-    const aliasMap = resolveProviderAuthAliasMap(envLookupParams);
-    const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
-    const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
+    const { aliasMap, envCandidateMap, authEvidenceMap } =
+      resolveProviderEnvAuthLookupMaps(envLookupParams);
     for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
       if (
         resolveEnvApiKey(provider, process.env, {

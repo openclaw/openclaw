@@ -59,6 +59,7 @@ import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
@@ -81,6 +82,7 @@ const prepareDeps = {
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
+  prepareClaudeCliSkillsPlugin,
   // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
@@ -310,6 +312,20 @@ export async function prepareCliRunContext(
           }
         }
       : undefined;
+  const claudeSkillsPlugin = await prepareDeps.prepareClaudeCliSkillsPlugin({
+    backendId: backendResolved.id,
+    skillsSnapshot: params.skillsSnapshot,
+  });
+  const preparedCleanup =
+    preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
+      ? async () => {
+          try {
+            await claudeSkillsPlugin.cleanup();
+          } finally {
+            await preparedBackendCleanup?.();
+          }
+        }
+      : undefined;
   const preparedBackendClearEnv = [
     ...(preparedBackend.backend.clearEnv ?? []),
     ...(preparedExecution?.clearEnv ?? []),
@@ -323,7 +339,7 @@ export async function prepareCliRunContext(
         : {}),
     },
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
-    ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
+    ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
   };
   const promptTools =
     bundleMcpEnabled && mcpLoopbackRuntime
@@ -405,6 +421,7 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
+  const systemPromptSkillsPrompt = claudeSkillsPlugin.args.length > 0 ? "" : skillsPrompt;
   const builtSystemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -421,7 +438,7 @@ export async function prepareCliRunContext(
       heartbeatPrompt,
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
-      skillsPrompt,
+      skillsPrompt: systemPromptSkillsPrompt,
       tools: promptTools,
       contextFiles,
       modelDisplay,
@@ -531,7 +548,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt,
+    skillsPrompt: systemPromptSkillsPrompt,
     tools: promptTools,
     currentTurn: {
       ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
@@ -595,6 +612,7 @@ export async function prepareCliRunContext(
       contextWindowInfo,
       systemPrompt,
       systemPromptReport,
+      claudeSkillsPluginArgs: claudeSkillsPlugin.args,
       bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
       heartbeatPrompt,
