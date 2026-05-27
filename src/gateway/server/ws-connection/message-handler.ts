@@ -1479,12 +1479,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         const shouldIssueDeviceToken = !trustedProxyAuthOk;
         const sharedGatewayAuthIssuer =
-          usesSharedGatewayAuth &&
-          sharedGatewaySessionGeneration &&
+          sessionUsesSharedGatewayAuth &&
+          sessionSharedGatewaySessionGeneration &&
           (isBrowserOperatorUi || isWebchat)
             ? {
                 kind: "shared-gateway-auth" as const,
-                generation: sharedGatewaySessionGeneration,
+                generation: sessionSharedGatewaySessionGeneration,
               }
             : undefined;
         const deviceToken =
