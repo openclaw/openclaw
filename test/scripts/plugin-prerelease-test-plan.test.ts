@@ -541,9 +541,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(
       fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-        (step) => step.name === "Verify Docker runtime-assets prune path",
+        (step) => step.name === "Build and smoke test final Docker runtime image",
       ).run,
-    ).toContain("--target runtime-assets");
+    ).toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );
