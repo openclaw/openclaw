@@ -1290,7 +1290,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       client,
       chatLog,
       tui,
-      opts,
+      opts: { ...opts, local: isLocalMode },
       state,
       deliverDefault,
       openOverlay,
@@ -1320,7 +1320,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   updateAutocompleteProvider();
   const canSubmitChatMessage = () =>
     canSubmitTuiChatMessage({
-      local: opts.local,
+      local: isLocalMode,
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
