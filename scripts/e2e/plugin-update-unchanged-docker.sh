@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
+# Verifies `openclaw plugins update` is a no-op for an already-current plugin.
+# The CLI under test is installed from the prepared npm tarball in a bare runner.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugin-update-e2e" OPENCLAW_PLUGIN_UPDATE_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_PLUGIN_UPDATE_E2E_SKIP_BUILD:-0}"
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz plugin-update "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+# Bare lanes mount the package artifact instead of baking app sources into the image.
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" plugin-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+docker_e2e_build_or_reuse "$IMAGE_NAME" plugin-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
 echo "Running unchanged plugin update smoke..."
 docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
-entry=dist/index.mjs
-[ -f \"\$entry\" ] || entry=dist/index.js
+package_tgz=\"\${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}\"
+npm install -g --prefix /tmp/npm-prefix \"\$package_tgz\" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
+entry=\"/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.mjs\"
+[ -f \"\$entry\" ] || entry=/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.js
 export NPM_CONFIG_REGISTRY=http://127.0.0.1:4873
+export PATH=\"/tmp/npm-prefix/bin:\$PATH\"
 
 mkdir -p \"\$HOME/.openclaw/extensions/lossless-claw\"
 cat > \"\$HOME/.openclaw/extensions/lossless-claw/package.json\" <<'JSON'

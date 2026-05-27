@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +39,10 @@ import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
 } from "../test/vitest/vitest.unit-paths.mjs";
-import { detectChangedLanes } from "./changed-lanes.mjs";
+import {
+  detectChangedLanes,
+  listChangedPathsFromGit as listChangedPathsFromGitSource,
+} from "./changed-lanes.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
@@ -207,7 +209,7 @@ const VITEST_CONFIG_BY_KIND = {
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
-const BROAD_CHANGED_RERUN_PATTERNS = [
+const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^package\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^test\/setup(?:\.shared|\.extensions|-openclaw-runtime)?\.ts$/u,
@@ -305,7 +307,7 @@ const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src"
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
-const FOCUSED_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_FOCUSED";
+const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
@@ -594,36 +596,7 @@ function resolveChannelContractTargetKind(relative) {
 }
 
 function listChangedPathsFromGit(baseRef, cwd) {
-  return [
-    ...new Set([
-      ...runGitNameOnlyDiff(cwd, [`${baseRef}...HEAD`]),
-      ...runGitNameOnlyDiff(cwd, ["--cached", "--diff-filter=ACMR"]),
-      ...runGitNameOnlyDiff(cwd, ["--diff-filter=ACMR"]),
-      ...runGitLsFiles(cwd, ["--others", "--exclude-standard"]),
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
-
-function runGitNameOnlyDiff(cwd, extraArgs) {
-  return execFileSync("git", ["diff", "--name-only", ...extraArgs], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-    .split("\n")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0);
-}
-
-function runGitLsFiles(cwd, extraArgs) {
-  return execFileSync("git", ["ls-files", ...extraArgs], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-    .split("\n")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0);
+  return listChangedPathsFromGitSource({ base: baseRef, cwd });
 }
 
 function extractChangedBaseRef(args) {
@@ -665,7 +638,7 @@ function shouldKeepBroadChangedRun(changedPaths) {
   return changedPaths.some((changedPath) =>
     PRECISE_SOURCE_TEST_TARGETS.has(changedPath)
       ? false
-      : BROAD_CHANGED_RERUN_PATTERNS.some((pattern) => pattern.test(changedPath)),
+      : BROAD_CHANGED_FALLBACK_PATTERNS.some((pattern) => pattern.test(changedPath)),
   );
 }
 
@@ -685,8 +658,8 @@ function resolveToolingTestTargets(changedPath) {
   return TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
 }
 
-function shouldUseFocusedChangedTargets(env = process.env) {
-  const value = env[FOCUSED_CHANGED_ENV_KEY]?.trim().toLowerCase();
+function shouldUseBroadChangedTargets(env = process.env) {
+  const value = env[BROAD_CHANGED_ENV_KEY]?.trim().toLowerCase();
   return ["1", "true", "yes", "on"].includes(value ?? "");
 }
 
@@ -741,7 +714,8 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
     return { mode: "targets", targets: toolingTargets };
   }
   const changedLanes = detectChangedLanes(changedPaths);
-  const focused = options.focused ?? shouldUseFocusedChangedTargets(options.env ?? {});
+  const env = options.env ?? {};
+  const useBroadFallback = options.broad ?? shouldUseBroadChangedTargets(env);
   const targets = [];
   for (const changedPath of changedPaths) {
     const preciseTargets = resolvePreciseChangedTestTargets(changedPath, options);
@@ -749,20 +723,18 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
       targets.push(...preciseTargets);
       continue;
     }
-    if (focused) {
+    const needsBroadFallback = shouldKeepBroadChangedRun([changedPath]) || changedLanes.lanes.all;
+    if (needsBroadFallback) {
+      if (useBroadFallback) {
+        return { mode: "broad", targets: [] };
+      }
       continue;
-    }
-    if (shouldKeepBroadChangedRun([changedPath]) || changedLanes.lanes.all) {
-      return { mode: "broad", targets: [] };
     }
     if (isRoutableChangedTarget(changedPath)) {
       targets.push(changedPath);
     }
   }
-  if (!focused && changedLanes.lanes.all) {
-    return { mode: "broad", targets: [] };
-  }
-  if (!focused && changedLanes.extensionImpactFromCore) {
+  if (useBroadFallback && changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }
   return { mode: "targets", targets: [...new Set(targets)] };

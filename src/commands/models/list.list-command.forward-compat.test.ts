@@ -273,6 +273,58 @@ describe("modelsListCommand forward-compat", () => {
       expect(runtime.log).toHaveBeenCalledWith("No models found.");
     });
 
+    it("includes configured provider model rows for provider-filtered lists", async () => {
+      const ollamaConfig = {
+        agents: { defaults: { model: { primary: "ollama/qwen2.5:7b" } } },
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              apiKey: "ollama-local",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [
+                { id: "qwen2.5:7b", name: "Qwen 2.5 7B", input: ["text"] },
+                { id: "llama3.2:3b", name: "Llama 3.2 3B", input: ["text"] },
+              ],
+            },
+          },
+        },
+      };
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: ollamaConfig,
+        resolvedConfig: ollamaConfig,
+        diagnostics: [],
+      });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "ollama/qwen2.5:7b",
+            ref: { provider: "ollama", model: "qwen2.5:7b" },
+            tags: new Set(["default"]),
+            aliases: [],
+          },
+        ],
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "ollama" }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      const rows = lastPrintedRows<{ key: string; name: string; tags: string[] }>();
+      expect(rows).toEqual([
+        expect.objectContaining({
+          key: "ollama/qwen2.5:7b",
+          name: "Qwen 2.5 7B",
+          tags: ["default"],
+        }),
+        expect.objectContaining({
+          key: "ollama/llama3.2:3b",
+          name: "Llama 3.2 3B",
+          tags: [],
+        }),
+      ]);
+    });
+
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
       const runtime = createRuntime();
 

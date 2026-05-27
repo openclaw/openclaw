@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
+# Verifies doctor/daemon repair switches service entrypoints between package and
+# git installs. Both fixtures come from the same prepared OpenClaw npm tarball.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-doctor-install-switch-e2e" OPENCLAW_DOCTOR_INSTALL_SWITCH_E2E_IMAGE)"
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz doctor-switch "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+# Bare lanes mount the package artifact instead of baking app sources into the image.
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" doctor-switch
+docker_e2e_build_or_reuse "$IMAGE_NAME" doctor-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare"
 
 echo "Running doctor install switch E2E..."
-docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$IMAGE_NAME" bash -lc '
+docker run --rm \
+  -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  "$IMAGE_NAME" \
+  bash -lc '
   set -euo pipefail
 
   # Keep logs focused; the npm global install step can emit noisy deprecation warnings.
@@ -74,15 +84,23 @@ exit 0
 LOGINCTL
   chmod +x /tmp/openclaw-bin/loginctl
 
-  # Install the npm-global variant from the local /app source.
-  # `npm pack` can emit script output; keep only the tarball name.
-  pkg_tgz="$(npm pack --ignore-scripts --silent /app | tail -n 1 | tr -d '\r')"
-  if [ ! -f "/app/$pkg_tgz" ]; then
-    echo "npm pack failed (expected /app/$pkg_tgz)"
-    exit 1
-  fi
+  package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+  git_root="/tmp/openclaw-git"
+  mkdir -p "$git_root"
+  # The git-style install fixture is unpacked from the tarball so this lane does
+  # not depend on checkout source files being present in the Docker image.
+  tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
+  (
+    cd "$git_root"
+    npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
+    git init -q
+    git config user.email "docker-e2e@openclaw.local"
+    git config user.name "OpenClaw Docker E2E"
+    git add -A
+    git commit -qm "test fixture"
+  )
   npm_log="/tmp/openclaw-doctor-switch-npm-install.log"
-  if ! npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz" >"$npm_log" 2>&1; then
+  if ! npm install -g --prefix /tmp/npm-prefix "$package_tgz" >"$npm_log" 2>&1; then
     cat "$npm_log"
     exit 1
   fi
@@ -95,12 +113,12 @@ LOGINCTL
 	    npm_entry="$npm_root/dist/index.js"
 	  fi
 
-	  if [ -f "/app/dist/index.mjs" ]; then
-	    git_entry="/app/dist/index.mjs"
+	  if [ -f "$git_root/dist/index.mjs" ]; then
+	    git_entry="$git_root/dist/index.mjs"
 	  else
-	    git_entry="/app/dist/index.js"
+	    git_entry="$git_root/dist/index.js"
 	  fi
-	  git_cli="/app/openclaw.mjs"
+	  git_cli="$git_root/openclaw.mjs"
 
   assert_entrypoint() {
     local unit_path="$1"

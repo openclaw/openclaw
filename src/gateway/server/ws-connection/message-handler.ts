@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
   getBoundDeviceBootstrapProfile,
@@ -26,6 +26,10 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
+import {
+  createDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import {
   getPairedNode,
   requestNodePairing,
@@ -321,7 +325,7 @@ export function attachGatewayWsMessageHandler(params: {
     authRateLimiter,
   } = browserSecurity;
 
-  socket.on("message", async (data) => {
+  const handleMessage = async (data: RawData) => {
     if (isClosed()) {
       return;
     }
@@ -1576,6 +1580,10 @@ export function attachGatewayWsMessageHandler(params: {
         close();
       }
     }
+  };
+
+  socket.on("message", (data) => {
+    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () => handleMessage(data));
   });
 }
 

@@ -274,6 +274,8 @@ export const ko: TranslationMap = {
       tailscaleDocsLink: "문서: Tailscale Serve",
       insecureHttpDocsTitle: "안전하지 않은 HTTP 문서(새 탭에서 열림)",
       insecureHttpDocsLink: "문서: 안전하지 않은 HTTP",
+      copyCommand: "명령 복사",
+      copyCommandAria: "명령 복사: {command}",
     },
     cards: {
       cost: "비용",
@@ -309,6 +311,30 @@ export const ko: TranslationMap = {
     palette: {
       placeholder: "명령을 입력하세요…",
       noResults: "결과 없음",
+      categories: {
+        search: "검색",
+        navigation: "탐색",
+        skills: "Skills",
+      },
+      items: {
+        overview: "개요",
+        sessions: "세션",
+        scheduled: "예약됨",
+        skills: "Skills",
+        settings: "설정",
+        agents: "에이전트",
+        shellCommand: "셸 명령",
+        debugMode: "디버그 모드",
+      },
+      descriptions: {
+        shellCommand: "셸 실행",
+        debugMode: "디버그 전환",
+      },
+      footer: {
+        navigate: "탐색",
+        select: "선택",
+        close: "닫기",
+      },
     },
   },
   dreaming: {

@@ -325,9 +325,11 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - Docker install/update coverage that exercises the published beta package
   - published npm Telegram proof: dispatch Actions > `NPM Telegram Beta E2E`
     from `main` with `package_spec=openclaw@<beta-version>` and
-    `provider_mode=mock-openai`, approve `npm-release`, and require success.
-    This is the default button path for installed-package onboarding,
-    Telegram setup, and real Telegram E2E against the published npm package.
+    `provider_mode=mock-openai`, and require success. This workflow is
+    maintainer-dispatched and intentionally has no `npm-release` approval gate;
+    `qa-live-shared` only supplies the shared QA secrets. This is the default
+    button path for installed-package onboarding, Telegram setup, and real
+    Telegram E2E against the published npm package.
     Use the local `pnpm test:docker:npm-telegram-live` lane with the matching
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC` and Convex CI env only as a fallback
     or debugging path.

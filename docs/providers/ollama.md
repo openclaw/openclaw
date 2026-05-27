@@ -13,6 +13,8 @@ OpenClaw integrates with Ollama's native API (`/api/chat`) for hosted cloud mode
 **Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling and models may output raw tool JSON as plain text. Use the native Ollama API URL instead: `baseUrl: "http://host:11434"` (no `/v1`).
 </Warning>
 
+Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accepts `baseURL` for compatibility with OpenAI SDK-style examples, but new config should prefer `baseUrl`.
+
 ## Getting started
 
 Choose your preferred setup method and mode.
@@ -155,7 +157,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 | Behavior             | Detail                                                                                                                                                              |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Catalog query        | Queries `/api/tags`                                                                                                                                                 |
-| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision)                                                             |
+| Capability detection | Uses best-effort `/api/show` lookups to read `contextWindow`, expanded `num_ctx` Modelfile parameters, and capabilities including vision/tools                      |
 | Vision models        | Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt |
 | Reasoning detection  | Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)                                                                                          |
 | Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                               |
@@ -318,15 +320,19 @@ Once configured, all your Ollama models are available:
 }
 ```
 
+Custom Ollama provider ids are also supported. When a model ref uses the active
+provider prefix, such as `ollama-spark/qwen3:32b`, OpenClaw strips only that
+prefix before calling Ollama so the server receives `qwen3:32b`.
+
 ## Ollama Web Search
 
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
 
-| Property    | Detail                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| Host        | Uses your configured Ollama host (`models.providers.ollama.baseUrl` when set, otherwise `http://127.0.0.1:11434`) |
-| Auth        | Key-free                                                                                                          |
-| Requirement | Ollama must be running and signed in with `ollama signin`                                                         |
+| Property    | Detail                                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host        | Uses your configured Ollama host (`models.providers.ollama.baseUrl` when set, otherwise `http://127.0.0.1:11434`); `https://ollama.com` uses the hosted API directly |
+| Auth        | Key-free for signed-in local Ollama hosts; `OLLAMA_API_KEY` or configured provider auth for direct `https://ollama.com` search or auth-protected hosts               |
+| Requirement | Local/self-hosted hosts must be running and signed in with `ollama signin`; direct hosted search requires `baseUrl: "https://ollama.com"` plus a real Ollama API key |
 
 Choose **Ollama Web Search** during `openclaw onboard` or `openclaw configure --section web`, or set:
 
@@ -395,9 +401,11 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   </Accordion>
 
   <Accordion title="Context windows">
-    For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it falls back to the default Ollama context window used by OpenClaw.
+    For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, including larger `PARAMETER num_ctx` values from custom Modelfiles. Otherwise it falls back to the default Ollama context window used by OpenClaw.
 
-    You can override `contextWindow` and `maxTokens` in explicit provider config:
+    You can override `contextWindow` and `maxTokens` in explicit provider config. To cap Ollama's per-request runtime context without rebuilding a Modelfile, set `params.num_ctx`; OpenClaw sends it as `options.num_ctx` for both native Ollama and the OpenAI-compatible Ollama adapter. Invalid, zero, negative, and non-finite values are ignored and fall back to `contextWindow`.
+
+    Native Ollama model entries also accept the common Ollama runtime options under `params`, including `temperature`, `top_p`, `top_k`, `min_p`, `num_predict`, `stop`, `repeat_penalty`, `num_batch`, `num_thread`, and `use_mmap`. OpenClaw forwards only Ollama request keys, so OpenClaw runtime params such as `streaming` are not leaked to Ollama. Use `params.think` or `params.thinking` to send top-level Ollama `think`; `false` disables API-level thinking for Qwen-style thinking models.
 
     ```json5
     {
@@ -409,6 +417,12 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
                 id: "llama3.3",
                 contextWindow: 131072,
                 maxTokens: 65536,
+                params: {
+                  num_ctx: 32768,
+                  temperature: 0.7,
+                  top_p: 0.9,
+                  thinking: false,
+                },
               }
             ]
           }
@@ -416,6 +430,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
       }
     }
     ```
+
+    Per-model `agents.defaults.models["ollama/<model>"].params.num_ctx` works too. If both are configured, the explicit provider model entry wins over the agent default.
 
   </Accordion>
 
@@ -437,7 +453,8 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Memory embeddings">
     The bundled Ollama plugin registers a memory embedding provider for
     [memory search](/concepts/memory). It uses the configured Ollama base URL
-    and API key.
+    and API key, calls Ollama's current `/api/embed` endpoint, and batches
+    multiple memory chunks into one `input` request when possible.
 
     | Property      | Value               |
     | ------------- | ------------------- |
@@ -461,7 +478,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Streaming configuration">
     OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by default, which fully supports streaming and tool calling simultaneously. No special configuration is needed.
 
-    For native `/api/chat` requests, OpenClaw also forwards thinking control directly to Ollama: `/think off` and `openclaw agent --thinking off` send top-level `think: false`, while non-`off` thinking levels send `think: true`.
+    For native `/api/chat` requests, OpenClaw also forwards thinking control directly to Ollama: `/think off` and `openclaw agent --thinking off` send top-level `think: false`, while `/think low|medium|high` send the matching top-level `think` effort string. `/think max` maps to Ollama's highest native effort, `think: "high"`.
 
     <Tip>
     If you need to use the OpenAI-compatible endpoint, see the "Legacy OpenAI-compatible mode" section above. Streaming and tool calling may not work simultaneously in that mode.

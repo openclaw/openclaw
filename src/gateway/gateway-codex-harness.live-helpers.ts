@@ -85,6 +85,9 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
       normalized.includes("fails to start") ||
       normalized.includes("repo-local fallback") ||
       normalized.includes("sandbox blocks") ||
+      normalized.includes("sandbox blocked") ||
+      normalized.includes("approval review failed") ||
+      normalized.includes("failed before it could be approved") ||
       ((normalized.includes("rejected") || normalized.includes("not approved")) &&
         (normalized.includes("sandbox") ||
           normalized.includes("permission") ||

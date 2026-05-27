@@ -279,6 +279,8 @@ export const fr: TranslationMap = {
       tailscaleDocsLink: "Documentation : Tailscale Serve",
       insecureHttpDocsTitle: "Documentation sur HTTP non sécurisé (s’ouvre dans un nouvel onglet)",
       insecureHttpDocsLink: "Documentation : HTTP non sécurisé",
+      copyCommand: "Copier la commande",
+      copyCommandAria: "Copier la commande : {command}",
     },
     cards: {
       cost: "Coût",
@@ -314,6 +316,30 @@ export const fr: TranslationMap = {
     palette: {
       placeholder: "Saisissez une commande…",
       noResults: "Aucun résultat",
+      categories: {
+        search: "Recherche",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Vue d’ensemble",
+        sessions: "Sessions",
+        scheduled: "Planifié",
+        skills: "Skills",
+        settings: "Paramètres",
+        agents: "Agents",
+        shellCommand: "Commande shell",
+        debugMode: "Mode débogage",
+      },
+      descriptions: {
+        shellCommand: "Exécuter le shell",
+        debugMode: "Basculer le débogage",
+      },
+      footer: {
+        navigate: "naviguer",
+        select: "sélectionner",
+        close: "fermer",
+      },
     },
   },
   dreaming: {
