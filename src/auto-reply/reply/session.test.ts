@@ -1555,7 +1555,7 @@ describe("initSessionState reset policy", () => {
     expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
-  it("rotates terminal session entries without carrying lifecycle markers forward", async () => {
+  it("reuses completed run entries while the session is still fresh", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-terminal-entry-");
     const storePath = path.join(root, "sessions.json");
@@ -1579,18 +1579,18 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       SessionEntry
     >;
-    expect(persisted[sessionKey]?.sessionId).toBe(result.sessionId);
-    expect(persisted[sessionKey]?.status).toBeUndefined();
-    expect(persisted[sessionKey]?.startedAt).toBeUndefined();
-    expect(persisted[sessionKey]?.endedAt).toBeUndefined();
-    expect(persisted[sessionKey]?.runtimeMs).toBeUndefined();
+    expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
+    expect(persisted[sessionKey]?.status).toBe("done");
+    expect(persisted[sessionKey]?.startedAt).toBe(Date.now() - 10_000);
+    expect(persisted[sessionKey]?.endedAt).toBe(Date.now() - 1_000);
+    expect(persisted[sessionKey]?.runtimeMs).toBe(9_000);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {

@@ -28,7 +28,6 @@ import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
-  hasTerminalSessionLifecycle,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
@@ -433,8 +432,7 @@ export async function initSessionState(params: {
   const canReuseExistingEntry =
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
-    Number.isFinite(entry.updatedAt) &&
-    !hasTerminalSessionLifecycle(entry);
+    Number.isFinite(entry.updatedAt);
   const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
@@ -442,17 +440,15 @@ export async function initSessionState(params: {
     storePath,
   });
   const entryFreshness = entry
-    ? hasTerminalSessionLifecycle(entry)
-      ? undefined
-      : skipImplicitExpiry
-        ? ({ fresh: true } satisfies SessionFreshness)
-        : evaluateSessionFreshness({
-            updatedAt: entry.updatedAt,
-            sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
-            lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
-            now,
-            policy: resetPolicy,
-          })
+    ? skipImplicitExpiry
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
+          lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
+          now,
+          policy: resetPolicy,
+        })
     : undefined;
   const softResetAllowed =
     softReset.matched &&

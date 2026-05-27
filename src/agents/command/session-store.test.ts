@@ -588,7 +588,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("starts a fresh session instead of reusing a terminal entry", async () => {
+  it("reuses a completed run entry while the session is still fresh", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:terminal-cli-session";
       const existingSessionId = "terminal-cli-session-old";
@@ -621,9 +621,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
       });
 
-      expect(result.isNewSession).toBe(true);
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(result.sessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.status).toBe("done");
+      expect(result.sessionEntry?.endedAt).toBe(now - 100);
     });
   });
 

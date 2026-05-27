@@ -10,7 +10,6 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
-import { hasTerminalSessionLifecycle } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
@@ -263,12 +262,15 @@ async function deliverQueuedSessionDelivery(params: {
     return;
   }
 
-  if (hasTerminalSessionLifecycle(entry)) {
-    log.warn("restart continuation skipped: session is terminal", {
+  if (
+    params.entry.expectedSessionId &&
+    (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
+  ) {
+    log.warn("restart continuation skipped: session changed", {
       sessionKey: canonicalKey,
       queueId: params.entry.id,
-      status: entry?.status ?? null,
-      endedAt: entry?.endedAt ?? null,
+      expectedSessionId: params.entry.expectedSessionId,
+      actualSessionId: entry?.sessionId ?? null,
     });
     enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
@@ -397,6 +399,7 @@ function buildQueuedRestartContinuation(params: {
   sessionKey: string;
   continuation: RestartSentinelContinuation;
   route?: SessionDeliveryRoute;
+  expectedSessionId?: string | undefined;
   ts: number;
   deliveryContext?: {
     channel?: string;
@@ -425,6 +428,7 @@ function buildQueuedRestartContinuation(params: {
     sessionKey: params.sessionKey,
     message: params.continuation.message,
     messageId: idempotencyKey,
+    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
     maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
     ...(params.route ? { route: params.route } : {}),
     ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
@@ -532,7 +536,6 @@ async function loadRestartSentinelStartupTask(params: {
     const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
     const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
-    const terminalSessionEntry = hasTerminalSessionLifecycle(entry);
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
@@ -591,9 +594,7 @@ async function loadRestartSentinelStartupTask(params: {
       }
     }
 
-    const terminalAgentTurnContinuation =
-      payload.continuation?.kind === "agentTurn" && terminalSessionEntry;
-    if (payload.continuation && !terminalAgentTurnContinuation) {
+    if (payload.continuation) {
       continuationRoute = resolveRestartContinuationRoute({
         channel: channel ?? undefined,
         to: resolvedTo,
@@ -608,6 +609,7 @@ async function loadRestartSentinelStartupTask(params: {
           continuation: payload.continuation,
           ts: payload.ts,
           route: continuationRoute,
+          expectedSessionId: entry?.sessionId,
           deliveryContext:
             resolvedTo && channel
               ? {
@@ -619,13 +621,6 @@ async function loadRestartSentinelStartupTask(params: {
               : wakeDeliveryContext,
         }),
       );
-    } else if (terminalAgentTurnContinuation) {
-      log.warn(`${summary}: continuation skipped: session is terminal`, {
-        sessionKey: canonicalKey,
-        continuationKind: "agentTurn",
-        status: entry?.status ?? null,
-        endedAt: entry?.endedAt ?? null,
-      });
     }
 
     await removeRestartSentinelFile(sentinelPath);

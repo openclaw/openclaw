@@ -619,7 +619,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
-  it("does not dispatch agentTurn continuation into a terminal session entry", async () => {
+  it("dispatches agentTurn continuation for a completed run entry", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
@@ -652,33 +652,36 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
-    expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
-      sessionKey: "agent:main:main",
-      deliveryContext: {
-        channel: "whatsapp",
-        to: "+15550002",
-        accountId: "acct-2",
-        threadId: "thread-42",
-      },
-    });
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      "restart summary: continuation skipped: session is terminal",
-      {
+    expect(mocks.enqueueSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agentTurn",
         sessionKey: "agent:main:main",
-        continuationKind: "agentTurn",
-        status: "done",
-        endedAt: expect.any(Number),
-      },
+        message: "continue after restart",
+        messageId: "restart-sentinel:agent:main:main:agentTurn:123",
+        expectedSessionId: "agent:main:main",
+        route: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+          threadId: "thread-42",
+          chatType: "direct",
+        },
+      }),
     );
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledTimes(1);
+    expectContinuationDispatchFields(
+      { routeSessionKey: "agent:main:main" },
+      { Body: "continue after restart" },
+    );
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(mocks.logWarn).not.toHaveBeenCalled();
   });
 
-  it("does not dispatch a queued agentTurn continuation after the session becomes terminal", async () => {
+  it("does not dispatch a queued agentTurn continuation after the session key changes", async () => {
     const activeEntry: LoadedSessionEntry = {
       cfg: {},
       entry: {
-        sessionId: "agent:main:main",
+        sessionId: "old-session-id",
         updatedAt: Date.now(),
       },
       store: {},
@@ -686,10 +689,10 @@ describe("scheduleRestartSentinelWake", () => {
       canonicalKey: "agent:main:main",
       legacyKey: undefined,
     };
-    const terminalEntry: LoadedSessionEntry = {
+    const replacementEntry: LoadedSessionEntry = {
       cfg: {},
       entry: {
-        sessionId: "agent:main:main",
+        sessionId: "new-session-id",
         updatedAt: Date.now(),
         status: "done",
         endedAt: Date.now() - 1_000,
@@ -715,7 +718,7 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.loadSessionEntry.mockReturnValueOnce(activeEntry).mockReturnValue(terminalEntry);
+    mocks.loadSessionEntry.mockReturnValueOnce(activeEntry).mockReturnValue(replacementEntry);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -736,18 +739,15 @@ describe("scheduleRestartSentinelWake", () => {
       reason: "wake",
       sessionKey: "agent:main:main",
     });
-    expect(mocks.logWarn).toHaveBeenCalledWith(
-      "restart continuation skipped: session is terminal",
-      {
-        sessionKey: "agent:main:main",
-        queueId: "session-delivery-1",
-        status: "done",
-        endedAt: expect.any(Number),
-      },
-    );
+    expect(mocks.logWarn).toHaveBeenCalledWith("restart continuation skipped: session changed", {
+      sessionKey: "agent:main:main",
+      queueId: "session-delivery-1",
+      expectedSessionId: "old-session-id",
+      actualSessionId: "new-session-id",
+    });
   });
 
-  it("still delivers systemEvent continuations for terminal session entries", async () => {
+  it("still delivers systemEvent continuations for completed run entries", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
@@ -791,7 +791,7 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
     expect(mocks.logWarn).not.toHaveBeenCalledWith(
-      "restart summary: continuation skipped: session is terminal",
+      "restart continuation skipped: session changed",
       expect.anything(),
     );
   });
