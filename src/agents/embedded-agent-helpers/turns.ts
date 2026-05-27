@@ -389,8 +389,16 @@ export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[]
   // First, strip dangling tool-call blocks from assistant messages.
   const stripped = stripDanglingAnthropicToolUses(messages);
 
-  return validateTurnsWithConsecutiveMerge({
+  // Merge consecutive assistant turns (e.g. subagent announce-delivery echo
+  // messages that leak into the transcript with real assistant responses).
+  const mergedAssistant = validateTurnsWithConsecutiveMerge({
     messages: stripped,
+    role: "assistant",
+    merge: mergeConsecutiveAssistantTurns,
+  });
+
+  return validateTurnsWithConsecutiveMerge({
+    messages: mergedAssistant,
     role: "user",
     merge: mergeConsecutiveUserTurns,
   });
