@@ -578,13 +578,6 @@ describe("runSetupWizard", () => {
           },
         },
       },
-      sourceConfig: {
-        plugins: {
-          installs: {
-            demo: { source: "npm", spec: "@openclaw/demo-plugin" },
-          },
-        },
-      },
       issues: [],
       warnings: [],
       legacyIssues: [],
