@@ -1405,6 +1405,15 @@ function filterVisibleProjectedHistoryMessages(
     }
     if (shouldHideProjectedHistoryMessage(current)) {
       changed = true;
+      // When hiding an announce-user message, also drop the adjacent assistant
+      // reply — it is an orphaned response with no visible user context.
+      if (
+        currentRoleContent?.role === "user" &&
+        isSubagentAnnounceInterSessionUserMessage(current) &&
+        nextRoleContent?.role === "assistant"
+      ) {
+        i++;
+      }
       continue;
     }
     if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {

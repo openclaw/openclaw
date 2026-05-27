@@ -2207,7 +2207,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const scanMax = historyMode === "turns" ? hardMax : max;
+    // Over-read by 1 in messages mode so filterVisibleProjectedHistoryMessages
+    // can detect announce-user + assistant pairs that straddle the limit boundary.
+    const scanMax = historyMode === "turns" ? hardMax : max + 1;
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const transcriptRead = Boolean(sessionId && storePath);
     let readTimings: ReadRecentSessionMessagesTiming | undefined;
@@ -2235,10 +2237,37 @@ export const chatHandlers: GatewayRequestHandlers = {
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const projectedMessages = projectRecentChatDisplayMessages(rawMessages, {
       maxChars: effectiveMaxChars,
-      maxMessages: scanMax,
+      // Use scanMax for turns (turn grouper needs the full window) but trim
+      // to the requested max for messages mode so the overread boundary
+      // message is dropped after announce-pair filtering.
+      maxMessages: historyMode === "turns" ? scanMax : max,
     });
+    // Drop leading orphaned assistant messages that predate the current
+    // session.  These are replies to announce-user messages that fell outside
+    // the read window (the overread only extends by one).  The old pipeline
+    // handled this via dropLocalHistoryOverreadContextMessage; the projection
+    // path replicates the behaviour with a timestamp check.
+    const sessionStartedAt =
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined;
+    let trimmedMessages = projectedMessages;
+    if (sessionStartedAt !== undefined && historyMode !== "turns") {
+      let dropCount = 0;
+      for (const msg of trimmedMessages) {
+        if (msg.role !== "assistant") break;
+        const meta = msg["__openclaw"] as Record<string, unknown> | undefined;
+        const ts = typeof meta?.recordTimestampMs === "number" ? meta.recordTimestampMs : undefined;
+        if (ts !== undefined && ts < sessionStartedAt) {
+          dropCount++;
+        } else {
+          break;
+        }
+      }
+      if (dropCount > 0) {
+        trimmedMessages = trimmedMessages.slice(dropCount);
+      }
+    }
     const projectMs = markMetricMs();
-    const canvasAugmentedMessages = augmentChatHistoryWithCanvasBlocks(projectedMessages) as Array<
+    const canvasAugmentedMessages = augmentChatHistoryWithCanvasBlocks(trimmedMessages) as Array<
       Record<string, unknown>
     >;
     const turnProjection =
