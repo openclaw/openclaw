@@ -1,7 +1,7 @@
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
-import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -111,7 +111,7 @@ const cronModelPreflightRuntimeLoader = createLazyImportLoader(
   () => import("./model-preflight.runtime.js"),
 );
 const runtimePluginsLoader = createLazyImportLoader(
-  () => import("./run-runtime-plugins.runtime.js"),
+  () => import("../../plugins/runtime-plugins.runtime.js"),
 );
 
 async function loadSessionStoreRuntime() {

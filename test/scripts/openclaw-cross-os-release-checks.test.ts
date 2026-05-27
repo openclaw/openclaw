@@ -65,6 +65,7 @@ import {
   resolveRequestedSuites,
   resolveRunnerMatrix,
   resolveStaticFileContentType,
+  startStaticFileServer,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
@@ -393,7 +394,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");
     expect(source).toContain("models: []");
-    expect(source).toContain('agentRuntime: { id: "pi" }');
+    expect(source).toContain('agentRuntime: { id: "openclaw" }');
     expect(source).toContain('"--merge"');
     expect(source).toContain(providerOverride);
     expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
@@ -657,6 +658,42 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveStaticFileContentType("scripts/install.sh")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("scripts/install.ps1")).toBe("text/plain; charset=utf-8");
     expect(resolveStaticFileContentType("openclaw-2026.4.14.tgz")).toBe("application/octet-stream");
+  });
+
+  it("streams release artifacts from the static file server", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-static-server-"));
+    const filePath = join(dir, "openclaw-2026.4.14.tgz");
+    const logPath = join(dir, "server.log");
+    let server: Awaited<ReturnType<typeof startStaticFileServer>> | undefined;
+
+    try {
+      const payload = Buffer.from(`artifact-head\n${"x".repeat(1024 * 1024)}\nartifact-tail`);
+      writeFileSync(filePath, payload);
+
+      server = await startStaticFileServer({ filePath, logPath });
+      const response = await fetch(server.url);
+      const body = Buffer.from(await response.arrayBuffer());
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-length")).toBe(String(payload.length));
+      expect(response.headers.get("content-type")).toBe("application/octet-stream");
+      expect(body.equals(payload)).toBe(true);
+      expect(readFileSync(logPath, "utf8")).toContain(`GET /${filePath.split(/[/\\]/u).at(-1)}`);
+    } finally {
+      await server?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not preload static release artifacts before serving them", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const serverSource = source.slice(
+      source.indexOf("export async function startStaticFileServer"),
+      source.indexOf("export function resolveStaticFileContentType"),
+    );
+
+    expect(serverSource).toContain("createReadStream(params.filePath)");
+    expect(serverSource).not.toContain("readFileSync(params.filePath)");
   });
 
   it("uses the published installer URLs for native installer lanes", () => {

@@ -3150,10 +3150,13 @@ describe("deliverOutboundPayloads", () => {
       channel: "matrix",
       to: "!room:1",
       payloads: [{ text: "hello", delivery: { pin: true } }],
+      gatewayClientScopes: ["operator.write"],
     });
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
     expect(pinDeliveredMessage).toHaveBeenCalledTimes(1);
+    const pinCall = requireMockCallArg(pinDeliveredMessage, "pin delivered message");
+    expect(pinCall.gatewayClientScopes).toEqual(["operator.write"]);
     const warnCall = requireMockCall(logMocks.warn, "warn");
     expect(warnCall[0]).toBe(
       "Delivery pin requested, but channel failed to pin delivered message.",

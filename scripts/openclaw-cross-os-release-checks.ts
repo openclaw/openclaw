@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -101,7 +102,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }
@@ -3680,11 +3681,11 @@ async function runCommandInvocation(invocation, options) {
   });
 }
 
-async function startStaticFileServer(params) {
+export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
-  const fileBytes = readFileSync(params.filePath);
+  const fileStat = statSync(params.filePath);
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
     if (request.url !== `/${fileName}`) {
@@ -3694,8 +3695,20 @@ async function startStaticFileServer(params) {
     }
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
-    response.setHeader("content-length", String(fileBytes.length));
-    response.end(fileBytes);
+    response.setHeader("content-length", String(fileStat.size));
+    response.setHeader("connection", "close");
+    const fileStream = createReadStream(params.filePath);
+    fileStream.once("error", (error) => {
+      logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
+      if (response.headersSent) {
+        response.destroy(error);
+        return;
+      }
+      response.removeHeader("content-length");
+      response.statusCode = 500;
+      response.end("failed to read file");
+    });
+    fileStream.pipe(response);
   });
   await new Promise((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);

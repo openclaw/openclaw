@@ -196,10 +196,22 @@ function cloneJsonLikeValue<T>(value: T): T {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => cloneJsonLikeValue(item)) as T;
+    const cloned: unknown[] = [];
+    cloned.length = value.length;
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value)) {
+        continue;
+      }
+      cloned[index] = cloneJsonLikeValue(value[index]);
+    }
+    return cloned as T;
   }
   const cloned: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const key in value as Record<string, unknown>) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const child = (value as Record<string, unknown>)[key];
     if (child === undefined) {
       continue;
     }

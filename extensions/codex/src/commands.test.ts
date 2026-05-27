@@ -594,6 +594,28 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects partial Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn();
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5x"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn();
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5.5"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+  });
+
   it("binds the current conversation to a Codex CLI node session", async () => {
     const requestConversationBinding = vi.fn(async () => ({
       status: "bound" as const,

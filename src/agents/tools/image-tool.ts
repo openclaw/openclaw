@@ -31,16 +31,16 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveModelAsync } from "../embedded-agent-runner/model.js";
+import {
+  bundledStaticCatalogProviderUsesRuntimeAugment,
+  resolveBundledStaticCatalogModel,
+} from "../embedded-agent-runner/model.static-catalog.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
   resolveImageFallbackDefaultProvider,
 } from "../model-fallback.js";
-import { resolveModelAsync } from "../pi-embedded-runner/model.js";
-import {
-  bundledStaticCatalogProviderUsesRuntimeAugment,
-  resolveBundledStaticCatalogModel,
-} from "../pi-embedded-runner/model.static-catalog.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -421,7 +421,7 @@ async function resolveCompressionModelPolicyWithHooks(params: {
       {
         allowBundledStaticCatalogFallback: true,
         skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         workspaceDir: params.workspaceDir,
       },
     );

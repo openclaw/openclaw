@@ -516,11 +516,13 @@ export async function getReplyFromConfig(
           sessionStore[sessionKey] = sessionEntry;
         }
         if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
+          const { applySessionStoreEntryPatch } = await import("../../config/sessions.js");
+          await applySessionStoreEntryPatch({
             storePath,
             sessionKey,
-            update: async () => ({
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+            patch: {
               pendingFinalDelivery: undefined,
               pendingFinalDeliveryText: undefined,
               pendingFinalDeliveryCreatedAt: undefined,
@@ -528,7 +530,7 @@ export async function getReplyFromConfig(
               pendingFinalDeliveryAttemptCount: undefined,
               pendingFinalDeliveryLastError: undefined,
               pendingFinalDeliveryContext: undefined,
-            }),
+            },
           });
         }
       } else {
@@ -544,17 +546,19 @@ export async function getReplyFromConfig(
           sessionStore[sessionKey] = sessionEntry;
         }
         if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
+          const { applySessionStoreEntryPatch } = await import("../../config/sessions.js");
+          await applySessionStoreEntryPatch({
             storePath,
             sessionKey,
-            update: async () => ({
+            skipMaintenance: true,
+            takeCacheOwnership: true,
+            patch: {
               pendingFinalDeliveryText: replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,
               pendingFinalDeliveryAttemptCount: attemptCount,
               pendingFinalDeliveryLastError: null,
               updatedAt,
-            }),
+            },
           });
         }
         logResolverTiming("completed", "pending_final_delivery_replay");

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
@@ -447,7 +447,7 @@ describe("openai transport stream", () => {
     ).toThrow(/Code mode payload tool surface violation/);
   });
 
-  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
+  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from provider overrides", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(
       {
@@ -457,8 +457,8 @@ describe("openai transport stream", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         headers: {
-          originator: "pi",
-          "User-Agent": "pi",
+          originator: "openclaw",
+          "User-Agent": "openclaw",
           "X-Provider": "model",
         },
         reasoning: true,
@@ -469,8 +469,8 @@ describe("openai transport stream", () => {
       } satisfies Model<"openai-responses">,
       { systemPrompt: "", messages: [] } as never,
       {
-        originator: "pi",
-        "User-Agent": "pi",
+        originator: "openclaw",
+        "User-Agent": "openclaw",
         "X-Caller": "request",
       },
     );
@@ -494,8 +494,8 @@ describe("openai transport stream", () => {
         provider: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api",
         headers: {
-          originator: "pi",
-          "User-Agent": "pi",
+          originator: "openclaw",
+          "User-Agent": "openclaw",
         },
         reasoning: true,
         input: ["text"],
@@ -2273,7 +2273,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<Api>,
+      } satisfies Model,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -3197,7 +3197,7 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("does not infer high reasoning when Pi passes thinking off", () => {
+  it("does not infer high reasoning when the runtime passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -4635,6 +4635,67 @@ describe("openai transport stream", () => {
 
     expect(disabled.prompt_cache_key).toBeUndefined();
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
+  });
+
+  it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const longRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "long",
+    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(longRetention.prompt_cache_key).toBe("session-123");
+    expect(longRetention.prompt_cache_retention).toBe("24h");
+  });
+
+  it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const shortRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "short",
+    });
+    const defaultRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+    });
+
+    expect(shortRetention).not.toHaveProperty("prompt_cache_retention");
+    expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
   });
 
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {

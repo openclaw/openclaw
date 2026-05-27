@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
@@ -93,7 +95,39 @@ function runRuntimeSmoke(root: string, args: string[]) {
   });
 }
 
+async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("error", onError);
+      reject(error);
+    };
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", onError);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("server did not bind to a TCP port"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+async function closeServer(server: HttpServer | NetServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -115,6 +149,146 @@ describe("bundled plugin install/uninstall probe", () => {
 
     const second = runtimeSmoke.appendBoundedOutput(first, "ghij", 5);
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("keeps runtime log tail reads bounded", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, `${"old log line\n".repeat(1000)}[gateway] ready\n`, "utf8");
+
+    const fullRead = vi.spyOn(fs, "readFileSync");
+    const tail = runtimeSmoke.readFileTail(logPath, 64);
+
+    expect(tail).toContain("[gateway] ready");
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(64);
+    expect(fullRead).not.toHaveBeenCalled();
+  });
+
+  it("remembers runtime ready logs after they fall outside the tail", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
+
+    fs.writeFileSync(logPath, `[gateway] ready\n${"x".repeat(300_000)}`, "utf8");
+
+    expect(readyLogSeen()).toBe(true);
+
+    fs.appendFileSync(logPath, "more log output".repeat(30_000), "utf8");
+
+    expect(readyLogSeen()).toBe(true);
+  });
+
+  it("does not treat shallow HTTP listen logs as runtime readiness", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
+
+    fs.writeFileSync(logPath, "[gateway] http server listening\n", "utf8");
+
+    expect(readyLogSeen()).toBe(false);
+  });
+
+  it("scans only post-ready runtime logs for dependency work", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      `pre-ready npm install is allowed here\n${"x".repeat(300_000)}\n[gateway] ready\nruntime ok\n`,
+      "utf8",
+    );
+
+    const fullRead = vi.spyOn(fs, "readFileSync");
+    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).not.toThrow();
+    expect(fullRead).not.toHaveBeenCalled();
+
+    fs.appendFileSync(logPath, "post-ready pnpm install should fail\n", "utf8");
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
+      /post-ready runtime dependency work/u,
+    );
+  });
+
+  it("keeps post-ready scans anchored when ready logs fall outside the tail", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      `startup\n[gateway] ready\npost-ready yarn install should fail\n${"x".repeat(300_000)}`,
+      "utf8",
+    );
+
+    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
+
+    expect(readyOffset).toBe("startup\n".length);
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
+      /post-ready runtime dependency work/u,
+    );
+  });
+
+  it("bounds runtime smoke child commands and preserves captured output", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const startedAt = Date.now();
+
+    await expect(
+      runtimeSmoke.runCommand(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('partial\\n'); process.stderr.write('problem\\n'); setInterval(() => {}, 1000);",
+        ],
+        { timeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/timed out after 200ms[\s\S]*partial[\s\S]*problem/u);
+
+    expect(Date.now() - startedAt).toBeLessThan(2_500);
+  });
+
+  it("accepts successful runtime HTTP probes", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(204);
+      response.end();
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 1000 })).resolves.toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("bounds stalled runtime HTTP probes", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const sockets = new Set<Socket>();
+    const server = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => {
+        sockets.delete(socket);
+      });
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+      const startedAt = Date.now();
+
+      await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 100 })).resolves.toBe(false);
+
+      expect(Date.now() - startedAt).toBeLessThan(2_500);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeServer(server);
+    }
   });
 
   it("creates runtime smoke state with OPENCLAW_HOME at the test home", async () => {

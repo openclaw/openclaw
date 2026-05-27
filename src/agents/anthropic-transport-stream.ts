@@ -1,14 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import {
-  calculateCost,
-  getEnvApiKey,
-  parseStreamingJson,
-  type AnthropicOptions,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-  type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import { calculateCost } from "../llm/model-utils.js";
+import type { AnthropicOptions } from "../llm/providers/anthropic.js";
+import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
+import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -19,6 +13,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -70,6 +65,13 @@ type AnthropicMessagesClient = {
     ): AsyncIterable<Record<string, unknown>>;
   };
 };
+
+function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
+  if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
+    return model.id.replace(/^anthropic\//i, "");
+  }
+  return model.id;
+}
 
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
@@ -794,7 +796,7 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const params: Record<string, unknown> = {
-    model: model.id,
+    model: resolveAnthropicRequestModelId(model),
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
