@@ -818,6 +818,46 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
+  it("sends idle slash stop as a normal prompt so the TUI receives a terminal event", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "/stop",
+      runId: "run-local-idle-stop",
+    });
+
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    pending.resolve({ payloads: [{ text: "idle stop prompt" }], meta: {} });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-local-idle-stop",
+        sessionKey: "agent:main:main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "idle stop prompt" }],
+          timestamp: embeddedEventTimestamp,
+        },
+      },
+    });
+  });
+
   it("queues same-session sends behind terminal local runs until maintenance settles", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
