@@ -11,12 +11,17 @@
  * branches fall through to a bare ACK (backward-compatible).
  */
 
+import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { authorizeQQBotApprovalAction } from "../../exec-approvals.js";
 import { resolveQQBotEffectivePolicies } from "../access/resolve-policy.js";
 import { getPlatformAdapter } from "../adapter/index.js";
 import { parseApprovalButtonData } from "../approval/index.js";
+import {
+  resolveQQBotCommandsAllowFrom,
+  resolveSlashCommandAuth,
+} from "../commands/slash-command-auth.js";
 import { getPluginVersion, getFrameworkVersion } from "../commands/slash-commands-impl.js";
 import { resolveGroupConfig, resolveMentionPatterns } from "../config/group.js";
 import { resolveAccountBase } from "../config/resolve.js";
@@ -291,12 +296,15 @@ function authorizeApprovalButtonActor(params: {
 }): { authorized: boolean; reason?: string } {
   const senderIds = resolveApprovalActorSenderIds(params.event);
   if (senderIds.length === 0) {
-    return authorizeQQBotApprovalAction({
+    const result = authorizeQQBotApprovalAction({
       cfg: params.cfg,
       accountId: params.accountId,
       senderId: null,
       approvalKind: params.approvalKind,
     });
+    return result.authorized && isImplicitSameChatApprovalAuthorization(result)
+      ? { authorized: false, reason: "You are not authorized to approve this request." }
+      : result;
   }
 
   let denial: { authorized: boolean; reason?: string } | undefined;
@@ -308,11 +316,43 @@ function authorizeApprovalButtonActor(params: {
       approvalKind: params.approvalKind,
     });
     if (result.authorized) {
-      return result;
+      if (
+        !isImplicitSameChatApprovalAuthorization(result) ||
+        isImplicitApprovalButtonActorAuthorized({
+          cfg: params.cfg,
+          accountId: params.accountId,
+          event: params.event,
+          senderId,
+        })
+      ) {
+        return result;
+      }
+      denial ??= {
+        authorized: false,
+        reason: "You are not authorized to approve this request.",
+      };
+      continue;
     }
     denial ??= result;
   }
   return denial ?? { authorized: false, reason: "You are not authorized to approve this request." };
+}
+
+function isImplicitApprovalButtonActorAuthorized(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  event: InteractionEvent;
+  senderId: string;
+}): boolean {
+  const account = resolveAccountBase(params.cfg as Record<string, unknown>, params.accountId);
+  const accountConfig = account.config as QQBotAccountConfigView;
+  return resolveSlashCommandAuth({
+    senderId: params.senderId,
+    isGroup: Boolean(params.event.group_openid),
+    allowFrom: accountConfig.allowFrom,
+    groupAllowFrom: accountConfig.groupAllowFrom,
+    commandsAllowFrom: resolveQQBotCommandsAllowFrom(params.cfg),
+  });
 }
 
 function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {

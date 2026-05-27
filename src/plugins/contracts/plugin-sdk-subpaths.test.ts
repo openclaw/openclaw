@@ -572,6 +572,8 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
+      "isImplicitSameChatApprovalAuthorization",
+      "markImplicitSameChatApprovalAuthorization",
       "resolveApprovalApprovers",
     ]);
     expectSourceMentions("reply-chunking", [
