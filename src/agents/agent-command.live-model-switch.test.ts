@@ -746,7 +746,15 @@ function setupSessionTouchStore(): void {
   const sessionEntry: SessionEntry = {
     sessionId: "session-1",
     updatedAt: 1,
-    skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    // `schemaVersion` keeps the snapshot current under the reuse-path guard so
+    // these tests exercise the session-touch logic alone, not a forced
+    // skills-snapshot rebuild persist.
+    skillsSnapshot: {
+      prompt: "",
+      schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
+      skills: [],
+      version: 0,
+    },
   };
   state.sessionEntryMock = sessionEntry;
   state.sessionStoreMock = { "agent:main:main": sessionEntry };
