@@ -12,6 +12,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -323,7 +324,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
-    const queuedAfter = question ? undefined : this.findQueuedSessionRunPromise(opts.sessionKey);
+    const stopCommand = isChatStopCommandText(opts.message);
+    const queuedAfter =
+      question || stopCommand ? undefined : this.findQueuedSessionRunPromise(opts.sessionKey);
+    if (stopCommand) {
+      this.abortSessionRuns(opts.sessionKey);
+    }
     const controller = new AbortController();
     const queuedRunReadiness = createQueuedRunReadiness();
     this.runs.set(runId, {
@@ -527,6 +533,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
     }
     return queuedAfter;
+  }
+
+  private abortSessionRuns(sessionKey: string) {
+    for (const run of this.runs.values()) {
+      if (run.sessionKey === sessionKey && !run.isBtw && !run.lifecycleEnded) {
+        run.controller.abort();
+      }
+    }
   }
 
   private nextSeq() {

@@ -7,6 +7,7 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -632,6 +633,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    if (isChatStopCommandText(text)) {
+      await abortActive();
+      return;
+    }
     if (!isBtw && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
       tui.requestRender();

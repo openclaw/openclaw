@@ -67,6 +67,7 @@ function createHarness(params?: {
   activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
+  abortActive?: ReturnType<typeof vi.fn>;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -88,6 +89,7 @@ function createHarness(params?: {
   const openOverlay = vi.fn();
   const closeOverlay = vi.fn();
   const requestExit = vi.fn();
+  const abortActive = params?.abortActive ?? vi.fn();
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
@@ -125,7 +127,7 @@ function createHarness(params?: {
     loadHistory,
     setSession,
     refreshAgents: vi.fn(),
-    abortActive: vi.fn(),
+    abortActive,
     setActivityStatus,
     formatSessionKey: vi.fn(),
     applySessionInfoFromPatch: applySessionInfoFromPatch as never,
@@ -160,6 +162,7 @@ function createHarness(params?: {
     noteLocalRunId,
     noteLocalBtwRunId,
     requestExit,
+    abortActive,
     state,
   };
 }
@@ -514,6 +517,21 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");
     expect(state.pendingChatRunId).toEqual(expect.any(String));
+  });
+
+  it("routes slash stop to the abort path instead of queueing a chat send", async () => {
+    const abortActive = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, sendChat, addUser } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+      abortActive,
+    });
+
+    await handleCommand("/stop");
+
+    expect(abortActive).toHaveBeenCalledOnce();
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
   });
 
   it("rejects normal sends while a queued submit is pending registration", async () => {

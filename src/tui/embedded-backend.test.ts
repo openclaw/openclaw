@@ -702,6 +702,53 @@ describe("EmbeddedTuiBackend", () => {
     }
   });
 
+  it("does not queue stop commands behind active local runs", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const first = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    const second = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    const firstAbortListener = vi.fn(() => {
+      first.resolve({ payloads: [{ text: "first aborted" }], meta: {} });
+    });
+    agentCommandFromIngressMock
+      .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+        opts.abortSignal?.addEventListener("abort", firstAbortListener);
+        return first.promise;
+      })
+      .mockReturnValueOnce(second.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "first",
+      runId: "run-local-first",
+    });
+
+    registeredListener?.({
+      runId: "run-local-first",
+      stream: "assistant",
+      data: { text: "first response", delta: "first response" },
+    });
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "/stop",
+      runId: "run-local-stop",
+    });
+
+    expect(firstAbortListener).toHaveBeenCalledTimes(1);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+
+    second.resolve({ payloads: [{ text: "stopped" }], meta: {} });
+    await flushMicrotasks();
+  });
+
   it("queues same-session sends behind terminal local runs until maintenance settles", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
