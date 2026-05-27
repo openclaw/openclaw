@@ -84,6 +84,15 @@ describe("telegram custom commands schema", () => {
     expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
   });
 
+  it("accepts the opt-in interleaved progress flag", () => {
+    expectTelegramConfigValid({
+      streaming: { preview: { toolProgress: true, interleavedProgress: true } },
+    });
+    expectTelegramConfigValid({
+      accounts: { ops: { streaming: { preview: { interleavedProgress: true } } } },
+    });
+  });
+
   it("accepts Telegram native tool-progress draft config only on Telegram", () => {
     expectTelegramConfigValid({
       streaming: {
