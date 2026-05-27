@@ -22,17 +22,11 @@ export const formatInternalVerbosePersistenceDeniedText = () =>
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
-function canPersistInternalDirective(params: {
-  messageProvider?: string;
-  surface?: string;
-  gatewayClientScopes?: string[];
-}): boolean {
-  const hasChannelContext = params.messageProvider !== undefined || params.surface !== undefined;
-  if (params.gatewayClientScopes === undefined && !hasChannelContext) {
+function canPersistInternalDirective(params: { gatewayClientScopes?: string[] }): boolean {
+  if (params.gatewayClientScopes === undefined) {
     return true;
   }
-  const scopes = params.gatewayClientScopes ?? [];
-  return scopes.includes("operator.admin");
+  return params.gatewayClientScopes.includes("operator.admin");
 }
 
 export const canPersistInternalExecDirective = canPersistInternalDirective;

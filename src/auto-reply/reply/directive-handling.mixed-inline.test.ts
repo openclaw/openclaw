@@ -208,7 +208,7 @@ describe("mixed inline directives", () => {
       directives,
       commandAuthorized: true,
       senderIsOwner: false,
-      ctx: { Provider: "telegram" } as never,
+      ctx: { Provider: "telegram", GatewayClientScopes: [] } as never,
       cfg,
       agentId: "main",
       isGroup: false,
@@ -262,6 +262,7 @@ describe("mixed inline directives", () => {
       formatModelSwitchEvent: (label) => label,
       agentCfg: cfg.agents?.defaults,
       messageProvider: "telegram",
+      gatewayClientScopes: [],
     });
 
     expect(sessionEntry.execHost).toBeUndefined();
