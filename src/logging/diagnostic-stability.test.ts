@@ -255,6 +255,43 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
   });
 
+  it("summarizes Codex native thread lifecycle diagnostics without scoped ids", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "codex.native_thread.lifecycle",
+      action: "reused",
+      reason: "semantic-thread-reuse",
+      threadId: "thread-secret",
+      sessionId: "session-secret",
+      sessionKey: "agent:main:session-secret",
+      runId: "run-secret",
+      bindingMode: "thread_bootstrap",
+      contextTokenBudget: 200_000,
+      nativeTokens: 1234,
+      nativeTranscriptBytes: 5678,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.events[0], {
+      type: "codex.native_thread.lifecycle",
+      action: "reused",
+      reason: "semantic-thread-reuse",
+      mode: "thread_bootstrap",
+      count: 1234,
+      bytes: 5678,
+      context: { limit: 200_000, used: 1234 },
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("target");
+    expect(snapshot.events[0]).not.toHaveProperty("threadId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionKey");
+    expect(snapshot.events[0]).not.toHaveProperty("runId");
+    expect(JSON.stringify(snapshot.events[0])).not.toContain("thread-secret");
+  });
+
   it("sanitizes tool and model diagnostic error categories", async () => {
     startDiagnosticStabilityRecorder();
 

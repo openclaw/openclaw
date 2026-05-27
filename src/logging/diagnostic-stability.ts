@@ -340,7 +340,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "codex.native_thread.lifecycle":
       record.action = event.action;
       assignReasonCode(record, event.reason);
-      record.target = event.threadId;
       record.mode = event.bindingMode;
       record.count = event.nativeTokens ?? event.sessionTokens;
       record.bytes = event.nativeTranscriptBytes;
