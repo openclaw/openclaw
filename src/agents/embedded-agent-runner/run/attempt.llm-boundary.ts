@@ -150,7 +150,7 @@ function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]
 function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
   const nextMessages = messages.map((message) => {
-    const openclaw = (message as { __openclaw?: unknown }).__openclaw;
+    const openclaw = (message as unknown as Record<string, unknown>)["__openclaw"];
     if (!openclaw || typeof openclaw !== "object") {
       return message;
     }
