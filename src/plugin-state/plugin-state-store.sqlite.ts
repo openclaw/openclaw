@@ -49,6 +49,7 @@ type PluginStateStatements = {
   countLiveNamespace: StatementSync;
   countLivePlugin: StatementSync;
   deleteOldestNamespace: StatementSync;
+  deleteOldestPlugin: StatementSync;
   sweepExpired: StatementSync;
 };
 
@@ -274,6 +275,18 @@ function createStatements(db: DatabaseSync): PluginStateStatements {
         LIMIT ?
       )
     `),
+    deleteOldestPlugin: db.prepare(`
+      DELETE FROM plugin_state_entries
+      WHERE rowid IN (
+        SELECT rowid
+        FROM plugin_state_entries
+        WHERE plugin_id = ?
+          AND entry_key <> ?
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY created_at ASC, namespace ASC, entry_key ASC
+        LIMIT ?
+      )
+    `),
     sweepExpired: db.prepare(`
       DELETE FROM plugin_state_entries
       WHERE expires_at IS NOT NULL AND expires_at <= ?
@@ -422,12 +435,12 @@ function enforcePostRegisterLimits(params: {
       | undefined,
   );
   if (pluginCount > MAX_ENTRIES_PER_PLUGIN) {
-    throw createPluginStateError({
-      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      operation: "register",
-      message: `Plugin state for ${params.pluginId} exceeds the ${MAX_ENTRIES_PER_PLUGIN} live row limit.`,
-      path: params.store.path,
-    });
+    params.store.statements.deleteOldestPlugin.run(
+      params.pluginId,
+      params.protectedKey,
+      params.now,
+      pluginCount - MAX_ENTRIES_PER_PLUGIN,
+    );
   }
 }
 

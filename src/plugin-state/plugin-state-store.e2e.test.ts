@@ -194,7 +194,7 @@ describe("limits", () => {
     });
   });
 
-  it("enforces the per-plugin live-row cap", async () => {
+  it("evicts the oldest live row when the per-plugin cap is exceeded", async () => {
     await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
       // Spread MAX_ENTRIES_PER_PLUGIN rows across several namespaces so
       // namespace eviction never fires (each namespace has generous room).
@@ -209,18 +209,26 @@ describe("limits", () => {
             namespace: `ns-${ns}`,
             key: `k-${k}`,
             value: { ns, k },
+            createdAt: 1000 + index,
           };
         }),
       );
-      const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "ns-0",
-        maxEntries: perNs + 1,
-      });
+      const stores = Array.from({ length: nsCount }, (_, ns) =>
+        createPluginStateKeyedStore("fixture-plugin", {
+          namespace: `ns-${ns}`,
+          maxEntries: perNs + 1,
+        }),
+      );
+      const store = stores[0];
 
-      // One more row tips over the plugin-wide limit.
-      await expectPluginStateStoreError(store.register("overflow", { boom: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
+      // One more row tips over the plugin-wide limit, so the oldest existing
+      // plugin row is evicted while preserving the just-written row.
+      await expect(store.register("overflow", { boom: true })).resolves.toBeUndefined();
+      await expect(store.lookup("overflow")).resolves.toEqual({ boom: true });
+      await expect(store.lookup("k-0")).resolves.toBeUndefined();
+
+      const liveEntries = await Promise.all(stores.map((namespaceStore) => namespaceStore.entries()));
+      expect(liveEntries.flat()).toHaveLength(MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN);
     });
   });
 
