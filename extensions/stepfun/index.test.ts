@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import stepfunPlugin from "./index.js";
 
 type StepFunManifest = {
+  contracts?: {
+    imageGenerationProviders?: string[];
+  };
   setup?: {
     providers?: Array<{
       id?: string;
@@ -28,7 +31,7 @@ function readManifest(): StepFunManifest {
 
 describe("stepfun provider registration", () => {
   it("keeps manifest auth choices aligned with runtime provider methods", async () => {
-    const { providers } = await registerProviderPlugin({
+    const { providers, imageProviders } = await registerProviderPlugin({
       plugin: stepfunPlugin,
       id: "stepfun",
       name: "StepFun",
@@ -50,6 +53,8 @@ describe("stepfun provider registration", () => {
     }));
 
     expect(runtimeChoices).toEqual(manifestChoices);
+    expect(imageProviders.map((provider) => provider.id)).toEqual(["stepfun", "stepfun-plan"]);
+    expect(manifest.contracts?.imageGenerationProviders).toEqual(["stepfun", "stepfun-plan"]);
     expect(manifest.setup?.providers).toEqual([
       {
         id: "stepfun",
