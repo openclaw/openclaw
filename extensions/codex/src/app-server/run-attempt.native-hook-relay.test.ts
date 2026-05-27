@@ -536,6 +536,55 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
+  it("rotates native hook relay generations when an existing binding starts a fresh thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      userMcpServersFingerprint: "stale-user-mcp-fingerprint",
+      nativeHookRelayGeneration: "generation-from-stale-thread",
+    });
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const currentGeneration = extractGenerationFromThreadRequest(startRequest?.params);
+    expect(currentGeneration).not.toBe("generation-from-stale-thread");
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: "generation-from-stale-thread",
+        event: "pre_tool_use",
+        requireGeneration: true,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "stale-thread-tool",
+          tool_input: { command: "pwd" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
+      currentGeneration,
+    );
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+  });
+
   it("builds deterministic opaque Codex native hook relay ids", () => {
     const relayId = testing.buildCodexNativeHookRelayId({
       agentId: "dev-codex",

@@ -113,6 +113,7 @@ import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
+  resolveCodexPluginsPolicy,
   resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
   shouldAutoApproveCodexAppServerApprovals,
@@ -126,6 +127,7 @@ import {
 import {
   buildDynamicTools,
   createCodexDynamicToolBuildStageTracker,
+  disableCodexPluginThreadConfig,
   filterCodexDynamicToolsForAllowlist,
   formatCodexDynamicToolBuildStageSummary,
   includeForcedCodexDynamicToolAllow,
@@ -179,6 +181,11 @@ import {
 } from "./native-hook-relay.js";
 import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
+import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexPluginThreadConfigInputFingerprint,
+  shouldBuildCodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import {
   assertCodexTurnStartResponse,
@@ -207,6 +214,7 @@ import {
   buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
+  resolveCodexNativeHookRelayBindingReuse,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
@@ -794,6 +802,48 @@ export async function runCodexAppServerAttempt(
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
+  const nativeHookRelayPluginThreadConfigRequired =
+    !nativeToolSurfaceEnabled || shouldBuildCodexPluginThreadConfig(pluginConfig);
+  const nativeHookRelayPluginThreadConfigPluginConfig = nativeToolSurfaceEnabled
+    ? pluginConfig
+    : disableCodexPluginThreadConfig(pluginConfig);
+  const nativeHookRelayPluginAppCacheKey = nativeHookRelayPluginThreadConfigRequired
+    ? buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
+        authProfileId: startupAuthProfileId,
+        accountId: startupAuthAccountCacheKey,
+        envApiKeyFingerprint: startupEnvApiKeyCacheKey,
+      })
+    : undefined;
+  const nativeHookRelayResolvedPluginPolicy = nativeHookRelayPluginThreadConfigRequired
+    ? resolveCodexPluginsPolicy(nativeHookRelayPluginThreadConfigPluginConfig)
+    : undefined;
+  const nativeHookRelayBindingReuse = resolveCodexNativeHookRelayBindingReuse({
+    binding: startupBinding,
+    attemptParams: buildActiveRunAttemptParams(),
+    agentId: sessionAgentId,
+    dynamicTools: toolBridge.specs,
+    nativeCodeModeEnabled: nativeToolSurfaceEnabled,
+    userMcpServersEnabled: nativeToolSurfaceEnabled,
+    mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
+    mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
+    environmentSelection: undefined,
+    contextEngineProjection,
+    pluginThreadConfig: nativeHookRelayPluginThreadConfigRequired
+      ? {
+          enabled: true,
+          inputFingerprint: buildCodexPluginThreadConfigInputFingerprint({
+            pluginConfig: nativeHookRelayPluginThreadConfigPluginConfig,
+            appCacheKey: nativeHookRelayPluginAppCacheKey!,
+          }),
+          enabledPluginConfigKeys: nativeHookRelayResolvedPluginPolicy?.pluginPolicies
+            .filter((plugin) => plugin.enabled)
+            .map((plugin) => plugin.configKey)
+            .toSorted(),
+        }
+      : undefined,
+  });
   try {
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -801,9 +851,9 @@ export async function runCodexAppServerAttempt(
     });
     nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
-      generation: startupBinding?.nativeHookRelayGeneration,
+      generation: nativeHookRelayBindingReuse.generation,
       generationMismatchGraceMs:
-        startupBinding && !startupBinding.nativeHookRelayGeneration
+        nativeHookRelayBindingReuse.canReuseBinding && !nativeHookRelayBindingReuse.generation
           ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
           : undefined,
       events: nativeHookRelayEvents,

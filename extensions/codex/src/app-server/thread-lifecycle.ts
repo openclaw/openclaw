@@ -69,6 +69,11 @@ export type CodexPluginThreadConfigProvider = {
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
+export type CodexNativeHookRelayBindingReuseDecision = {
+  canReuseBinding: boolean;
+  generation?: string;
+};
+
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
@@ -611,6 +616,94 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
+}
+
+export function resolveCodexNativeHookRelayBindingReuse(params: {
+  binding: CodexAppServerThreadBinding | undefined;
+  attemptParams: EmbeddedRunAttemptParams;
+  agentId?: string;
+  dynamicTools: CodexDynamicToolSpec[];
+  nativeCodeModeEnabled?: boolean;
+  userMcpServersEnabled?: boolean;
+  mcpServersFingerprint?: string;
+  mcpServersFingerprintEvaluated?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
+  pluginThreadConfig?: Pick<
+    CodexPluginThreadConfigProvider,
+    "enabled" | "inputFingerprint" | "enabledPluginConfigKeys"
+  >;
+  contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+}): CodexNativeHookRelayBindingReuseDecision {
+  const binding = params.binding;
+  if (!binding?.threadId || params.nativeCodeModeEnabled === false) {
+    return { canReuseBinding: false };
+  }
+
+  const contextEngineBinding = buildContextEngineBinding(
+    params.attemptParams,
+    params.contextEngineProjection,
+  );
+  if (binding.contextEngine || contextEngineBinding) {
+    if (
+      !contextEngineBinding ||
+      !isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)
+    ) {
+      return { canReuseBinding: false };
+    }
+  }
+
+  const userMcpServersConfigPatch =
+    params.userMcpServersEnabled === false
+      ? undefined
+      : buildCodexUserMcpServersThreadConfigPatch(params.attemptParams.config, {
+          agentId: params.agentId ?? params.attemptParams.agentId,
+        });
+  if (
+    binding.userMcpServersFingerprint !==
+    fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch)
+  ) {
+    return { canReuseBinding: false };
+  }
+
+  if (
+    binding.environmentSelectionFingerprint !==
+    fingerprintEnvironmentSelection(params.environmentSelection)
+  ) {
+    return { canReuseBinding: false };
+  }
+
+  if (
+    params.mcpServersFingerprintEvaluated === true &&
+    binding.mcpServersFingerprint !== params.mcpServersFingerprint
+  ) {
+    return { canReuseBinding: false };
+  }
+
+  if (
+    isCodexPluginThreadBindingStale({
+      codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
+      bindingFingerprint: binding.pluginAppsFingerprint,
+      bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+      currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
+      hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+    }) ||
+    shouldRecheckRecoverablePluginBinding({
+      binding,
+      pluginThreadConfig: params.pluginThreadConfig as CodexPluginThreadConfigProvider | undefined,
+    })
+  ) {
+    return { canReuseBinding: false };
+  }
+
+  const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
+  if (
+    binding.dynamicToolsFingerprint &&
+    !areDynamicToolFingerprintsCompatible(binding.dynamicToolsFingerprint, dynamicToolsFingerprint)
+  ) {
+    return { canReuseBinding: false };
+  }
+
+  return { canReuseBinding: true, generation: binding.nativeHookRelayGeneration };
 }
 
 export function buildContextEngineBinding(
