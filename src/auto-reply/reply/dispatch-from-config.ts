@@ -2142,12 +2142,19 @@ export async function dispatchReplyFromConfig(
     const hasFailedProgressStatus = (payload: {
       phase?: string;
       status?: string;
+      outcomeClassification?: string;
       exitCode?: number | null;
-    }) =>
-      payload.phase === "error" ||
-      payload.status === "failed" ||
-      payload.status === "error" ||
-      (typeof payload.exitCode === "number" && payload.exitCode !== 0);
+    }) => {
+      if (payload.outcomeClassification === "benign_no_result") {
+        return false;
+      }
+      return (
+        payload.phase === "error" ||
+        payload.status === "failed" ||
+        payload.status === "error" ||
+        (typeof payload.exitCode === "number" && payload.exitCode !== 0)
+      );
+    };
     const shouldSuppressToolErrorWarnings = () => {
       if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
         return params.replyOptions.suppressToolErrorWarnings;

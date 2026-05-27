@@ -82,6 +82,9 @@ function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
   if (evt.stream !== "item" && evt.stream !== "command_output") {
     return false;
   }
+  if (evt.stream === "command_output" && evt.data.outcomeClassification === "benign_no_result") {
+    return false;
+  }
   const phase = readStringValue(evt.data.phase);
   const status = readStringValue(evt.data.status);
   return (
