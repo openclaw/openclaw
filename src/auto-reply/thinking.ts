@@ -1,4 +1,3 @@
-import { modelKey as buildModelKey } from "../agents/model-selection-normalize.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   BASE_THINKING_LEVELS,
@@ -58,6 +57,22 @@ type ResolvedThinkingProfile = {
   defaultLevel?: ThinkLevel | null;
 };
 
+function buildCatalogModelKey(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeOptionalLowercaseString(modelId)?.startsWith(
+    `${normalizeOptionalLowercaseString(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
 function resolveThinkingPolicyContext(params: {
   provider?: string | null;
   model?: string | null;
@@ -68,11 +83,11 @@ function resolveThinkingPolicyContext(params: {
   const modelId = normalizeOptionalString(params.model) ?? "";
   const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
   const selectedCatalogKey =
-    normalizedProvider && modelId ? buildModelKey(normalizedProvider, modelId) : undefined;
+    normalizedProvider && modelId ? buildCatalogModelKey(normalizedProvider, modelId) : undefined;
   const candidate = params.catalog?.find(
     (entry) =>
       selectedCatalogKey !== undefined &&
-      buildModelKey(normalizeProviderId(entry.provider), entry.id) === selectedCatalogKey,
+      buildCatalogModelKey(normalizeProviderId(entry.provider), entry.id) === selectedCatalogKey,
   );
   return {
     normalizedProvider,
