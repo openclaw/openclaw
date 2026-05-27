@@ -7,6 +7,7 @@ import {
   extractHookToken,
   isHookAgentAllowed,
   normalizeHookDispatchSessionKey,
+  resolveEffectiveHookTargetAgentId,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   normalizeAgentPayload,
@@ -181,7 +182,7 @@ describe("gateway hooks helpers", () => {
     }
   });
 
-  test("resolveHookTargetAgentId resolves effective hook target agent ids", () => {
+  test("resolveHookTargetAgentId preserves omitted default target intent", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
@@ -191,8 +192,10 @@ describe("gateway hooks helpers", () => {
     const resolved = resolveHooksConfigOrThrow(cfg);
     expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
     expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBe("main");
-    expect(resolveHookTargetAgentId(resolved, undefined)).toBe("main");
-    expect(resolveHookTargetAgentId(resolved, " ")).toBe("main");
+    expect(resolveHookTargetAgentId(resolved, undefined)).toBeUndefined();
+    expect(resolveHookTargetAgentId(resolved, " ")).toBeUndefined();
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBe("main");
+    expect(resolveEffectiveHookTargetAgentId(resolved, " ")).toBe("main");
   });
 
   test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
