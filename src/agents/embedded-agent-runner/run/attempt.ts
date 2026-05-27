@@ -145,7 +145,6 @@ import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-subscribe.tools.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
