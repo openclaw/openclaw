@@ -101,6 +101,17 @@ function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentH
   return policy;
 }
 
+function isCodexRuntimeOpenAIProvider(params: {
+  runtime: string | undefined;
+  provider: string | undefined;
+}): boolean {
+  if (params.runtime?.trim().toLowerCase() !== "codex") {
+    return false;
+  }
+  const provider = params.provider?.trim().toLowerCase();
+  return provider === "openai" || provider === "openai-codex";
+}
+
 function compareHarnessSupport(
   left: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
   right: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
@@ -169,6 +180,25 @@ function selectAgentHarnessDecision(params: {
           harness: forced,
           policy,
           selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      if (isCodexRuntimeOpenAIProvider({ runtime, provider: params.provider })) {
+        return buildSelectionDecision({
+          harness: forced,
+          policy,
+          selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+        return buildSelectionDecision({
+          harness: piHarness,
+          policy: {
+            ...policy,
+            runtime: "pi",
+          },
+          selectedReason: "cli_runtime_passthrough_pi",
           candidates: listHarnessCandidates(pluginHarnesses),
         });
       }
