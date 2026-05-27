@@ -36,6 +36,12 @@ afterEach(() => {
 });
 
 describe("report-test-temp-creations", () => {
+  it("keeps a non-executed warning fixture for changed-gate proof", () => {
+    const warningFixture = 'fs.mkdtempSync("openclaw-warning-fixture-")';
+
+    expect(warningFixture).toContain("mkdtempSync");
+  });
+
   it("reports added bare temp creation lines using changed-lane test path scope", () => {
     const bareTempSource = [
       "const tempRoot = fs.",
