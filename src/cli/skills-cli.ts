@@ -79,7 +79,6 @@ async function runSkillsAction(
   try {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
-    defaultRuntime.exit(0);
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
