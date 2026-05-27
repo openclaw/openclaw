@@ -41,6 +41,7 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
     SenderE164: "+15551234567",
     MessageThreadId: 42,
     MediaPath: "/tmp/audio.ogg",
+    MediaUrl: "https://cdn.example.com/audio.ogg",
     MediaType: "audio/ogg",
     GroupSubject: "ops",
     GroupChannel: "ops-room",
@@ -245,6 +246,9 @@ describe("message hook mappers", () => {
     expect(receivedMetadata?.senderName).toBe("User One");
     expect(receivedMetadata?.threadId).toBe(42);
     expect(receivedMetadata?.topicName).toBe("Deployments");
+    expect(receivedMetadata?.mediaPath).toBe("/tmp/audio.ogg");
+    expect(receivedMetadata?.mediaUrl).toBe("https://cdn.example.com/audio.ogg");
+    expect(receivedMetadata?.mediaType).toBe("audio/ogg");
     const internalReceived = toInternalMessageReceivedContext(canonical);
     const { metadata: internalMetadata, ...internalReceivedBase } = internalReceived;
     expect(internalReceivedBase).toEqual({
