@@ -210,6 +210,8 @@ export interface AgentSessionConfig {
   initialActiveToolNames?: string[];
   /** Optional allowlist of tool names. When provided, only these tool names are exposed. */
   allowedToolNames?: string[];
+  /** Exclude built-in shell/filesystem tools from the registry. */
+  disableBuiltInTools?: boolean;
   /**
    * Override base tools (useful for custom runtimes).
    *
@@ -341,6 +343,7 @@ export class AgentSession {
   private extensionRunnerRef?: { current?: ExtensionRunner };
   private initialActiveToolNames?: string[];
   private allowedToolNames?: Set<string>;
+  private disableBuiltInTools: boolean;
   private baseToolsOverride?: Record<string, AgentTool>;
   private sessionStartEvent: SessionStartEvent;
   private extensionUIContext?: ExtensionUIContext;
@@ -375,6 +378,7 @@ export class AgentSession {
     this.extensionRunnerRef = config.extensionRunnerRef;
     this.initialActiveToolNames = config.initialActiveToolNames;
     this.allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
+    this.disableBuiltInTools = config.disableBuiltInTools === true;
     this.baseToolsOverride = config.baseToolsOverride;
     this.sessionStartEvent = config.sessionStartEvent ?? {
       type: "session_start",
@@ -2301,8 +2305,10 @@ export class AgentSession {
     const previousRegistryNames = new Set(this.toolRegistry.keys());
     const previousActiveToolNames = this.getActiveToolNames();
     const allowedToolNames = this.allowedToolNames;
+    const isDisabledBuiltInToolName = (name: string): boolean =>
+      this.disableBuiltInTools && this.baseToolDefinitions.has(name);
     const isAllowedTool = (name: string): boolean =>
-      !allowedToolNames || allowedToolNames.has(name);
+      !isDisabledBuiltInToolName(name) && (!allowedToolNames || allowedToolNames.has(name));
 
     const registeredTools = this.currentExtensionRunner.getAllRegisteredTools();
     const allCustomTools = [

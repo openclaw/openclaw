@@ -66,5 +66,10 @@ describe("createAgentSession tool defaults", () => {
     });
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["custom_lookup"]);
+
+    session.setActiveToolsByName(["bash", "custom_lookup"]);
+
+    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
   });
 });

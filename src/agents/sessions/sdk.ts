@@ -285,13 +285,14 @@ export async function createAgentSession(
   const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
   const customToolNames = options.customTools?.map((tool) => tool.name) ?? [];
   const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
+  const disableBuiltInTools = !options.tools && options.noTools === "builtin";
   const initialActiveToolNames: string[] = options.tools
     ? [...options.tools]
     : options.noTools === "all"
       ? []
       : options.noTools === "builtin"
         ? customToolNames
-      : defaultActiveToolNames;
+        : defaultActiveToolNames;
 
   let agent: Agent;
 
@@ -424,6 +425,7 @@ export async function createAgentSession(
     modelRegistry,
     initialActiveToolNames,
     allowedToolNames,
+    disableBuiltInTools,
     extensionRunnerRef,
     sessionStartEvent: options.sessionStartEvent,
   });
