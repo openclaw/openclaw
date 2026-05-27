@@ -84,13 +84,13 @@ function summarizeProfile(file, limit) {
   console.log(`duration_ms: ${durationMs.toFixed(1)} samples: ${samples.length}`);
   console.log("top_frames:");
   for (const [key, micros] of [...byFrame.entries()]
-    .sort((left, right) => right[1] - left[1])
+    .toSorted((left, right) => right[1] - left[1])
     .slice(0, limit)) {
     console.log(`${(micros / 1000).toFixed(1)}ms\t${key}`);
   }
   console.log("top_modules:");
   for (const [key, micros] of [...byModule.entries()]
-    .sort((left, right) => right[1] - left[1])
+    .toSorted((left, right) => right[1] - left[1])
     .slice(0, limit)) {
     console.log(`${(micros / 1000).toFixed(1)}ms\t${key}`);
   }
