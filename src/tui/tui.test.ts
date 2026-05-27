@@ -120,6 +120,17 @@ describe("canSubmitTuiChatMessage", () => {
     ).toBe(true);
   });
 
+  it("allows local stop text while a queued run is pending", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+        pendingChatRunId: "run-queued",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
   it("blocks submits with pending optimistic state", () => {
     expect(
       canSubmitTuiChatMessage({

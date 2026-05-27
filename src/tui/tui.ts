@@ -374,11 +374,12 @@ export function canSubmitTuiChatMessage(params: {
   pendingOptimisticUserMessage?: boolean;
   message?: string;
 }): boolean {
+  const stopText = params.message ? isChatStopCommandText(params.message) : false;
+  if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
+    return true;
+  }
   const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
   if (!params.local && params.activeChatRunId) {
-    if (params.message && isChatStopCommandText(params.message)) {
-      return true;
-    }
     return false;
   }
   return !pending;
