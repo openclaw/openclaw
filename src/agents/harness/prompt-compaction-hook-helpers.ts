@@ -5,8 +5,8 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
-import type { AgentMessage } from "../runtime/index.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
