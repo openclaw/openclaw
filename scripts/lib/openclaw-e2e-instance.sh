@@ -54,6 +54,13 @@ openclaw_e2e_maybe_timeout() {
   if [ -z "$timeout_bin" ]; then
     if command -v node >/dev/null 2>&1; then
       echo "timeout command not found; using Node watchdog for OpenClaw E2E command timeout $timeout_value" >&2
+      if [[ "$1" != */* ]]; then
+        local resolved_command
+        resolved_command="$(command -v "$1" 2>/dev/null || true)"
+        if [ -n "$resolved_command" ]; then
+          set -- "$resolved_command" "${@:2}"
+        fi
+      fi
       node - "$timeout_value" "$@" <<'NODE'
 const [, , timeoutValue, command, ...args] = process.argv;
 const parseTimeoutMs = (value) => {
@@ -80,6 +87,7 @@ try {
 }
 const child = spawn(command, args, {
   detached: process.platform !== "win32",
+  env: process.env,
   stdio: "inherit",
 });
 let timedOut = false;
