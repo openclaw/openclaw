@@ -22,6 +22,7 @@ import {
   resolvePluginRuntimeModulePath,
   resolvePluginRuntimeModulePathWithDiagnostics,
   resolvePluginSdkAliasFile,
+  resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import {
@@ -652,6 +653,175 @@ describe("plugin sdk alias helpers", () => {
       }),
     );
     expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
+  });
+
+  it("backfills scoped aliases for real dist plugin-sdk artifacts even when exports are stale", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    const corePath = path.join(fixture.root, "dist", "plugin-sdk", "core.js");
+    const taskRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "agent-harness-task-runtime.js",
+    );
+    fs.writeFileSync(corePath, "export const core = true;\n", "utf-8");
+    fs.writeFileSync(
+      taskRuntimePath,
+      "export const marker = true;\n",
+      "utf-8",
+    );
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/core"] ?? "")).toBe(
+      fs.realpathSync(corePath),
+    );
+    expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(taskRuntimePath);
+    expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(taskRuntimePath);
+    // The package-level fall-through that caused the original bug appended the
+    // subpath under the file-valued root alias target. Confirm no alias value
+    // ever points inside `root-alias.cjs/<subpath>`.
+    for (const aliasValue of Object.values(aliases)) {
+      expect(aliasValue).not.toMatch(/root-alias\.cjs[\\/]/);
+    }
+  });
+
+  it("does not backfill dist plugin-sdk artifacts whose transitive relative imports are missing", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "agent-harness-task-runtime.js"),
+      'import { x } from "./agent-harness-task-runtime-missing-chunk.js";\nexport const marker = x;\n',
+      "utf-8",
+    );
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBeUndefined();
+  });
+
+  it("backfills to source artifact when pluginSdkResolution=src and src exists", () => {
+    // P2-3 regression: when source mode is requested and a subpath is
+    // missing from package.json#exports but present in BOTH src and dist,
+    // the backfill must respect the src-first resolution order. Otherwise
+    // source-mode dev/test loaders would silently run stale built code for
+    // the same stale-export case this patch is meant to handle.
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    const srcTaskRuntimePath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "agent-harness-task-runtime.ts",
+    );
+    const distTaskRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "agent-harness-task-runtime.js",
+    );
+    fs.writeFileSync(srcTaskRuntimePath, 'export const marker = "src";\n', "utf-8");
+    fs.writeFileSync(distTaskRuntimePath, 'export const marker = "dist";\n', "utf-8");
+
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "extensions", "demo", "index.ts"),
+      pluginSdkResolution: "src",
+    });
+
+    expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(srcTaskRuntimePath);
+    expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(srcTaskRuntimePath);
+  });
+
+  it("does not backfill openclaw/plugin-sdk/index (root-export dist artifact)", () => {
+    // P2-2 regression: `dist/plugin-sdk/index.js` is the dist artifact for
+    // the package's root `./plugin-sdk` export, not a scoped subpath. The
+    // package.json contract only exposes `openclaw/plugin-sdk` for it, so
+    // backfilling `openclaw/plugin-sdk/index` would synthesize a subpath
+    // that does not exist in `package.json#exports` and would break for
+    // plugins loaded against the published package.
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    // dist/plugin-sdk/index.js already exists from the fixture (default
+    // distFile). Confirm the backfill does NOT publish it as a scoped alias.
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(aliases["openclaw/plugin-sdk/index"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/index"]).toBeUndefined();
+  });
+
+  it("does NOT backfill private dist plugin-sdk artifacts for untrusted callers", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    // Drop a private subpath artifact in dist. Its scoped alias must NOT be
+    // exposed to an untrusted loader path when private QA mode is disabled.
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "codex-native-task-runtime.js"),
+      "export const marker = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "ssrf-runtime-internal.js"),
+      "export const marker = true;\n",
+      "utf-8",
+    );
+
+    const aliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      resolvePluginSdkScopedAliasMap({
+        modulePath: path.join(
+          fixture.root,
+          "dist",
+          "extensions",
+          "demo",
+          "index.js",
+        ),
+      }),
+    );
+
+    expect(aliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(aliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
   });
 
   it("adds non-QA private Codex helper subpaths only for trusted Codex plugins", () => {

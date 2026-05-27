@@ -713,6 +713,22 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   );
 }
 
+// Backfill is default-allow for any non-private dist plugin-sdk subpath:
+// returns true when the subpath is not in the private list at all, or when
+// it IS private but the caller has trusted owner / private QA CLI access.
+// Callers MUST still gate on `isUsableDistPluginSdkArtifact` so we never
+// publish a scoped alias for a broken dist file.
+function isBackfillableDistPluginSdkArtifactSubpath(params: {
+  packageRoot: string;
+  modulePath: string;
+  subpath: string;
+}) {
+  if (!readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).includes(params.subpath)) {
+    return true;
+  }
+  return shouldIncludePrivateLocalOnlyPluginSdkSubpath(params);
+}
+
 function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
   if (isUsableDistPluginSdkArtifact(distPath)) {
@@ -723,6 +739,51 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   );
 }
 
+// `dist/plugin-sdk/index.js` is the dist artifact for the package's root
+// `./plugin-sdk` export, not a scoped subpath. The package contract only
+// exposes `openclaw/plugin-sdk` for it, so backfilling
+// `openclaw/plugin-sdk/index` here would synthesize a subpath that does
+// not exist in `package.json#exports` and would break for plugins that
+// load against the published package rather than the OpenClaw aliasing
+// loader.
+const PLUGIN_SDK_ROOT_DIST_BASENAME = "index";
+
+function resolveBackfillablePluginSdkSubpathTarget(params: {
+  packageRoot: string;
+  subpath: string;
+  orderedKinds: readonly PluginSdkAliasCandidateKind[];
+}): string | null {
+  for (const kind of params.orderedKinds) {
+    if (kind === "src") {
+      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+        const candidate = path.join(
+          params.packageRoot,
+          "src",
+          "plugin-sdk",
+          `${params.subpath}${ext}`,
+        );
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+      continue;
+    }
+    const candidate = path.join(
+      params.packageRoot,
+      "dist",
+      "plugin-sdk",
+      `${params.subpath}.js`,
+    );
+    // Mirror the health check used by the primary alias loop so we never
+    // publish a backfilled alias for an artifact whose transitive relative
+    // dependencies are missing on disk.
+    if (isUsableDistPluginSdkArtifact(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   try {
     const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
@@ -731,7 +792,11 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
         .readdirSync(distPluginSdkDir, { withFileTypes: true })
         .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
         .map((entry) => entry.name.slice(0, -".js".length))
-        .filter((subpath) => isSafePluginSdkSubpathSegment(subpath)),
+        .filter(
+          (subpath) =>
+            isSafePluginSdkSubpathSegment(subpath) &&
+            subpath !== PLUGIN_SDK_ROOT_DIST_BASENAME,
+        ),
     );
   } catch {
     return new Set();
@@ -846,6 +911,32 @@ export function resolvePluginSdkScopedAliasMap(
       }
       if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
+      }
+    }
+  }
+  if (distPluginSdkArtifacts.size > 0) {
+    for (const subpath of distPluginSdkArtifacts) {
+      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
+        continue;
+      }
+      if (!isBackfillableDistPluginSdkArtifactSubpath({ packageRoot, modulePath, subpath })) {
+        continue;
+      }
+      // Honor the same src/dist resolution order the primary loop uses
+      // (orderedKinds). When src is preferred and a src artifact exists,
+      // backfilling to dist would silently make source-mode dev/test
+      // loaders run stale built SDK code for the same stale-export case
+      // this patch is meant to handle.
+      const candidate = resolveBackfillablePluginSdkSubpathTarget({
+        packageRoot,
+        subpath,
+        orderedKinds,
+      });
+      if (!candidate) {
+        continue;
+      }
+      for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+        aliasMap[`${packageName}/${subpath}`] = candidate;
       }
     }
   }

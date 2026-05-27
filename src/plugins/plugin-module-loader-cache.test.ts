@@ -431,11 +431,15 @@ describe("getCachedPluginModuleLoader", () => {
     >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-require-fastpath");
 
     const cache = new Map();
+    const aliasMap = {
+      "openclaw/plugin-sdk": "/repo/dist/plugin-sdk/root-alias.cjs",
+    };
     const loader = getCachedPluginModuleLoader({
       cache,
       modulePath: "/repo/dist/extensions/demo/api.js",
       importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
       loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      aliasMap,
       createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
@@ -447,6 +451,7 @@ describe("getCachedPluginModuleLoader", () => {
     expect(fromSourceTransformer).not.toHaveBeenCalled();
     // allowWindows must be passed so the native fast path works on Windows too.
     expectNativeOptions(nativeStub, "/repo/dist/extensions/demo/api.js");
+    expect(callArg(nativeStub, 0, 1, "native options")).toMatchObject({ aliasMap });
     expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
       nativeHits: 1,

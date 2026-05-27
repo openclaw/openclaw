@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import Module from "node:module";
 import path from "node:path";
@@ -80,6 +81,88 @@ function requireWithOptionalAliases(
   return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
 }
 
+// Memoized file-vs-directory probe for alias targets. We need this to decide
+// whether to use `dirname(aliasTarget)` (file target) or `aliasTarget` itself
+// (directory target) as the base for suffix resolution. A pure `path.extname`
+// heuristic is wrong for directories whose last segment contains a dot
+// (e.g. `dist/plugin-sdk.v2`), so we prefer a real `statSync` and only fall
+// back to the extension check when the target cannot be stat'd.
+const aliasTargetIsFileCache = new Map<string, boolean>();
+function isFileValuedAliasTarget(aliasTarget: string): boolean {
+  const cached = aliasTargetIsFileCache.get(aliasTarget);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let isFile: boolean;
+  try {
+    isFile = fs.statSync(aliasTarget).isFile();
+  } catch {
+    isFile = path.extname(aliasTarget) !== "";
+  }
+  aliasTargetIsFileCache.set(aliasTarget, isFile);
+  return isFile;
+}
+
+function resolveAliasSubpathTarget(params: {
+  aliasTarget: string;
+  remainder: string;
+  parent: NodeJS.Module | undefined;
+  isMain: boolean;
+  options?: { paths?: string[] };
+  originalResolveFilename: ResolveFilename;
+}): string | null {
+  const { aliasTarget, isMain, options, originalResolveFilename, parent, remainder } = params;
+  const basePath = isFileValuedAliasTarget(aliasTarget) ? path.dirname(aliasTarget) : aliasTarget;
+  const targetPath = path.resolve(basePath, remainder);
+  try {
+    return originalResolveFilename(targetPath, parent, isMain, options);
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function resolveNativeRequireAlias(
+  request: string,
+  aliasMap: Record<string, string>,
+  parent: NodeJS.Module | undefined,
+  isMain: boolean,
+  options: { paths?: string[] } | undefined,
+  originalResolveFilename: ResolveFilename,
+): string | null {
+  const exactTarget = aliasMap[request];
+  if (exactTarget) {
+    return exactTarget;
+  }
+  // Restrict prefix-based subpath fallback to alias targets that are
+  // DIRECTORIES. A file-valued root alias (e.g. `openclaw/plugin-sdk` ->
+  // `dist/plugin-sdk/root-alias.cjs`) intentionally does NOT expose every
+  // sibling file in its containing directory; the scoped alias map governs
+  // which subpaths are reachable, including private-subpath gating. Using
+  // prefix matching against a file target to resolve arbitrary siblings
+  // would bypass that gate. Public subpaths must already be present as
+  // exact entries in the alias map via the scoped backfill.
+  const prefix = Object.keys(aliasMap)
+    .filter(
+      (key) => request.startsWith(`${key}/`) && !isFileValuedAliasTarget(aliasMap[key] ?? ""),
+    )
+    .toSorted((left, right) => right.length - left.length)[0];
+  if (!prefix) {
+    return null;
+  }
+  return resolveAliasSubpathTarget({
+    aliasTarget: aliasMap[prefix] ?? "",
+    remainder: request.slice(prefix.length + 1),
+    parent,
+    isMain,
+    options,
+    originalResolveFilename,
+  });
+}
+
 export function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,
@@ -89,7 +172,14 @@ export function withNativeRequireAliases<T>(
   }
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
-    const aliasTarget = aliasMap[request];
+    const aliasTarget = resolveNativeRequireAlias(
+      request,
+      aliasMap,
+      parent,
+      isMain,
+      options,
+      originalResolveFilename,
+    );
     if (aliasTarget) {
       return aliasTarget;
     }
