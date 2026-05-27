@@ -87,7 +87,7 @@ describe("package manager build policy", () => {
     expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
       "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
     });
-    expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.1" });
+    expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
   });
 
   it("can preserve current forked shrinkwrap dependencies with parent-scoped overrides", () => {

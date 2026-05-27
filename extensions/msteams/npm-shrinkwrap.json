@@ -1232,9 +1232,9 @@
       "license": "MIT"
     },
     "node_modules/lru-cache": {
-      "version": "11.5.1",
-      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.1.tgz",
-      "integrity": "sha512-RPimw/7aMdv2oqRrxKwvZXcPfwBrn/JZ2xYcY9Hus/6LaS3VOAKVWKWgNLCFSiOm1ESXinjsDlidVU7JlnCN2A==",
+      "version": "11.5.0",
+      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-11.5.0.tgz",
+      "integrity": "sha512-5YgH9UJd7wVb9hIouI2adWpgqrrICkt070Dnj8EUY1+B4B2P9eRLPAkAAo6NICA7CEhOIeBHl46u9zSNpNu7zA==",
       "license": "BlueOak-1.0.0",
       "engines": {
         "node": "20 || >=22"
