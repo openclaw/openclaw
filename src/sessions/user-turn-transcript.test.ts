@@ -231,6 +231,11 @@ describe("user turn transcript persistence", () => {
           text: "What is in this image?",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
           timestamp: 123,
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "source-main",
+            sourceTool: "sessions_send",
+          },
         },
         updateMode: "none",
       });
@@ -245,6 +250,11 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "What is in this image?",
           MediaPath: "/tmp/image.png",
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "source-main",
+            sourceTool: "sessions_send",
+          },
           MediaType: "image/png",
         }),
       ]);

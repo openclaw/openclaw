@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { mimeTypeFromFilePath } from "../media/mime.js";
+import { applyInputProvenanceToUserMessage, type InputProvenance } from "./input-provenance.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
 type TranscriptAppendConfig = Parameters<typeof appendSessionTranscriptMessage>[0]["config"];
@@ -34,6 +35,7 @@ export type UserTurnInput = {
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
+  provenance?: InputProvenance;
   mediaOnlyText?: string;
 };
 
@@ -285,13 +287,14 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
-  return {
+  const message = {
     role: "user",
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
   } as PersistedUserTurnMessage;
+  return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
 }
 
 function resolvePersistedUserTurnMessage(

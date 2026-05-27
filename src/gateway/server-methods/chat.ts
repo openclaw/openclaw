@@ -2600,6 +2600,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         text: rawMessage,
         timestamp: now,
         idempotencyKey: `${clientRunId}:user`,
+        ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
       };
       const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
         ...baseUserTurnInput,
