@@ -9,11 +9,51 @@ import {
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  CodexNativeThreadLifecycleReason,
+  emitCodexNativeThreadLifecycleDiagnostic,
+  resolveCodexNativeThreadBindingMode,
+  type CodexNativeThreadLifecycleDiagnostic,
+  type CodexNativeThreadLifecycleDiagnosticInput,
+} from "./native-thread-diagnostics.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { readCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
+
+function codexNativeBindingDiagnosticFields(
+  binding: CodexAppServerThreadBinding | undefined,
+): Partial<CodexNativeThreadLifecycleDiagnostic> {
+  return {
+    threadId: binding?.threadId,
+    bindingMode: resolveCodexNativeThreadBindingMode(binding),
+    contextEngineId: binding?.contextEngine?.engineId,
+    contextEnginePolicyFingerprint: binding?.contextEngine?.policyFingerprint,
+    projectionMode: binding?.contextEngine?.projection?.mode,
+    projectionEpoch: binding?.contextEngine?.projection?.epoch,
+    projectionFingerprint: binding?.contextEngine?.projection?.fingerprint,
+    dynamicToolsFingerprint: binding?.dynamicToolsFingerprint,
+    userMcpServersFingerprint: binding?.userMcpServersFingerprint,
+    mcpServersFingerprint: binding?.mcpServersFingerprint,
+    environmentSelectionFingerprint: binding?.environmentSelectionFingerprint,
+    pluginAppsFingerprint: binding?.pluginAppsFingerprint,
+    pluginAppsInputFingerprint: binding?.pluginAppsInputFingerprint,
+  };
+}
+
+function emitCodexNativeThreadCompactionDiagnostic(
+  params: CompactEmbeddedPiSessionParams,
+  diagnostic: CodexNativeThreadLifecycleDiagnosticInput,
+): void {
+  emitCodexNativeThreadLifecycleDiagnostic({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    contextTokenBudget: params.contextTokenBudget,
+    sessionTokens: params.currentTokenCount,
+    ...diagnostic,
+  });
+}
 
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
@@ -168,6 +208,17 @@ async function compactCodexNativeThread(
     binding.authProfileId &&
     binding.authProfileId !== requestedAuthProfileId
   ) {
+    emitCodexNativeThreadCompactionDiagnostic(params, {
+      action: "failed",
+      reason: CodexNativeThreadLifecycleReason.AuthProfileMismatch,
+      level: "warn",
+      message: "codex app-server compaction rejected thread binding for auth profile mismatch",
+      ...codexNativeBindingDiagnosticFields(binding),
+      extra: {
+        requestedAuthProfileId,
+        bindingAuthProfileId: binding.authProfileId,
+      },
+    });
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
 
@@ -189,6 +240,7 @@ async function compactCodexNativeThread(
   } catch (error) {
     if (isCodexThreadNotFoundError(error)) {
       return failedCodexThreadBindingCompactionResult(params, {
+        binding,
         threadId: binding.threadId,
         reason: formatCompactionError(error),
         recovery: "stale_thread_binding",
@@ -227,17 +279,32 @@ async function compactCodexNativeThread(
 function failedCodexThreadBindingCompactionResult(
   params: CompactEmbeddedPiSessionParams,
   recovery: {
+    binding?: CodexAppServerThreadBinding;
     reason: string;
     recovery: "missing_thread_binding" | "stale_thread_binding";
     threadId?: string;
   },
 ): EmbeddedPiCompactResult {
-  embeddedAgentLog.warn("codex app-server compaction could not use thread binding", {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    threadId: recovery.threadId,
-    reason: recovery.reason,
-    recovery: recovery.recovery,
+  const bindingDiagnosticFields = codexNativeBindingDiagnosticFields(recovery.binding);
+  emitCodexNativeThreadCompactionDiagnostic(params, {
+    action: recovery.recovery === "stale_thread_binding" ? "rejected" : "failed",
+    reason:
+      recovery.recovery === "missing_thread_binding"
+        ? CodexNativeThreadLifecycleReason.MissingThreadBinding
+        : CodexNativeThreadLifecycleReason.AppServerRejectedThread,
+    level: "warn",
+    message: "codex app-server compaction could not use thread binding",
+    ...bindingDiagnosticFields,
+    threadId: recovery.threadId ?? bindingDiagnosticFields.threadId,
+    bindingMode: recovery.binding
+      ? bindingDiagnosticFields.bindingMode
+      : recovery.threadId
+        ? "legacy"
+        : "none",
+    extra: {
+      reason: recovery.reason,
+      recovery: recovery.recovery,
+    },
   });
   return {
     ok: false,

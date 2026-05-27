@@ -233,6 +233,48 @@ Because Codex owns the canonical native thread, `tool_result_persist` does not
 currently rewrite Codex-native tool result records. It only applies when
 OpenClaw is writing an OpenClaw-owned session transcript tool result.
 
+## Troubleshooting token pressure
+
+Codex harness latency can come from three different pressure points. They look
+similar in logs, but they have different fixes.
+
+| Pressure point                    | Owner            | What it means                                                                                                                                                            |
+| --------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Model or app-server context limit | Codex app-server | Codex accepted a native thread or turn and then rejected, compacted, or failed because the real model request could not fit.                                             |
+| OpenClaw assembly precheck        | OpenClaw         | OpenClaw's rendered turn prompt, developer instructions, context-engine projection, media, and reserves are too large before the turn is submitted to app-server.        |
+| Native-thread reuse rotation      | OpenClaw + Codex | OpenClaw has a saved Codex thread binding, but the persisted/native transcript is over the configured warm-thread reuse guard or the binding identity no longer matches. |
+
+The native-thread reuse guard is not the model context window. When unset,
+OpenClaw uses Codex's reported model context window, with a 300000-token
+fallback recovery fuse when Codex has not reported one. It is a proactive
+threshold for deciding whether an existing native Codex thread is still a good
+warm resume candidate. Setting `maxActiveTranscriptTokens` to `120k` preserves
+an 86000 token native rollout on models with smaller reported windows, while
+setting it to `50k` rotates a 60000 token binding. Setting the token guard to
+`0` disables only proactive token rotation; byte guards and semantic binding
+checks can still rotate.
+
+For context-engine `thread_bootstrap`, the efficient path is a matching
+context-engine id, policy fingerprint, projection epoch, projection
+fingerprint, and dynamic-tool surface. In that case OpenClaw logs
+`thread-bootstrap-semantic-reuse` and skips the proactive token and byte guards,
+because the large projection was already bootstrapped into that Codex thread.
+When any semantic identity changes, OpenClaw starts a fresh native thread and
+emits `codex.native_thread.lifecycle` with a stable reason such as
+`projection-mismatch`, `context-engine-binding-mismatch`,
+`dynamic-tools-mismatch`, `mcp-config-mismatch`,
+`environment-selection-mismatch`, `native-tool-surface-disabled`,
+`plugin-app-config-mismatch`, `auth-profile-mismatch`, `missing-thread-binding`,
+`app-server-rejected-thread`, `native-token-guard`, or `native-byte-guard`.
+
+The trusted lifecycle diagnostic includes counts and fingerprints, but not raw
+prompt text, bootstrap file contents, tool arguments, or secrets. Its companion
+log entry is intentionally lower-cardinality and omits scoped thread/session ids
+and fingerprints. Use the trusted event to answer whether a slow Codex session is
+rebuilding context because the warm native thread exceeded a guard, because
+OpenClaw assembled too much prompt/context, or because Codex itself rejected the
+native thread or turn.
+
 ## Media and delivery
 
 OpenClaw continues to own media delivery and media provider selection. Image,
