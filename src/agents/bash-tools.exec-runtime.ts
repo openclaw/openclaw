@@ -244,7 +244,7 @@ export function resolveExecTarget(params: {
   elevatedRequested: boolean;
   sandboxAvailable: boolean;
 }) {
-  const configuredTarget = params.configuredTarget ?? "auto";
+  const configuredTarget = params.configuredTarget ?? "sandbox";
   const requestedTarget = params.requestedTarget ?? null;
   if (
     requestedTarget &&

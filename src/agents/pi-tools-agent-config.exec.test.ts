@@ -76,7 +76,7 @@ describe("Agent-specific exec tool defaults", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
+  it("fails closed for the implicit sandbox exec host when sandbox runtime is unavailable", async () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: {
@@ -92,7 +92,31 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const execTool = requireExecTool(tools);
 
-    const result = await execTool.execute("call-implicit-auto-default", {
+    await expect(
+      execTool.execute("call-implicit-sandbox-default", {
+        command: "echo done",
+      }),
+    ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it("routes explicit auto exec to gateway without a sandbox runtime", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "auto",
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-explicit-auto-gateway",
+      agentDir: "/tmp/agent-main-explicit-auto-gateway",
+    });
+    const execTool = requireExecTool(tools);
+
+    const result = await execTool.execute("call-explicit-auto-default", {
       command: "echo done",
     });
     const resultDetails = result?.details as { status?: string } | undefined;
