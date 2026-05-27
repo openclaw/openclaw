@@ -500,8 +500,9 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
 
-  it("sends normal prompts while a run is active so queue policy can handle them", async () => {
+  it("sends local prompts while a run is active so queue policy can handle them", async () => {
     const { handleCommand, sendChat, addUser, addSystem, requestRender, state } = createHarness({
+      opts: { local: true },
       activeChatRunId: "run-active",
       activityStatus: "streaming",
     });
@@ -520,6 +521,21 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");
     expect(state.pendingChatRunId).toEqual(expect.any(String));
+  });
+
+  it("blocks gateway slash prompts while a run is active", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
   });
 
   it("routes slash stop to the abort path instead of queueing a chat send", async () => {
@@ -580,7 +596,7 @@ describe("tui command handlers", () => {
     );
   });
 
-  it("allows gateway sends while the current run is finishing", async () => {
+  it("blocks gateway sends while the current run is finishing", async () => {
     const { handleCommand, sendChat, addUser, addSystem } = createHarness({
       activeChatRunId: "run-active",
       activityStatus: "finishing context",
@@ -588,9 +604,9 @@ describe("tui command handlers", () => {
 
     await handleCommand("/context detail");
 
-    expect(sendChat).toHaveBeenCalledTimes(1);
-    expect(addUser).toHaveBeenCalledWith("/context detail");
-    expect(addSystem).not.toHaveBeenCalledWith(
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
     );
   });

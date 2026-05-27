@@ -648,7 +648,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await abortActive({ preferActive: true });
       return;
     }
-    if (!isBtw && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
+    if (
+      !isBtw &&
+      (state.pendingChatRunId ||
+        state.pendingOptimisticUserMessage ||
+        (opts.local !== true && state.activeChatRunId))
+    ) {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
       tui.requestRender();
       return;
