@@ -1476,6 +1476,7 @@ export async function runEmbeddedAgent(
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
             workspaceDir: resolvedWorkspace,
+            cwd: params.cwd,
             agentDir,
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,

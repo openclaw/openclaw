@@ -371,6 +371,8 @@ export function createOpenClawCodingTools(options?: {
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
+  /** Task working directory for coding tools. Defaults to workspaceDir. */
+  cwd?: string;
   workspaceDir?: string;
   /**
    * Workspace directory that spawned subagents should inherit.
@@ -630,6 +632,9 @@ export function createOpenClawCodingTools(options?: {
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
+  const runtimeRoot = resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir);
+  const codingRoot = sandboxRoot ?? runtimeRoot;
+  const memoryFlushWriteRoot = sandboxRoot ?? workspaceRoot;
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
     includeBaseCodingTools: includeCoreTools,
@@ -666,7 +671,7 @@ export function createOpenClawCodingTools(options?: {
 
   const base: AnyAgentTool[] = [];
   if (includeBaseCodingTools) {
-    for (const tool of createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]) {
+    for (const tool of createCodingTools(codingRoot) as unknown as AnyAgentTool[]) {
       if (tool.name === "read") {
         if (sandboxRoot) {
           const sandboxed = createSandboxedReadTool({
@@ -685,14 +690,14 @@ export function createOpenClawCodingTools(options?: {
           );
           continue;
         }
-        const freshReadTool = createReadTool(workspaceRoot);
+        const freshReadTool = createReadTool(codingRoot);
         const wrapped = createOpenClawReadTool(freshReadTool, {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
         });
         base.push(
           workspaceOnly
-            ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+            ? wrapToolWorkspaceRootGuardWithOptions(wrapped, codingRoot, {
                 additionalRoots: skillReadRoots,
               })
             : wrapped,
@@ -706,16 +711,16 @@ export function createOpenClawCodingTools(options?: {
         if (sandboxRoot) {
           continue;
         }
-        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        const wrapped = createHostWorkspaceWriteTool(codingRoot, { workspaceOnly });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
         continue;
       }
       if (tool.name === "edit") {
         if (sandboxRoot) {
           continue;
         }
-        const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        const wrapped = createHostWorkspaceEditTool(codingRoot, { workspaceOnly });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, codingRoot) : wrapped);
         continue;
       }
       base.push(tool);
@@ -738,7 +743,7 @@ export function createOpenClawCodingTools(options?: {
         safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
         safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
         agentId,
-        cwd: workspaceRoot,
+        cwd: codingRoot,
         allowBackground,
         scopeKey,
         sessionKey: options?.sessionKey,
@@ -783,7 +788,7 @@ export function createOpenClawCodingTools(options?: {
     !includeShellTools || !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
       : createApplyPatchTool({
-          cwd: sandboxRoot ?? workspaceRoot,
+          cwd: codingRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
@@ -983,7 +988,7 @@ export function createOpenClawCodingTools(options?: {
       if (tool.name === "write") {
         toolsForMemoryFlush.push(
           wrapToolMemoryFlushAppendOnlyWrite(tool, {
-            root: sandboxRoot ?? workspaceRoot,
+            root: memoryFlushWriteRoot,
             relativePath: memoryFlushWritePath,
             containerWorkdir: sandbox?.containerWorkdir,
             sandbox:
@@ -1075,7 +1080,7 @@ export function createOpenClawCodingTools(options?: {
       {
         agentId,
         ...(options?.config ? { config: options.config } : {}),
-        cwd: sandboxRoot ?? workspaceRoot,
+        cwd: codingRoot,
         workspaceDir: workspaceRoot,
         ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
         ...(sandboxRoot && allowWorkspaceWrites

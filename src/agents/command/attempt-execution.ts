@@ -392,6 +392,7 @@ export function runAgentAttempt(params: {
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
+  cwd?: string;
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
@@ -540,6 +541,7 @@ export function runAgentAttempt(params: {
         trigger: "user",
         sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
+        cwd: params.cwd,
         config: params.cfg,
         prompt: effectivePrompt,
         provider: cliExecutionProvider,
@@ -667,6 +669,7 @@ export function runAgentAttempt(params: {
     senderIsOwner: params.opts.senderIsOwner,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,

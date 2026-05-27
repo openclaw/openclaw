@@ -146,6 +146,7 @@ import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
+import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
@@ -614,11 +615,18 @@ async function compactEmbeddedAgentSessionDirectOnce(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed embedded compaction runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   await ensureSessionHeader({
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
-    cwd: effectiveWorkspace,
+    cwd: effectiveCwd,
   });
   const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -758,7 +766,15 @@ async function compactEmbeddedAgentSessionDirectOnce(
       senderE164: params.senderE164,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
+      cwd: effectiveCwd,
       workspaceDir: effectiveWorkspace,
+      spawnWorkspaceDir:
+        effectiveCwd !== effectiveWorkspace
+          ? resolvedWorkspace
+          : resolveAttemptSpawnWorkspaceDir({
+              sandbox,
+              resolvedWorkspace,
+            }),
       config: params.config,
       abortSignal: runAbortController.signal,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -915,7 +931,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
-      cwd: effectiveWorkspace,
+      cwd: effectiveCwd,
       moduleUrl: import.meta.url,
     });
     const promptContributionContext: Parameters<
@@ -1034,7 +1050,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       compactionSessionManager = sessionManager;
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-        cwd: effectiveWorkspace,
+        cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
         pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
@@ -1054,7 +1070,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         model,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
-        cwd: resolvedWorkspace,
+        cwd: effectiveCwd,
         agentDir,
         settingsManager,
         extensionFactories,
@@ -1088,7 +1104,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         toolHookContext: {
           agentId: sessionAgentId,
           config: params.config,
-          cwd: effectiveWorkspace,
+          cwd: effectiveCwd,
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
@@ -1112,7 +1128,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
         try {
           const createdSession = await createAgentSession({
-            cwd: effectiveWorkspace,
+            cwd: effectiveCwd,
             agentDir,
             authStorage,
             modelRegistry,

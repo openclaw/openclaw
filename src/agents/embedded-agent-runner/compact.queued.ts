@@ -490,6 +490,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       currentMessageId: params.params.currentMessageId,
       authProfileId: params.params.authProfileId,
       workspaceDir: params.params.workspaceDir,
+      cwd: params.params.cwd,
       agentDir: params.agentDir,
       config: params.params.config,
       skillsSnapshot: params.params.skillsSnapshot,

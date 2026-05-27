@@ -23,6 +23,9 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   registerSubagentRunMock: vi.fn(),
+  resolveSandboxRuntimeStatusMock: vi.fn<
+    (params: { sessionKey?: string }) => { sandboxed: boolean }
+  >(() => ({ sandboxed: false })),
   hookRunner: {
     hasHooks: vi.fn(() => false),
     runSubagentSpawning: vi.fn(),
@@ -107,6 +110,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
+      resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
       resetModules: false,
     }));
   });
@@ -115,6 +119,8 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
+    hoisted.resolveSandboxRuntimeStatusMock.mockReset();
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({ sandboxed: false }));
     hoisted.hookRunner.hasHooks.mockReset();
     hoisted.hookRunner.hasHooks.mockImplementation(() => false);
     hoisted.hookRunner.runSubagentSpawning.mockReset();
@@ -189,11 +195,54 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     );
 
     expect(result.status).toBe("accepted");
-    expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/requester-workspace");
+    expect(getRegisteredRun()?.workspaceDir).toBe("/tmp/workspace-ops");
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([request]) => (request as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
     expect(agentCall?.params).not.toHaveProperty("workspaceDir");
+  });
+
+  it("rejects explicit cwd overrides for sandboxed native subagent spawns", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["ops"],
+            },
+          },
+          {
+            id: "ops",
+            workspace: "/tmp/workspace-ops",
+          },
+        ],
+      },
+    });
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+      sandboxed: typeof sessionKey === "string" && sessionKey.includes(":subagent:"),
+    }));
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inspect explicit cwd",
+        agentId: "ops",
+        cwd: "/tmp/requester-workspace",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/tmp/fallback-requester-workspace",
+      },
+    );
+
+    expect(result.status).toBe("forbidden");
+    expect(result.error).toContain("cwd override is not supported for sandboxed subagent runs");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   async function spawnAndReadAgentParams(task: { task: string; lightContext?: boolean }) {

@@ -552,7 +552,7 @@ export async function executePreparedCliRun(
           argv: [backend.command, ...args],
           timeoutMs: params.timeoutMs,
           noOutputTimeoutMs,
-          cwd: context.workspaceDir,
+          cwd: context.cwd ?? context.workspaceDir,
           env,
           input: stdinPayload,
           captureOutput: false,

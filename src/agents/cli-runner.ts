@@ -136,7 +136,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     sessionId: params.sessionId,
     agentId: params.agentId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    cwd: params.workspaceDir,
+    cwd: params.cwd ?? params.workspaceDir,
     ...(params.config ? { config: params.config } : {}),
   };
   const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
@@ -560,6 +560,7 @@ export async function runPreparedCliAgent(
                   ...(context.promptToolNamesHash
                     ? { promptToolNamesHash: context.promptToolNamesHash }
                     : {}),
+                  ...(context.cwdHash ? { cwdHash: context.cwdHash } : {}),
                   ...(context.preparedBackend.mcpConfigHash
                     ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
                     : {}),
@@ -752,6 +753,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     trigger: params.trigger,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
     config: params.config,
     prompt: params.prompt,
     provider: params.provider ?? "claude-cli",
