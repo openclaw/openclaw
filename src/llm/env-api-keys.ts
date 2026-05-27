@@ -4,31 +4,39 @@ let homedir: typeof import("node:os").homedir | null = null;
 let join: typeof import("node:path").join | null = null;
 
 type DynamicImport = (specifier: string) => Promise<unknown>;
+type NodeBuiltinModule =
+  | typeof import("node:fs")
+  | typeof import("node:os")
+  | typeof import("node:path");
 
 const dynamicImport: DynamicImport = (specifier) => import(specifier);
 const NODE_FS_SPECIFIER = "node:fs";
 const NODE_OS_SPECIFIER = "node:os";
 const NODE_PATH_SPECIFIER = "node:path";
 
-function loadNodeBuiltinModule(specifier: string): unknown | null {
+function loadNodeBuiltinModule(specifier: string): NodeBuiltinModule | null {
   const getBuiltinModule = (typeof process !== "undefined" ? process : undefined) as
     | (NodeJS.Process & { getBuiltinModule?: (id: string) => unknown })
     | undefined;
   if (typeof getBuiltinModule?.getBuiltinModule === "function") {
-    return getBuiltinModule.getBuiltinModule(specifier);
+    return getBuiltinModule.getBuiltinModule(specifier) as NodeBuiltinModule;
   }
   if (typeof require === "function") {
-    return require(specifier) as unknown;
+    return require(specifier) as NodeBuiltinModule;
   }
   return null;
 }
 
 function loadNodeHelpersSync(): boolean {
   try {
-    existsSync ??= (loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs"))
-      ?.existsSync;
-    homedir ??= (loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os"))?.homedir;
-    join ??= (loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as typeof import("node:path"))?.join;
+    const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
+    const osModule = loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os") | null;
+    const pathModule = loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as
+      | typeof import("node:path")
+      | null;
+    existsSync ??= fsModule?.existsSync ?? null;
+    homedir ??= osModule?.homedir ?? null;
+    join ??= pathModule?.join ?? null;
     if (!existsSync || !homedir || !join) {
       return false;
     }

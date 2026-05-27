@@ -145,7 +145,6 @@ const rules = [
   {
     id: "extension-plugin-sdk-compat-subpaths",
     roots: ["extensions"],
-    skippedFilePatterns: [],
     moduleSpecifiers: buildDeprecatedPluginSdkModuleSpecifiers(),
     message: "extensions must use focused non-deprecated plugin SDK subpaths",
   },

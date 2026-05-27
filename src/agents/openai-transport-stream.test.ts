@@ -2273,7 +2273,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<Api>,
+      } satisfies Model,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],

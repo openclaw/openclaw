@@ -5,6 +5,7 @@
  * It is only intended for CLI use, not browser environments.
  */
 
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { oauthErrorHtml, oauthSuccessHtml } from "./openai-codex-oauth-page.runtime.js";
 import type {
@@ -44,7 +45,9 @@ let nodeOAuthRuntimePromise: Promise<NodeOAuthRuntime> | null = null;
 
 function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
   if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
-    return Promise.reject(new Error("OpenAI Codex OAuth is only available in Node.js environments"));
+    return Promise.reject(
+      new Error("OpenAI Codex OAuth is only available in Node.js environments"),
+    );
   }
   nodeOAuthRuntimePromise ??= Promise.all([import("node:crypto"), import("node:http")]).then(
     ([cryptoModule, httpModule]) => ({
@@ -58,9 +61,7 @@ function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
 function resolveCallbackHost(env: NodeJS.ProcessEnv = process.env): string {
   const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
   if (!LOOPBACK_CALLBACK_HOSTS.has(host)) {
-    throw new Error(
-      "OpenAI Codex OAuth callback host must be localhost, 127.0.0.1, or ::1",
-    );
+    throw new Error("OpenAI Codex OAuth callback host must be localhost, 127.0.0.1, or ::1");
   }
   return host;
 }
@@ -143,22 +144,42 @@ function formatMissingTokenResponseFields(json: TokenResponseJson): string {
   return missing.join(", ");
 }
 
+async function postTokenForm(body: URLSearchParams): Promise<Response> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: TOKEN_URL,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    },
+    auditContext: "openai-codex-oauth-token",
+  });
+  try {
+    const responseBody = await response.arrayBuffer();
+    return new Response(responseBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } finally {
+    await release();
+  }
+}
+
 async function exchangeAuthorizationCode(
   code: string,
   verifier: string,
   redirectUri: string = REDIRECT_URI,
 ): Promise<TokenResult> {
-  const response = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
+  const response = await postTokenForm(
+    new URLSearchParams({
       grant_type: "authorization_code",
       client_id: CLIENT_ID,
       code,
       code_verifier: verifier,
       redirect_uri: redirectUri,
     }),
-  });
+  );
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -188,15 +209,13 @@ async function exchangeAuthorizationCode(
 
 async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
   try {
-    const response = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
+    const response = await postTokenForm(
+      new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: refreshToken,
         client_id: CLIENT_ID,
       }),
-    });
+    );
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");

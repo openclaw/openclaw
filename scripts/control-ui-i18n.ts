@@ -4,15 +4,14 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import * as ts from "typescript";
-import { formatErrorMessage } from "../src/infra/errors.ts";
 import {
   completeSimple,
-  getModel,
   type Api,
   type AssistantMessage,
   type Model,
-} from "../src/llm/index.ts";
+} from "openclaw/plugin-sdk/llm";
+import * as ts from "typescript";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -1088,13 +1087,11 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
 export function resolveTranslationModel(): Model {
   const provider = resolveKnownTranslationProvider();
   const modelId = resolveConfiguredModel();
-  return (
-    getModel(provider, modelId) ?? {
-      ...TRANSLATION_PROVIDER_DEFAULTS[provider],
-      id: modelId,
-      name: modelId,
-    }
-  );
+  return {
+    ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+    id: modelId,
+    name: modelId,
+  };
 }
 
 class TranslationClient {

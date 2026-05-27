@@ -1,5 +1,4 @@
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
-import { getModel } from "../src/llm/models.js";
 
 type Usage = {
   input?: number;
@@ -106,10 +105,17 @@ async function main(): Promise<void> {
     contextWindow: 200000,
     maxTokens: 8192,
   };
-  const opusModel = getModel("anthropic", "claude-opus-4-6");
-  if (!opusModel) {
-    throw new Error("Missing anthropic/claude-opus-4-6 in the model registry.");
-  }
+  const opusModel: Model<"anthropic-messages"> = {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+    contextWindow: 200000,
+    maxTokens: 32000,
+  };
 
   console.log(`Prompt: ${prompt}`);
   console.log(`Runs: ${runs}`);

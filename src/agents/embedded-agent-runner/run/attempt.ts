@@ -1660,7 +1660,7 @@ export async function runEmbeddedAttempt(
       toolSearchControlsEnabledForRun ||
       codeModeControlsEnabledForRun;
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-    const toolSearchCatalogRef: ToolSearchCatalogRef | undefined =
+    toolSearchCatalogRef =
       toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
         ? createToolSearchCatalogRef()
         : undefined;
@@ -2767,6 +2767,7 @@ export async function runEmbeddedAttempt(
         trackSettlePromise(inFlightAbortSettlePromises, promise);
       const abortActiveSession = (): Promise<void> =>
         trackAbortSettlePromise(Promise.resolve(activeSession.abort()));
+      abortActiveSessionForExternalSignal = abortActiveSession;
       buildAbortSettlePromise = (): Promise<void> | null => {
         const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
         if (promises.length === 0) {
@@ -3486,6 +3487,7 @@ export async function runEmbeddedAttempt(
         abortCompaction();
         void abortActiveSession();
       };
+      abortRunForExternalSignal = abortRun;
       idleTimeoutTrigger = (error) => {
         idleTimedOut = true;
         abortRun(true, error);
@@ -3586,6 +3588,8 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
         getLastCompactionTokensAfter,
       } = subscription;
+      isCompactionPendingForExternalSignal = subscription.isCompacting;
+      isCompactionInFlightForExternalSignal = () => activeSession.isCompacting;
       toolSearchCatalogExecutor = async (toolParams) => {
         try {
           const result = await runToolLifecycle({

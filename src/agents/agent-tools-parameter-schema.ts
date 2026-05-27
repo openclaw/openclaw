@@ -1,11 +1,11 @@
 import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
 import {
   resolveUnsupportedToolSchemaKeywords,
   shouldOmitEmptyArrayItems,
 } from "../plugins/provider-model-compat.js";
 import { isRecord as isSchemaRecord } from "../shared/record-coerce.js";
+import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";

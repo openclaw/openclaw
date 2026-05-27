@@ -73,14 +73,14 @@ function createNoopTools() {
   ];
 }
 
-function replayValidationTools(model: Model<Api>) {
+function replayValidationTools(model: Model) {
   // Responses-family providers may force or reject fresh tool-choice policy
   // when tools are present. These probes validate repaired historical transcript
   // shape, not new tool invocation.
   return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
 }
 
-function buildReplayMessages(model: Model<Api>): AgentMessage[] {
+function buildReplayMessages(model: Model): AgentMessage[] {
   const now = Date.now();
   // Gemini source metadata deliberately simulates a model switch from a
   // provider-owned transcript. That forces the same id sanitization and replay

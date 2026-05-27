@@ -55,11 +55,11 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   findOpenAIStrictToolSchemaDiagnostics,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
-  resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
@@ -1900,7 +1900,7 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
   return params.effort;
 }
 
-function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
+function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
     model.provider === "openai-codex" &&
     (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")

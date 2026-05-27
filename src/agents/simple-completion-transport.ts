@@ -51,7 +51,7 @@ function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
 function prepareCodexSimpleTransportModel<TApi extends Api>(
   model: Model<TApi>,
   cfg?: OpenClawConfig,
-): Model<Api> | undefined {
+): Model | undefined {
   if (model.provider !== "openai-codex" || model.api !== "openai-codex-responses") {
     return undefined;
   }
@@ -61,7 +61,7 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
   const transportModel = {
     ...model,
     baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(model.baseUrl),
-  } as Model<Api>;
+  } as Model;
   const api = resolveTransportAwareSimpleApi(model.api);
   const streamFn = createOpenClawTransportStreamFnForModel(transportModel, { cfg });
   if (!api || !streamFn) {

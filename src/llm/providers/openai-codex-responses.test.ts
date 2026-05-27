@@ -61,11 +61,9 @@ describe("streamOpenAICodexResponses transport", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal(
       "WebSocket",
-      class {
-        constructor() {
-          throw new Error("websocket connect failed");
-        }
-      },
+      vi.fn(() => {
+        throw new Error("websocket connect failed");
+      }),
     );
 
     const stream = streamOpenAICodexResponses(model, context, {

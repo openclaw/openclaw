@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
+import { resolveOpenAIStrictToolSetting } from "../../agents/openai-strict-tool-setting.js";
 import {
   findOpenAIStrictToolSchemaDiagnostics,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
-  resolveOpenAIStrictToolSetting,
 } from "../../agents/openai-tool-schema.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Model, Tool } from "../types.js";
