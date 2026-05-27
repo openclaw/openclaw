@@ -55,9 +55,6 @@ describe("isSilentReplyPayloadText", () => {
         "think\nCav is talking about a follow-up conversation.\nI will stay quiet here.NO_REPLY",
       ),
     ).toBe(true);
-    expect(
-      isSilentReplyPayloadText("think\nCav is talking about a follow-up conversation.\nNO_REPLY"),
-    ).toBe(true);
     expect(isSilentReplyPayloadText("<think>internal reasoning</think>\nNO_REPLY")).toBe(true);
     expect(
       isSilentReplyPayloadText(
@@ -69,6 +66,19 @@ describe("isSilentReplyPayloadText", () => {
 
   it("keeps substantive replies that also contain a trailing NO_REPLY token", () => {
     expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
+    expect(
+      isSilentReplyPayloadText("think\nCav is talking about a follow-up conversation.\nNO_REPLY"),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "think\nHere is the actual answer.\nI will stay quiet here.NO_REPLY",
+      ),
+    ).toBe(false);
+    expect(
+      isSilentReplyPayloadText(
+        "think\nThe user is asking whether the outage is resolved. Tell them the service is back up and they should retry.\nNO_REPLY",
+      ),
+    ).toBe(false);
     expect(
       isSilentReplyPayloadText("<think>internal reasoning</think>\nHere is the answer.\nNO_REPLY"),
     ).toBe(false);

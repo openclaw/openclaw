@@ -105,18 +105,28 @@ function hasSilentIntentFinalSilentToken(text: string, token: string): boolean {
   return !withoutToken || silentIntentTextRe.test(withoutToken);
 }
 
-const plainReasoningOnlyTextRe =
-  /^\s*(?:(?:the\s+)?(?:user|sender|author|message|conversation|thread|chat)\b|[\p{L}\p{N}_-]{2,40}\s+is\b)[\s\S]{0,280}\b(?:talking|asking|saying|discussing|mentioning|referring|following\s+up|checking|wondering)\b[\s\S]*[.!?]?\s*$/iu;
+const substantiveAnswerCueRe =
+  /\b(?:answer|here(?:'s|\s+is)|tell\s+them|you\s+(?:should|can|could|need|must)|please|try|use|send|service\s+is|resolved|retry|yes|no,|sure)\b/i;
 
 function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean {
   const withoutToken = stripFinalSilentToken(text, token);
   if (withoutToken === null) {
     return false;
   }
-  return (
-    !withoutToken ||
-    silentIntentTextRe.test(withoutToken) ||
-    plainReasoningOnlyTextRe.test(withoutToken)
+  if (!withoutToken || silentIntentTextRe.test(withoutToken)) {
+    return true;
+  }
+  const lines = withoutToken
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const finalLine = lines.at(-1);
+  const previousLines = lines.slice(0, -1).join("\n");
+  return Boolean(
+    finalLine &&
+    silentIntentTextRe.test(finalLine) &&
+    previousLines &&
+    !substantiveAnswerCueRe.test(previousLines),
   );
 }
 
