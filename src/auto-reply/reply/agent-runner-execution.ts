@@ -936,8 +936,34 @@ function resolveContextWindowForCompactionHint(params: {
   return agentCap ?? contextWindow;
 }
 
-function buildContextOverflowResetHint(contextWindowTokens: number | undefined): string {
+function buildContextOverflowResetHint(params: {
+  contextWindowTokens: number | undefined;
+  reserveTokensFloor?: number;
+}): string {
+  const contextWindowTokens = params.contextWindowTokens;
   const reserveFloor = computeContextAwareReserveTokensFloor(contextWindowTokens);
+  const configuredReserve =
+    typeof params.reserveTokensFloor === "number" &&
+    Number.isFinite(params.reserveTokensFloor) &&
+    params.reserveTokensFloor >= 0
+      ? Math.floor(params.reserveTokensFloor)
+      : undefined;
+  if (
+    typeof contextWindowTokens === "number" &&
+    contextWindowTokens > 0 &&
+    typeof configuredReserve === "number"
+  ) {
+    const promptBudget = Math.max(0, contextWindowTokens - configuredReserve);
+    if (configuredReserve / contextWindowTokens >= 0.5) {
+      return (
+        `\n\nCurrent compaction reserve is ${configuredReserve} tokens against a ` +
+        `${formatContextWindowLabel(contextWindowTokens)} context window, leaving about ` +
+        `${promptBudget} tokens for the compacted prompt. That reserve is high; lower ` +
+        "`agents.defaults.compaction.reserveTokensFloor` or start with /new if this session " +
+        "is carrying stale tool output."
+      );
+    }
+  }
   return (
     "\n\nTo prevent this, increase your compaction buffer by setting " +
     `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
@@ -1158,7 +1184,14 @@ export function buildContextOverflowRecoveryText(params: {
         activeSessionEntry: params.activeSessionEntry,
       })
     : undefined;
-  return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint(primaryContextWindow));
+  return (
+    prefix +
+    (heartbeatBleedHint ??
+      buildContextOverflowResetHint({
+        contextWindowTokens: primaryContextWindow,
+        reserveTokensFloor: params.cfg.agents?.defaults?.compaction?.reserveTokensFloor,
+      }))
+  );
 }
 
 function buildRestartLifecycleReplyText(): string {
