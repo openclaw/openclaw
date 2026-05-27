@@ -250,6 +250,12 @@ export type AgentDefaultsConfig = {
    * files into the system prompt (CLI + embedded runtime). Use
    * `contextInjection: "never"` instead if you want to keep the files on disk
    * but skip prompt injection only.
+   *
+   * Takes precedence over {@link skipOptionalBootstrapFiles}: when
+   * `skipBootstrap` is true, `skipOptionalBootstrapFiles` is irrelevant
+   * because no workspace files are created or loaded. `agent:bootstrap` hook
+   * overrides still run so installations that inject context from hooks
+   * remain functional.
    */
   skipBootstrap?: boolean;
   /**
@@ -257,6 +263,9 @@ export type AgentDefaultsConfig = {
    * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
    * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
    * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   *
+   * Ignored when {@link skipBootstrap} is true — that flag short-circuits the
+   * workspace load entirely before per-file selection runs.
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   /**

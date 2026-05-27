@@ -341,11 +341,12 @@ describe("resolveBootstrapFilesForRun", () => {
 
   it("returns no bootstrap files when agents.defaults.skipBootstrap is true even if workspace files exist", async () => {
     // Regression for #75184: workspace creation already honored skipBootstrap
-    // (agent-command.ts:373 passes ensureBootstrapFiles: !skipBootstrap), but
-    // any workspace that already had AGENTS.md / SOUL.md / etc. on disk would
-    // still be picked up by the runtime resolver and injected into the system
-    // prompt. Honor skipBootstrap at the resolver so existing workspace files
-    // also stay out of injection without forcing users onto contextInjection.
+    // (ensureWorkspaceBootstrap in agent-command.ts passes
+    // `ensureBootstrapFiles: !agentCfg?.skipBootstrap`), but any workspace
+    // that already had AGENTS.md / SOUL.md / etc. on disk would still be
+    // picked up by the runtime resolver and injected into the system prompt.
+    // Honor skipBootstrap at the resolver so existing workspace files also
+    // stay out of injection without forcing users onto contextInjection.
     const workspaceDir = await makeTempWorkspace("openclaw-skip-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "workspace rules", "utf8");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "soul content", "utf8");
