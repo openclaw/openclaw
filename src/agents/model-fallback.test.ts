@@ -2272,6 +2272,37 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fall back when a timed-out caller abort is classified from the result", async () => {
+    const cfg = makeProviderFallbackCfg("openai-codex");
+    const timeoutReason = new Error("chat run timed out");
+    timeoutReason.name = "TimeoutError";
+    const controller = new AbortController();
+    controller.abort(timeoutReason);
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback should not run" }] });
+    const classifyResult = vi.fn(() => ({
+      message: "This operation was aborted",
+      reason: "timeout" as const,
+      code: "terminal_abort",
+    }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai-codex",
+        model: "m1",
+        abortSignal: controller.signal,
+        run,
+        classifyResult,
+      }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(classifyResult).toHaveBeenCalledTimes(1);
+  });
+
   it("appends the configured primary as a last fallback", async () => {
     const cfg = makeCfg({
       agents: {

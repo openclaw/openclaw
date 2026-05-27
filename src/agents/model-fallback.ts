@@ -328,6 +328,9 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
+      if (isTerminalAbort(params.abortSignal)) {
+        throw classifiedError;
+      }
       return { error: classifiedError };
     }
     return {
