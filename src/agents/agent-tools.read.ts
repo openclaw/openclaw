@@ -960,7 +960,8 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
       writeFile: writeHostFile,
       readFile: async (absolutePath: string) =>
         fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
-      statFile: (absolutePath: string) => statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+      statFile: (absolutePath: string) =>
+        statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
     } as const;
   }
 
