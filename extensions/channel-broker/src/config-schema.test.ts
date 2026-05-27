@@ -108,4 +108,25 @@ describe("channel-broker config schema", () => {
     expect(account.outboundToken).toBeNull();
     expect(account.signingSecret).toBeNull();
   });
+
+  it("falls back to a listed provider when the configured default is stale", () => {
+    const account = resolveChannelBrokerAccount({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            defaultProviderId: "missing",
+            accounts: {
+              acme: {
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(account.providerId).toBe("acme");
+    expect(account.baseUrl).toBe("https://broker.example.test");
+  });
 });

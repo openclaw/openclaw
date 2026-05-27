@@ -142,8 +142,6 @@ export function resolveChannelBrokerAccount(params: {
   const channelConfig = getChannelBrokerConfig(params.cfg);
   const accountId =
     normalizeOptionalString(params.accountId) ??
-    normalizeOptionalString(channelConfig?.defaultProviderId) ??
-    normalizeOptionalString(channelConfig?.defaultAccount) ??
     resolveDefaultChannelBrokerProviderId(params.cfg as never);
   const normalizedAccountId = normalizeAccountId(accountId);
   const merged = resolveMergedBrokerProviderConfig(params.cfg, normalizedAccountId);
