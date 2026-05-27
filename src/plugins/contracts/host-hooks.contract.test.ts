@@ -657,6 +657,15 @@ describe("host-hook fixture plugin contract", () => {
     expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
+
+    const unreadablePayload: Record<string, unknown> = {};
+    Object.defineProperty(unreadablePayload, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin payload read failed");
+      },
+    });
+    expect(isPluginJsonValue(unreadablePayload)).toBe(false);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {

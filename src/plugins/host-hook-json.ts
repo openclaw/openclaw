@@ -65,7 +65,11 @@ function isPluginJsonValueWithinLimits(
 }
 
 export function isPluginJsonValue(value: unknown): value is PluginJsonValue {
-  if (!isPluginJsonValueWithinLimits(value, PLUGIN_JSON_VALUE_LIMITS, { depth: 0, nodes: 0 })) {
+  try {
+    if (!isPluginJsonValueWithinLimits(value, PLUGIN_JSON_VALUE_LIMITS, { depth: 0, nodes: 0 })) {
+      return false;
+    }
+  } catch {
     return false;
   }
   try {
