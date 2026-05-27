@@ -1,9 +1,9 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, vi } from "vitest";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 
-export type SessionEntry = { type: string; customType: string; data: unknown };
+type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn = (params: {
   messages: AgentMessage[];
   modelApi: string;
@@ -13,8 +13,9 @@ export type SanitizeSessionHistoryFn = (params: {
   sessionId: string;
   modelId?: string;
   policy?: TranscriptPolicy;
+  preserveLatestAssistantThinking?: boolean;
 }) => Promise<AgentMessage[]>;
-export type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
+type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
 export type SanitizeSessionHistoryHarness = {
   sanitizeSessionHistory: SanitizeSessionHistoryFn;
   mockedHelpers: SanitizeSessionHistoryMockedHelpers;
@@ -83,18 +84,22 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
   };
 }
 
-export function createSanitizeSessionHistoryProviderHookRuntimeMock(
+export async function createSanitizeSessionHistoryProviderHookRuntimeMock(
   extra: Record<string, unknown> = {},
 ) {
+  const clearProviderRuntimePluginCacheForTest = vi.fn();
+  const actual = await vi.importActual<typeof import("../plugins/provider-hook-runtime.js")>(
+    "../plugins/provider-hook-runtime.js",
+  );
   return {
+    ...actual,
+    clearProviderRuntimePluginCacheForTest,
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     prepareProviderExtraParams: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
-    clearProviderRuntimeHookCache: vi.fn(),
-    resetProviderRuntimeHookCacheForTest: vi.fn(),
-    __testing: {},
+    testing: { clearProviderRuntimePluginCacheForTest },
     ...extra,
   };
 }
@@ -162,18 +167,18 @@ export function expectOpenAIResponsesStrictSanitizeCall(
   sanitizeSessionMessagesImagesMock: unknown,
   messages: AgentMessage[],
 ) {
-  expect(sanitizeSessionMessagesImagesMock).toHaveBeenCalledWith(
-    messages,
-    "session:history",
-    expect.objectContaining({
-      sanitizeMode: "images-only",
-      sanitizeToolCallIds: false,
-      toolCallIdMode: "strict",
-    }),
-  );
+  const mock = sanitizeSessionMessagesImagesMock as {
+    mock?: { calls: Array<[AgentMessage[], string, Record<string, unknown>]> };
+  };
+  const call = mock.mock?.calls[0];
+  expect(call?.[0]).toBe(messages);
+  expect(call?.[1]).toBe("session:history");
+  expect(call?.[2]?.sanitizeMode).toBe("images-only");
+  expect(call?.[2]?.sanitizeToolCallIds).toBe(false);
+  expect(call?.[2]?.toolCallIdMode).toBe("strict");
 }
 
-export function makeSnapshotChangedOpenAIReasoningScenario() {
+function makeSnapshotChangedOpenAIReasoningScenario() {
   const sessionEntries = [
     makeModelSnapshotEntry({
       provider: "anthropic",

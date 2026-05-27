@@ -1,8 +1,13 @@
 import { selectApplicableRuntimeConfig } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
@@ -12,18 +17,42 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
+  pluginToolDenylist?: string[];
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   sandboxRoot?: string;
   modelHasVision?: boolean;
   modelProvider?: string;
+  modelId?: string;
   allowMediaInvokeCommands?: boolean;
   requesterAgentIdOverride?: string;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;
   disablePluginTools?: boolean;
+  authProfileStore?: AuthProfileStore;
 };
+
+function resolveApplicablePluginRuntimeConfig(
+  inputConfig?: OpenClawConfig,
+): OpenClawConfig | undefined {
+  const runtimeConfig = getRuntimeConfigSnapshot() ?? undefined;
+  if (!runtimeConfig) {
+    return inputConfig;
+  }
+  if (!inputConfig || inputConfig === runtimeConfig) {
+    return runtimeConfig;
+  }
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
+  if (!runtimeSourceConfig) {
+    return inputConfig;
+  }
+  return selectApplicableRuntimeConfig({
+    inputConfig,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+}
 
 export function resolveOpenClawPluginToolsForOptions(params: {
   options?: ResolveOpenClawPluginToolsOptions;
@@ -34,7 +63,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     return [];
   }
 
-  const runtimeSnapshot = getActiveSecretsRuntimeSnapshot();
   const deliveryContext = normalizeDeliveryContext({
     channel: params.options?.agentChannel,
     to: params.options?.agentTo,
@@ -42,18 +70,55 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     threadId: params.options?.agentThreadId,
   });
 
+  const resolveCurrentRuntimeConfig = () => {
+    return resolveApplicablePluginRuntimeConfig(params.resolvedConfig ?? params.options?.config);
+  };
+  const authProfileStore = params.options?.authProfileStore;
+  const resolveAuthProfileIdsForProvider = authProfileStore
+    ? (providerId: string): string[] =>
+        resolveAuthProfileOrder({
+          cfg: resolveCurrentRuntimeConfig(),
+          store: authProfileStore,
+          provider: providerId,
+        })
+    : undefined;
+  const hasAuthForProvider = authProfileStore
+    ? (providerId: string) => (resolveAuthProfileIdsForProvider?.(providerId) ?? []).length > 0
+    : undefined;
+  const resolveApiKeyForProvider = authProfileStore
+    ? async (providerId: string): Promise<string | undefined> => {
+        for (const profileId of resolveAuthProfileIdsForProvider?.(providerId) ?? []) {
+          const resolved = await resolveApiKeyForProfile({
+            cfg: resolveCurrentRuntimeConfig(),
+            store: authProfileStore,
+            profileId,
+            agentDir: params.options?.agentDir,
+          });
+          if (resolved?.apiKey) {
+            return resolved.apiKey;
+          }
+        }
+        return undefined;
+      }
+    : undefined;
+  const pluginToolInputs = resolveOpenClawPluginToolInputs({
+    options: params.options,
+    resolvedConfig: params.resolvedConfig,
+    runtimeConfig: resolveCurrentRuntimeConfig(),
+    getRuntimeConfig: resolveCurrentRuntimeConfig,
+  });
   const pluginTools = resolvePluginTools({
-    ...resolveOpenClawPluginToolInputs({
-      options: params.options,
-      resolvedConfig: params.resolvedConfig,
-      runtimeConfig: selectApplicableRuntimeConfig({
-        inputConfig: params.resolvedConfig ?? params.options?.config,
-        runtimeConfig: runtimeSnapshot?.config,
-        runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
-      }),
-    }),
+    ...pluginToolInputs,
+    context: {
+      ...pluginToolInputs.context,
+      ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+      ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
+    },
     existingToolNames: params.existingToolNames ?? new Set<string>(),
     toolAllowlist: params.options?.pluginToolAllowlist,
+    toolDenylist: params.options?.pluginToolDenylist,
+    allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
+    ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
   });
 
   return applyPluginToolDeliveryDefaults({

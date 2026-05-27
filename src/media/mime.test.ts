@@ -8,6 +8,7 @@ import {
   imageMimeFromFormat,
   isAudioFileName,
   kindFromMime,
+  mimeTypeFromFilePath,
   normalizeMimeType,
   sliceMimeSniffBuffer,
 } from "./mime.js";
@@ -78,6 +79,30 @@ describe("mime detection", () => {
       expected: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     },
     {
+      name: "does not let image extensions override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/fake.png",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let image headers override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "image/png",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
       name: "uses extension mapping for JavaScript assets",
       input: async () => ({
         filePath: "/tmp/a2ui.bundle.js",
@@ -118,12 +143,49 @@ describe("mime detection", () => {
     expect(mime).toBe("audio/aac");
   });
 
+  it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
+    // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
+    // no native CAF detector, so without the manual magic-byte fallback the
+    // host-local-media validator drops `afconvert`-produced voice-memo CAFs as
+    // unknown binary blobs. Regression guard for the iMessage voice-memo
+    // pre-transcode path.
+    const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
+    const mime = await detectMime({ buffer: buf });
+    expect(mime).toBe("audio/x-caf");
+  });
+
+  it("returns audio/x-caf when extension and CAF magic bytes both agree", async () => {
+    const buf = Buffer.concat([Buffer.from("caff", "ascii"), Buffer.alloc(60)]);
+    const mime = await detectMime({ buffer: buf, filePath: "/tmp/voice.caf" });
+    expect(mime).toBe("audio/x-caf");
+  });
+
   it("caps dependency sniffing to a bounded prefix", () => {
     const small = Buffer.alloc(32);
     const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);
 
     expect(sliceMimeSniffBuffer(small)).toBe(small);
     expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
+  });
+});
+
+describe("mimeTypeFromFilePath", () => {
+  it.each([
+    { filePath: "image.bmp", expected: "image/bmp" },
+    { filePath: "photo.jpg", expected: "image/jpeg" },
+    { filePath: "photo.JPG", expected: "image/jpeg" },
+    { filePath: "voice.mp3", expected: "audio/mpeg" },
+    { filePath: "voice.wav", expected: "audio/wav" },
+    { filePath: "clip.avi", expected: "video/x-msvideo" },
+    { filePath: "clip.mkv", expected: "video/x-matroska" },
+    { filePath: "clip.webm", expected: "video/webm" },
+    { filePath: "clip.flv", expected: "video/x-flv" },
+    { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
+    { filePath: "debug.log", expected: "text/plain" },
+    { filePath: "page.xml", expected: "text/xml" },
+    { filePath: "unknown.bin", expected: undefined },
+  ] as const)("maps $filePath", ({ filePath, expected }) => {
+    expect(mimeTypeFromFilePath(filePath)).toBe(expected);
   });
 });
 
@@ -137,15 +199,26 @@ describe("extensionForMime", () => {
 
   it.each([
     { mime: "image/jpeg", expected: ".jpg" },
+    { mime: "image/jpg", expected: ".jpg" },
+    { mime: "image/bmp", expected: ".bmp" },
     { mime: "image/png", expected: ".png" },
+    { mime: "image/svg+xml", expected: ".svg" },
     { mime: "image/webp", expected: ".webp" },
     { mime: "image/gif", expected: ".gif" },
     { mime: "image/heic", expected: ".heic" },
     { mime: "audio/mpeg", expected: ".mp3" },
+    { mime: "audio/mp3", expected: ".mp3" },
     { mime: "audio/ogg", expected: ".ogg" },
+    { mime: "audio/x-wav", expected: ".wav" },
+    { mime: "audio/webm", expected: ".webm" },
     { mime: "audio/x-m4a", expected: ".m4a" },
     { mime: "audio/mp4", expected: ".m4a" },
+    { mime: "video/x-msvideo", expected: ".avi" },
     { mime: "video/mp4", expected: ".mp4" },
+    { mime: "video/x-matroska", expected: ".mkv" },
+    { mime: "video/webm", expected: ".webm" },
+    { mime: "video/x-flv", expected: ".flv" },
+    { mime: "video/x-ms-wmv", expected: ".wmv" },
     { mime: "video/quicktime", expected: ".mov" },
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "text/plain", expected: ".txt" },
@@ -190,6 +263,7 @@ describe("normalizeMimeType", () => {
 
   it.each([
     { input: "Audio/MP4; codecs=mp4a.40.2", expected: "audio/mp4" },
+    { input: "image/apng", expected: "image/png" },
     { input: "   ", expected: undefined },
     { input: null, expected: undefined },
     { input: undefined, expected: undefined },

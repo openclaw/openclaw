@@ -14,7 +14,10 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import {
+  checkQmdBinaryAvailability,
+  resolveQmdBinaryUnavailableReason,
+} from "../memory-host-sdk/engine-qmd.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
@@ -25,12 +28,15 @@ import {
   type DreamingArtifactsAuditSummary,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -303,6 +309,31 @@ export async function maybeRepairMemoryRecallHealth(params: {
   }
 }
 
+function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  if (!plugins.enabled) {
+    return false;
+  }
+  const memorySlot = plugins.slots.memory;
+  if (typeof memorySlot !== "string" || memorySlot.length === 0) {
+    return false;
+  }
+  if (memorySlot === defaultSlotIdForKey("memory")) {
+    return false;
+  }
+  if (plugins.deny.includes(memorySlot)) {
+    return false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(plugins.entries, memorySlot)) {
+    return false;
+  }
+  const entry = plugins.entries[memorySlot];
+  if (!entry || entry.enabled === false) {
+    return false;
+  }
+  return entry.enabled === true || entry.config !== undefined;
+}
+
 /**
  * Check whether memory search has a usable embedding provider.
  * Runs as part of `openclaw doctor` — config-only checks where possible;
@@ -316,6 +347,7 @@ export async function noteMemorySearchHealth(
       checked: boolean;
       ready: boolean;
       error?: string;
+      skipped?: boolean;
     };
   },
 ): Promise<void> {
@@ -335,6 +367,12 @@ export async function noteMemorySearchHealth(
   // separate embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
+    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+      return;
+    }
+    if (hasActiveAlternateMemoryPluginSlot(cfg)) {
+      return;
+    }
     note("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }
@@ -345,14 +383,22 @@ export async function noteMemorySearchHealth(
       cwd: resolveAgentWorkspaceDir(cfg, agentId),
     });
     if (!qmdCheck.available) {
+      const workspaceProbeFailed = resolveQmdBinaryUnavailableReason(qmdCheck) === "workspace-cwd";
+      const probeError = qmdCheck.error.trim();
       note(
         [
-          `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
-          qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
+          workspaceProbeFailed
+            ? "QMD memory backend is configured, but the agent workspace directory could not be used for the QMD startup probe."
+            : `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
+          probeError ? `Probe error: ${probeError}` : null,
           "",
           "Fix (pick one):",
-          "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
-          `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+          workspaceProbeFailed
+            ? "- Create the missing workspace directory or update the agent workspace path to an existing directory."
+            : "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
+          workspaceProbeFailed
+            ? "- Verify the resolved workspace path for the affected agent before retrying."
+            : `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
           `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
           "",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
@@ -408,6 +454,16 @@ export async function noteMemorySearchHealth(
     }
     if (isKeyOptionalMemoryProvider(resolved.provider)) {
       if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        return;
+      }
+      // When the probe was intentionally skipped (skipped: true / checked: false
+      // due to probe:false path), we have no embedding status information — do
+      // not warn. A skipped probe means the user ran `openclaw doctor` without
+      // --deep; it does not mean embeddings are unavailable.
+      // NOTE: a transport timeout also sets checked: false, but skipped stays
+      // false/absent — a timeout is a real diagnostic signal and should fall
+      // through to the warning below.
+      if (opts?.gatewayMemoryProbe?.skipped) {
         return;
       }
       const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
@@ -570,7 +626,9 @@ function resolvePrimaryMemoryProviderEnvVar(provider: string): string {
 }
 
 function formatMemoryProviderEnvVarList(providers: Array<{ envVars: string[] }>): string {
-  return [...new Set(providers.flatMap((provider) => provider.envVars).filter(Boolean))].join(", ");
+  return uniqueStrings(providers.flatMap((provider) => provider.envVars).filter(Boolean)).join(
+    ", ",
+  );
 }
 
 function buildGatewayProbeWarning(
@@ -579,6 +637,7 @@ function buildGatewayProbeWarning(
         checked: boolean;
         ready: boolean;
         error?: string;
+        skipped?: boolean;
       }
     | undefined,
 ): string | null {

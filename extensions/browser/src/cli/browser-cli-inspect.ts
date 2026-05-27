@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
-  loadConfig,
+  getRuntimeConfig,
   shortenHomePath,
   type SnapshotResult,
 } from "./core-api.js";
@@ -81,7 +81,7 @@ export function registerBrowserInspectCommands(
       const configMode =
         !formatWasExplicit &&
         format === "ai" &&
-        loadConfig().browser?.snapshotDefaults?.mode === "efficient"
+        getRuntimeConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
       const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;

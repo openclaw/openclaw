@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  processAttachments,
-  registerAudioConvertAdapter,
-  type AudioConvertAdapter,
-} from "./inbound-attachments.js";
+import { processAttachments, type AudioConvertPort } from "./inbound-attachments.js";
 
 const downloadFileMock = vi.hoisted(() => vi.fn());
 const resolveSTTConfigMock = vi.hoisted(() => vi.fn());
@@ -22,31 +18,38 @@ vi.mock("../utils/stt.js", () => ({
   transcribeAudio: transcribeAudioMock,
 }));
 
-function registerAdapter(overrides: Partial<AudioConvertAdapter> = {}): void {
-  registerAudioConvertAdapter({
+function createAudioConvert(overrides: Partial<AudioConvertPort> = {}): AudioConvertPort {
+  return {
     convertSilkToWav: vi.fn(async () => null),
-    formatDuration: (seconds) => `${seconds}s`,
-    isVoiceAttachment: (att) =>
+    formatDuration: (seconds: number) => `${seconds}s`,
+    isVoiceAttachment: (att: { content_type: string; filename?: string }) =>
       att.content_type === "voice" || att.content_type.startsWith("audio/"),
     ...overrides,
-  });
+  };
 }
 
 describe("engine/gateway/inbound-attachments", () => {
+  let audioConvert: AudioConvertPort;
+
   beforeEach(() => {
     vi.clearAllMocks();
     resolveSTTConfigMock.mockReturnValue(null);
     transcribeAudioMock.mockResolvedValue(null);
-    registerAdapter();
+    audioConvert = createAudioConvert();
   });
 
   it("returns an empty result when no attachments are present", async () => {
     await expect(
-      processAttachments(undefined, { accountId: "qq", cfg: {} }),
-    ).resolves.toMatchObject({
+      processAttachments(undefined, { accountId: "qq", cfg: {}, audioConvert }),
+    ).resolves.toStrictEqual({
       attachmentInfo: "",
       imageUrls: [],
+      imageMediaTypes: [],
       voiceAttachmentPaths: [],
+      voiceAttachmentUrls: [],
+      voiceAsrReferTexts: [],
+      voiceTranscripts: [],
+      voiceTranscriptSources: [],
       attachmentLocalPaths: [],
     });
   });
@@ -56,7 +59,7 @@ describe("engine/gateway/inbound-attachments", () => {
 
     const result = await processAttachments(
       [{ content_type: "image/png", url: "//cdn.example.test/a.png", filename: "a.png" }],
-      { accountId: "qq", cfg: {} },
+      { accountId: "qq", cfg: {}, audioConvert },
     );
 
     expect(downloadFileMock).toHaveBeenCalledWith(
@@ -88,7 +91,7 @@ describe("engine/gateway/inbound-attachments", () => {
           asr_refer_text: "platform text",
         },
       ],
-      { accountId: "qq", cfg: { channels: { qqbot: { stt: {} } } } },
+      { accountId: "qq", cfg: { channels: { qqbot: { stt: {} } } }, audioConvert },
     );
 
     expect(downloadFileMock).toHaveBeenCalledWith(
@@ -117,7 +120,7 @@ describe("engine/gateway/inbound-attachments", () => {
           asr_refer_text: "platform text",
         },
       ],
-      { accountId: "qq", cfg: {} },
+      { accountId: "qq", cfg: {}, audioConvert },
     );
 
     expect(result.voiceAttachmentUrls).toEqual(["https://cdn.example.test/voice.silk"]);

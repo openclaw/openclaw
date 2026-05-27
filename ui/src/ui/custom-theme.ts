@@ -2,7 +2,7 @@ import { z } from "zod";
 import { normalizeOptionalString } from "./string-coerce.ts";
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
-const THEME_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 const CUSTOM_THEME_STYLE_ID = "openclaw-custom-theme";
 const MAX_TWEAKCN_THEME_BYTES = 200_000;
 const MAX_CSS_TOKEN_LENGTH = 240;
@@ -27,7 +27,7 @@ const SAFE_COLOR_KEYWORDS = new Set(["black", "white", "transparent", "currentco
 const SAFE_COLOR_FUNCTION_PATTERN =
   /^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\([a-z0-9+\-.,/%\s]+\)$/i;
 const SAFE_HEX_COLOR_PATTERN = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-const SAFE_FONT_FAMILY_PATTERN = /^[a-z0-9\s,'"._-]+(?:,\s*[a-z0-9\s'"._-]+)*$/i;
+const SAFE_FONT_FAMILY_PUNCTUATION = new Set([",", "'", '"', ".", "_", "-"]);
 
 const MODE_TOKEN_ORDER = [
   "bg",
@@ -165,7 +165,7 @@ function requireThemeId(value: string) {
   }
 }
 
-function normalizeThemeIdFromPath(pathname: string): string {
+function normalizeThemeIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 2 && segments[0] === "themes") {
     requireThemeId(segments[1]);
@@ -174,6 +174,43 @@ function normalizeThemeIdFromPath(pathname: string): string {
   if (segments.length === 3 && segments[0] === "r" && segments[1] === "themes") {
     requireThemeId(segments[2]);
     return segments[2];
+  }
+  return null;
+}
+
+function normalizePastedThemeInput(input: string): string {
+  const normalized = normalizeOptionalString(input);
+  if (!normalized) {
+    throw new Error("Paste a tweakcn theme link to import.");
+  }
+  const inputValue = normalized.replace(/[.,;:]+$/, "");
+  if (THEME_ID_PATTERN.test(inputValue)) {
+    return `https://tweakcn.com/themes/${inputValue}`;
+  }
+  if (inputValue.startsWith("/themes/") || inputValue.startsWith("/r/themes/")) {
+    return `https://tweakcn.com${inputValue}`;
+  }
+  if (/^(?:www\.)?tweakcn\.com\//i.test(inputValue)) {
+    return `https://${inputValue}`;
+  }
+  const embeddedUrl = inputValue
+    .match(/https?:\/\/(?:www\.)?tweakcn\.com\/[^\s<>"')]+/i)?.[0]
+    ?.replace(/[.,;:]+$/, "");
+  return embeddedUrl ?? inputValue;
+}
+
+function normalizeThemeIdFromUrl(parsed: URL): string {
+  const pathThemeId = normalizeThemeIdFromPath(parsed.pathname);
+  if (pathThemeId) {
+    return pathThemeId;
+  }
+  const queryThemeId =
+    parsed.searchParams.get("theme") ??
+    parsed.searchParams.get("themeId") ??
+    parsed.searchParams.get("id");
+  if (queryThemeId) {
+    requireThemeId(queryThemeId);
+    return queryThemeId;
   }
   throw new Error("Unsupported tweakcn link. Expected a theme share URL.");
 }
@@ -224,12 +261,23 @@ function requireSafeExternalColorValue(value: unknown, label: string) {
   throw new Error(`Unsupported tweakcn token: ${label}`);
 }
 
+function isSafeFontFamilyCharacter(char: string) {
+  const code = char.charCodeAt(0);
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    char === " " ||
+    SAFE_FONT_FAMILY_PUNCTUATION.has(char)
+  );
+}
+
 function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
   if (
     normalized.includes("(") ||
     normalized.includes(")") ||
-    !SAFE_FONT_FAMILY_PATTERN.test(normalized)
+    !Array.from(normalized).every(isSafeFontFamilyCharacter)
   ) {
     throw new Error(`Unsupported tweakcn token: ${label}`);
   }
@@ -384,10 +432,7 @@ function describeThemeLabel(value: string | undefined) {
 }
 
 export function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {
-  const normalized = normalizeOptionalString(input);
-  if (!normalized) {
-    throw new Error("Paste a tweakcn theme link to import.");
-  }
+  const normalized = normalizePastedThemeInput(input);
   let parsed: URL;
   try {
     parsed = new URL(normalized);
@@ -397,7 +442,7 @@ export function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution 
   if (!TWEAKCN_HOSTS.has(parsed.hostname)) {
     throw new Error("Only tweakcn.com theme links are supported.");
   }
-  const themeId = normalizeThemeIdFromPath(parsed.pathname);
+  const themeId = normalizeThemeIdFromUrl(parsed);
   return {
     themeId,
     sourceUrl: `https://tweakcn.com/themes/${themeId}`,

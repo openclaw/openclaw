@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -8,8 +8,6 @@ import {
   type FeishuDirectoryGroup,
   type FeishuDirectoryPeer,
 } from "./directory.static.js";
-
-export { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
 
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;

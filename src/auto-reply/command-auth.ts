@@ -17,6 +17,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -289,7 +290,8 @@ function resolveOwnerAllowFromList(params: {
       const prefix = trimmed.slice(0, separatorIndex);
       const channel = normalizeAnyChannelId(prefix);
       if (channel) {
-        if (params.providerId && channel !== params.providerId) {
+        // Channel-prefixed entries require a known matching provider; webchat leaves it unset.
+        if (!params.providerId || channel !== params.providerId) {
           continue;
         }
         const remainder = trimmed.slice(separatorIndex + 1).trim();
@@ -429,12 +431,17 @@ function resolveOwnerAuthorizationState(params: {
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
+  enforceOwnerForCommands: boolean;
+  nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
   commandsAllowFromList: string[] | null;
   providerResolutionError: boolean;
   commandsAllowFromConfigured: boolean;
 }): boolean {
+  if (params.enforceOwnerForCommands && !params.isOwnerForCommands) {
+    return false;
+  }
   if (
     params.commandsAllowFromList !== null ||
     (params.providerResolutionError && params.commandsAllowFromConfigured)
@@ -450,7 +457,7 @@ function resolveCommandSenderAuthorization(params: {
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
     );
   }
-  return params.commandAuthorized && params.isOwnerForCommands;
+  return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
 }
 
 function isConversationLikeIdentity(value: string): boolean {
@@ -693,9 +700,7 @@ export function resolveCommandAuthorization(params: {
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
-  const senderIsOwner = ctx.ForceSenderIsOwnerFalse
-    ? false
-    : senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
@@ -704,8 +709,12 @@ export function resolveCommandAuthorization(params: {
       : ownerAllowlistConfigured
         ? senderIsOwner
         : senderIsOwnerByScope || Boolean(matchedCommandOwner);
+  const nativeCommandAuthorized =
+    commandAuthorized && isNativeCommandTurn(resolveCommandTurnContext(ctx)) && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
+    enforceOwnerForCommands: enforceOwner,
+    nativeCommandAuthorized,
     isOwnerForCommands,
     senderCandidates,
     commandsAllowFromList,

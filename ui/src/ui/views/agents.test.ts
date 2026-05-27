@@ -1,5 +1,7 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
@@ -30,6 +32,24 @@ function createSkill() {
     configChecks: [],
     install: [],
   };
+}
+
+function directText(element: Element | null | undefined): string | undefined {
+  return Array.from(element?.childNodes ?? [])
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent ?? "")
+    .join("")
+    .trim();
+}
+
+function expectAgentTab(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    (candidate) => directText(candidate) === text,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected agent tab "${text}"`);
+  }
+  return button;
 }
 
 function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
@@ -123,6 +143,135 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
+  it("selects the configured primary model on initial render", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const defaultSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(select?.value).toBe("openai/gpt-5.4");
+      return select;
+    });
+    expect(defaultSelect?.selectedOptions[0]?.value).toBe("openai/gpt-5.4");
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const inheritedSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(select?.value).toBe("");
+      return select;
+    });
+    expect(inheritedSelect?.selectedOptions[0]?.textContent?.trim()).toBe(
+      "Inherit default (openai/gpt-5.4)",
+    );
+  });
+
+  it("remounts overview model controls when switching selected agents", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [
+          { id: "alpha", model: { primary: "anthropic/claude-sonnet-4-6" } },
+          { id: "beta", model: { primary: "openai/gpt-5.4" } },
+        ],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const betaSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(
+        Array.from(select?.options ?? []).some((option) => option.value === "openai/gpt-5.4"),
+      ).toBe(true);
+      return select;
+    });
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const alphaSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(
+        Array.from(select?.options ?? []).some(
+          (option) => option.value === "anthropic/claude-sonnet-4-6",
+        ),
+      ).toBe(true);
+      return select;
+    });
+    expect(alphaSelect).not.toBe(betaSelect);
+  });
+
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
     render(
@@ -145,11 +294,9 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    let skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-      (button) => button.textContent?.includes("Skills"),
-    );
+    let skillsTab = expectAgentTab(container, "Skills");
 
-    expect(skillsTab?.textContent?.trim()).toBe("Skills");
+    expect(skillsTab.textContent?.trim()).toBe("Skills");
 
     render(
       renderAgents(
@@ -171,11 +318,45 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
-      (button) => button.textContent?.includes("Skills"),
-    );
+    skillsTab = expectAgentTab(container, "Skills");
 
-    expect(skillsTab?.textContent?.trim()).toContain("1");
+    expect(directText(skillsTab)).toBe("Skills");
+    expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
+  });
+
+  it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    await i18n.setLocale("zh-CN");
+    const container = document.createElement("div");
+
+    try {
+      render(
+        renderAgents(
+          createProps({
+            activePanel: "channels",
+            channels: {
+              snapshot: null,
+              loading: false,
+              error: null,
+              lastSuccess: null,
+            },
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+        (button) => button.textContent?.trim(),
+      );
+
+      expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs"]);
+      const cards = container.querySelectorAll("section.card");
+      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
+    } finally {
+      await i18n.setLocale("en");
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -218,14 +399,18 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelector(".md-preview-dialog__reader.sidebar-markdown")).not.toBeNull();
+    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
+      1,
+    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );
     expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(
       "Saved Preview",
     );
-    expect(container.textContent).toContain("Markdown Preview");
+    expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
+      "Markdown Preview",
+    );
   });
 
   it("renders preview header controls as icon-only buttons with accessible labels", () => {
@@ -321,18 +506,34 @@ describe("renderAgentFiles", () => {
     const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
     const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
 
-    expandButton?.click();
+    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+    expect(panel).toBeInstanceOf(HTMLElement);
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    const previewPanel = panel!;
+    const previewExpandButton = expandButton!;
+    previewExpandButton.click();
 
-    expect(panel?.classList.contains("fullscreen")).toBe(true);
-    expect(expandButton?.classList.contains("is-fullscreen")).toBe(true);
-    expect(expandButton?.getAttribute("aria-pressed")).toBe("true");
-    expect(expandButton?.getAttribute("aria-label")).toBe("Collapse preview");
+    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel", "fullscreen"]);
+    expect([...previewExpandButton.classList]).toEqual([
+      "btn",
+      "btn--sm",
+      "md-preview-icon-btn",
+      "md-preview-expand-btn",
+      "is-fullscreen",
+    ]);
+    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
+    expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
 
-    dialog?.dispatchEvent(new Event("close"));
+    dialog!.dispatchEvent(new Event("close"));
 
-    expect(panel?.classList.contains("fullscreen")).toBe(false);
-    expect(expandButton?.classList.contains("is-fullscreen")).toBe(false);
-    expect(expandButton?.getAttribute("aria-pressed")).toBe("false");
-    expect(expandButton?.getAttribute("aria-label")).toBe("Expand preview");
+    expect([...previewPanel.classList]).toEqual(["md-preview-dialog__panel"]);
+    expect([...previewExpandButton.classList]).toEqual([
+      "btn",
+      "btn--sm",
+      "md-preview-icon-btn",
+      "md-preview-expand-btn",
+    ]);
+    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
+    expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
   });
 });

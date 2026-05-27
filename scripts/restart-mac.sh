@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
 APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
@@ -153,8 +154,8 @@ log "==> Killing existing OpenClaw instances"
 kill_all_openclaw
 stop_launch_agent
 
-# Bundle Gateway-hosted Canvas A2UI assets.
-run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
+# Bundle Gateway-hosted plugin assets.
+run_step "bundle plugin assets" bash -lc "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
@@ -187,13 +188,11 @@ fi
 run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
 
 choose_app_bundle() {
-  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
-    return 0
-  fi
-
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
+  if [[ -n "${APP_BUNDLE}" ]]; then
+    if [[ -d "${APP_BUNDLE}" ]]; then
+      return 0
+    fi
+    fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"
   fi
 
   if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
@@ -201,6 +200,11 @@ choose_app_bundle() {
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
       fail "dist/OpenClaw.app missing Sparkle after packaging"
     fi
+    return 0
+  fi
+
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    APP_BUNDLE="/Applications/OpenClaw.app"
     return 0
   fi
 
@@ -236,7 +240,7 @@ if [ "$NO_SIGN" -eq 1 ] && [ "$ATTACH_ONLY" -ne 1 ]; then
       }
     '
   )"
-  run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" bash -lc "lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true"
+  run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"
 fi
 
 ATTACH_ONLY_ARGS=()

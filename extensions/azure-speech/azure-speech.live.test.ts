@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const AZURE_SPEECH_KEY =
@@ -36,9 +36,7 @@ describeLive("azure speech plugin live", () => {
     });
 
     expect(voices?.length).toBeGreaterThan(100);
-    expect(voices).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "en-US-JennyNeural" })]),
-    );
+    expect(voices?.some((voice) => voice.id === "en-US-JennyNeural")).toBe(true);
   }, 120_000);
 
   it("synthesizes MP3, native Ogg/Opus voice notes, and telephony audio", async () => {

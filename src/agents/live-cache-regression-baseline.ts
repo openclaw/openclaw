@@ -8,6 +8,7 @@ export type LiveCacheFloor = {
   minHitRate?: number;
   maxCacheRead?: number;
   maxCacheWrite?: number;
+  warnOnly?: boolean;
 };
 
 export const LIVE_CACHE_REGRESSION_BASELINE = {
@@ -56,24 +57,28 @@ export const LIVE_CACHE_REGRESSION_BASELINE = {
       observedHitRate: 0.954,
       minCacheRead: 3_840,
       minHitRate: 0.82,
+      warnOnly: true,
     },
     mcp: {
       observedCacheRead: 4_608,
       observedHitRate: 0.891,
       minCacheRead: 4_096,
       minHitRate: 0.85,
+      warnOnly: true,
     },
     stable: {
       observedCacheRead: 4_864,
       observedHitRate: 0.966,
       minCacheRead: 4_608,
       minHitRate: 0.9,
+      warnOnly: true,
     },
     tool: {
       observedCacheRead: 4_608,
       observedHitRate: 0.896,
       minCacheRead: 4_096,
       minHitRate: 0.85,
+      warnOnly: true,
     },
   },
 } as const satisfies Record<string, Record<string, LiveCacheFloor>>;

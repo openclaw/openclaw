@@ -29,7 +29,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
     ```markdown
     ---
-    name: hello_world
+    name: hello-world
     description: A simple skill that says hello.
     ---
 
@@ -38,6 +38,9 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     When the user asks for a greeting, use the `echo` tool to say
     "Hello from your custom skill!".
     ```
+
+    Use hyphen-case with lowercase letters, digits, and hyphens for the skill
+    `name`. Keep the folder name and frontmatter `name` aligned.
 
   </Step>
 
@@ -83,13 +86,35 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
 The YAML frontmatter supports these fields:
 
-| Field                               | Required | Description                                 |
-| ----------------------------------- | -------- | ------------------------------------------- |
-| `name`                              | Yes      | Unique identifier (snake_case)              |
-| `description`                       | Yes      | One-line description shown to the agent     |
-| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.) |
-| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                   |
-| `metadata.openclaw.requires.config` | No       | Required config keys                        |
+| Field                               | Required | Description                                                    |
+| ----------------------------------- | -------- | -------------------------------------------------------------- |
+| `name`                              | Yes      | Unique identifier using lowercase letters, digits, and hyphens |
+| `description`                       | Yes      | One-line description shown to the agent                        |
+| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.)                    |
+| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                                      |
+| `metadata.openclaw.requires.config` | No       | Required config keys                                           |
+
+## Advanced features
+
+Once a basic skill works, these fields help make it reliable and portable:
+
+- **Conditional activation** — use `requires.bins`, `requires.env`, or
+  `requires.config` to load the skill only when required dependencies are
+  available. See [Skills reference: gating](/tools/skills#gating).
+- **Environment and API-key wiring** — use `skills.entries.<name>.env` and
+  `skills.entries.<name>.apiKey` to inject host-side environment for a skill
+  turn. See [Skills reference: config wiring](/tools/skills#config-wiring).
+- **Invocation control** — set `user-invocable: false` to hide a slash command,
+  or `disable-model-invocation: true` to keep a command-style skill out of the
+  model prompt. See [Skills reference: frontmatter](/tools/skills#frontmatter).
+- **Direct command dispatch** — use `command-dispatch: tool` with
+  `command-tool` when a slash command should call a tool directly instead of
+  routing through the model.
+- **Portable paths** — use `{baseDir}` in `SKILL.md` when referencing scripts
+  or assets inside the skill directory.
+- **Publishing** — use the ClawHub skill when preparing a skill for publication.
+  It documents the current `clawhub publish` command shape and required
+  metadata.
 
 ## Best practices
 
@@ -113,5 +138,5 @@ The YAML frontmatter supports these fields:
 
 - [Skills reference](/tools/skills) — loading, precedence, and gating rules
 - [Skills config](/tools/skills-config) — `skills.*` config schema
-- [ClawHub](/tools/clawhub) — public skill registry
+- [ClawHub](/clawhub) — public skill registry
 - [Building Plugins](/plugins/building-plugins) — plugins can ship skills

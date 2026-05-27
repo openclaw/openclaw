@@ -1,15 +1,17 @@
 import crypto from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
+import { isSessionWriteLockTimeoutError } from "../session-write-lock-error.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
@@ -21,7 +23,7 @@ type CacheRetention = "short" | "long";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 type GooglePromptCacheSessionManager = {
-  appendCustomEntry(customType: string, data?: unknown): unknown;
+  appendCustomEntry(customType: string, data?: unknown): void | Promise<void>;
   getEntries(): CustomEntryLike[];
 };
 type GooglePromptCacheModel = Model<Api> & {
@@ -29,6 +31,8 @@ type GooglePromptCacheModel = Model<Api> & {
   headers?: Record<string, string>;
   provider: string;
 };
+type GooglePromptCacheContext = Parameters<StreamFn>[1];
+type GooglePromptCacheOptions = Parameters<StreamFn>[2];
 
 type GooglePromptCacheEntry = {
   timestamp: number;
@@ -37,6 +41,7 @@ type GooglePromptCacheEntry = {
   modelApi?: string | null;
   baseUrl: string;
   systemPromptDigest: string;
+  cacheConfigDigest?: string;
   cacheRetention: CacheRetention;
 } & (
   | {
@@ -109,6 +114,7 @@ function buildGooglePromptCacheMatchKey(params: {
   modelApi?: string | null;
   baseUrl: string;
   systemPromptDigest: string;
+  cacheConfigDigest?: string;
 }) {
   return stableStringify(params);
 }
@@ -148,6 +154,8 @@ function readLatestGooglePromptCacheEntry(
             : null,
         baseUrl: stringifyGooglePromptCacheKeyPart(cacheData.baseUrl),
         systemPromptDigest: stringifyGooglePromptCacheKeyPart(cacheData.systemPromptDigest),
+        cacheConfigDigest:
+          typeof cacheData.cacheConfigDigest === "string" ? cacheData.cacheConfigDigest : undefined,
       });
       if (candidateKey === matchKey) {
         return data as GooglePromptCacheEntry;
@@ -159,13 +167,16 @@ function readLatestGooglePromptCacheEntry(
   return null;
 }
 
-function appendGooglePromptCacheEntry(
+async function appendGooglePromptCacheEntry(
   sessionManager: GooglePromptCacheSessionManager,
   entry: GooglePromptCacheEntry,
-): void {
+): Promise<void> {
   try {
-    sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
-  } catch {
+    await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
+  } catch (err) {
+    if (err instanceof EmbeddedAttemptSessionTakeoverError || isSessionWriteLockTimeoutError(err)) {
+      throw err;
+    }
     // ignore persistence failures
   }
 }
@@ -178,13 +189,79 @@ function parseExpireTimeMs(expireTime: string | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function buildManagedContextWithoutSystemPrompt(context: Parameters<StreamFn>[1]) {
-  if (!context.systemPrompt) {
+function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
+  if (tools.length === 0) {
+    return undefined;
+  }
+  return [
+    {
+      functionDeclarations: tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parametersJsonSchema: tool.parameters,
+      })),
+    },
+  ];
+}
+
+function mapManagedGoogleToolChoice(
+  choice: unknown,
+): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
+  if (!choice) {
+    return undefined;
+  }
+  if (
+    typeof choice === "object" &&
+    choice !== null &&
+    (choice as { type?: unknown }).type === "function"
+  ) {
+    const functionName = (choice as { function?: { name?: unknown } }).function?.name;
+    return typeof functionName === "string"
+      ? { mode: "ANY", allowedFunctionNames: [functionName] }
+      : { mode: "ANY" };
+  }
+  switch (choice) {
+    case "none":
+      return { mode: "NONE" };
+    case "any":
+    case "required":
+      return { mode: "ANY" };
+    default:
+      return { mode: "AUTO" };
+  }
+}
+
+function buildManagedGooglePromptCacheConfig(
+  context: GooglePromptCacheContext,
+  options: GooglePromptCacheOptions,
+) {
+  const tools = context.tools?.length ? convertManagedGoogleTools(context.tools) : undefined;
+  const toolChoice = tools
+    ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
+    : undefined;
+  const toolConfig = toolChoice ? { functionCallingConfig: toolChoice } : undefined;
+  const cacheConfigDigest =
+    tools || toolConfig
+      ? stableStringify({
+          tools,
+          toolConfig,
+        })
+      : undefined;
+  return {
+    cacheConfigDigest,
+    tools,
+    toolConfig,
+  };
+}
+
+function buildManagedContextForCachedContent(context: GooglePromptCacheContext) {
+  if (!context.systemPrompt && !context.tools?.length) {
     return context;
   }
   return {
     ...context,
     systemPrompt: undefined,
+    tools: undefined,
   };
 }
 
@@ -224,6 +301,8 @@ async function createGooglePromptCache(params: {
   modelId: string;
   signal?: AbortSignal;
   systemPrompt: string;
+  tools?: unknown;
+  toolConfig?: unknown;
 }): Promise<{ cachedContent: string; expireTime?: string } | null> {
   const response = await params.fetchImpl(`${params.baseUrl}/cachedContents`, {
     method: "POST",
@@ -234,6 +313,8 @@ async function createGooglePromptCache(params: {
       systemInstruction: {
         parts: [{ text: params.systemPrompt }],
       },
+      ...(params.tools ? { tools: params.tools } : {}),
+      ...(params.toolConfig ? { toolConfig: params.toolConfig } : {}),
     }),
     signal: params.signal,
   });
@@ -251,9 +332,12 @@ async function ensureGooglePromptCache(
     cacheRetention: CacheRetention;
     model: GooglePromptCacheModel;
     provider: string;
+    cacheConfigDigest?: string;
     sessionManager: GooglePromptCacheSessionManager;
     signal?: AbortSignal;
     systemPrompt: string;
+    tools?: unknown;
+    toolConfig?: unknown;
   },
   deps: GooglePromptCacheDeps,
 ): Promise<string | null> {
@@ -266,6 +350,7 @@ async function ensureGooglePromptCache(
     modelApi: params.model.api,
     baseUrl,
     systemPromptDigest,
+    cacheConfigDigest: params.cacheConfigDigest,
   });
   const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
 
@@ -293,7 +378,7 @@ async function ensureGooglePromptCache(
         signal: params.signal,
       }).catch(() => null);
       if (refreshed) {
-        appendGooglePromptCacheEntry(params.sessionManager, {
+        await appendGooglePromptCacheEntry(params.sessionManager, {
           status: "ready",
           timestamp: now,
           provider: params.provider,
@@ -301,6 +386,7 @@ async function ensureGooglePromptCache(
           modelApi: params.model.api,
           baseUrl,
           systemPromptDigest,
+          cacheConfigDigest: params.cacheConfigDigest,
           cacheRetention: params.cacheRetention,
           cachedContent: latestEntry.cachedContent,
           expireTime: refreshed.expireTime ?? latestEntry.expireTime,
@@ -320,9 +406,11 @@ async function ensureGooglePromptCache(
     modelId: params.model.id,
     signal: params.signal,
     systemPrompt: params.systemPrompt,
+    tools: params.tools,
+    toolConfig: params.toolConfig,
   });
   if (!created) {
-    appendGooglePromptCacheEntry(params.sessionManager, {
+    await appendGooglePromptCacheEntry(params.sessionManager, {
       status: "failed",
       timestamp: now,
       provider: params.provider,
@@ -330,13 +418,14 @@ async function ensureGooglePromptCache(
       modelApi: params.model.api,
       baseUrl,
       systemPromptDigest,
+      cacheConfigDigest: params.cacheConfigDigest,
       cacheRetention: params.cacheRetention,
       retryAfter: now + GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS,
     });
     return null;
   }
 
-  appendGooglePromptCacheEntry(params.sessionManager, {
+  await appendGooglePromptCacheEntry(params.sessionManager, {
     status: "ready",
     timestamp: now,
     provider: params.provider,
@@ -344,6 +433,7 @@ async function ensureGooglePromptCache(
     modelApi: params.model.api,
     baseUrl,
     systemPromptDigest,
+    cacheConfigDigest: params.cacheConfigDigest,
     cacheRetention: params.cacheRetention,
     cachedContent: created.cachedContent,
     expireTime: created.expireTime,
@@ -379,34 +469,39 @@ export async function prepareGooglePromptCacheStreamFn(
     return undefined;
   }
 
-  const cachedContent = await ensureGooglePromptCache(
-    {
-      apiKey,
-      cacheRetention: resolvedRetention,
-      model: params.model,
-      provider: params.provider,
-      sessionManager: params.sessionManager,
-      signal: params.signal,
-      systemPrompt,
-    },
-    deps,
-  );
-  if (!cachedContent) {
-    log.debug(
-      `google prompt cache unavailable for ${params.provider}/${params.modelId}; continuing without cachedContent`,
-    );
-    return undefined;
-  }
-
   const inner = params.streamFn;
-  return (model, context, options) =>
-    streamWithPayloadPatch(
+  return async (model, context, options) => {
+    const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
+    const cachedContent = await ensureGooglePromptCache(
+      {
+        apiKey,
+        cacheConfigDigest: cacheConfig.cacheConfigDigest,
+        cacheRetention: resolvedRetention,
+        model: params.model,
+        provider: params.provider,
+        sessionManager: params.sessionManager,
+        signal: params.signal,
+        systemPrompt,
+        tools: cacheConfig.tools,
+        toolConfig: cacheConfig.toolConfig,
+      },
+      deps,
+    );
+    if (!cachedContent) {
+      log.debug(
+        `google prompt cache unavailable for ${params.provider}/${params.modelId}; continuing without cachedContent`,
+      );
+      return inner(model, context, options);
+    }
+
+    return streamWithPayloadPatch(
       inner,
       model,
-      buildManagedContextWithoutSystemPrompt(context),
+      buildManagedContextForCachedContent(context),
       options,
       (payload) => {
         payload.cachedContent = cachedContent;
       },
     );
+  };
 }

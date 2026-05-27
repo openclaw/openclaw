@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -24,6 +24,33 @@ describe("compileMemoryWikiVault", () => {
 
   function nextCaseRoot() {
     return path.join(suiteRoot, `case-${caseId++}`);
+  }
+
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    let error: unknown;
+    try {
+      await fs.access(targetPath);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+
+  function expectDigestPage<T extends { path: string }>(pages: T[], pagePath: string): T {
+    const page = pages.find((candidate) => candidate.path === pagePath);
+    if (!page) {
+      throw new Error(`Expected digest page ${pagePath}`);
+    }
+    return page;
+  }
+
+  function expectDigestCluster<T extends { key: string }>(clusters: T[], key: string): T {
+    const cluster = clusters.find((candidate) => candidate.key === key);
+    if (!cluster) {
+      throw new Error(`Expected digest contradiction cluster ${key}`);
+    }
+    return cluster;
   }
 
   it("writes root and directory indexes for native markdown", async () => {
@@ -73,16 +100,69 @@ describe("compileMemoryWikiVault", () => {
       pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
     };
     expect(agentDigest.claimCount).toBe(1);
-    expect(agentDigest.pages).toContainEqual(
-      expect.objectContaining({
-        path: "sources/alpha.md",
-        claimCount: 1,
-        topClaims: [expect.objectContaining({ text: "Alpha is the canonical source page." })],
-      }),
-    );
+    const alphaPage = expectDigestPage(agentDigest.pages, "sources/alpha.md");
+    expect(alphaPage.claimCount).toBe(1);
+    expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
+      "Alpha is the canonical source page.",
+    ]);
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
+  });
+
+  it("bounds concurrent page reads while compiling", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    for (let index = 0; index < 24; index += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `page-${index}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: `source.page-${index}`,
+            title: `Page ${index}`,
+          },
+          body: `# Page ${index}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    const originalReadFile = fs.readFile.bind(fs);
+    let activePageReads = 0;
+    let maxActivePageReads = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const targetPath = args[0];
+        const isTestPageRead =
+          typeof targetPath === "string" &&
+          targetPath.startsWith(path.join(rootDir, "sources", "page-"));
+        if (!isTestPageRead) {
+          return await originalReadFile(...args);
+        }
+
+        activePageReads += 1;
+        maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return await originalReadFile(...args);
+        } finally {
+          activePageReads -= 1;
+        }
+      });
+
+    try {
+      await compileMemoryWikiVault(config);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+
+    expect(maxActivePageReads).toBeGreaterThan(0);
+    expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
   it("renders obsidian-friendly links when configured", async () => {
@@ -168,6 +248,64 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );
+  });
+
+  it("does not rewrite empty source pages into related-only stubs", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const emptySourcePath = path.join(rootDir, "sources", "empty.md");
+    const whitespaceSourcePath = path.join(rootDir, "sources", "whitespace.md");
+    await fs.writeFile(emptySourcePath, "", "utf8");
+    await fs.writeFile(whitespaceSourcePath, " \n\t", "utf8");
+
+    const result = await compileMemoryWikiVault(config);
+
+    await expect(fs.readFile(emptySourcePath, "utf8")).resolves.toBe("");
+    await expect(fs.readFile(whitespaceSourcePath, "utf8")).resolves.toBe(" \n\t");
+    expect(result.updatedFiles).not.toContain(emptySourcePath);
+    expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
+  });
+
+  it("does not relate every page through a broad shared source", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.alpha", title: "Alpha" },
+        body: "# Alpha\n",
+      }),
+      "utf8",
+    );
+
+    for (let index = 0; index < 30; index += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "entities", `entity-${index}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: `entity.${index}`,
+            title: `Entity ${index}`,
+            sourceIds: ["source.alpha"],
+          },
+          body: `# Entity ${index}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    await compileMemoryWikiVault(config);
+
+    const firstEntity = await fs.readFile(path.join(rootDir, "entities", "entity-0.md"), "utf8");
+    const sourcePage = await fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8");
+    expect(firstEntity).toContain("[Alpha](sources/alpha.md)");
+    expect(firstEntity).not.toContain("### Related Pages");
+    expect(sourcePage).not.toContain("### Referenced By");
   });
 
   it("writes dashboard report pages when createDashboards is enabled", async () => {
@@ -279,8 +417,8 @@ describe("compileMemoryWikiVault", () => {
     };
     expect(agentDigest.claimHealth.missingEvidence).toBeGreaterThanOrEqual(1);
     expect(agentDigest.claimHealth.freshness.unknown).toBeGreaterThanOrEqual(1);
-    expect(agentDigest.contradictionClusters).toContainEqual(
-      expect.objectContaining({ key: "claim.alpha.db" }),
+    expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
+      "claim.alpha.db",
     );
   });
 
@@ -310,7 +448,98 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(rootDir, "reports", "open-questions.md"));
+  });
+
+  it("writes agent directory, relationship, provenance, and privacy reports", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          canonicalId: "maintainer.brad-groux",
+          aliases: ["brad"],
+          privacyTier: "local-private",
+          bestUsedFor: ["Microsoft routing"],
+          lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+          personCard: {
+            handles: ["@bgroux"],
+            lane: "Microsoft Teams",
+            askFor: ["Teams and Azure questions"],
+            privacyTier: "confirm-before-use",
+          },
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "collaborates-with",
+              evidenceKind: "discrawl-stat",
+              privacyTier: "local-private",
+            },
+          ],
+          claims: [
+            {
+              id: "claim.brad.teams",
+              text: "Brad is useful for Microsoft Teams routing.",
+              status: "supported",
+              confidence: 0.9,
+              evidence: [
+                {
+                  kind: "maintainer-whois",
+                  sourceId: "source.maintainers",
+                  privacyTier: "local-private",
+                },
+              ],
+            },
+          ],
+        },
+        body: "# Brad Groux\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "person-agent-directory.md"), "utf8"),
+    ).resolves.toContain("Microsoft Teams");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "relationship-graph.md"), "utf8"),
+    ).resolves.toContain("collaborates-with");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "provenance-coverage.md"), "utf8"),
+    ).resolves.toContain("maintainer-whois: 1");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
+    ).resolves.toContain("confirm-before-use");
+
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
+      pages: Array<{
+        path: string;
+        canonicalId?: string;
+        aliases?: string[];
+        personCard?: { lane?: string };
+        relationshipCount?: number;
+      }>;
+    };
+    const bradPage = expectDigestPage(agentDigest.pages, "entities/brad.md");
+    expect(bradPage.canonicalId).toBe("maintainer.brad-groux");
+    expect(bradPage.aliases).toEqual(["brad"]);
+    expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
+    expect(bradPage.relationshipCount).toBe(1);
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+    ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
   });
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {
@@ -339,7 +568,7 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     const second = await compileMemoryWikiVault(config);
 
-    expect(second.updatedFiles).toEqual([]);
+    expect(second.updatedFiles).toStrictEqual([]);
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );

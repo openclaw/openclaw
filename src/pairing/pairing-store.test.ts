@@ -24,39 +24,6 @@ vi.mock("../infra/file-lock.js", () => ({
   withFileLock: async (_path: string, _options: unknown, fn: () => unknown) => await fn(),
 }));
 
-vi.mock("../plugin-sdk/json-store.js", async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-
-  return {
-    readJsonFileWithFallback: async <T>(filePath: string, fallback: T) => {
-      let raw: string;
-      try {
-        raw = await fs.readFile(filePath, "utf8");
-      } catch (err) {
-        if ((err as { code?: string }).code === "ENOENT") {
-          return { value: fallback, exists: false };
-        }
-        return { value: fallback, exists: false };
-      }
-      try {
-        const parsed = JSON.parse(raw) as T;
-        return {
-          value: parsed ?? fallback,
-          exists: true,
-        };
-      } catch {
-        return { value: fallback, exists: true };
-      }
-    },
-    writeJsonFileAtomically: async (filePath: string, value: unknown) => {
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    },
-  };
-});
-
-import * as jsonStore from "../plugin-sdk/json-store.js";
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
@@ -73,6 +40,10 @@ import {
 let fixtureRoot = "";
 let caseId = 0;
 type RandomIntSync = (minOrMax: number, max?: number) => number;
+type FileReadSpy = {
+  readCount: () => number;
+  mockRestore: () => void;
+};
 
 let randomIntSpy: MockInstance<RandomIntSync>;
 let nextRandomInt = 0;
@@ -105,6 +76,17 @@ function setDefaultRandomIntMock() {
     const span = Math.max(upper - min, 1);
     return min + (nextRandomInt++ % span);
   });
+}
+
+function requireFirstPairingRequest(
+  requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
+) {
+  expect(requests).toHaveLength(1);
+  const [request] = requests;
+  if (!request) {
+    throw new Error("expected pairing request");
+  }
+  return request;
 }
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
@@ -176,15 +158,13 @@ async function seedTelegramAllowFromFixtures(params: {
 async function assertAllowFromCacheInvalidation(params: {
   stateDir: string;
   readAllowFrom: () => Promise<string[]>;
-  readSpy: {
-    mockRestore: () => void;
-  };
+  readSpy: FileReadSpy;
 }) {
   const first = await params.readAllowFrom();
   const second = await params.readAllowFrom();
   expect(first).toEqual(["1001"]);
   expect(second).toEqual(["1001"]);
-  expect(params.readSpy).toHaveBeenCalledTimes(1);
+  expect(params.readSpy.readCount()).toBe(1);
 
   await writeAllowFromFixture({
     stateDir: params.stateDir,
@@ -194,7 +174,7 @@ async function assertAllowFromCacheInvalidation(params: {
   });
   const third = await params.readAllowFrom();
   expect(third).toEqual(["10022"]);
-  expect(params.readSpy).toHaveBeenCalledTimes(2);
+  expect(params.readSpy.readCount()).toBe(2);
 }
 
 async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy") {
@@ -204,26 +184,39 @@ async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy")
   expect(channelScoped).not.toContain(entry);
 }
 
-async function withAllowFromCacheReadSpy(params: {
+async function expectAllowFromCacheInvalidationWithReadSpy(params: {
   stateDir: string;
-  createReadSpy: () => {
-    mockRestore: () => void;
-  };
+  createReadSpy: (filePath: string) => FileReadSpy;
   readAllowFrom: () => Promise<string[]>;
 }) {
+  const filePath = resolveAllowFromFilePath(params.stateDir, "telegram", "yy");
   await writeAllowFromFixture({
     stateDir: params.stateDir,
     channel: "telegram",
     accountId: "yy",
     allowFrom: ["1001"],
   });
-  const readSpy = params.createReadSpy();
-  await assertAllowFromCacheInvalidation({
-    stateDir: params.stateDir,
-    readAllowFrom: params.readAllowFrom,
-    readSpy,
-  });
-  readSpy.mockRestore();
+  clearPairingAllowFromReadCacheForTest();
+  const readSpy = params.createReadSpy(filePath);
+  try {
+    await assertAllowFromCacheInvalidation({
+      stateDir: params.stateDir,
+      readAllowFrom: params.readAllowFrom,
+      readSpy,
+    });
+  } finally {
+    readSpy.mockRestore();
+  }
+}
+
+function countFileReads(spy: { mock: { calls: unknown[][] } }, filePath: string): number {
+  let count = 0;
+  for (const [candidate] of spy.mock.calls) {
+    if (candidate === filePath) {
+      count++;
+    }
+  }
+  return count;
 }
 
 async function seedDefaultAccountAllowFromFixture(stateDir: string) {
@@ -301,13 +294,49 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
     process.env,
     params.secondAccountId,
   );
-  expect(firstList).toHaveLength(1);
-  expect(secondList).toHaveLength(1);
-  expect(firstList[0]?.code).toBe(first.code);
-  expect(secondList[0]?.code).toBe(second.code);
+  expect(requireFirstPairingRequest(firstList).code).toBe(first.code);
+  expect(requireFirstPairingRequest(secondList).code).toBe(second.code);
 }
 
 describe("pairing store", () => {
+  it("skips malformed persisted pairing requests while approving valid codes", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const now = new Date().toISOString();
+      writeJsonFixture(resolvePairingFilePath(stateDir, "telegram"), {
+        version: 1,
+        requests: [
+          {
+            id: "bad-code",
+            code: { nested: "bad" },
+            createdAt: now,
+            lastSeenAt: now,
+          },
+          {
+            id: "1001",
+            code: "ABCDEFGH",
+            createdAt: now,
+            lastSeenAt: now,
+            meta: {
+              accountId: "yy",
+              ignored: { nested: "bad" },
+            },
+          },
+        ],
+      });
+
+      await expect(
+        approveChannelPairingCode({
+          channel: "telegram",
+          code: "ABCDEFGH",
+          accountId: "yy",
+        }),
+      ).resolves.toMatchObject({ id: "1001" });
+      await expect(readChannelAllowFromStore("telegram", process.env, "yy")).resolves.toEqual([
+        "1001",
+      ]);
+    });
+  });
+
   it("handles pending pairing request lifecycle and limits", async () => {
     await withTempStateDir(async (stateDir) => {
       const first = await upsertChannelPairingRequest({
@@ -324,8 +353,7 @@ describe("pairing store", () => {
       expect(second.created).toBe(false);
       expect(second.code).toBe(first.code);
       const reusedList = await listChannelPairingRequests("demo-pairing-a");
-      expect(reusedList).toHaveLength(1);
-      expect(reusedList[0]?.code).toBe(first.code);
+      expect(requireFirstPairingRequest(reusedList).code).toBe(first.code);
 
       const created = await upsertChannelPairingRequest({
         channel: "demo-pairing-b",
@@ -419,6 +447,32 @@ describe("pairing store", () => {
     });
   });
 
+  it("reports unique code exhaustion without exposing reserved codes", async () => {
+    await withTempStateDir(async () => {
+      await withMockRandomInt({
+        initialValue: 0,
+        run: async () => {
+          const first = await upsertChannelPairingRequest({
+            channel: "telegram",
+            id: "123",
+            accountId: DEFAULT_ACCOUNT_ID,
+          });
+          expect(first.code).toBe("AAAAAAAA");
+
+          await expect(
+            upsertChannelPairingRequest({
+              channel: "telegram",
+              id: "456",
+              accountId: DEFAULT_ACCOUNT_ID,
+            }),
+          ).rejects.toThrow(
+            "failed to generate unique pairing code after 500 attempts; existing code count: 1",
+          );
+        },
+      });
+    });
+  });
+
   it("keeps allowFrom account-scoped across manual and pairing-code approvals", async () => {
     await withTempStateDir(async () => {
       await addChannelAllowFromStoreEntry({
@@ -468,6 +522,32 @@ describe("pairing store", () => {
       });
       expect(removedAgain.changed).toBe(false);
       expect(removedAgain.allowFrom).toEqual(["67890"]);
+    });
+  });
+
+  it("rethrows unexpected stat errors after allowFrom writes", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      const error = Object.assign(new Error("stat failed"), { code: "EACCES" });
+      const originalStat = fsSync.promises.stat.bind(fsSync.promises);
+      const statSpy = vi.spyOn(fsSync.promises, "stat").mockImplementation(async (target) => {
+        if (String(target) === allowFromPath) {
+          throw error;
+        }
+        return await originalStat(target);
+      });
+
+      try {
+        await expect(
+          addChannelAllowFromStoreEntry({
+            channel: "telegram",
+            accountId: "yy",
+            entry: "12345",
+          }),
+        ).rejects.toBe(error);
+      } finally {
+        statSpy.mockRestore();
+      }
     });
   });
 
@@ -579,16 +659,28 @@ describe("pairing store", () => {
     await withTempStateDir(async (stateDir) => {
       for (const variant of [
         {
-          createReadSpy: () => vi.spyOn(jsonStore, "readJsonFileWithFallback"),
+          createReadSpy: (filePath: string) => {
+            const spy = vi.spyOn(fsSync.promises, "readFile");
+            return {
+              readCount: () => countFileReads(spy, filePath),
+              mockRestore: () => spy.mockRestore(),
+            };
+          },
           readAllowFrom: () => readChannelAllowFromStore("telegram", process.env, "yy"),
         },
         {
-          createReadSpy: () => vi.spyOn(fsSync, "readFileSync"),
+          createReadSpy: (filePath: string) => {
+            const spy = vi.spyOn(fsSync, "readFileSync");
+            return {
+              readCount: () => countFileReads(spy, filePath),
+              mockRestore: () => spy.mockRestore(),
+            };
+          },
           readAllowFrom: async () => readChannelAllowFromStoreSync("telegram", process.env, "yy"),
         },
       ]) {
         clearOAuthFixtures(stateDir);
-        await withAllowFromCacheReadSpy({
+        await expectAllowFromCacheInvalidationWithReadSpy({
           stateDir,
           createReadSpy: variant.createReadSpy,
           readAllowFrom: variant.readAllowFrom,

@@ -1,4 +1,4 @@
-import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/testing";
+import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
@@ -73,6 +73,30 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
+  it("uses CJK punctuation as a safe long-line split point", () => {
+    const text = "一二三四五。六七八九十。甲乙丙丁戊。";
+    const chunks = chunkDiscordText(text, { maxChars: 10, maxLines: 50 });
+
+    expect(chunks).toEqual(["一二三四五。", "六七八九十。", "甲乙丙丁戊。"]);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still prefers whitespace before CJK punctuation", () => {
+    const text = "alpha beta。gamma delta";
+    const chunks = chunkDiscordText(text, { maxChars: 13, maxLines: 50 });
+
+    expect(chunks[0]).toBe("alpha");
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("does not split surrogate pairs at hard fallback boundaries", () => {
+    const text = "ab😀cd😀ef";
+    const chunks = chunkDiscordText(text, { maxChars: 3, maxLines: 50 });
+
+    expect(chunks).toEqual(["ab", "😀c", "d😀", "ef"]);
+    expect(chunks.join("")).toBe(text);
+  });
+
   it("keeps reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;
@@ -98,6 +122,19 @@ describe("chunkDiscordText", () => {
     const text = `Reasoning:\n_${body}_`;
 
     const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
+  });
+
+  it("keeps thinking-prefixed reasoning italics balanced across chunks", () => {
+    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
+    const text = `Thinking\n\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
     for (const chunk of chunks) {

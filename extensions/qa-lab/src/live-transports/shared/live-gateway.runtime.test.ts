@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
@@ -14,6 +15,13 @@ vi.mock("../../providers/server-runtime.js", () => ({
 }));
 
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
+
+type GatewayOptions = {
+  providerBaseUrl?: string;
+  providerMode?: string;
+  transportBaseUrl?: string;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+};
 
 function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
   return {
@@ -36,6 +44,10 @@ function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
       },
     }),
   };
+}
+
+function firstGatewayOptions(): GatewayOptions | undefined {
+  return startQaGatewayChild.mock.calls[0]?.[0] as GatewayOptions | undefined;
 }
 
 describe("startQaLiveLaneGateway", () => {
@@ -81,17 +93,66 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
-    expect(startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        transportBaseUrl: "http://127.0.0.1:43123",
-        providerBaseUrl: "http://127.0.0.1:44080/v1",
-        providerMode: "mock-openai",
-      }),
-    );
+    const gatewayOptions = firstGatewayOptions();
+    expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
+    expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(gatewayOptions?.providerMode).toBe("mock-openai");
 
     await harness.stop();
     expect(gatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables memory search for transport-only live lanes", async () => {
+    await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+      controlUiEnabled: false,
+    });
+
+    const { mutateConfig } = firstGatewayOptions() ?? {};
+    if (!mutateConfig) {
+      throw new Error("expected gateway config mutator");
+    }
+    const cfg = mutateConfig({
+      plugins: {
+        allow: ["acpx", "memory-core", "qa-channel"],
+        entries: {
+          acpx: { enabled: true },
+          "memory-core": { enabled: true },
+          "qa-channel": { enabled: true },
+        },
+        slots: {
+          memory: "memory-core",
+          contextEngine: "qmd",
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            sync: {
+              onSearch: true,
+              onSessionStart: true,
+              watch: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
+    expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
+    expect(cfg?.plugins?.slots?.memory).toBe("none");
+    expect(cfg?.plugins?.slots?.contextEngine).toBe("qmd");
+    expect(cfg?.agents?.defaults?.memorySearch?.enabled).toBe(false);
+    expect(cfg?.agents?.defaults?.memorySearch?.sync?.onSearch).toBe(false);
+    expect(cfg?.agents?.defaults?.memorySearch?.sync?.onSessionStart).toBe(false);
+    expect(cfg?.agents?.defaults?.memorySearch?.sync?.watch).toBe(false);
   });
 
   it("forwards gateway stop options to the child harness", async () => {
@@ -122,13 +183,10 @@ describe("startQaLiveLaneGateway", () => {
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
-    expect(startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({
-        transportBaseUrl: "http://127.0.0.1:43123",
-        providerBaseUrl: undefined,
-        providerMode: "live-frontier",
-      }),
-    );
+    const gatewayOptions = firstGatewayOptions();
+    expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
+    expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
+    expect(gatewayOptions?.providerMode).toBe("live-frontier");
 
     await harness.stop();
     expect(gatewayStop).toHaveBeenCalledTimes(1);

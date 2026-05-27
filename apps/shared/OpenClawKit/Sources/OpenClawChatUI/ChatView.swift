@@ -86,8 +86,6 @@ public struct OpenClawChatView: View {
         .sheet(isPresented: self.$showSessions) {
             if self.showsSessionSwitcher {
                 ChatSessionsSheet(viewModel: self.viewModel)
-            } else {
-                EmptyView()
             }
         }
     }
@@ -99,11 +97,11 @@ public struct OpenClawChatView: View {
                     self.messageListRows
 
                     Color.clear
-                        #if os(macOS)
+                    #if os(macOS)
                         .frame(height: Layout.messageListPaddingBottom)
-                        #else
+                    #else
                         .frame(height: Layout.messageListPaddingBottom + 1)
-                        #endif
+                    #endif
                         .id(self.scrollerBottomID)
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
@@ -115,11 +113,11 @@ public struct OpenClawChatView: View {
             .scrollDismissesKeyboard(.interactively)
             #endif
             // Keep the scroll pinned to the bottom for new messages.
-            .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
-            .onChange(of: self.scrollPosition) { _, position in
-                guard let position else { return }
-                self.isPinnedToBottom = position == self.scrollerBottomID
-            }
+                .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
+                .onChange(of: self.scrollPosition) { _, position in
+                    guard let position else { return }
+                    self.isPinnedToBottom = position == self.scrollerBottomID
+                }
 
             if self.viewModel.isLoading {
                 ProgressView()
@@ -158,7 +156,8 @@ public struct OpenClawChatView: View {
             guard self.hasPerformedInitialScroll else { return }
             if let lastMessage = self.viewModel.messages.last,
                lastMessage.role.lowercased() == "user",
-               lastMessage.id != self.lastUserMessageID {
+               lastMessage.id != self.lastUserMessageID
+            {
                 self.lastUserMessageID = lastMessage.id
                 self.isPinnedToBottom = true
                 withAnimation(.snappy(duration: 0.22)) {
@@ -390,7 +389,8 @@ public struct OpenClawChatView: View {
                 toolCallId: last.toolCallId,
                 toolName: last.toolName,
                 usage: last.usage,
-                stopReason: last.stopReason)
+                stopReason: last.stopReason,
+                errorMessage: last.errorMessage)
             result[result.count - 1] = merged
         }
 
@@ -434,7 +434,11 @@ public struct OpenClawChatView: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return OpenClawChatMessage.displayText(
+            contentText: parts.joined(separator: "\n"),
+            role: message.role,
+            stopReason: message.stopReason,
+            errorMessage: message.errorMessage)
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {

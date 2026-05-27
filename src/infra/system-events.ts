@@ -2,6 +2,8 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { sanitizeInboundSystemTags } from "../security/system-tags.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
@@ -18,14 +20,12 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
 
 type SessionQueue = {
   queue: SystemEvent[];
-  lastText: string | null;
   lastContextKey: string | null;
 };
 
@@ -37,7 +37,6 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -64,7 +63,6 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
   }
   const created: SessionQueue = {
     queue: [],
-    lastText: null,
     lastContextKey: null,
   };
   queues.set(key, created);
@@ -87,26 +85,42 @@ export function isSystemEventContextChanged(
   return normalized !== (existing?.lastContextKey ?? null);
 }
 
+function findDuplicateInQueue(
+  queue: readonly SystemEvent[],
+  text: string,
+  contextKey: string | null,
+  deliveryContext: DeliveryContext | undefined,
+): boolean {
+  const incoming = { text, contextKey, deliveryContext };
+  if (contextKey === null) {
+    const last = queue[queue.length - 1];
+    return last ? isDuplicateSystemEvent(last, incoming) : false;
+  }
+  return queue.some((event) => isDuplicateSystemEvent(event, incoming));
+}
+
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
-  const key = requireSessionKey(options?.sessionKey);
+  const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = text.trim();
+  // These entries are rendered as `System:` lines, so strip nested system-marker
+  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
+  const cleaned = sanitizeInboundSystemTags(text).trim();
   if (!cleaned) {
     return false;
   }
-  const normalizedContextKey = normalizeContextKey(options?.contextKey);
-  const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
-  entry.lastContextKey = normalizedContextKey;
-  if (entry.lastText === cleaned) {
+  const normalizedContextKey = normalizeContextKey(options.contextKey);
+  const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
     return false;
-  } // skip consecutive duplicates
-  entry.lastText = cleaned;
+  }
+  if (normalizedContextKey !== null) {
+    entry.lastContextKey = normalizedContextKey;
+  }
   entry.queue.push({
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    trusted: options.trusted !== false,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -122,7 +136,6 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   }
   const out = entry.queue.map(cloneSystemEvent);
   entry.queue.length = 0;
-  entry.lastText = null;
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
@@ -135,10 +148,17 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
   if (!left || !right) {
     return false;
   }
+  return channelRouteDedupeKey(left) === channelRouteDedupeKey(right);
+}
+
+function isDuplicateSystemEvent(
+  existing: SystemEvent,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
+): boolean {
   return (
-    (left.channel ?? undefined) === (right.channel ?? undefined) &&
-    (left.to ?? undefined) === (right.to ?? undefined) &&
-    (left.threadId ?? undefined) === (right.threadId ?? undefined)
+    existing.text === incoming.text &&
+    (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
+    areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
 
@@ -147,9 +167,24 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    (left.trusted ?? true) === (right.trusted ?? true) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
+}
+
+function resetQueueState(key: string, entry: SessionQueue) {
+  if (entry.queue.length === 0) {
+    entry.lastContextKey = null;
+    queues.delete(key);
+    return;
+  }
+  for (let index = entry.queue.length - 1; index >= 0; index -= 1) {
+    const contextKey = entry.queue[index].contextKey ?? null;
+    if (contextKey !== null) {
+      entry.lastContextKey = contextKey;
+      return;
+    }
+  }
+  entry.lastContextKey = null;
 }
 
 export function consumeSystemEventEntries(
@@ -168,15 +203,31 @@ export function consumeSystemEventEntries(
     return [];
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
-  if (entry.queue.length === 0) {
-    entry.lastText = null;
-    entry.lastContextKey = null;
-    queues.delete(key);
-  } else {
-    const newest = entry.queue[entry.queue.length - 1];
-    entry.lastText = newest.text;
-    entry.lastContextKey = newest.contextKey ?? null;
+  resetQueueState(key, entry);
+  return removed;
+}
+
+export function consumeSelectedSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+    return [];
   }
+  const removed: SystemEvent[] = [];
+  for (const consumed of consumedEntries) {
+    const index = entry.queue.findIndex((event) => areSystemEventsEqual(event, consumed));
+    if (index === -1) {
+      continue;
+    }
+    const [event] = entry.queue.splice(index, 1);
+    if (event) {
+      removed.push(cloneSystemEvent(event));
+    }
+  }
+  resetQueueState(key, entry);
   return removed;
 }
 

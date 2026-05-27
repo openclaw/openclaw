@@ -1,6 +1,8 @@
+import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logDebug, logWarn } from "../../logger.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,15 +11,48 @@ import {
 } from "../protocol/index.js";
 import {
   deliveryContextFromSession,
+  getActivePluginChannelRegistryVersion,
+  getActivePluginRegistryVersion,
   listAgentIds,
-  loadConfig,
   loadSessionEntry,
   resolveEffectiveToolInventory,
   resolveReplyToMode,
+  resolveRuntimeConfigCacheKey,
   resolveSessionAgentId,
   resolveSessionModelRef,
 } from "./tools-effective.runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+
+const TOOLS_EFFECTIVE_FRESH_TTL_MS = 10_000;
+const TOOLS_EFFECTIVE_STALE_TTL_MS = 120_000;
+const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
+const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
+
+let nowForToolsEffectiveCache = () => Date.now();
+
+type TrustedToolsEffectiveContext = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  modelProvider?: string;
+  modelId?: string;
+  messageProvider?: string;
+  accountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  replyToMode?: "off" | "first" | "all" | "batched";
+};
+
+type ToolsEffectiveCacheEntry = {
+  value: EffectiveToolInventoryResult;
+  createdAtMs: number;
+};
+
+const toolsEffectiveCache = new Map<string, ToolsEffectiveCacheEntry>();
+const toolsEffectiveInflight = new Map<string, Promise<EffectiveToolInventoryResult>>();
 
 function resolveRequestedAgentIdOrRespondError(params: {
   rawAgentId: unknown;
@@ -40,10 +75,129 @@ function resolveRequestedAgentIdOrRespondError(params: {
   return requestedAgentId;
 }
 
+function optionalCacheString(value: string | undefined | null): string {
+  return value?.trim() ?? "";
+}
+
+function buildToolsEffectiveCacheKey(params: {
+  sessionKey: string;
+  context: TrustedToolsEffectiveContext;
+}): string {
+  const context = params.context;
+  return JSON.stringify({
+    v: 1,
+    config: resolveRuntimeConfigCacheKey(context.cfg),
+    pluginRegistry: getActivePluginRegistryVersion(),
+    channelRegistry: getActivePluginChannelRegistryVersion(),
+    sessionKey: params.sessionKey,
+    agentId: context.agentId,
+    modelProvider: optionalCacheString(context.modelProvider),
+    modelId: optionalCacheString(context.modelId),
+    messageProvider: optionalCacheString(context.messageProvider),
+    accountId: optionalCacheString(context.accountId),
+    currentChannelId: optionalCacheString(context.currentChannelId),
+    currentThreadTs: optionalCacheString(context.currentThreadTs),
+    groupId: optionalCacheString(context.groupId),
+    groupChannel: optionalCacheString(context.groupChannel),
+    groupSpace: optionalCacheString(context.groupSpace),
+    replyToMode: optionalCacheString(context.replyToMode),
+  });
+}
+
+function trimToolsEffectiveCache(): void {
+  while (toolsEffectiveCache.size > TOOLS_EFFECTIVE_CACHE_LIMIT) {
+    const oldest = toolsEffectiveCache.keys().next().value;
+    if (typeof oldest !== "string") {
+      return;
+    }
+    toolsEffectiveCache.delete(oldest);
+  }
+}
+
+function cacheToolsEffectiveResult(key: string, value: EffectiveToolInventoryResult): void {
+  toolsEffectiveCache.delete(key);
+  toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
+  trimToolsEffectiveCache();
+}
+
+function scheduleToolsEffectiveRefresh(
+  key: string,
+  context: TrustedToolsEffectiveContext,
+): Promise<EffectiveToolInventoryResult> {
+  const existing = toolsEffectiveInflight.get(key);
+  if (existing) {
+    return existing;
+  }
+  const startedAt = nowForToolsEffectiveCache();
+  const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
+    setImmediate(() => {
+      try {
+        const value = resolveEffectiveToolInventory({
+          cfg: context.cfg,
+          agentId: context.agentId,
+          sessionKey: context.sessionKey,
+          messageProvider: context.messageProvider,
+          modelProvider: context.modelProvider,
+          modelId: context.modelId,
+          currentChannelId: context.currentChannelId,
+          currentThreadTs: context.currentThreadTs,
+          accountId: context.accountId,
+          groupId: context.groupId,
+          groupChannel: context.groupChannel,
+          groupSpace: context.groupSpace,
+          replyToMode: context.replyToMode,
+        });
+        cacheToolsEffectiveResult(key, value);
+        const durationMs = nowForToolsEffectiveCache() - startedAt;
+        if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
+          logDebug(
+            `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
+          );
+        }
+        resolve(value);
+      } catch (err) {
+        reject(err);
+      } finally {
+        toolsEffectiveInflight.delete(key);
+      }
+    });
+  });
+  toolsEffectiveInflight.set(key, task);
+  return task;
+}
+
+function refreshToolsEffectiveInBackground(
+  key: string,
+  context: TrustedToolsEffectiveContext,
+): void {
+  void scheduleToolsEffectiveRefresh(key, context).catch((err) => {
+    logWarn(`tools-effective: background refresh failed: ${String(err)}`);
+  });
+}
+
+async function resolveCachedToolsEffective(params: {
+  sessionKey: string;
+  context: TrustedToolsEffectiveContext;
+}): Promise<EffectiveToolInventoryResult> {
+  const key = buildToolsEffectiveCacheKey(params);
+  const now = nowForToolsEffectiveCache();
+  const cached = toolsEffectiveCache.get(key);
+  if (cached) {
+    const ageMs = now - cached.createdAtMs;
+    if (ageMs < TOOLS_EFFECTIVE_FRESH_TTL_MS) {
+      return cached.value;
+    }
+    if (ageMs < TOOLS_EFFECTIVE_STALE_TTL_MS) {
+      refreshToolsEffectiveInBackground(key, params.context);
+      return cached.value;
+    }
+  }
+  return scheduleToolsEffectiveRefresh(key, params.context);
+}
+
 function resolveTrustedToolsEffectiveContext(params: {
   sessionKey: string;
   requestedAgentId?: string;
-  senderIsOwner: boolean;
   respond: RespondFn;
 }) {
   const loaded = loadSessionEntry(params.sessionKey);
@@ -77,7 +231,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
-    senderIsOwner: params.senderIsOwner,
+    sessionKey: params.sessionKey,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider:
@@ -89,11 +243,11 @@ function resolveTrustedToolsEffectiveContext(params: {
     currentChannelId: delivery?.to,
     currentThreadTs:
       delivery?.threadId != null
-        ? String(delivery.threadId)
+        ? stringifyRouteThreadId(delivery.threadId)
         : loaded.entry.lastThreadId != null
-          ? String(loaded.entry.lastThreadId)
+          ? stringifyRouteThreadId(loaded.entry.lastThreadId)
           : loaded.entry.origin?.threadId != null
-            ? String(loaded.entry.origin.threadId)
+            ? stringifyRouteThreadId(loaded.entry.origin.threadId)
             : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
@@ -111,7 +265,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }
 
 export const toolsEffectiveHandlers: GatewayRequestHandlers = {
-  "tools.effective": ({ params, respond, client }) => {
+  "tools.effective": async ({ params, respond, context }) => {
     if (!validateToolsEffectiveParams(params)) {
       respond(
         false,
@@ -123,7 +277,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = loadConfig();
+    const cfg = context.getRuntimeConfig();
     const requestedAgentId = resolveRequestedAgentIdOrRespondError({
       rawAgentId: params.agentId,
       cfg,
@@ -135,33 +289,40 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
     const trustedContext = resolveTrustedToolsEffectiveContext({
       sessionKey: params.sessionKey,
       requestedAgentId,
-      senderIsOwner: Array.isArray(client?.connect?.scopes)
-        ? client.connect.scopes.includes(ADMIN_SCOPE)
-        : false,
       respond,
     });
     if (!trustedContext) {
       return;
     }
-    respond(
-      true,
-      resolveEffectiveToolInventory({
-        cfg: trustedContext.cfg,
-        agentId: trustedContext.agentId,
-        sessionKey: params.sessionKey,
-        messageProvider: trustedContext.messageProvider,
-        modelProvider: trustedContext.modelProvider,
-        modelId: trustedContext.modelId,
-        senderIsOwner: trustedContext.senderIsOwner,
-        currentChannelId: trustedContext.currentChannelId,
-        currentThreadTs: trustedContext.currentThreadTs,
-        accountId: trustedContext.accountId,
-        groupId: trustedContext.groupId,
-        groupChannel: trustedContext.groupChannel,
-        groupSpace: trustedContext.groupSpace,
-        replyToMode: trustedContext.replyToMode,
-      }),
-      undefined,
-    );
+    try {
+      respond(
+        true,
+        await resolveCachedToolsEffective({
+          sessionKey: params.sessionKey,
+          context: trustedContext,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
+      );
+    }
   },
 };
+
+export const testing = {
+  resetToolsEffectiveCacheForTest() {
+    toolsEffectiveCache.clear();
+    toolsEffectiveInflight.clear();
+  },
+  setToolsEffectiveNowForTest(now: () => number) {
+    nowForToolsEffectiveCache = now;
+  },
+  resetToolsEffectiveNowForTest() {
+    nowForToolsEffectiveCache = () => Date.now();
+  },
+} as const;
+export { testing as __testing };

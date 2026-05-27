@@ -1,18 +1,30 @@
 import { randomBytes } from "node:crypto";
 import { rmSync } from "node:fs";
-import { chmod, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 
 const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
+const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
+
+function resolveHostedZaloMediaDirName(): string {
+  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
+  if (!workerId) {
+    return ZALO_OUTBOUND_MEDIA_DIR_NAME;
+  }
+  const safeWorkerId = workerId.replaceAll(/[^a-zA-Z0-9_.-]/gu, "_");
+  return `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${safeWorkerId}`;
+}
+
 const ZALO_OUTBOUND_MEDIA_DIR = join(
   resolvePreferredOpenClawTmpDir(),
-  "openclaw-zalo-outbound-media",
+  resolveHostedZaloMediaDirName(),
 );
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 
@@ -40,8 +52,8 @@ function createHostedZaloMediaToken(): string {
 }
 
 async function ensureHostedZaloMediaDir(): Promise<void> {
-  await mkdir(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, mode: 0o700 });
-  await chmod(ZALO_OUTBOUND_MEDIA_DIR, 0o700).catch(() => undefined);
+  await privateFileStore(ZALO_OUTBOUND_MEDIA_DIR).writeText(".ready", "");
+  await unlink(join(ZALO_OUTBOUND_MEDIA_DIR, ".ready")).catch(() => undefined);
 }
 
 async function deleteHostedZaloMediaEntry(id: string): Promise<void> {
@@ -142,18 +154,15 @@ export async function prepareHostedZaloMediaUrl(params: {
   const token = createHostedZaloMediaToken();
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
-  await writeFile(resolveHostedZaloMediaBufferPath(id), media.buffer, { mode: 0o600 });
+  const store = privateFileStore(ZALO_OUTBOUND_MEDIA_DIR);
+  await store.writeText(`${id}.bin`, media.buffer);
   try {
-    await writeFile(
-      resolveHostedZaloMediaMetadataPath(id),
-      JSON.stringify({
-        routePath,
-        token,
-        contentType: media.contentType,
-        expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
-      } satisfies HostedZaloMediaMetadata),
-      { encoding: "utf8", mode: 0o600 },
-    );
+    await store.writeJson(`${id}.json`, {
+      routePath,
+      token,
+      contentType: media.contentType,
+      expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
+    } satisfies HostedZaloMediaMetadata);
   } catch (error) {
     await deleteHostedZaloMediaEntry(id);
     throw error;

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
+import "../test-support/browser-security.mock.js";
 import {
   type AriaSnapshotNode,
   captureScreenshot,
@@ -33,6 +34,16 @@ type CdpMockMessage = Parameters<CdpReplyHandler>[0];
 
 function sendCdpResult(socket: WebSocket, id: number | undefined, result: Record<string, unknown>) {
   socket.send(JSON.stringify({ id, result }));
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function replyToPageEnable(msg: CdpMockMessage, socket: WebSocket): boolean {
@@ -133,7 +144,7 @@ describe("cdp internal", () => {
           return;
         }
         if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params).toMatchObject({ format: "png" });
+          expect(msg.params?.format).toBe("png");
           expect(msg.params).not.toHaveProperty("captureBeyondViewport");
           socket.send(
             JSON.stringify({
@@ -197,7 +208,7 @@ describe("cdp internal", () => {
         }
         if (msg.method === "Runtime.evaluate") {
           // Pre-capture viewport probe + post-capture probe.
-          const isPre = events.filter((m) => m === "Runtime.evaluate").length === 1;
+          const isPre = countMatching(events, (m) => m === "Runtime.evaluate") === 1;
           socket.send(
             JSON.stringify({
               id: msg.id,
@@ -385,12 +396,12 @@ describe("cdp internal", () => {
 
   describe("formatAriaSnapshot", () => {
     it("returns an empty array when the AX tree is empty", () => {
-      expect(formatAriaSnapshot([], 100)).toEqual([]);
+      expect(formatAriaSnapshot([], 100)).toStrictEqual([]);
     });
 
     it("returns an empty array when no node has an id", () => {
       const nodes = [{ role: { value: "Role" }, name: { value: "" } }] as unknown as RawAXNode[];
-      expect(formatAriaSnapshot(nodes, 100)).toEqual([]);
+      expect(formatAriaSnapshot(nodes, 100)).toStrictEqual([]);
     });
 
     it("skips child references that are absent from the node map", () => {
@@ -482,7 +493,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -723,7 +734,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("returns an empty nodes array when nodes is not an array", async () => {
@@ -743,7 +754,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -854,7 +865,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const out = await querySelector({ wsUrl: server.wsUrl, selector: "button" });
-      expect(out.matches).toEqual([]);
+      expect(out.matches).toStrictEqual([]);
     });
   });
 
@@ -963,6 +974,22 @@ describe("cdp internal", () => {
           const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
           if (msg.method === "Target.createTarget") {
             socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_BARE_WS" } }));
+            return;
+          }
+          if (msg.method === "Target.attachToTarget") {
+            socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S_BARE_WS" } }));
+            return;
+          }
+          if (
+            msg.method === "Page.enable" ||
+            msg.method === "Runtime.enable" ||
+            msg.method === "Network.enable" ||
+            msg.method === "DOM.enable" ||
+            msg.method === "Accessibility.enable" ||
+            msg.method === "Runtime.runIfWaitingForDebugger" ||
+            msg.method === "Target.detachFromTarget"
+          ) {
+            socket.send(JSON.stringify({ id: msg.id, result: {} }));
           }
         });
       });
@@ -1069,7 +1096,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {

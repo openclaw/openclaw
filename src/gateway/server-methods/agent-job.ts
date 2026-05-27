@@ -1,4 +1,11 @@
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "../../agents/run-timeout-attribution.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../../shared/agent-liveness.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
@@ -29,6 +36,11 @@ type AgentRunSnapshot = {
   startedAt?: number;
   endedAt?: number;
   error?: string;
+  stopReason?: string;
+  livenessState?: string;
+  yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   ts: number;
 };
 
@@ -135,12 +147,27 @@ function createSnapshotFromLifecycleEvent(params: {
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
   const error = typeof data?.error === "string" ? data.error : undefined;
+  const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
+  const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
+  const blocked = isBlockedLivenessState(livenessState);
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const status =
+    phase === "error" || blocked || abortedStopReason ? "error" : data?.aborted ? "timeout" : "ok";
+  const resolvedError = abortedStopReason && !error ? AGENT_RUN_ABORTED_ERROR : error;
+  const timeoutPhase =
+    status === "timeout" ? normalizeAgentRunTimeoutPhase(data?.timeoutPhase) : undefined;
+  const providerStarted = normalizeProviderStarted(data?.providerStarted);
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status,
     startedAt,
     endedAt,
-    error,
+    error: blocked ? formatBlockedLivenessError(resolvedError) : resolvedError,
+    stopReason,
+    livenessState,
+    ...(data?.yielded === true ? { yielded: true } : {}),
+    ...(timeoutPhase ? { timeoutPhase } : {}),
+    ...(providerStarted !== undefined ? { providerStarted } : {}),
     ts: Date.now(),
   };
 }
@@ -364,7 +391,7 @@ export async function waitForAgentJob(params: {
 
 ensureAgentRunListener();
 
-export const __testing = {
+export const testing = {
   getWaiterCount(runId?: string): number {
     if (runId) {
       return agentRunWaiterCounts.get(runId) ?? 0;
@@ -379,3 +406,4 @@ export const __testing = {
     agentRunWaiterCounts.clear();
   },
 };
+export { testing as __testing };

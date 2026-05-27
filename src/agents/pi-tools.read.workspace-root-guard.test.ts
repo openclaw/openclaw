@@ -173,6 +173,57 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("adds a workspace-safe temp hint when rejecting paths outside the workspace", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+    mocks.assertSandboxPath.mockImplementationOnce(async () => {
+      throw new Error("Path escapes sandbox root (/tmp/root): /tmp/repo_meta.jsonl");
+    });
+
+    await expect(
+      wrapped.execute("tc-outside-temp", { path: "/tmp/repo_meta.jsonl" }),
+    ).rejects.toThrow(
+      /Path escapes sandbox root .* Use a relative path under `.openclaw\/tmp\/` inside the workspace/,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("maps additional container mounts to their own guarded host roots", async () => {
+    const { tool } = createToolHarness();
+    const agentRoot = "/tmp/agent-root";
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-agent-mount", { path: "/agent/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(agentRoot, "docs", "readme.md"),
+      cwd: agentRoot,
+      root: agentRoot,
+    });
+  });
+
+  it("maps file URLs under additional container mounts", async () => {
+    const { tool } = createToolHarness();
+    const agentRoot = "/tmp/agent-root";
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      additionalContainerMounts: [{ containerRoot: "/agent", hostRoot: agentRoot }],
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-agent-file-url", { path: "file:///agent/docs/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(agentRoot, "docs", "readme.md"),
+      cwd: agentRoot,
+      root: agentRoot,
+    });
+  });
+
   it("does not guard outPath by default", async () => {
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {

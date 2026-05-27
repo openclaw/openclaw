@@ -1,10 +1,10 @@
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
@@ -35,6 +35,7 @@ type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> 
 
 type DiscoverModelsOptions = {
   providerFilter?: string;
+  normalizeModels?: boolean;
 };
 
 type InMemoryAuthStorageBackendLike = {
@@ -146,20 +147,42 @@ function createOpenClawModelRegistry(
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
+  const refresh = registry.refresh.bind(registry);
   const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
   const matchesProviderFilter = (entry: Model<Api>) =>
     !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
+  const shouldNormalize = options?.normalizeModels !== false;
+  const findCache = new Map<string, Model<Api> | undefined>();
+  const normalizeEntry = (entry: Model<Api>) =>
+    shouldNormalize ? normalizeDiscoveredPiModel(entry, agentDir) : entry;
 
-  registry.getAll = () =>
-    getAll()
-      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
-      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
-  registry.getAvailable = () =>
-    getAvailable()
-      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
-      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
-  registry.find = (provider: string, modelId: string) =>
-    normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
+  registry.getAll = () => {
+    const entries = getAll().filter((entry: Model<Api>) => matchesProviderFilter(entry));
+    return shouldNormalize
+      ? entries.map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir))
+      : entries;
+  };
+  registry.getAvailable = () => {
+    const entries = getAvailable().filter((entry: Model<Api>) => matchesProviderFilter(entry));
+    return shouldNormalize
+      ? entries.map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir))
+      : entries;
+  };
+  registry.find = (provider: string, modelId: string) => {
+    const normalizedProvider = normalizeProviderId(provider);
+    const key = `${normalizedProvider}\0${modelId}`;
+    if (findCache.has(key)) {
+      return findCache.get(key);
+    }
+    const fallbackEntry = find(provider, modelId);
+    const resolved = fallbackEntry ? normalizeEntry(fallbackEntry) : undefined;
+    findCache.set(key, resolved);
+    return resolved;
+  };
+  registry.refresh = () => {
+    findCache.clear();
+    return refresh();
+  };
 
   return registry;
 }
@@ -214,7 +237,8 @@ export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): PiAuthStorage {
-  const credentials = resolvePiCredentialsForDiscovery(agentDir, options);
+  const credentials =
+    options?.skipCredentials === true ? {} : resolvePiCredentialsForDiscovery(agentDir, options);
   const authPath = path.join(agentDir, "auth.json");
   if (options?.readOnly !== true) {
     scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);

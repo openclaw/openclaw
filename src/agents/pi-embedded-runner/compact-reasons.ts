@@ -1,4 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
+
+const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
+
+export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
+  "deferred to background context-engine maintenance";
 
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
@@ -23,11 +29,16 @@ export function classifyCompactionReason(reason?: string): string {
   if (text.includes("nothing to compact")) {
     return "no_compactable_entries";
   }
-  if (text.includes("below threshold")) {
+  // Backends use both phrases for the same harmless state: the transcript is
+  // already small enough, so preflight compaction should skip instead of fail.
+  if (text.includes("below threshold") || text.includes("already under target")) {
     return "below_threshold";
   }
   if (text.includes("already compacted")) {
     return "already_compacted_recently";
+  }
+  if (text.includes("deferred to background")) {
+    return "deferred_background";
   }
   if (text.includes("still exceeds target")) {
     return "live_context_still_exceeds_target";
@@ -58,4 +69,16 @@ export function classifyCompactionReason(reason?: string): string {
     return "provider_error_5xx";
   }
   return "unknown";
+}
+
+export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
+  const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
+    .trim()
+    .replace(/[^A-Za-z0-9._:@/+~-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!sanitized) {
+    return undefined;
+  }
+  return sanitized.slice(0, MAX_COMPACTION_REASON_DETAIL_CHARS);
 }

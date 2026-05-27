@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
@@ -9,8 +9,6 @@ import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } f
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
-export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
-import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
@@ -76,7 +74,7 @@ async function isInvokeAuthorized(params: {
 
   const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
 
-  if (isDirectMessage && resolved.access.decision !== "allow") {
+  if (isDirectMessage && resolved.senderAccess.decision !== "allow") {
     deps.log.debug?.(deniedLogs.dm, {
       sender: senderId,
       conversationId,
@@ -99,7 +97,7 @@ async function isInvokeAuthorized(params: {
     return false;
   }
 
-  if (!isDirectMessage && !resolved.senderGroupAccess.allowed) {
+  if (!isDirectMessage && !resolved.senderAccess.allowed) {
     deps.log.debug?.(deniedLogs.group, {
       sender: senderId,
       conversationId,
@@ -258,7 +256,11 @@ async function handleFeedbackInvoke(
     });
     const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
     const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
-    await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
+    await appendRegularFile({
+      filePath: transcriptFile,
+      content: `${JSON.stringify(feedbackEvent)}\n`,
+      rejectSymlinkParents: true,
+    }).catch(() => {
       // Best effort — transcript dir may not exist yet
     });
   } catch {
@@ -457,7 +459,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleTeamsMessage(context as MSTeamsTurnContext);
     } catch (err) {
-      deps.runtime.error?.(`msteams handler failed: ${formatUnknownError(err)}`);
+      deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
     }
     await next();
   });
@@ -518,7 +520,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleReaction(context as MSTeamsTurnContext, "added");
     } catch (err) {
-      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });
@@ -527,7 +529,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     try {
       await handleReaction(context as MSTeamsTurnContext, "removed");
     } catch (err) {
-      deps.runtime.error?.(`msteams reaction handler failed: ${String(err)}`);
+      deps.runtime.error(`msteams reaction handler failed: ${String(err)}`);
     }
     await next();
   });

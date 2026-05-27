@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
@@ -173,17 +173,17 @@ async function waitForMatrixSelfVerificationTrustStatus(params: {
   timeoutMs: number;
 }): Promise<MatrixOwnDeviceVerificationStatus> {
   const startedAt = Date.now();
-  let last: MatrixDeviceVerificationStatus | undefined;
+  let last: MatrixOwnDeviceVerificationStatus | undefined;
   let crossSigningPublished = false;
   while (Date.now() - startedAt < params.timeoutMs) {
     const [status, crossSigning] = await Promise.all([
-      params.client.getOwnDeviceIdentityVerificationStatus(),
+      params.client.getOwnDeviceVerificationStatus(),
       params.client.getOwnCrossSigningPublicationStatus(),
     ]);
     last = status;
     crossSigningPublished = crossSigning.published;
-    if (last.verified && crossSigningPublished) {
-      return await params.client.getOwnDeviceVerificationStatus();
+    if (status.verified && crossSigningPublished) {
+      return status;
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
   }
@@ -214,20 +214,20 @@ async function completeMatrixSelfVerification(params: {
   completed: MatrixVerificationSummary;
   timeoutMs: number;
 }): Promise<MatrixSelfVerificationResult> {
-  const bootstrap = await params.client.bootstrapOwnDeviceVerification({
-    allowAutomaticCrossSigningReset: false,
-    strict: false,
-  });
-  if (!bootstrap.verification.verified) {
-    await params.client.trustOwnIdentityAfterSelfVerification?.();
+  const initial = await Promise.all([
+    params.client.getOwnDeviceVerificationStatus(),
+    params.client.getOwnCrossSigningPublicationStatus(),
+  ]);
+  let ownerVerification = initial[0];
+  if (!ownerVerification.verified || !initial[1].published) {
+    if (!ownerVerification.verified) {
+      await params.client.trustOwnIdentityAfterSelfVerification?.();
+    }
+    ownerVerification = await waitForMatrixSelfVerificationTrustStatus({
+      client: params.client,
+      timeoutMs: params.timeoutMs,
+    });
   }
-  const ownerVerification =
-    bootstrap.verification.verified && bootstrap.crossSigning.published
-      ? bootstrap.verification
-      : await waitForMatrixSelfVerificationTrustStatus({
-          client: params.client,
-          timeoutMs: params.timeoutMs,
-        });
   return {
     ...params.completed,
     deviceOwnerVerified: ownerVerification.verified,
@@ -437,7 +437,16 @@ export async function confirmMatrixVerificationSas(
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     await ensureMatrixVerificationDmTracked(crypto, opts);
-    return await crypto.confirmVerificationSas(resolveVerificationId(requestId));
+    const summary = await crypto.confirmVerificationSas(resolveVerificationId(requestId));
+    // For self-verifications, mirror the trust-own-identity step that the
+    // higher-level runMatrixSelfVerification path already performs at
+    // completeMatrixSelfVerification: cross-sign the operator's master key
+    // from the bot side so Element X clears the "Verify" prompt without
+    // waiting for a passive sync tick. Non-self verifications are a no-op.
+    if (summary.isSelfVerification && summary.completed && !summary.error) {
+      await client.trustOwnIdentityAfterSelfVerification?.();
+    }
+    return summary;
   });
 }
 
@@ -482,21 +491,42 @@ export async function getMatrixEncryptionStatus(
 export async function getMatrixVerificationStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withResolvedActionClient(opts, async (client) => {
-    const status = await client.getOwnDeviceVerificationStatus();
-    const payload = {
-      ...status,
-      pendingVerifications: client.crypto ? (await client.crypto.listVerifications()).length : 0,
-    };
-    if (!opts.includeRecoveryKey) {
-      return payload;
-    }
-    const recoveryKey = client.crypto ? await client.crypto.getRecoveryKey() : null;
-    return {
-      ...payload,
-      recoveryKey: recoveryKey?.encodedPrivateKey ?? null,
-    };
-  });
+  const readiness = opts.readiness ?? "prepared";
+  return await withResolvedActionClient(
+    { ...opts, readiness: "none" },
+    async (client) => {
+      const preflight = await readMatrixVerificationStatus(client, opts);
+      if (readiness === "none" || preflight.serverDeviceKnown === false) {
+        return preflight;
+      }
+      if (readiness === "started") {
+        await client.start();
+      } else {
+        await client.prepareForOneOff();
+      }
+      return await readMatrixVerificationStatus(client, opts);
+    },
+    "discard",
+  );
+}
+
+async function readMatrixVerificationStatus(
+  client: MatrixActionClient,
+  opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean },
+) {
+  const status = await client.getOwnDeviceVerificationStatus();
+  const payload = {
+    ...status,
+    pendingVerifications: client.crypto ? (await client.crypto.listVerifications()).length : 0,
+  };
+  if (!opts.includeRecoveryKey) {
+    return payload;
+  }
+  const recoveryKey = client.crypto ? await client.crypto.getRecoveryKey() : null;
+  return {
+    ...payload,
+    recoveryKey: recoveryKey?.encodedPrivateKey ?? null,
+  };
 }
 
 export async function getMatrixRoomKeyBackupStatus(opts: MatrixActionClientOpts = {}) {

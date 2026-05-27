@@ -66,7 +66,7 @@ export type ResolvedAgentRoute = {
     | "default";
 };
 
-export { DEFAULT_ACCOUNT_ID, DEFAULT_AGENT_ID } from "./session-key.js";
+export { DEFAULT_ACCOUNT_ID } from "./session-key.js";
 
 export function deriveLastRoutePolicy(params: {
   sessionKey: string;
@@ -661,16 +661,14 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
-    const sessionKey = normalizeLowercaseStringOrEmpty(
-      buildAgentSessionKey({
-        agentId: resolvedAgentId,
-        channel,
-        accountId,
-        peer,
-        dmScope: effectiveDmScope,
-        identityLinks,
-      }),
-    );
+    const sessionKey = buildAgentSessionKey({
+      agentId: resolvedAgentId,
+      channel,
+      accountId,
+      peer,
+      dmScope: effectiveDmScope,
+      identityLinks,
+    });
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
       buildAgentMainSessionKey({
         agentId: resolvedAgentId,

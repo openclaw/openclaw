@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../../test-support/browser-security-runtime.mock.js";
+import "../test-support/browser-security.mock.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
@@ -49,6 +49,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
+    getRuntimeConfig: mocks.loadConfig,
     loadConfig: mocks.loadConfig,
   };
 });
@@ -84,6 +85,15 @@ function stubJsonFetchOk() {
   );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function requireFetchInit(fetchMock: ReturnType<typeof stubJsonFetchOk>) {
+  const [call] = fetchMock.mock.calls;
+  if (!call) {
+    throw new Error("expected browser fetch call");
+  }
+  const [, init] = call;
+  return init;
 }
 
 async function expectThrownBrowserFetchError(
@@ -149,7 +159,7 @@ describe("fetchBrowserJson loopback auth", () => {
     const res = await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/");
     expect(res.ok).toBe(true);
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
@@ -159,7 +169,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://example.com/");
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBeNull();
   });
@@ -173,7 +183,7 @@ describe("fetchBrowserJson loopback auth", () => {
       },
     });
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer caller-token");
   });
@@ -183,7 +193,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://[::1]:18888/");
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
@@ -193,7 +203,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await fetchBrowserJson<{ ok: boolean }>("http://[::ffff:127.0.0.1]:18888/");
 
-    const init = fetchMock.mock.calls[0]?.[1];
+    const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });

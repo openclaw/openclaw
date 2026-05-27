@@ -11,6 +11,7 @@ function createMockContext(overrides?: {
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
   builtinToolNames?: ReadonlySet<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -32,15 +33,20 @@ function createMockContext(overrides?: {
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
+      hadDeterministicSideEffect: false,
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
     },
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
+    trustedLocalMediaToolNames:
+      overrides?.trustedLocalMediaToolNames ?? overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -69,6 +75,15 @@ function createMockContext(overrides?: {
     getUsageTotals: vi.fn(() => undefined),
     getCompactionCount: vi.fn(() => 0),
   } as unknown as EmbeddedPiSubscribeContext;
+}
+
+function firstEmitToolOutputCall(ctx: EmbeddedPiSubscribeContext) {
+  expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+  const call = vi.mocked(ctx.emitToolOutput).mock.calls[0];
+  if (!call) {
+    throw new Error("expected emitToolOutput call");
+  }
+  return call;
 }
 
 async function emitPngMediaToolResult(
@@ -141,6 +156,44 @@ async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
   return ctx;
 }
 
+const providerInventoryText = [
+  "openai: default=sora-2 | models=sora-2",
+  "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+].join("\n");
+
+async function handleProviderInventoryListResult(params: {
+  toolName: "image_generate" | "video_generate";
+  shouldEmitToolOutput: boolean;
+}) {
+  const ctx = createMockContext({
+    shouldEmitToolOutput: params.shouldEmitToolOutput,
+    onToolResult: vi.fn(),
+    toolResultFormat: "plain",
+  });
+
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: providerInventoryText }],
+      details: {
+        providers: [
+          { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
+          {
+            id: "google",
+            defaultModel: "veo-3.1-fast-generate-preview",
+            models: ["veo-3.1-fast-generate-preview"],
+          },
+        ],
+      },
+    },
+  });
+
+  return ctx;
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -200,7 +253,7 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitUntrustedToolMediaResult(ctx, "/tmp/secret.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("emits remote media for untrusted tools", async () => {
@@ -220,13 +273,13 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitMcpMediaToolResult(ctx, "/tmp/secret.png");
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit local media for case-variant collisions with trusted built-ins", async () => {
     const ctx = await handleCaseVariantBuiltinMedia("/tmp/secret.png");
 
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("still emits remote media for case-variant collisions with trusted built-ins", async () => {
@@ -254,8 +307,8 @@ describe("handleToolExecutionEnd media emission", () => {
     // onToolResult should NOT be called by the new media path (emitToolOutput handles it).
     // It may be called by emitToolOutput, but the new block should not fire.
     // Verify emitToolOutput was called instead.
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("queues TTS structured media without leaking spoken text when verbose is full", async () => {
@@ -340,8 +393,8 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 
@@ -369,12 +422,11 @@ describe("handleToolExecutionEnd media emission", () => {
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-      "tts",
-      undefined,
-      "remote tool output",
-      expect.any(Object),
-    );
+    const [toolName, summary, output, options] = firstEmitToolOutputCall(ctx);
+    expect(toolName).toBe("tts");
+    expect(summary).toBeUndefined();
+    expect(output).toBe("remote tool output");
+    expect(options).toBeTypeOf("object");
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
   });
@@ -412,62 +464,118 @@ describe("handleToolExecutionEnd media emission", () => {
   it("does not queue structured media already emitted in plain verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("plain");
 
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
-  it("queues structured media once for markdown verbose output", async () => {
-    const ctx = await handleVerboseGeneratedImage("markdown");
-
-    expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
-  });
-
-  it("emits provider inventory output for compact video_generate list results", async () => {
+  it("does not queue trusted bundled plugin media already emitted in plain verbose output", async () => {
     const ctx = createMockContext({
-      shouldEmitToolOutput: false,
-      onToolResult: vi.fn(),
+      shouldEmitToolOutput: true,
       toolResultFormat: "plain",
+      trustedLocalMediaToolNames: new Set(["plugin_media_tool"]),
     });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
-      toolName: "video_generate",
+      toolName: "plugin_media_tool",
       toolCallId: "tc-1",
       isError: false,
       result: {
         content: [
           {
             type: "text",
-            text: [
-              "openai: default=sora-2 | models=sora-2",
-              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-            ].join("\n"),
+            text: "Meeting audio attached.\nMEDIA:/tmp/meeting.wav",
           },
         ],
         details: {
-          providers: [
-            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
-            {
-              id: "google",
-              defaultModel: "veo-3.1-fast-generate-preview",
-              models: ["veo-3.1-fast-generate-preview"],
-            },
-          ],
+          media: {
+            mediaUrls: ["/tmp/meeting.wav"],
+          },
         },
       },
     });
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-      "video_generate",
-      undefined,
-      [
-        "openai: default=sora-2 | models=sora-2",
-        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-      ].join("\n"),
-      expect.any(Object),
-    );
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("queues structured media once for markdown verbose output", async () => {
+    const ctx = await handleVerboseGeneratedImage("markdown");
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
+  });
+
+  it.each(["image_generate", "video_generate"] as const)(
+    "keeps %s provider inventory internal when tool output is hidden",
+    async (toolName) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: false,
+      });
+
+      expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+      expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    },
+  );
+
+  it.each(["image_generate", "video_generate"] as const)(
+    "emits %s provider inventory when verbose tool output is enabled",
+    async (toolName) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: true,
+      });
+
+      const [calledToolName, summary, output, options] = firstEmitToolOutputCall(ctx);
+      expect(calledToolName).toBe(toolName);
+      expect(summary).toBeUndefined();
+      expect(output).toBe(providerInventoryText);
+      expect(options).toBeTypeOf("object");
+      expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+    },
+  );
+
+  it("marks async-started media generation in tool metadata", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: vi.fn() });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      args: { action: "generate", prompt: "a portrait" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Background task started for image generation (task-123).",
+          },
+        ],
+        details: {
+          async: true,
+          status: "started",
+          taskId: "task-123",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "image_generate",
+        asyncStarted: true,
+      }),
+    ]);
+    expect(ctx.state.hadDeterministicSideEffect).toBe(true);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
   });
 
   it("does NOT emit media for error results", async () => {
@@ -477,7 +585,7 @@ describe("handleToolExecutionEnd media emission", () => {
     await emitPngMediaToolResult(ctx, { isError: true });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit when tool result has no media", async () => {
@@ -495,7 +603,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit media for <media:audio> placeholder text", async () => {
@@ -518,7 +626,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("does NOT emit media for malformed MEDIA:-prefixed prose", async () => {
@@ -541,7 +649,7 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
   });
 
   it("queues media from details.path fallback when no MEDIA: text", async () => {
@@ -566,7 +674,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/canvas-output.png"]);
   });
 
-  it("queues structured details.media and voice metadata", async () => {
+  it("queues structured details.media trust and voice metadata", async () => {
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: vi.fn() });
 
     await handleToolExecutionEnd(ctx, {
@@ -579,6 +687,7 @@ describe("handleToolExecutionEnd media emission", () => {
           media: {
             mediaUrl: "/tmp/reply.opus",
             audioAsVoice: true,
+            trustedLocalMedia: true,
           },
         },
       },
@@ -586,5 +695,90 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+  });
+
+  it("does NOT queue structured media marked as non-outbound", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["message"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Downloaded Slack file to /tmp/report.pdf" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/report.pdf",
+            outbound: false,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("does NOT queue image fallback paths when media is marked as non-outbound", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["message"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          { type: "text", text: "Downloaded Slack image" },
+          { type: "image", data: "base64", mimeType: "image/png" },
+        ],
+        details: {
+          path: "/tmp/slack-image.png",
+          media: {
+            outbound: false,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("queues trusted TTS local media when the exact built-in name is absent", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "(spoken) hello" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+            trustedLocalMedia: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
 });

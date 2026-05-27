@@ -8,6 +8,7 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./guard-inventory-utils.mjs";
+import { mapWithConcurrency } from "./source-file-scan-cache.mjs";
 import {
   collectTypeScriptFilesFromRoots,
   resolveRepoRoot,
@@ -72,30 +73,29 @@ export function createExtensionImportBoundaryChecker(params) {
       .toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-    const entriesByFile = await Promise.all(
-      files.map(async (filePath) => {
-        const source = await fs.readFile(filePath, "utf8");
-        if (
-          params.skipSourcesWithoutBundledPluginPrefix &&
-          !source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
-        ) {
-          return [];
-        }
-        return scanImportBoundaryViolations(
-          source,
-          filePath,
-          params.boundaryLabel,
-          params.allowResolvedPath,
-        );
-      }),
-    );
+    const entriesByFile = await mapWithConcurrency(files, undefined, async (filePath) => {
+      const source = await fs.readFile(filePath, "utf8");
+      if (
+        params.skipSourcesWithoutBundledPluginPrefix &&
+        !source.includes(BUNDLED_PLUGIN_PATH_PREFIX)
+      ) {
+        return [];
+      }
+      return scanImportBoundaryViolations(
+        source,
+        filePath,
+        params.boundaryLabel,
+        params.allowResolvedPath,
+      );
+    });
     const inventory = entriesByFile.flat();
     return inventory.toSorted(compareEntries);
   });
 
-  async function main(argv = process.argv.slice(2), io) {
+  async function main(argv, io) {
+    const args = argv ?? process.argv.slice(2);
     const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
-    const json = argv.includes("--json");
+    const json = args.includes("--json");
     const inventory = await collectInventory();
 
     if (json) {

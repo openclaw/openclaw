@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QQBOT_ACCESS_REASON } from "../access/index.js";
+import type { QQBotInboundAccess } from "../adapter/index.js";
 import type { RefIndexEntry } from "../ref/types.js";
 import type { InboundPipelineDeps } from "./inbound-context.js";
 import { buildInboundContext } from "./inbound-pipeline.js";
@@ -48,6 +48,28 @@ const account: GatewayAccount = {
   config: {},
 };
 
+const emptyAllowlist: QQBotInboundAccess["state"]["allowlists"]["dm"] = {
+  rawEntryCount: 0,
+  normalizedEntries: [],
+  invalidEntries: [],
+  disabledEntries: [],
+  matchedEntryIds: [],
+  hasConfiguredEntries: false,
+  hasMatchableEntries: false,
+  hasWildcard: false,
+  accessGroups: {
+    referenced: [],
+    matched: [],
+    missing: [],
+    unsupported: [],
+    failed: [],
+  },
+  match: {
+    matched: false,
+    matchedEntryIds: [],
+  },
+};
+
 function makeRuntime(): GatewayPluginRuntime {
   return {
     channel: {
@@ -64,6 +86,31 @@ function makeRuntime(): GatewayPluginRuntime {
         formatInboundEnvelope: vi.fn(() => "formatted inbound"),
         resolveEffectiveMessagesConfig: vi.fn(() => ({})),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
+      },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: {
+        run: vi.fn(async (rawParams: unknown) => {
+          const params = rawParams as {
+            raw: unknown;
+            adapter: {
+              ingest: (raw: unknown) => unknown;
+              resolveTurn: (...args: unknown[]) => unknown;
+            };
+          };
+          const input = await params.adapter.ingest(params.raw);
+          const turn = (await params.adapter.resolveTurn(
+            input,
+            {
+              kind: "message",
+              canStartAgentTurn: true,
+            },
+            {},
+          )) as { runDispatch: () => Promise<unknown> };
+          return { dispatchResult: await turn.runDispatch() };
+        }),
       },
       text: {
         chunkMarkdownText: (text: string) => [text],
@@ -93,6 +140,93 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
     log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     runtime: makeRuntime(),
     startTyping: vi.fn(async () => ({ keepAlive: null })),
+    adapters: {
+      history: {
+        recordPendingHistoryEntry: vi.fn(() => []),
+        buildPendingHistoryContext: vi.fn(() => ""),
+        clearPendingHistory: vi.fn(),
+      },
+      mentionGate: {
+        resolveInboundMentionDecision: vi.fn(() => ({
+          effectiveWasMentioned: false,
+          shouldSkip: false,
+          shouldBypassMention: false,
+          implicitMention: false,
+        })),
+      },
+      access: {
+        resolveInboundAccess: vi.fn(
+          (input): QQBotInboundAccess => ({
+            state: {
+              channelId: "qqbot",
+              accountId: "qq-main",
+              conversationKind: input.isGroup ? "group" : "direct",
+              event: {
+                kind: "message",
+                authMode: "inbound",
+                mayPair: true,
+                hasOriginSubject: false,
+                originSubjectMatched: false,
+              },
+              routeFacts: [],
+              allowlists: {
+                dm: emptyAllowlist,
+                pairingStore: emptyAllowlist,
+                group: emptyAllowlist,
+                commandOwner: emptyAllowlist,
+                commandGroup: emptyAllowlist,
+              },
+            },
+            ingress: {
+              admission: "dispatch",
+              decision: "allow",
+              decisiveGateId: "activation",
+              reasonCode: "activation_allowed",
+              graph: { gates: [] },
+            },
+            senderAccess: {
+              allowed: true,
+              decision: "allow",
+              reasonCode: input.isGroup ? "group_policy_allowed" : "dm_policy_open",
+              effectiveAllowFrom: [],
+              effectiveGroupAllowFrom: [],
+              providerMissingFallbackApplied: false,
+            },
+            commandAccess: {
+              requested: true,
+              authorized: true,
+              shouldBlockControlCommand: false,
+              reasonCode: "command_authorized",
+            },
+            routeAccess: {
+              allowed: true,
+            },
+            activationAccess: {
+              ran: false,
+              allowed: true,
+              shouldSkip: false,
+              reasonCode: "activation_allowed",
+            },
+          }),
+        ),
+        resolveSlashCommandAuthorization: vi.fn(() => true),
+      },
+      audioConvert: {
+        convertSilkToWav: vi.fn(async () => null),
+        isVoiceAttachment: vi.fn(() => false),
+        formatDuration: vi.fn(() => "0s"),
+      },
+      outboundAudio: {
+        audioFileToSilkBase64: vi.fn(async () => undefined),
+        isAudioFile: vi.fn(() => false),
+        shouldTranscodeVoice: vi.fn(() => false),
+        waitForFile: vi.fn(async () => 0),
+      },
+      commands: {
+        pluginVersion: "0.0.0-test",
+        resolveVersion: vi.fn(() => "0.0.0"),
+      },
+    },
     ...overrides,
   };
 }
@@ -105,7 +239,7 @@ describe("buildInboundContext bot self-echo suppression", () => {
     processAttachmentsMock.mockResolvedValue(emptyProcessedAttachments);
   });
 
-  it("blocks inbound events whose current msgIdx matches this bot's outbound ref", async () => {
+  it("does not block inbound events whose current msgIdx matches this bot's outbound ref (self-echo handled upstream)", async () => {
     getRefIndexMock.mockReturnValue({
       content: "mirrored reply",
       senderId: "qq-main",
@@ -116,13 +250,11 @@ describe("buildInboundContext bot self-echo suppression", () => {
 
     const inbound = await buildInboundContext(makeEvent({ msgIdx: "REF_BOT" }), deps);
 
-    expect(getRefIndexMock).toHaveBeenCalledWith("REF_BOT");
-    expect(inbound.blocked).toBe(true);
-    expect(inbound.blockReasonCode).toBe(QQBOT_ACCESS_REASON.BOT_SELF_ECHO);
-    expect(inbound.body).toBe("");
-    expect(deps.startTyping).not.toHaveBeenCalled();
-    expect(processAttachmentsMock).not.toHaveBeenCalled();
-    expect(setRefIndexMock).not.toHaveBeenCalled();
+    // Self-echo suppression is handled by the gateway layer upstream;
+    // buildInboundContext no longer short-circuits on msgIdx match.
+    expect(inbound.blocked).toBe(false);
+    expect(deps.startTyping).toHaveBeenCalledTimes(1);
+    expect(processAttachmentsMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not block a user message that quotes a bot-authored ref", async () => {
@@ -139,9 +271,10 @@ describe("buildInboundContext bot self-echo suppression", () => {
     expect(getRefIndexMock).toHaveBeenCalledWith("REF_BOT");
     expect(formatRefEntryForAgentMock).toHaveBeenCalled();
     expect(inbound.blocked).toBe(false);
-    expect(inbound.replyTo).toMatchObject({
+    expect(inbound.replyTo).toStrictEqual({
       id: "REF_BOT",
       body: "bot reply",
+      sender: "qq-main",
       isQuote: true,
     });
     expect(deps.startTyping).toHaveBeenCalledTimes(1);

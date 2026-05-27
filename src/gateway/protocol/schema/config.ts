@@ -51,11 +51,14 @@ export const ConfigSchemaLookupParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const UpdateStatusParamsSchema = Type.Object({}, { additionalProperties: false });
+
 export const UpdateRunParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
     deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
     note: Type.Optional(Type.String()),
+    continuationMessage: Type.Optional(Type.String()),
     restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   },
@@ -94,6 +97,9 @@ export const ConfigSchemaLookupChildSchema = Type.Object(
     type: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),
     required: Type.Boolean(),
     hasChildren: Type.Boolean(),
+    reloadKind: Type.Optional(
+      Type.Union([Type.Literal("restart"), Type.Literal("hot"), Type.Literal("none")]),
+    ),
     hint: Type.Optional(ConfigUiHintSchema),
     hintPath: Type.Optional(Type.String()),
   },
@@ -104,6 +110,9 @@ export const ConfigSchemaLookupResultSchema = Type.Object(
   {
     path: NonEmptyString,
     schema: Type.Unknown(),
+    reloadKind: Type.Optional(
+      Type.Union([Type.Literal("restart"), Type.Literal("hot"), Type.Literal("none")]),
+    ),
     hint: Type.Optional(ConfigUiHintSchema),
     hintPath: Type.Optional(Type.String()),
     children: Type.Array(ConfigSchemaLookupChildSchema),

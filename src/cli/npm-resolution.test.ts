@@ -1,5 +1,5 @@
+import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import {
   buildNpmInstallRecordFields,
   logPinnedNpmSpecMessages,
@@ -140,7 +140,7 @@ describe("npm-resolution helpers", () => {
       resolvedAt: undefined,
     });
     expect(logs).toEqual(["Pinned npm install record to @openclaw/plugin-alpha@1.2.3."]);
-    expect(warns).toEqual([]);
+    expect(warns).toStrictEqual([]);
   });
 
   it("resolves pinned install record for CLI and formats warning output", () => {

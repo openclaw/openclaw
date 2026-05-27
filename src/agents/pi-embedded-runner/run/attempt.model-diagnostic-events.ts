@@ -1,22 +1,30 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
 import {
   diagnosticErrorCategory,
+  diagnosticErrorFailureKind,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
 import {
+  areDiagnosticsEnabledForProcess,
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
+  type DiagnosticModelCallContent,
+  type DiagnosticMemoryUsage,
+  emitTrustedDiagnosticEventWithPrivateData,
 } from "../../../infra/diagnostic-events.js";
+import type { DiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
+  PluginHookContextWindowSource,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
@@ -31,8 +39,13 @@ type ModelCallDiagnosticContext = {
   model: string;
   api?: string;
   transport?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: PluginHookContextWindowSource;
+  contextWindowReferenceTokens?: number;
   trace: DiagnosticTraceContext;
+  contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
+  onStarted?: () => void;
 };
 
 type ModelCallEventBase = Omit<
@@ -41,7 +54,7 @@ type ModelCallEventBase = Omit<
 >;
 type ModelCallErrorFields = Pick<
   Extract<DiagnosticEventInput, { type: "model.call.error" }>,
-  "errorCategory" | "upstreamRequestIdHash"
+  "errorCategory" | "failureKind" | "memory" | "upstreamRequestIdHash"
 >;
 type ModelCallEndedHookFields = Pick<
   PluginHookModelCallEndedEvent,
@@ -51,6 +64,7 @@ type ModelCallEndedHookFields = Pick<
   | "requestPayloadBytes"
   | "responseStreamBytes"
   | "timeToFirstByteMs"
+  | "failureKind"
   | "upstreamRequestIdHash"
 >;
 type ModelCallSizeTimingFields = Pick<
@@ -61,8 +75,14 @@ type ModelCallObservationState = {
   requestPayloadBytes?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
+  modelContent?: DiagnosticModelCallContent;
+  outputMessages?: unknown[];
+  contentCapture?: DiagnosticModelContentCapturePolicy;
+  lastStreamProgressAt?: number;
 };
 
+const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
+const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
@@ -82,16 +102,98 @@ function assignRequestPayloadBytes(state: ModelCallObservationState, payload: un
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneDiagnosticContentValue(value: unknown): unknown {
+  try {
+    return structuredClone(value);
+  } catch {
+    try {
+      return JSON.parse(JSON.stringify(value)) as unknown;
+    } catch {
+      return String(value);
+    }
+  }
+}
+
+function streamContextModelContentFields(
+  policy: DiagnosticModelContentCapturePolicy | undefined,
+  streamContext: unknown,
+): DiagnosticModelCallContent | undefined {
+  if (!policy?.anyModelContent || !isRecord(streamContext)) {
+    return undefined;
+  }
+  const content = {
+    ...(policy.inputMessages && Array.isArray(streamContext.messages)
+      ? { inputMessages: cloneDiagnosticContentValue(streamContext.messages) }
+      : {}),
+    ...(policy.systemPrompt && typeof streamContext.systemPrompt === "string"
+      ? { systemPrompt: streamContext.systemPrompt }
+      : {}),
+    ...(policy.toolDefinitions && Array.isArray(streamContext.tools)
+      ? { toolDefinitions: cloneDiagnosticContentValue(streamContext.tools) }
+      : {}),
+  };
+  return Object.keys(content).length > 0 ? content : undefined;
+}
+
+function observeOutputMessageContent(state: ModelCallObservationState, chunk: unknown): void {
+  if (!state.contentCapture?.outputMessages || !isRecord(chunk)) {
+    return;
+  }
+  const message =
+    chunk.type === "done" ? chunk.message : chunk.type === "error" ? chunk.error : undefined;
+  if (message !== undefined) {
+    state.outputMessages = [cloneDiagnosticContentValue(message)];
+  }
+}
+
 function observeResponseChunk(
   state: ModelCallObservationState,
   startedAt: number,
   chunk: unknown,
 ): void {
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
+  observeOutputMessageContent(state, chunk);
   const bytes = utf8JsonByteLength(chunk);
   if (bytes !== undefined) {
     state.responseStreamBytes += bytes;
   }
+}
+
+function maybeEmitModelCallStreamProgress(
+  eventBase: ModelCallEventBase,
+  state: ModelCallObservationState,
+): void {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const now = Date.now();
+  const progressFields = {
+    runId: eventBase.runId,
+    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+    reason: MODEL_CALL_STREAM_PROGRESS_REASON,
+  };
+  markDiagnosticRunProgress(progressFields);
+  if (
+    state.lastStreamProgressAt !== undefined &&
+    now - state.lastStreamProgressAt < MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS
+  ) {
+    return;
+  }
+  state.lastStreamProgressAt = now;
+  // Streaming providers, local or remote, are expected to produce chunks or
+  // heartbeat-style progress. The in-memory freshness clock is refreshed for
+  // each chunk, while diagnostic events are throttled so token streams do not
+  // spam observers; silent/non-streaming calls remain recoverable after the
+  // configured stuck-session timeout.
+  emitTrustedDiagnosticEvent({
+    type: "run.progress",
+    ...progressFields,
+  });
 }
 
 function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallSizeTimingFields {
@@ -146,16 +248,52 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
+    ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
+    ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
+    ...(ctx.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
+      : {}),
     trace,
+  };
+}
+
+function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
+  return modelContent ? { modelContent } : undefined;
+}
+
+function modelCallCompletedContent(state: ModelCallObservationState) {
+  if (!state.modelContent && !state.outputMessages) {
+    return undefined;
+  }
+  return {
+    ...state.modelContent,
+    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
   };
 }
 
 function modelCallErrorFields(err: unknown): ModelCallErrorFields {
   const upstreamRequestIdHash = diagnosticProviderRequestIdHash(err);
+  const failureKind = diagnosticErrorFailureKind(err);
   return {
     errorCategory: diagnosticErrorCategory(err),
+    ...(failureKind ? { failureKind, memory: processMemoryUsageSnapshot() } : {}),
     ...(upstreamRequestIdHash ? { upstreamRequestIdHash } : {}),
   };
+}
+
+function processMemoryUsageSnapshot(): DiagnosticMemoryUsage | undefined {
+  try {
+    const memory = process.memoryUsage();
+    return {
+      rssBytes: memory.rss,
+      heapTotalBytes: memory.heapTotal,
+      heapUsedBytes: memory.heapUsed,
+      externalBytes: memory.external,
+      arrayBuffersBytes: memory.arrayBuffers,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelCallStartedEvent {
@@ -168,6 +306,13 @@ function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelC
     model: eventBase.model,
     ...(eventBase.api ? { api: eventBase.api } : {}),
     ...(eventBase.transport ? { transport: eventBase.transport } : {}),
+    ...(eventBase.contextTokenBudget ? { contextTokenBudget: eventBase.contextTokenBudget } : {}),
+    ...(eventBase.contextWindowSource
+      ? { contextWindowSource: eventBase.contextWindowSource }
+      : {}),
+    ...(eventBase.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: eventBase.contextWindowReferenceTokens }
+      : {}),
   };
 }
 
@@ -179,6 +324,13 @@ function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentCon
     ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
     modelProviderId: eventBase.provider,
     modelId: eventBase.model,
+    ...(eventBase.contextTokenBudget ? { contextTokenBudget: eventBase.contextTokenBudget } : {}),
+    ...(eventBase.contextWindowSource
+      ? { contextWindowSource: eventBase.contextWindowSource }
+      : {}),
+    ...(eventBase.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: eventBase.contextWindowReferenceTokens }
+      : {}),
   }) as PluginHookAgentContext;
 }
 
@@ -214,11 +366,17 @@ function dispatchModelCallEndedHook(
   );
 }
 
-function emitModelCallStarted(eventBase: ModelCallEventBase): void {
-  emitTrustedDiagnosticEvent({
-    type: "model.call.started",
-    ...eventBase,
-  });
+function emitModelCallStarted(
+  eventBase: ModelCallEventBase,
+  modelContent: DiagnosticModelCallContent | undefined,
+): void {
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.started",
+      ...eventBase,
+    },
+    modelContentPrivateData(modelContent),
+  );
   dispatchModelCallStartedHook(eventBase);
 }
 
@@ -229,12 +387,15 @@ function emitModelCallCompleted(
 ): void {
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitTrustedDiagnosticEvent({
-    type: "model.call.completed",
-    ...eventBase,
-    durationMs,
-    ...sizeTimingFields,
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.completed",
+      ...eventBase,
+      durationMs,
+      ...sizeTimingFields,
+    },
+    modelContentPrivateData(modelCallCompletedContent(state)),
+  );
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
     outcome: "completed",
@@ -250,13 +411,16 @@ function emitModelCallError(
 ): void {
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
-  emitTrustedDiagnosticEvent({
-    type: "model.call.error",
-    ...eventBase,
-    durationMs,
-    ...sizeTimingFields,
-    ...fields,
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "model.call.error",
+      ...eventBase,
+      durationMs,
+      ...sizeTimingFields,
+      ...fields,
+    },
+    modelContentPrivateData(modelCallCompletedContent(state)),
+  );
   dispatchModelCallEndedHook(eventBase, {
     durationMs,
     outcome: "error",
@@ -356,6 +520,7 @@ async function* observeModelCallIterator<T>(
         break;
       }
       observeResponseChunk(state, startedAt, next.value);
+      maybeEmitModelCallStreamProgress(eventBase, state);
       yield next.value;
     }
     terminalEmitted = true;
@@ -432,9 +597,15 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const callId = ctx.nextCallId();
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
     const eventBase = baseModelCallEvent(ctx, callId, trace);
-    emitModelCallStarted(eventBase);
+    const modelContent = streamContextModelContentFields(ctx.contentCapture, streamContext);
+    emitModelCallStarted(eventBase, modelContent);
+    ctx.onStarted?.();
     const startedAt = Date.now();
-    const state: ModelCallObservationState = { responseStreamBytes: 0 };
+    const state: ModelCallObservationState = {
+      responseStreamBytes: 0,
+      modelContent,
+      contentCapture: ctx.contentCapture,
+    };
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
 
     try {

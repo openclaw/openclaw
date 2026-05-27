@@ -60,7 +60,7 @@ Anthropic's current public docs:
 
     ```json5
     {
-      env: { ANTHROPIC_API_KEY: "sk-ant-..." },
+      env: { ANTHROPIC_API_KEY: "example-anthropic-key-not-real" },
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
     }
     ```
@@ -106,7 +106,11 @@ Anthropic's current public docs:
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
-          agentRuntime: { id: "claude-cli" },
+          models: {
+            "anthropic/claude-opus-4-7": {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
         },
       },
     }
@@ -114,10 +118,10 @@ Anthropic's current public docs:
 
     Legacy `claude-cli/claude-opus-4-7` model refs still work for
     compatibility, but new config should keep provider/model selection as
-    `anthropic/*` and put the execution backend in `agentRuntime.id`.
+    `anthropic/*` and put the execution backend in provider/model runtime policy.
 
     <Tip>
-    If you want the clearest billing path, use an Anthropic API key instead. OpenClaw also supports subscription-style options from [OpenAI Codex](/providers/openai), [Qwen Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [Z.AI / GLM](/providers/glm).
+    If you want the clearest billing path, use an Anthropic API key instead. OpenClaw also supports subscription-style options from [OpenAI Codex](/providers/openai), [Qwen Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [Z.AI / GLM](/providers/zai).
     </Tip>
 
   </Tab>
@@ -147,6 +151,7 @@ Override per-message with `/think:<level>` or in model params:
 Related Anthropic docs:
 - [Adaptive thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking)
 - [Extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+
 </Note>
 
 ## Prompt caching
@@ -209,6 +214,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - Anthropic Claude models on Bedrock (`amazon-bedrock/*anthropic.claude*`) accept `cacheRetention` pass-through when configured.
     - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
     - API-key smart defaults also seed `cacheRetention: "short"` for Claude-on-Bedrock refs when no explicit value is set.
+
   </Accordion>
 </AccordionGroup>
 
@@ -241,6 +247,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     - Only injected for direct `api.anthropic.com` requests. Proxy routes leave `service_tier` untouched.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - On accounts without Priority Tier capacity, `service_tier: "auto"` may resolve to `standard`.
+
     </Note>
 
   </Accordion>
@@ -250,9 +257,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     auto-resolves media capabilities from the configured Anthropic auth — no
     additional config is needed.
 
-    | Property       | Value                |
-    | -------------- | -------------------- |
-    | Default model  | `claude-opus-4-6`    |
+    | Property        | Value                 |
+    | --------------- | --------------------- |
+    | Default model   | `claude-opus-4-7`     |
     | Supported input | Images, PDF documents |
 
     When an image or PDF is attached to a conversation, OpenClaw automatically
@@ -260,37 +267,41 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   </Accordion>
 
-  <Accordion title="1M context window (beta)">
-    Anthropic's 1M context window is beta-gated. Enable it per model:
+  <Accordion title="1M context window">
+    Anthropic's 1M context window is available on GA-capable Claude 4.x models
+    such as Opus 4.6, Opus 4.7, and Sonnet 4.6. OpenClaw sizes those models at
+    1M automatically:
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": {
-              params: { context1m: true },
-            },
+            "anthropic/claude-opus-4-6": {},
           },
         },
       },
     }
     ```
 
-    OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on requests.
+    Older configs can keep `params.context1m: true`, but OpenClaw no longer sends
+    the retired `context-1m-2025-08-07` beta header. Older `anthropicBeta` config
+    entries with that value are ignored during request header resolution and
+    unsupported older Claude models stay on their normal context window.
 
     `params.context1m: true` also applies to the Claude CLI backend
-    (`claude-cli/*`) for eligible Opus and Sonnet models, expanding the runtime
-    context window for those CLI sessions to match the direct-API behavior.
+    (`claude-cli/*`) for eligible GA-capable Opus and Sonnet models, preserving
+    the runtime context window for those CLI sessions to match the direct-API
+    behavior.
 
     <Warning>
-    Requires long-context access on your Anthropic credential. Legacy token auth (`sk-ant-oat-*`) is rejected for 1M context requests — OpenClaw logs a warning and falls back to the standard context window.
+    Requires long-context access on your Anthropic credential. OAuth/subscription token auth keeps its required Anthropic beta headers, but OpenClaw strips the retired 1M beta header if it remains in older config.
     </Warning>
 
   </Accordion>
 
   <Accordion title="Claude Opus 4.7 1M context">
-    `anthropic/claude-opus-4.7` and its `claude-cli` variant have a 1M context
+    `anthropic/claude-opus-4-7` and its `claude-cli` variant have a 1M context
     window by default — no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>

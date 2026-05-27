@@ -1,7 +1,7 @@
 import { lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
 import {
   collectQaSuiteGatewayConfigPatch,
@@ -13,6 +13,7 @@ import {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
@@ -80,15 +81,41 @@ describe("qa suite planning helpers", () => {
   it("maps suite work with bounded concurrency while preserving order", async () => {
     let active = 0;
     let maxActive = 0;
-    const result = await mapQaSuiteWithConcurrency([1, 2, 3, 4], 2, async (item) => {
+    let releaseStartedTasks = false;
+    let resolveBothStarted: () => void = () => {};
+    const bothStarted = new Promise<void>((resolve) => {
+      resolveBothStarted = resolve;
+    });
+    const taskReleases: Array<() => void> = [];
+    const releaseQueuedTasks = () => {
+      if (!releaseStartedTasks) {
+        return;
+      }
+      let releaseTask: (() => void) | undefined;
+      while ((releaseTask = taskReleases.shift())) {
+        releaseTask();
+      }
+    };
+
+    const resultPromise = mapQaSuiteWithConcurrency([1, 2, 3, 4], 2, async (item) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (active === 2) {
+        resolveBothStarted();
+      }
+      await new Promise<void>((resolve) => {
+        taskReleases.push(resolve);
+        releaseQueuedTasks();
+      });
       active -= 1;
       return item * 10;
     });
 
+    await bothStarted;
     expect(maxActive).toBe(2);
+    releaseStartedTasks = true;
+    releaseQueuedTasks();
+    const result = await resultPromise;
     expect(result).toEqual([10, 20, 30, 40]);
   });
 
@@ -96,7 +123,11 @@ describe("qa suite planning helpers", () => {
     const sleeps: number[] = [];
     const releaseSleeps: Array<() => void> = [];
     const started: number[] = [];
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const waitForStarted = async (expected: number[]) => {
+      await vi.waitFor(() => {
+        expect(started).toEqual(expected);
+      });
+    };
     const resultPromise = mapQaSuiteWithConcurrency(
       [1, 2, 3, 4],
       3,
@@ -115,17 +146,13 @@ describe("qa suite planning helpers", () => {
       },
     );
 
-    await tick();
-    expect(started).toEqual([1]);
+    await waitForStarted([1]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2]);
+    await waitForStarted([1, 2]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3]);
+    await waitForStarted([1, 2, 3]);
     releaseSleeps.shift()?.();
-    await tick();
-    expect(started).toEqual([1, 2, 3, 4]);
+    await waitForStarted([1, 2, 3, 4]);
 
     const result = await resultPromise;
     expect(result).toEqual([1, 2, 3, 4]);
@@ -148,7 +175,7 @@ describe("qa suite planning helpers", () => {
       makeQaSuiteTestScenario("anthropic-only", {
         config: {
           requiredProvider: "anthropic",
-          requiredModel: "claude-opus-4-6",
+          requiredModel: "claude-opus-4-7",
         },
       }),
     ];
@@ -161,6 +188,23 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["anthropic-only"]);
+  });
+
+  it("keeps explicitly requested scenarios in request order", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("first"),
+      makeQaSuiteTestScenario("second"),
+      makeQaSuiteTestScenario("third"),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["third", "first"],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["third", "first"]);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
@@ -259,6 +303,46 @@ describe("qa suite planning helpers", () => {
     });
   });
 
+  it("isolates multi-scenario serial runs when a scenario needs startup config", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("baseline"),
+      makeQaSuiteTestScenario("message-tool-mode", {
+        gatewayConfigPatch: {
+          messages: {
+            groupChat: {
+              visibleReplies: "message_tool",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios,
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not isolate plain serial scenario runs", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
+        concurrency: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps concurrent runs on isolated workers", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
+        concurrency: 2,
+      }),
+    ).toBe(true);
+  });
+
   it("enables Control UI only for Control UI scenario workers", () => {
     expect(
       scenarioRequiresControlUi(
@@ -277,7 +361,7 @@ describe("qa suite planning helpers", () => {
         config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
-        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-6" },
+        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-7" },
       }),
       makeQaSuiteTestScenario("claude-subscription", {
         config: { requiredProvider: "claude-cli", authMode: "subscription" },

@@ -4,14 +4,19 @@ import {
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
-  __testing as messageActionTesting,
+  testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
+import {
+  channelPluginHasNativeApprovalPromptUi,
+  NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY,
+} from "../channels/plugins/native-approval-prompt.js";
 import type {
   ChannelAgentTool,
   ChannelMessageActionName,
 } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 type ChannelAgentToolMeta = {
   channelId: string;
@@ -27,7 +32,6 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 const channelAgentToolMeta = new WeakMap<ChannelAgentTool, ChannelAgentToolMeta>();
@@ -125,12 +129,10 @@ export function resolveChannelMessageToolHints(params: {
     return [];
   }
   const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return (resolve({ cfg, accountId: params.accountId }) ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(resolve({ cfg, accountId: params.accountId }));
 }
 
-export function resolveChannelMessageToolCapabilities(params: {
+export function resolveChannelPromptCapabilities(params: {
   cfg?: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
@@ -139,14 +141,19 @@ export function resolveChannelMessageToolCapabilities(params: {
   if (!channelId) {
     return [];
   }
-  const resolve = getChannelPlugin(channelId)?.agentPrompt?.messageToolCapabilities;
-  if (!resolve) {
-    return [];
-  }
+  const plugin = getChannelPlugin(channelId);
   const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return (resolve({ cfg, accountId: params.accountId }) ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const capabilities = normalizePromptCapabilities(
+    plugin?.agentPrompt?.messageToolCapabilities?.({ cfg, accountId: params.accountId }),
+  );
+  if (channelPluginHasNativeApprovalPromptUi(plugin)) {
+    capabilities.push(NATIVE_APPROVAL_PROMPT_RUNTIME_CAPABILITY);
+  }
+  return capabilities;
+}
+
+function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
+  return normalizeStringEntries(capabilities ?? []);
 }
 
 export function resolveChannelReactionGuidance(params: {
@@ -173,8 +180,9 @@ export function resolveChannelReactionGuidance(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   resetLoggedListActionErrors() {
     messageActionTesting.resetLoggedMessageActionErrors();
   },
 };
+export { testing as __testing };

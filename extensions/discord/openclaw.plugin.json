@@ -1,6 +1,12 @@
 {
   "id": "discord",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["discord"],
+  "contracts": {
+    "transcriptSourceProviders": ["discord-voice"]
+  },
   "channelEnvVars": {
     "discord": ["DISCORD_BOT_TOKEN"]
   },

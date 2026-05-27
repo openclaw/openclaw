@@ -2,12 +2,21 @@ import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+  resolveExecApprovalsFromFile,
+} from "../../infra/exec-approvals.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
+import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
   type CliStreamingDelta,
 } from "../cli-output.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -19,6 +28,7 @@ type ProcessSupervisor = ReturnType<
 type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
+  outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
   rawLines: string[];
   rawChars: number;
@@ -45,17 +55,40 @@ type ClaudeLiveSession = {
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
   closing: boolean;
+  controlRequestPolicy: ClaudeLiveControlRequestPolicy;
 };
+type ClaudeLiveControlRequestPolicy = {
+  allowNativeBash: boolean;
+  security: "deny" | "allowlist" | "full";
+  ask: "off" | "on-miss" | "always";
+  effectivePermissionMode?: string;
+};
+
+// OpenClaw exec policy is authoritative for Claude live native Bash. Keep
+// Claude's launch mode aligned with the effective OpenClaw policy instead of
+// letting raw Claude permission args silently relax or tighten it.
+const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
+const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
+const CLAUDE_PERMISSION_MODE_FLAG = "--permission-mode";
 type ClaudeLiveRunResult = {
   output: CliOutput;
+};
+type ClaudeLiveOutputLimits = {
+  maxTurnRawChars: number;
+  maxPendingLineChars: number;
+  maxTurnLines: number;
 };
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
-const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
-const CLAUDE_LIVE_MAX_PENDING_LINE_CHARS = CLAUDE_LIVE_MAX_TURN_RAW_CHARS;
-const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
+const CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
+const CLAUDE_LIVE_MIN_TURN_RAW_CHARS = 1_024;
+const CLAUDE_LIVE_MAX_CONFIGURABLE_TURN_RAW_CHARS = 64 * 1024 * 1024;
+const CLAUDE_LIVE_DEFAULT_MAX_TURN_LINES = 20_000;
+const CLAUDE_LIVE_MIN_TURN_LINES = 100;
+const CLAUDE_LIVE_MAX_CONFIGURABLE_TURN_LINES = 100_000;
+const CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS = 5_000;
 const liveSessions = new Map<string, ClaudeLiveSession>();
 const liveSessionCreates = new Map<string, Promise<ClaudeLiveSession>>();
 
@@ -71,11 +104,34 @@ export function resetClaudeLiveSessionsForTest(): void {
   liveSessionCreates.clear();
 }
 
-export function closeClaudeLiveSessionForContext(context: PreparedCliRunContext): void {
+async function waitForManagedRunExit(managedRun: ManagedRun): Promise<void> {
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    await Promise.race([
+      managedRun.wait().then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, CLAUDE_LIVE_CLOSE_WAIT_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export async function closeClaudeLiveSessionForContext(
+  context: PreparedCliRunContext,
+): Promise<void> {
   const key = buildClaudeLiveKey(context);
   const session = liveSessions.get(key);
   if (session) {
     closeLiveSession(session, "restart");
+    await waitForManagedRunExit(session.managedRun);
   }
   liveSessionCreates.delete(key);
 }
@@ -147,8 +203,16 @@ export function buildClaudeLiveArgs(params: {
   return appendArg(
     upsertArgValue(
       upsertArgValue(
-        stripLiveProcessArgs(params.args, params.backend, params.useResume),
-        "--input-format",
+        upsertArgValue(
+          stripLiveProcessArgs(
+            params.args,
+            params.backend,
+            params.useResume && params.backend.systemPromptWhen !== "always",
+          ),
+          "--input-format",
+          "stream-json",
+        ),
+        "--output-format",
         "stream-json",
       ),
       "--permission-prompt-tool",
@@ -242,12 +306,14 @@ function buildClaudeLiveFingerprint(params: {
       : undefined,
     authEpochHash: params.context.authEpoch ? sha256(params.context.authEpoch) : undefined,
     extraSystemPromptHash: params.context.extraSystemPromptHash,
+    promptToolNamesHash: params.context.promptToolNamesHash,
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
     skillsFingerprint,
     argv: stableArgv,
     env: Object.keys(params.env)
       .toSorted()
       .map((key) => [key, params.env[key] ? sha256(params.env[key]) : ""]),
+    controlRequestPolicy: resolveClaudeLiveControlRequestPolicy(params.context, params.argv),
   });
 }
 
@@ -407,15 +473,213 @@ function parseSessionId(parsed: Record<string, unknown>): string | undefined {
   return sessionId || undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function extractClaudeEffectivePermissionMode(argv: readonly string[]): string | undefined {
+  // Scan from the end so the last-set --permission-mode wins, matching how
+  // CLI arg precedence works in practice and how
+  // extensions/anthropic/cli-shared.ts:normalizeClaudePermissionArgs treats
+  // operator-provided overrides.
+  for (let i = argv.length - 1; i >= 0; i -= 1) {
+    const arg = argv[i] ?? "";
+    if (arg === CLAUDE_PERMISSION_MODE_FLAG) {
+      const value = argv[i + 1];
+      if (typeof value === "string" && value.trim().length > 0 && !value.startsWith("-")) {
+        return value.trim();
+      }
+      continue;
+    }
+    if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_FLAG}=`)) {
+      const value = arg.slice(`${CLAUDE_PERMISSION_MODE_FLAG}=`.length).trim();
+      if (value.length > 0 && !value.startsWith("-")) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveClaudeLiveControlRequestPolicy(
+  context: PreparedCliRunContext,
+  argv?: readonly string[],
+): ClaudeLiveControlRequestPolicy {
+  const execDefaults = resolveExecDefaults({
+    cfg: context.params.config,
+    sessionEntry: context.params.sessionEntry,
+    agentId: context.params.agentId,
+    sessionKey: context.params.sessionKey,
+  });
+  const effectiveAgentId = resolveSessionAgentIds({
+    sessionKey: context.params.sessionKey,
+    config: context.params.config,
+    agentId: context.params.agentId,
+  }).sessionAgentId;
+  const approvals = resolveExecApprovalsFromFile({
+    file: loadExecApprovals(),
+    agentId: effectiveAgentId,
+    overrides: {
+      security: execDefaults.security,
+      ask: execDefaults.ask,
+    },
+  });
+  const security: ClaudeLiveControlRequestPolicy["security"] = minSecurity(
+    execDefaults.security,
+    approvals.agent.security,
+  );
+  const ask: ClaudeLiveControlRequestPolicy["ask"] = maxAsk(execDefaults.ask, approvals.agent.ask);
+  // Effective permission mode starts from argv so we can detect when the live
+  // launch needs to be normalized back to OpenClaw's effective exec policy.
+  const argvMode = argv ? extractClaudeEffectivePermissionMode(argv) : undefined;
+  const synthesizedMode =
+    security === "full" && ask === "off" ? CLAUDE_BYPASS_PERMISSION_MODE : undefined;
+  const effectivePermissionMode = argvMode ?? synthesizedMode;
+  const allowNativeBash = security === "full" && ask === "off";
+  return {
+    allowNativeBash,
+    security,
+    ask,
+    ...(effectivePermissionMode ? { effectivePermissionMode } : {}),
+  };
+}
+
+function shouldForceClaudeLivePermissionPrompt(policy: ClaudeLiveControlRequestPolicy): boolean {
+  return (
+    (policy.security !== "full" || policy.ask !== "off") &&
+    policy.effectivePermissionMode !== CLAUDE_DEFAULT_PERMISSION_MODE
+  );
+}
+
+function shouldForceClaudeLiveBypass(policy: ClaudeLiveControlRequestPolicy): boolean {
+  return (
+    policy.security === "full" &&
+    policy.ask === "off" &&
+    policy.effectivePermissionMode !== CLAUDE_BYPASS_PERMISSION_MODE
+  );
+}
+
+function writeClaudeLiveControlResponse(
+  session: ClaudeLiveSession,
+  response: Record<string, unknown>,
+): void {
+  const stdin = session.managedRun.stdin;
+  if (!stdin) {
+    closeLiveSession(
+      session,
+      "abort",
+      new Error("Claude CLI live session stdin is unavailable for control response"),
+    );
+    return;
+  }
+  stdin.write(`${JSON.stringify(response)}\n`, (error) => {
+    if (error) {
+      closeLiveSession(session, "abort", error);
+    }
+  });
+}
+
+function buildClaudeLivePermissionResult(
+  session: ClaudeLiveSession,
+  request: Record<string, unknown>,
+): Record<string, unknown> {
+  const toolName = typeof request.tool_name === "string" ? request.tool_name : "";
+  const toolUseID = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
+  if (toolName === "Bash" && session.controlRequestPolicy.allowNativeBash) {
+    return {
+      behavior: "allow",
+      updatedInput: isRecord(request.input) ? request.input : {},
+      ...(toolUseID ? { toolUseID } : {}),
+    };
+  }
+  const permissionModeNote = session.controlRequestPolicy.effectivePermissionMode
+    ? `, permission-mode=${session.controlRequestPolicy.effectivePermissionMode}`
+    : "";
+  const message =
+    toolName === "Bash"
+      ? `OpenClaw denied Claude native Bash because the effective exec policy is security=${session.controlRequestPolicy.security}, ask=${session.controlRequestPolicy.ask}${permissionModeNote}; this bridge only auto-allows Bash when OpenClaw exec is full/no-ask.`
+      : `OpenClaw denied Claude native ${toolName || "tool"}; this bridge only maps Claude native Bash permission prompts to OpenClaw exec policy. Use OpenClaw MCP tools instead.`;
+  return {
+    behavior: "deny",
+    message,
+    ...(toolUseID ? { toolUseID } : {}),
+    decisionClassification: "user_reject",
+  };
+}
+
+function handleClaudeLiveControlRequest(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): void {
+  const requestId = typeof parsed.request_id === "string" ? parsed.request_id : "";
+  const request = isRecord(parsed.request) ? parsed.request : null;
+  if (!requestId || !request) {
+    cliBackendLog.warn("claude live control_request ignored: malformed request");
+    return;
+  }
+  if (request.subtype === "can_use_tool") {
+    const permissionResult = buildClaudeLivePermissionResult(session, request);
+    const toolName = typeof request.tool_name === "string" ? request.tool_name : "unknown";
+    cliBackendLog.info(
+      `claude live control_request: subtype=can_use_tool tool=${toolName} decision=${permissionResult.behavior as string}`,
+    );
+    writeClaudeLiveControlResponse(session, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: requestId,
+        response: permissionResult,
+      },
+    });
+    return;
+  }
+  const subtype = typeof request.subtype === "string" ? request.subtype : "unknown";
+  cliBackendLog.warn(`claude live control_request denied: unsupported subtype=${subtype}`);
+  writeClaudeLiveControlResponse(session, {
+    type: "control_response",
+    response: {
+      subtype: "error",
+      request_id: requestId,
+      error: `OpenClaw Claude live bridge does not support control request subtype '${subtype}'.`,
+    },
+  });
+}
+
+function normalizePositiveInt(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function resolveClaudeLiveOutputLimits(backend: CliBackendConfig): ClaudeLiveOutputLimits {
+  const configured = backend.reliability?.outputLimits;
+  const maxTurnRawChars = normalizePositiveInt(
+    configured?.maxTurnRawChars,
+    CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS,
+    CLAUDE_LIVE_MIN_TURN_RAW_CHARS,
+    CLAUDE_LIVE_MAX_CONFIGURABLE_TURN_RAW_CHARS,
+  );
+  return {
+    maxTurnRawChars,
+    maxPendingLineChars: maxTurnRawChars,
+    maxTurnLines: normalizePositiveInt(
+      configured?.maxTurnLines,
+      CLAUDE_LIVE_DEFAULT_MAX_TURN_LINES,
+      CLAUDE_LIVE_MIN_TURN_LINES,
+      CLAUDE_LIVE_MAX_CONFIGURABLE_TURN_LINES,
+    ),
+  };
 }
 
 function parseClaudeLiveJsonLine(
   session: ClaudeLiveSession,
   trimmed: string,
 ): Record<string, unknown> | null {
-  if (trimmed.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
+  const maxPendingLineChars =
+    session.currentTurn?.outputLimits.maxPendingLineChars ?? CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS;
+  if (trimmed.length > maxPendingLineChars) {
     closeLiveSession(
       session,
       "abort",
@@ -458,6 +722,13 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   if (!parsed) {
     return;
   }
+  if (parsed.type === "control_request") {
+    handleClaudeLiveControlRequest(session, parsed);
+    return;
+  }
+  if (parsed.type === "control_response") {
+    return;
+  }
   if (session.drainingAbortedTurn) {
     if (parsed.type === "result") {
       const turnToClear = session.currentTurn;
@@ -476,8 +747,8 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   }
   turn.rawChars += trimmed.length + 1;
   if (
-    turn.rawChars > CLAUDE_LIVE_MAX_TURN_RAW_CHARS ||
-    turn.rawLines.length >= CLAUDE_LIVE_MAX_TURN_LINES
+    turn.rawChars > turn.outputLimits.maxTurnRawChars ||
+    turn.rawLines.length >= turn.outputLimits.maxTurnLines
   ) {
     closeLiveSession(
       session,
@@ -513,7 +784,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   resetNoOutputTimer(session);
   session.stdoutBuffer += chunk;
-  if (session.stdoutBuffer.length > CLAUDE_LIVE_MAX_PENDING_LINE_CHARS) {
+  const maxPendingLineChars =
+    session.currentTurn?.outputLimits.maxPendingLineChars ?? CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS;
+  if (session.stdoutBuffer.length > maxPendingLineChars) {
     closeLiveSession(
       session,
       "abort",
@@ -665,6 +938,7 @@ async function createClaudeLiveSession(params: {
     cleanup: params.cleanup,
     cleanupDone: false,
     closing: false,
+    controlRequestPolicy: resolveClaudeLiveControlRequestPolicy(params.context, params.argv),
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),
@@ -691,6 +965,7 @@ function createTurn(params: {
 }): ClaudeLiveTurn {
   const turn: ClaudeLiveTurn = {
     backend: params.context.preparedBackend.backend,
+    outputLimits: resolveClaudeLiveOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
     rawLines: [],
     rawChars: 0,
@@ -769,15 +1044,25 @@ export async function runClaudeLiveSessionTurn(params: {
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
-  const argv = [
-    params.context.preparedBackend.backend.command,
-    ...buildClaudeLiveArgs({
-      args: params.args,
-      backend: params.context.preparedBackend.backend,
-      systemPrompt: params.context.systemPrompt,
-      useResume: params.useResume,
-    }),
-  ];
+  let liveArgs = buildClaudeLiveArgs({
+    args: params.args,
+    backend: params.context.preparedBackend.backend,
+    systemPrompt: params.context.systemPrompt,
+    useResume: params.useResume,
+  });
+  let argv = [params.context.preparedBackend.backend.command, ...liveArgs];
+  const launchPolicy = resolveClaudeLiveControlRequestPolicy(params.context, argv);
+  if (shouldForceClaudeLivePermissionPrompt(launchPolicy)) {
+    liveArgs = upsertArgValue(
+      liveArgs,
+      CLAUDE_PERMISSION_MODE_FLAG,
+      CLAUDE_DEFAULT_PERMISSION_MODE,
+    );
+    argv = [params.context.preparedBackend.backend.command, ...liveArgs];
+  } else if (shouldForceClaudeLiveBypass(launchPolicy)) {
+    liveArgs = upsertArgValue(liveArgs, CLAUDE_PERMISSION_MODE_FLAG, CLAUDE_BYPASS_PERMISSION_MODE);
+    argv = [params.context.preparedBackend.backend.command, ...liveArgs];
+  }
   const fingerprint = buildClaudeLiveFingerprint({
     context: params.context,
     argv,

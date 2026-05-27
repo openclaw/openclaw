@@ -1,7 +1,8 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasIrcControlChars } from "./control-chars.js";
 import type { IrcInboundMessage } from "./types.js";
 
@@ -65,22 +66,6 @@ export function normalizeIrcAllowlist(entries?: Array<string | number>): string[
   return (entries ?? []).map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean);
 }
 
-export function formatIrcSenderId(message: IrcInboundMessage): string {
-  const base = message.senderNick.trim();
-  const user = message.senderUser?.trim();
-  const host = message.senderHost?.trim();
-  if (user && host) {
-    return `${base}!${user}@${host}`;
-  }
-  if (user) {
-    return `${base}!${user}`;
-  }
-  if (host) {
-    return `${base}@${host}`;
-  }
-  return base;
-}
-
 export function buildIrcAllowlistCandidates(
   message: IrcInboundMessage,
   params?: { allowNameMatching?: boolean },
@@ -109,7 +94,7 @@ export function resolveIrcAllowlistMatch(params: {
   message: IrcInboundMessage;
   allowNameMatching?: boolean;
 }): { allowed: boolean; source?: string } {
-  const allowFrom = new Set(params.allowFrom.map(normalizeLowercaseStringOrEmpty).filter(Boolean));
+  const allowFrom = new Set(normalizeStringEntriesLower(params.allowFrom));
   if (allowFrom.has("*")) {
     return { allowed: true, source: "wildcard" };
   }

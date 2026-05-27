@@ -1,4 +1,7 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
@@ -75,6 +78,17 @@ export function resolveOpenAITtsInstructions(
   return model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
+function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      continue;
+    }
+    sanitized[key] = entry;
+  }
+  return sanitized;
+}
+
 export async function openaiTTS(params: {
   text: string;
   apiKey: string;
@@ -84,10 +98,21 @@ export async function openaiTTS(params: {
   speed?: number;
   instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm" | "wav";
+  extraBody?: Record<string, unknown>;
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
-    params;
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    model,
+    voice,
+    speed,
+    instructions,
+    responseFormat,
+    extraBody,
+    timeoutMs,
+  } = params;
   const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
@@ -97,7 +122,16 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const requestHeaders = {
+  const requestHeaders = resolveProviderRequestHeaders({
+    provider: "openai",
+    baseUrl,
+    capability: "audio",
+    transport: "http",
+    defaultHeaders: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  }) ?? {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   };
@@ -108,6 +142,7 @@ export async function openaiTTS(params: {
     response_format: responseFormat,
     ...(speed != null && { speed }),
     ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+    ...(extraBody == null ? {} : sanitizeExtraBodyRecord(extraBody)),
   });
   const requestUrl = `${baseUrl}/audio/speech`;
   const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();

@@ -94,18 +94,23 @@ beforeEach(() => {
   mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
 });
 
+function requireSentMessage(method: string) {
+  const message = sentMessages.find((m) => m.method === method);
+  if (!message) {
+    throw new Error(`expected ${method} CDP message`);
+  }
+  return message;
+}
+
 describe("CDP screenshot params", () => {
   it("viewport screenshot omits fromSurface and captureBeyondViewport", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
-    const call = sentMessages.find((m) => m.method === "Page.captureScreenshot");
-    expect(call).toBeDefined();
-    expect(call!.params).toMatchObject({
-      format: "png",
-    });
-    expect(call!.params).not.toHaveProperty("fromSurface");
-    expect(call!.params).not.toHaveProperty("captureBeyondViewport");
-    expect(call!.params).not.toHaveProperty("clip");
+    const call = requireSentMessage("Page.captureScreenshot");
+    expect(call.params?.format).toBe("png");
+    expect(call.params).not.toHaveProperty("fromSurface");
+    expect(call.params).not.toHaveProperty("captureBeyondViewport");
+    expect(call.params).not.toHaveProperty("clip");
 
     const emulationCalls = sentMessages.filter(
       (m) => m.method === "Emulation.setDeviceMetricsOverride",
@@ -120,11 +125,12 @@ describe("CDP screenshot params", () => {
       timeoutMs: 12_345,
     });
 
-    expect(withCdpSocket).toHaveBeenCalledWith(
-      "ws://localhost:9222/devtools/page/X",
-      expect.any(Function),
-      { commandTimeoutMs: 12_345 },
-    );
+    const [wsUrl, sendCallback, options] =
+      (withCdpSocket as unknown as { mock: { calls: Array<Array<unknown>> } }).mock.calls.at(-1) ??
+      [];
+    expect(wsUrl).toBe("ws://localhost:9222/devtools/page/X");
+    expect(typeof sendCallback).toBe("function");
+    expect(options).toEqual({ commandTimeoutMs: 12_345 });
   });
 
   it("fullPage on emulated tab: clears, detects drift, re-applies saved emulation", async () => {
@@ -144,28 +150,23 @@ describe("CDP screenshot params", () => {
     }
 
     // Expand: uses saved DPR, mobile defaults to false
-    expect(firstSetCall.params).toMatchObject({
-      width: 1200,
-      height: 3000,
-      deviceScaleFactor: 2,
-      mobile: false,
-    });
+    expect(firstSetCall.params?.width).toBe(1200);
+    expect(firstSetCall.params?.height).toBe(3000);
+    expect(firstSetCall.params?.deviceScaleFactor).toBe(2);
+    expect(firstSetCall.params?.mobile).toBe(false);
 
     // Clear is called first in the finally block
-    const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
-    expect(clearCall).toBeDefined();
-    const captureCall = sentMessages.find((m) => m.method === "Page.captureScreenshot");
-    expect(captureCall?.params).toMatchObject({ captureBeyondViewport: true });
+    requireSentMessage("Emulation.clearDeviceMetricsOverride");
+    const captureCall = requireSentMessage("Page.captureScreenshot");
+    expect(captureCall.params?.captureBeyondViewport).toBe(true);
 
     // Viewport drifted after clear → re-apply saved dimensions
-    expect(secondSetCall.params).toMatchObject({
-      width: 800,
-      height: 600,
-      deviceScaleFactor: 2,
-      mobile: false,
-      screenWidth: 800,
-      screenHeight: 600,
-    });
+    expect(secondSetCall.params?.width).toBe(800);
+    expect(secondSetCall.params?.height).toBe(600);
+    expect(secondSetCall.params?.deviceScaleFactor).toBe(2);
+    expect(secondSetCall.params?.mobile).toBe(false);
+    expect(secondSetCall.params?.screenWidth).toBe(800);
+    expect(secondSetCall.params?.screenHeight).toBe(600);
   });
 
   it("fullPage on non-emulated tab: clears and does NOT re-apply emulation", async () => {
@@ -183,17 +184,15 @@ describe("CDP screenshot params", () => {
     // Only the expand call — no re-apply after clear
     expect(setCalls).toHaveLength(1);
 
-    const clearCall = sentMessages.find((m) => m.method === "Emulation.clearDeviceMetricsOverride");
-    expect(clearCall).toBeDefined();
+    requireSentMessage("Emulation.clearDeviceMetricsOverride");
   });
 
   it("fullPage viewport dimensions never shrink below current innerWidth/Height", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", fullPage: true });
 
-    const expandCall = sentMessages.find((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    expect(expandCall).toBeDefined();
-    expect(Number(expandCall!.params!.width)).toBeGreaterThanOrEqual(800);
-    expect(Number(expandCall!.params!.height)).toBeGreaterThanOrEqual(600);
+    const expandCall = requireSentMessage("Emulation.setDeviceMetricsOverride");
+    expect(Number(expandCall.params?.width)).toBeGreaterThanOrEqual(800);
+    expect(Number(expandCall.params?.height)).toBeGreaterThanOrEqual(600);
   });
 });
 

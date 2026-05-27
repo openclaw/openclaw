@@ -1,5 +1,12 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import {
+  CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  formatContextLimitTruncationNotice,
+} from "./context-truncation-notice.js";
+import { log } from "./logger.js";
+import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
+import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -15,7 +22,6 @@ import {
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
-export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
 export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Context overflow: estimated context size exceeds safe threshold during tool loop.";
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
@@ -31,9 +37,17 @@ type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
 
-export function formatContextLimitTruncationNotice(truncatedChars: number): string {
-  return `[... ${Math.max(1, Math.floor(truncatedChars))} ${CONTEXT_LIMIT_TRUNCATION_NOTICE}]`;
-}
+type MidTurnPrecheckOptions = {
+  enabled?: boolean;
+  contextTokenBudget: number;
+  reserveTokens: () => number;
+  toolResultMaxChars?: number;
+  getSystemPrompt?: () => string | undefined;
+  getPrePromptMessageCount?: () => number;
+  onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
+};
+
+export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
 
 function truncateTextToBudget(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
@@ -184,6 +198,34 @@ function enforceToolResultLimitInPlace(params: {
   }
 }
 
+function hasNewToolResultAfterFence(params: {
+  messages: AgentMessage[];
+  prePromptMessageCount: number;
+}): boolean {
+  for (const message of params.messages.slice(params.prePromptMessageCount)) {
+    if (isToolResultMessage(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function toMidTurnPrecheckRequest(
+  result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
+): MidTurnPrecheckRequest | null {
+  if (result.route === "fits") {
+    return null;
+  }
+  return {
+    route: result.route,
+    estimatedPromptTokens: result.estimatedPromptTokens,
+    promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
+    overflowTokens: result.overflowTokens,
+    toolResultReducibleChars: result.toolResultReducibleChars,
+    effectiveReserveTokens: result.effectiveReserveTokens,
+  };
+}
+
 /**
  * Per-iteration `afterTurn` + `assemble` wrapper for sessions where
  * the context engine owns compaction. Lets the engine compact inside
@@ -198,6 +240,7 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   modelId: string;
   getPrePromptMessageCount?: () => number;
+  onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -208,12 +251,27 @@ export function installContextEngineLoopHook(params: {
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
+  let lastSourceMessages: AgentMessage[] | null = null;
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+    const checkedPrefixLength =
+      lastSeenLength == null ? 0 : Math.min(lastSeenLength, sourceMessages.length);
+    const sourceHistoryChanged =
+      lastSeenLength != null &&
+      lastSourceMessages != null &&
+      (sourceMessages.length < lastSeenLength ||
+        (sourceMessages.length === lastSeenLength &&
+          sourceMessages
+            .slice(0, checkedPrefixLength)
+            .some((message, index) => message !== lastSourceMessages?.[index])));
+    if (sourceHistoryChanged) {
+      lastSeenLength = null;
+      lastAssembledView = null;
+    }
 
     // Seed the loop fence from the attempt's pre-prompt message count when available.
     // This keeps the first real post-tool-call iteration eligible for compaction even
@@ -225,13 +283,13 @@ export function installContextEngineLoopHook(params: {
         lastSeenLength ?? params.getPrePromptMessageCount?.() ?? sourceMessages.length,
       ),
     );
-    lastSeenLength = prePromptMessageCount;
 
     const hasNewMessages = sourceMessages.length > prePromptMessageCount;
     if (!hasNewMessages) {
+      lastSeenLength = prePromptMessageCount;
+      lastSourceMessages = sourceMessages;
       return lastAssembledView ?? sourceMessages;
     }
-
     try {
       if (typeof contextEngine.afterTurn === "function") {
         await contextEngine.afterTurn({
@@ -267,6 +325,8 @@ export function installContextEngineLoopHook(params: {
         }
       }
       lastSeenLength = sourceMessages.length;
+      params.onAfterTurnCheckpoint?.(lastSeenLength);
+      lastSourceMessages = sourceMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
@@ -282,6 +342,9 @@ export function installContextEngineLoopHook(params: {
     } catch {
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
+      lastSeenLength = prePromptMessageCount;
+      lastAssembledView = null;
+      lastSourceMessages = sourceMessages;
     }
 
     return sourceMessages;
@@ -295,6 +358,7 @@ export function installContextEngineLoopHook(params: {
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
+  midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const maxContextChars = Math.max(
@@ -312,6 +376,7 @@ export function installToolResultContextGuard(params: {
   // narrow runtime view to keep callsites type-safe while preserving behavior.
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
+  let lastSeenLength: number | null = null;
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
@@ -330,6 +395,50 @@ export function installToolResultContextGuard(params: {
         messages: contextMessages,
         maxSingleToolResultChars,
       });
+    }
+    if (params.midTurnPrecheck?.enabled) {
+      const prePromptMessageCount = Math.max(
+        0,
+        Math.min(
+          contextMessages.length,
+          lastSeenLength ??
+            params.midTurnPrecheck.getPrePromptMessageCount?.() ??
+            contextMessages.length,
+        ),
+      );
+      lastSeenLength = prePromptMessageCount;
+      if (
+        hasNewToolResultAfterFence({
+          messages: contextMessages,
+          prePromptMessageCount,
+        })
+      ) {
+        // Use the same post-truncation view Pi will send to the next model call.
+        // Recovery re-applies truncation to the persisted session manager, so
+        // this precheck is only a routing signal, not the source of truth.
+        const precheck = shouldPreemptivelyCompactBeforePrompt({
+          messages: contextMessages,
+          systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
+          // During a tool loop, the active user prompt is already part of messages.
+          prompt: "",
+          contextTokenBudget: params.midTurnPrecheck.contextTokenBudget,
+          reserveTokens: params.midTurnPrecheck.reserveTokens(),
+          toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
+        });
+        const request = toMidTurnPrecheckRequest(precheck);
+        log.debug(
+          `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
+            `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
+            `estimatedPromptTokens=${precheck.estimatedPromptTokens} ` +
+            `promptBudgetBeforeReserve=${precheck.promptBudgetBeforeReserve} ` +
+            `overflowTokens=${precheck.overflowTokens}`,
+        );
+        if (request) {
+          params.midTurnPrecheck.onMidTurnPrecheck?.(request);
+          throw new MidTurnPrecheckSignal(request);
+        }
+      }
+      lastSeenLength = contextMessages.length;
     }
     if (
       exceedsPreemptiveOverflowThreshold({

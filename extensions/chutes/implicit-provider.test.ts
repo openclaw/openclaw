@@ -1,10 +1,18 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 import { CHUTES_BASE_URL } from "./models.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
+
+function restoreEnvVar(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 async function runChutesCatalog(params: { apiKey?: string; discoveryApiKey?: string }) {
   const provider = await registerSingleProviderPlugin(plugin);
@@ -44,8 +52,8 @@ async function withRealChutesDiscovery<T>(
   try {
     return await run(fetchMock);
   } finally {
-    process.env.VITEST = originalVitest;
-    process.env.NODE_ENV = originalNodeEnv;
+    restoreEnvVar("VITEST", originalVitest);
+    restoreEnvVar("NODE_ENV", originalNodeEnv);
     globalThis.fetch = originalFetch;
   }
 }

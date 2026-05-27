@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
 } from "./inbound-context.js";
 
 type ReplyContextParams = Parameters<typeof resolveVisibleWhatsAppReplyContext>[0];
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] => ({
   id,
@@ -24,8 +34,8 @@ const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] =>
   replyToSender: "Mallory (+999)",
   replyToSenderJid: "999@s.whatsapp.net",
   sendComposing: async () => {},
-  reply: async () => {},
-  sendMedia: async () => {},
+  reply: async () => acceptedSendResult("text", "r1"),
+  sendMedia: async () => acceptedSendResult("media", "m1"),
 });
 
 describe("whatsapp inbound context visibility", () => {
@@ -49,10 +59,11 @@ describe("whatsapp inbound context visibility", () => {
     });
 
     expect(history).toEqual([
-      expect.objectContaining({
+      {
         sender: "Alice (+111)",
         body: "Allowed context",
-      }),
+        senderJid: "111@s.whatsapp.net",
+      },
     ]);
   });
 
@@ -75,12 +86,15 @@ describe("whatsapp inbound context visibility", () => {
       groupAllowFrom: ["+111"],
     });
 
-    expect(reply).toMatchObject({
+    expect(reply).toEqual({
       id: "blocked-reply",
       body: "Blocked quoted text",
-      sender: expect.objectContaining({
+      sender: {
+        jid: "999@s.whatsapp.net",
+        lid: null,
+        e164: "+999",
         label: "Mallory (+999)",
-      }),
+      },
     });
   });
 });

@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,
@@ -29,6 +29,11 @@ type GatewayLikeLogger = {
   debug?: (message: string) => void;
   warn?: (message: string) => void;
   error?: (message: string) => void;
+};
+
+type ApprovalPushTarget = {
+  deviceId: string;
+  scopes: readonly string[];
 };
 
 type DeliveryTarget = {
@@ -102,12 +107,26 @@ async function loadRegisteredTargets(params: {
 
 async function resolvePairedTargets(params: {
   requireApprovalScope: boolean;
+  isTargetVisible?: (target: ApprovalPushTarget) => boolean;
 }): Promise<DeliveryTarget[]> {
   const pairing = await listDevicePairing();
   const deviceIds = pairing.paired
-    .filter((device) =>
-      shouldTargetDevice({ device, requireApprovalScope: params.requireApprovalScope }),
-    )
+    .filter((device) => {
+      if (!shouldTargetDevice({ device, requireApprovalScope: params.requireApprovalScope })) {
+        return false;
+      }
+      const operatorToken = resolveActiveOperatorToken(device);
+      if (
+        params.isTargetVisible &&
+        !params.isTargetVisible({
+          deviceId: device.deviceId,
+          scopes: operatorToken?.scopes ?? [],
+        })
+      ) {
+        return false;
+      }
+      return true;
+    })
     .map((device) => device.deviceId);
   return await loadRegisteredTargets({ deviceIds });
 }
@@ -115,11 +134,15 @@ async function resolvePairedTargets(params: {
 async function resolveDeliveryPlan(params: {
   requireApprovalScope: boolean;
   explicitNodeIds?: readonly string[];
+  isTargetVisible?: (target: ApprovalPushTarget) => boolean;
   log: GatewayLikeLogger;
 }): Promise<DeliveryPlan> {
   const targets = params.explicitNodeIds?.length
     ? await loadRegisteredTargets({ deviceIds: params.explicitNodeIds })
-    : await resolvePairedTargets({ requireApprovalScope: params.requireApprovalScope });
+    : await resolvePairedTargets({
+        requireApprovalScope: params.requireApprovalScope,
+        isTargetVisible: params.isTargetVisible,
+      });
   if (targets.length === 0) {
     return { targets: [] };
   }
@@ -139,7 +162,7 @@ async function resolveDeliveryPlan(params: {
 
   let relayConfig: ApnsRelayConfig | undefined;
   if (needsRelay) {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+    const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway);
     if (relay.ok) {
       relayConfig = relay.value;
     } else {
@@ -260,10 +283,14 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
   const pendingDeliveryStateById = new Map<string, Promise<ApprovalDeliveryState | null>>();
 
   return {
-    async handleRequested(request: ExecApprovalRequest): Promise<boolean> {
+    async handleRequested(
+      request: ExecApprovalRequest,
+      opts?: { isTargetVisible?: (target: ApprovalPushTarget) => boolean },
+    ): Promise<boolean> {
       const deliveryStatePromise = (async (): Promise<ApprovalDeliveryState | null> => {
         const plan = await resolveDeliveryPlan({
           requireApprovalScope: true,
+          isTargetVisible: opts?.isTargetVisible,
           log: params.log,
         });
         if (plan.targets.length === 0) {

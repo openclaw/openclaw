@@ -9,6 +9,7 @@ export type {
   EmbeddedPiRunResult,
 } from "./pi-embedded-runner.js";
 export {
+  abortAndDrainEmbeddedPiRun,
   abortEmbeddedAgentRun,
   abortEmbeddedPiRun,
   compactEmbeddedAgentSession,
@@ -19,6 +20,7 @@ export {
   isEmbeddedPiRunStreaming,
   queueEmbeddedAgentMessage,
   queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageWithOutcome,
   resolveActiveEmbeddedAgentRunSessionId,
   resolveActiveEmbeddedRunSessionId,
   resolveEmbeddedSessionLane,

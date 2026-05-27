@@ -1,28 +1,29 @@
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
 import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
 
-export const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedKeys,
 ]);
-export const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze([
+const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedPrefixes,
 ]);
-export const HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+const HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedInheritedKeys,
 ]);
-export const HOST_DANGEROUS_INHERITED_ENV_PREFIXES: readonly string[] = Object.freeze([
+const HOST_DANGEROUS_INHERITED_ENV_PREFIXES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedInheritedPrefixes,
 ]);
-export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedOverrideKeys,
 ]);
-export const HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES: readonly string[] = Object.freeze([
+const HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedOverridePrefixes,
 ]);
-export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   "TERM",
   "LANG",
   "LC_ALL",
@@ -32,16 +33,13 @@ export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string
   "NO_COLOR",
   "FORCE_COLOR",
 ]);
-export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES: readonly string[] =
-  Object.freeze(["LC_"]);
-export const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
-export const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set<string>(
-  HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES,
-);
-export const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(
-  HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES,
-);
-export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
+const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES: readonly string[] = Object.freeze([
+  "LC_",
+]);
+const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
+const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set<string>(HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES);
+const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES);
+const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
 );
 
@@ -59,13 +57,13 @@ function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   );
 }
 
-export type HostExecEnvSanitizationResult = {
+type HostExecEnvSanitizationResult = {
   env: Record<string, string>;
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
 };
 
-export type HostExecEnvOverrideDiagnostics = {
+type HostExecEnvOverrideDiagnostics = {
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
 };
@@ -149,10 +147,6 @@ function listNormalizedEnvEntries(
   return entries;
 }
 
-function sortUnique(values: Iterable<string>): string[] {
-  return Array.from(new Set(values)).toSorted((a, b) => a.localeCompare(b));
-}
-
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -201,8 +195,8 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
 
   return {
     acceptedOverrides,
-    rejectedOverrideBlockedKeys: sortUnique(rejectedBlocked),
-    rejectedOverrideInvalidKeys: sortUnique(rejectedInvalid),
+    rejectedOverrideBlockedKeys: sortUniqueStrings(rejectedBlocked),
+    rejectedOverrideInvalidKeys: sortUniqueStrings(rejectedInvalid),
   };
 }
 

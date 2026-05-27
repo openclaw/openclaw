@@ -8,7 +8,7 @@ import {
   withRouteTabContext,
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
+import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
@@ -43,11 +43,9 @@ export function registerBrowserAgentActHookRoutes(
         ctx,
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
+          const uploadPathsResult = await pathScope(DEFAULT_UPLOAD_DIR, {
+            label: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
+          }).existing(paths);
           if (!uploadPathsResult.ok) {
             res.status(400).json({ error: uploadPathsResult.error });
             return;
@@ -121,6 +119,7 @@ export function registerBrowserAgentActHookRoutes(
       const accept = toBoolean(body.accept);
       const promptText = toStringOrEmpty(body.promptText) || undefined;
       const timeoutMs = toNumber(body.timeoutMs);
+      const dialogId = toStringOrEmpty(body.dialogId) || undefined;
       if (accept === undefined) {
         return jsonError(res, 400, "accept is required");
       }
@@ -132,6 +131,9 @@ export function registerBrowserAgentActHookRoutes(
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            if (dialogId) {
+              return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
+            }
             if (timeoutMs) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
             }
@@ -188,6 +190,7 @@ export function registerBrowserAgentActHookRoutes(
           await pw.armDialogViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
+            dialogId,
             accept,
             promptText,
             timeoutMs: timeoutMs ?? undefined,

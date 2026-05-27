@@ -1,20 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { buildPluginConfigSchema, emptyPluginConfigSchema } from "./config-schema.js";
+import {
+  buildJsonPluginConfigSchema,
+  buildPluginConfigSchema,
+  emptyPluginConfigSchema,
+} from "./config-schema.js";
 
 function expectSafeParseCases(
   safeParse: ((value: unknown) => unknown) | undefined,
   cases: ReadonlyArray<readonly [unknown, unknown]>,
 ) {
-  expect(safeParse).toBeDefined();
-  expect(cases.map(([value]) => safeParse?.(value))).toEqual(cases.map(([, expected]) => expected));
+  if (safeParse === undefined) {
+    throw new Error("expected config schema safeParse function");
+  }
+  expect(cases.map(([value]) => safeParse(value))).toEqual(cases.map(([, expected]) => expected));
 }
 
 function expectJsonSchema(
   result: ReturnType<typeof buildPluginConfigSchema>,
   expected: Record<string, unknown>,
 ) {
-  expect(result.jsonSchema).toMatchObject(expected);
+  expect(result.jsonSchema).toEqual(expected);
 }
 
 describe("buildPluginConfigSchema", () => {
@@ -80,6 +86,37 @@ describe("buildPluginConfigSchema", () => {
       data: { normalized: true },
     });
     expect(safeParse).toHaveBeenCalledWith({ enabled: false });
+  });
+});
+
+describe("buildJsonPluginConfigSchema", () => {
+  it("validates direct JSON schemas without zod conversion", () => {
+    const result = buildJsonPluginConfigSchema(
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean", default: true },
+        },
+      },
+      { cacheKey: "config-schema.test.json-plugin" },
+    );
+
+    expect(result.jsonSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", default: true },
+      },
+    });
+    expect(result.safeParse?.({})).toEqual({
+      success: true,
+      data: { enabled: true },
+    });
+    expect(result.safeParse?.({ enabled: "yes" })).toEqual({
+      success: false,
+      error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
+    });
   });
 });
 

@@ -14,7 +14,7 @@ import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
 
-export type MemoryWikiLintIssue = {
+type MemoryWikiLintIssue = {
   severity: "error" | "warning";
   category: "structure" | "provenance" | "links" | "contradictions" | "open-questions" | "quality";
   code:
@@ -38,7 +38,7 @@ export type MemoryWikiLintIssue = {
   message: string;
 };
 
-export type LintMemoryWikiResult = {
+type LintMemoryWikiResult = {
   vaultRoot: string;
   issueCount: number;
   issues: MemoryWikiLintIssue[];
@@ -54,6 +54,7 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   const validTargets = new Set<string>();
   for (const page of pages) {
     const withoutExtension = page.relativePath.replace(/\.md$/i, "");
+    validTargets.add(page.relativePath);
     validTargets.add(withoutExtension);
     validTargets.add(path.basename(withoutExtension));
   }

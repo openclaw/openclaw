@@ -1,7 +1,5 @@
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type {
   PluginWebContentExtractorEntry,
   WebContentExtractorPlugin,
@@ -11,10 +9,6 @@ const WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "web-content-extractor.js",
   "web-content-extractor-api.js",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isWebContentExtractorPlugin(value: unknown): value is WebContentExtractorPlugin {
   return (
@@ -82,10 +76,4 @@ export function loadBundledWebContentExtractorEntriesFromDir(params: {
     return null;
   }
   return extractors.map((extractor) => Object.assign({}, extractor, { pluginId: params.pluginId }));
-}
-
-export function hasBundledWebContentExtractorPublicArtifact(pluginId: string): boolean {
-  return WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: pluginId, artifactBasename })),
-  );
 }

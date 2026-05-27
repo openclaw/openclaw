@@ -2,7 +2,7 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
@@ -20,7 +20,7 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   normalizeOptionalLowercaseString,
-  normalizeStringifiedOptionalString,
+  normalizeStringifiedEntries,
 } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -137,7 +137,7 @@ export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
 
   const defaultAgentId = resolveAgentIdFromSessionKey(resolveMainSessionKey(cfg));
   const resolvedAgentId = normalizeAgentId(
@@ -183,8 +183,7 @@ export async function sandboxExplainCommand(
   const globalAllow = channel ? elevatedGlobal?.allowFrom?.[channel] : undefined;
   const agentAllow = channel ? elevatedAgent?.allowFrom?.[channel] : undefined;
 
-  const allowTokens = (values?: Array<string | number>) =>
-    (values ?? []).map((v) => normalizeStringifiedOptionalString(v) ?? "").filter(Boolean);
+  const allowTokens = (values?: Array<string | number>) => normalizeStringifiedEntries(values);
   const globalAllowTokens = allowTokens(globalAllow);
   const agentAllowTokens = allowTokens(agentAllow);
 

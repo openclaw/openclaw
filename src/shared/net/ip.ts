@@ -36,8 +36,27 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
   "orchid2",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+const CLOUD_METADATA_IP_ADDRESSES = new Set(["100.100.100.200", "fd00:ec2::254"]);
 export type Ipv4SpecialUseBlockOptions = {
   allowRfc2544BenchmarkRange?: boolean;
+};
+
+/**
+ * Per-call exemptions for `isBlockedSpecialUseIpv6Address`. Mirror of
+ * {@link Ipv4SpecialUseBlockOptions} for the IPv6 side. Currently only
+ * `allowUniqueLocalRange` is exposed (#74351); other reserved IPv6 ranges stay
+ * unconditionally blocked because they have no documented fake-ip / proxy
+ * use case.
+ */
+export type Ipv6SpecialUseBlockOptions = {
+  /**
+   * When true, exempt addresses in `fc00::/7` (the IPv6 Unique Local Address
+   * block, RFC 4193) from the SSRF private-IP block. Sing-box / Clash / Surge
+   * fake-ip implementations resolve foreign domains to ULA addresses
+   * alongside RFC 2544 benchmark IPv4 addresses, and operators using those
+   * proxy stacks need both ranges exempted to keep `web_fetch` working.
+   */
+  allowUniqueLocalRange?: boolean;
 };
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
@@ -225,6 +244,37 @@ export function isLoopbackIpAddress(raw: string | undefined): boolean {
   return normalized.range() === "loopback";
 }
 
+export function isLinkLocalIpAddress(raw: string | undefined): boolean {
+  const parsed = parseLooseIpAddress(raw);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeIpv4MappedAddress(parsed);
+  if (isIpv4Address(normalized)) {
+    return normalized.range() === "linkLocal";
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+  if (embeddedIpv4?.range() === "linkLocal") {
+    return true;
+  }
+  return normalized.range() === "linkLocal";
+}
+
+export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
+  const parsed = parseLooseIpAddress(raw);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeIpv4MappedAddress(parsed);
+  if (isIpv6Address(normalized)) {
+    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+    if (embeddedIpv4 && CLOUD_METADATA_IP_ADDRESSES.has(embeddedIpv4.toString())) {
+      return true;
+    }
+  }
+  return CLOUD_METADATA_IP_ADDRESSES.has(normalized.toString());
+}
+
 export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   const parsed = parseCanonicalIpAddress(raw);
   if (!parsed) {
@@ -237,10 +287,19 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   return isBlockedSpecialUseIpv6Address(normalized);
 }
 
-export function isBlockedSpecialUseIpv6Address(address: ipaddr.IPv6): boolean {
+export function isBlockedSpecialUseIpv6Address(
+  address: ipaddr.IPv6,
+  options: Ipv6SpecialUseBlockOptions = {},
+): boolean {
   // ipaddr.js returns "discard" at runtime for 100::/64, but its published
   // TypeScript IPv6Range union omits that literal.
   const range = address.range() as BlockedIpv6Range;
+  if (range === "uniqueLocal" && options.allowUniqueLocalRange === true) {
+    // Operators running fake-ip proxy stacks (sing-box, Clash, Surge) opt in
+    // to fc00::/7 reaching the network — same intent as
+    // `allowRfc2544BenchmarkRange` for the IPv4 side (#74351).
+    return false;
+  }
   if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;
   }

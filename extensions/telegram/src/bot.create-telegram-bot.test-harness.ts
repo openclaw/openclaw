@@ -1,14 +1,22 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import path from "node:path";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
 type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn>;
-type LoadConfigFn = typeof import("openclaw/plugin-sdk/config-runtime").loadConfig;
-type LoadSessionStoreFn = typeof import("openclaw/plugin-sdk/config-runtime").loadSessionStore;
-type ResolveStorePathFn = typeof import("openclaw/plugin-sdk/config-runtime").resolveStorePath;
+type GetRuntimeConfigFn =
+  typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
+type LoadSessionStoreFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
+type ResolveStorePathFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
+type ReadSessionUpdatedAtFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
 type SessionStore = ReturnType<LoadSessionStoreFn>;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -26,9 +34,18 @@ type ReplyPayloadLike = {
   replyToId?: string;
 };
 
-const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}.json`,
-}));
+const { sessionStorePath } = vi.hoisted(() => {
+  const tempRoot =
+    process.platform === "win32"
+      ? (process.env.TEMP ?? process.env.TMP ?? "C:\\Windows\\Temp")
+      : (process.env.TMPDIR ?? "/tmp");
+  const separator = process.platform === "win32" ? "\\" : "/";
+  return {
+    sessionStorePath: `${tempRoot.replace(/[\\/]+$/u, "")}${separator}openclaw-telegram-${
+      process.pid
+    }-${process.env.VITEST_POOL_ID ?? "0"}.json`,
+  };
+});
 
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
@@ -42,26 +59,37 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-const { loadConfig, loadSessionStoreMock, resolveStorePathMock, sessionStoreEntries } = vi.hoisted(
+const {
+  getRuntimeConfig,
+  loadSessionStoreMock,
+  readSessionUpdatedAtMock,
+  recordInboundSessionMock,
+  resolveStorePathMock,
+  sessionStoreEntries,
+} = vi.hoisted(
   (): {
-    loadConfig: MockFn<LoadConfigFn>;
+    getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
     loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
+    readSessionUpdatedAtMock: MockFn<ReadSessionUpdatedAtFn>;
+    recordInboundSessionMock: MockFn<NonNullable<TelegramBotDeps["recordInboundSession"]>>;
     resolveStorePathMock: MockFn<ResolveStorePathFn>;
     sessionStoreEntries: { value: SessionStore };
   } => ({
-    loadConfig: vi.fn<LoadConfigFn>(() => ({})),
+    getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
     loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
       (_storePath, _opts) => sessionStoreEntries.value,
     ),
     resolveStorePathMock: vi.fn<ResolveStorePathFn>(
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
+    readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
+    recordInboundSessionMock: vi.fn(async () => undefined),
     sessionStoreEntries: { value: {} as SessionStore },
   }),
 );
 
 export function getLoadConfigMock(): AnyMock {
-  return loadConfig;
+  return getRuntimeConfig;
 }
 
 export function getLoadSessionStoreMock(): AnyMock {
@@ -262,12 +290,13 @@ const grammySpies = vi.hoisted(() => ({
   onSpy: vi.fn(),
   stopSpy: vi.fn(),
   commandSpy: vi.fn(),
-  botCtorSpy: vi.fn((_: string, __?: { client?: { fetch?: typeof fetch } }) => undefined),
+  botCtorSpy: vi.fn(
+    (_: string, __?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => undefined,
+  ),
   answerCallbackQuerySpy: vi.fn(async () => undefined) as AnyAsyncMock,
   sendChatActionSpy: vi.fn(),
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   editMessageReplyMarkupSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
-  sendMessageDraftSpy: vi.fn(async () => true) as AnyAsyncMock,
   setMessageReactionSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   setMyCommandsSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   getMeSpy: vi.fn(async () => ({
@@ -287,13 +316,12 @@ export const onSpy: AnyMock = grammySpies.onSpy;
 export const stopSpy: AnyMock = grammySpies.stopSpy;
 export const commandSpy: AnyMock = grammySpies.commandSpy;
 export const botCtorSpy: MockFn<
-  (token: string, options?: { client?: { fetch?: typeof fetch } }) => void
+  (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
 > = grammySpies.botCtorSpy;
 export const answerCallbackQuerySpy: AnyAsyncMock = grammySpies.answerCallbackQuerySpy;
 export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
 export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
 export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageReplyMarkupSpy;
-export const sendMessageDraftSpy: AnyAsyncMock = grammySpies.sendMessageDraftSpy;
 export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
 export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
 export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
@@ -323,7 +351,6 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       sendChatAction: grammySpies.sendChatActionSpy,
       editMessageText: grammySpies.editMessageTextSpy,
       editMessageReplyMarkup: grammySpies.editMessageReplyMarkupSpy,
-      sendMessageDraft: grammySpies.sendMessageDraftSpy,
       setMessageReaction: grammySpies.setMessageReactionSpy,
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
@@ -340,7 +367,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     catch = vi.fn();
     constructor(
       public token: string,
-      public options?: { client?: { fetch?: typeof fetch } },
+      public options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown },
     ) {
       (grammySpies.botCtorSpy as unknown as (token: string, options?: unknown) => void)(
         token,
@@ -362,9 +389,16 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  loadConfig,
+  getRuntimeConfig,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
+  readSessionUpdatedAt: readSessionUpdatedAtMock,
+  recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],
+  recordChannelActivity: vi.fn() as TelegramBotDeps["recordChannelActivity"],
+  resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
+    route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
+  resolvePinnedMainDmOwnerFromAllowlist: () => null,
+  buildChannelInboundEventContext,
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -453,14 +487,33 @@ export function makeForumGroupMessageCtx(params?: {
   });
 }
 
+function clearTelegramDispatchDedupeFilesForTest(): void {
+  const dir = path.dirname(sessionStorePath);
+  if (!existsSync(dir)) {
+    return;
+  }
+  const prefix = `${path.basename(sessionStorePath)}.telegram-message-dispatch-`;
+  for (const entry of readdirSync(dir)) {
+    if (entry.startsWith(prefix)) {
+      rmSync(path.join(dir, entry), { force: true });
+    }
+  }
+}
+
 beforeEach(() => {
-  loadConfig.mockReset();
-  loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
+  getRuntimeConfig.mockReset();
+  getRuntimeConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   sessionStoreEntries.value = {};
+  rmSync(`${sessionStorePath}.telegram-messages.json`, { force: true });
+  clearTelegramDispatchDedupeFilesForTest();
   loadSessionStoreMock.mockReset();
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockImplementation((storePath?: string) => storePath ?? sessionStorePath);
+  readSessionUpdatedAtMock.mockReset();
+  readSessionUpdatedAtMock.mockReturnValue(undefined);
+  recordInboundSessionMock.mockReset();
+  recordInboundSessionMock.mockResolvedValue(undefined);
   loadWebMedia.mockReset();
   readChannelAllowFromStore.mockReset();
   readChannelAllowFromStore.mockResolvedValue([]);
@@ -517,8 +570,6 @@ beforeEach(() => {
   editMessageTextSpy.mockResolvedValue({ message_id: 88 });
   editMessageReplyMarkupSpy.mockReset();
   editMessageReplyMarkupSpy.mockResolvedValue({ message_id: 88 });
-  sendMessageDraftSpy.mockReset();
-  sendMessageDraftSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

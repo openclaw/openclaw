@@ -1,5 +1,5 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 
 public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authRequired = "AUTH_REQUIRED"
@@ -7,6 +7,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTokenMismatch = "AUTH_TOKEN_MISMATCH"
     case authBootstrapTokenInvalid = "AUTH_BOOTSTRAP_TOKEN_INVALID"
     case authDeviceTokenMismatch = "AUTH_DEVICE_TOKEN_MISMATCH"
+    case authScopeMismatch = "AUTH_SCOPE_MISMATCH"
     case authTokenMissing = "AUTH_TOKEN_MISSING"
     case authTokenNotConfigured = "AUTH_TOKEN_NOT_CONFIGURED"
     case authPasswordMissing = "AUTH_PASSWORD_MISSING"
@@ -129,9 +130,13 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    public var detailCode: String? { self.detailCodeRaw }
+    public var detailCode: String? {
+        self.detailCodeRaw
+    }
 
-    public var recommendedNextStepCode: String? { self.recommendedNextStepRaw }
+    public var recommendedNextStepCode: String? {
+        self.recommendedNextStepRaw
+    }
 
     public var detail: GatewayConnectAuthDetailCode? {
         guard let detailCodeRaw else { return nil }
@@ -143,23 +148,26 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         return GatewayConnectRecoveryNextStep(rawValue: recommendedNextStepRaw)
     }
 
-    public var errorDescription: String? { self.message }
+    public var errorDescription: String? {
+        self.message
+    }
 
     public var isNonRecoverable: Bool {
         switch self.detail {
         case .authTokenMissing,
-            .authBootstrapTokenInvalid,
-            .authTokenNotConfigured,
-            .authPasswordMissing,
-            .authPasswordMismatch,
-            .authPasswordNotConfigured,
-            .authRateLimited,
-            .pairingRequired,
-            .controlUiDeviceIdentityRequired,
-            .deviceIdentityRequired:
-            return true
+             .authBootstrapTokenInvalid,
+             .authTokenNotConfigured,
+             .authPasswordMissing,
+             .authPasswordMismatch,
+             .authPasswordNotConfigured,
+             .authRateLimited,
+             .authScopeMismatch,
+             .pairingRequired,
+             .controlUiDeviceIdentityRequired,
+             .deviceIdentityRequired:
+            true
         default:
-            return false
+            false
         }
     }
 }
@@ -203,5 +211,7 @@ public struct GatewayDecodingError: LocalizedError, Sendable {
         self.message = message
     }
 
-    public var errorDescription: String? { "\(self.method): \(self.message)" }
+    public var errorDescription: String? {
+        "\(self.method): \(self.message)"
+    }
 }

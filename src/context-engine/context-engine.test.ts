@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,8 +16,13 @@ import {
   getContextEngineFactory,
   listContextEngineIds,
   resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
 } from "./registry.js";
-import type { ContextEngineFactory, ContextEngineRegistrationResult } from "./registry.js";
+import type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+  ContextEngineRegistrationResult,
+} from "./registry.js";
 import type {
   ContextEngine,
   ContextEngineInfo,
@@ -48,6 +53,16 @@ function installCompactRuntimeSpy() {
       details: undefined,
     },
   });
+}
+
+function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
+  const params = compactEmbeddedPiSessionDirectMock.mock.calls[callIndex]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!params) {
+    throw new Error(`missing compact runtime call ${callIndex}`);
+  }
+  return params;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +100,25 @@ function registerPromptTrackingEngine(engineId: string) {
     },
   }));
   return calls;
+}
+
+function requireFactoryContext(
+  context: ContextEngineFactoryContext | undefined,
+): ContextEngineFactoryContext {
+  if (!context) {
+    throw new Error("expected context engine factory context");
+  }
+  return context;
+}
+
+function requireRegistryState() {
+  const registryState = (globalThis as Record<symbol, unknown>)[
+    Symbol.for("openclaw.contextEngineRegistryState")
+  ] as { engines: Map<string, unknown> } | undefined;
+  if (!registryState) {
+    throw new Error("expected context engine registry state");
+  }
+  return registryState;
 }
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
@@ -356,7 +390,7 @@ describe("Engine contract tests", () => {
     const resolved = getContextEngineFactory("mock");
     expect(resolved).toBe(factory);
 
-    const engine = await resolved!();
+    const engine = await resolved!({});
     expect(engine).toBeInstanceOf(MockContextEngine);
     expect(engine.info.id).toBe("mock");
   });
@@ -374,11 +408,8 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(compactRuntimeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currentTokenCount: 277403,
-      }),
-    );
+    expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
+    expect(requireCompactRuntimeParams(0).currentTokenCount).toBe(277403);
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
@@ -393,15 +424,13 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(compactRuntimeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "s2",
-        sessionFile: "/tmp/session.json",
-        tokenBudget: 4096,
-        currentTokenCount: 12345,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.sessionId).toBe("s2");
+    expect(compactRuntimeParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactRuntimeParams.tokenBudget).toBe(4096);
+    expect(compactRuntimeParams.currentTokenCount).toBe(12345);
+    expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
     expect(result).toEqual({
       ok: true,
       compacted: false,
@@ -451,7 +480,6 @@ describe("Registry tests", () => {
 
     const retrieved = getContextEngineFactory("reg-test-2");
     expect(retrieved).toBe(factory);
-    expect(typeof retrieved).toBe("function");
   });
 
   it("listContextEngineIds() returns all registered ids", () => {
@@ -499,6 +527,17 @@ describe("Registry tests", () => {
       existingOwner: "owner-a",
     });
     expect(getContextEngineFactory("reg-owner-guard")).toBe(factory1);
+  });
+
+  it("exposes the trusted plugin owner for a resolved registered engine", async () => {
+    const engineId = `owner-policy-${Date.now().toString(36)}`;
+    registerContextEngineForOwner(engineId, () => new MockContextEngine(), "plugin:lossless-claw", {
+      allowSameOwnerRefresh: true,
+    });
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
   });
 
   it("public registerContextEngine cannot spoof owner or refresh existing ids", () => {
@@ -694,6 +733,108 @@ describe("Default engine selection", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 3b. Factory context passing
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Factory context passing", () => {
+  it("passes ContextEngineFactoryContext to factories that accept a parameter", async () => {
+    const engineId = `factory-ctx-${Date.now().toString(36)}`;
+    let receivedCtx: ContextEngineFactoryContext | undefined;
+
+    const factory: ContextEngineFactory = (ctx: ContextEngineFactoryContext) => {
+      receivedCtx = ctx;
+      return {
+        info: { id: engineId, name: "Ctx Engine" },
+        async ingest() {
+          return { ingested: true };
+        },
+        async assemble({ messages }: { messages: AgentMessage[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      };
+    };
+    registerContextEngine(engineId, factory);
+
+    const cfg = configWithSlot(engineId);
+    await resolveContextEngine(cfg, {
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    const context = requireFactoryContext(receivedCtx);
+    expect(context.config).toBe(cfg);
+    expect(context.agentDir).toBe("/tmp/agent");
+    expect(context.workspaceDir).toBe("/tmp/workspace");
+  });
+
+  it("no-arg factories still work when context is passed", async () => {
+    const engineId = `factory-noarg-${Date.now().toString(36)}`;
+    let called = false;
+
+    const factory: ContextEngineFactory = () => {
+      called = true;
+      return {
+        info: { id: engineId, name: "No-Arg Engine" },
+        async ingest() {
+          return { ingested: true };
+        },
+        async assemble({ messages }: { messages: AgentMessage[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+      };
+    };
+    registerContextEngine(engineId, factory);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId), {
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(called).toBe(true);
+    expect(engine.info.id).toBe(engineId);
+  });
+
+  it("passes undefined config when resolveContextEngine is called without config", async () => {
+    let receivedCtx: ContextEngineFactoryContext | undefined;
+
+    // Override the default "legacy" engine to intercept the no-config path
+    registerContextEngineForOwner(
+      "legacy",
+      (ctx: ContextEngineFactoryContext) => {
+        receivedCtx = ctx;
+        return {
+          info: { id: "legacy", name: "NoConfig Engine", version: "1" },
+          async ingest() {
+            return { ingested: true };
+          },
+          async assemble({ messages }: { messages: AgentMessage[] }) {
+            return { messages, estimatedTokens: 0 };
+          },
+          async compact() {
+            return { ok: true, compacted: false };
+          },
+        };
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await resolveContextEngine(undefined);
+
+    const context = requireFactoryContext(receivedCtx);
+    expect(context.config).toBeUndefined();
+    expect(context.agentDir).toBeUndefined();
+    expect(context.workspaceDir).toBeUndefined();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 4. Invalid engine fallback
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -713,7 +854,8 @@ describe("Invalid engine fallback", () => {
         name: "missing registration",
         engineId: uniqueEngineId("does-not-exist"),
         register: () => undefined,
-        expectedError: "does-not-exist",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" is not registered; falling back to default engine "legacy".`,
       },
       {
         name: "factory throws",
@@ -723,7 +865,8 @@ describe("Invalid engine fallback", () => {
             throw new Error("plugin version mismatch");
           });
         },
-        expectedError: "plugin version mismatch",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory threw during resolution: plugin version mismatch; falling back to default engine "legacy".`,
       },
       {
         name: "missing info metadata",
@@ -745,7 +888,8 @@ describe("Invalid engine fallback", () => {
               }) as unknown as ContextEngine,
           );
         },
-        expectedError: "missing info",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.; falling back to default engine "legacy".`,
       },
       {
         name: "missing lifecycle methods",
@@ -762,7 +906,8 @@ describe("Invalid engine fallback", () => {
               }) as unknown as ContextEngine,
           );
         },
-        expectedError: "missing assemble(), missing compact()",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().; falling back to default engine "legacy".`,
       },
       {
         name: "contract validation throws",
@@ -770,7 +915,8 @@ describe("Invalid engine fallback", () => {
         register: (engineId: string) => {
           registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
         },
-        expectedError: "contract validation threw",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" contract validation threw: Do not know how to serialize a BigInt; falling back to default engine "legacy".`,
       },
     ] as const;
 
@@ -782,7 +928,7 @@ describe("Invalid engine fallback", () => {
 
       expect(engine.info.id, testCase.name).toBe("legacy");
       expect(console.error, testCase.name).toHaveBeenCalledWith(
-        expect.stringContaining(testCase.expectedError),
+        testCase.expectedError(testCase.engineId),
       );
     }
   });
@@ -792,18 +938,15 @@ describe("Invalid engine fallback", () => {
     // so even the default engine is missing. The symbol key must match the
     // private CONTEXT_ENGINE_REGISTRY_STATE constant in registry.ts — guard
     // against a silent key mismatch so a rename surfaces loudly.
-    const registryState = (globalThis as Record<symbol, unknown>)[
-      Symbol.for("openclaw.contextEngineRegistryState")
-    ] as { engines: Map<string, unknown> } | undefined;
-    expect(registryState).toBeDefined();
-    const snapshot = new Map(registryState!.engines);
-    registryState!.engines.clear();
+    const registryState = requireRegistryState();
+    const snapshot = new Map(registryState.engines);
+    registryState.engines.clear();
 
     try {
       await expect(resolveContextEngine()).rejects.toThrow("not registered");
     } finally {
       for (const [key, value] of snapshot) {
-        registryState!.engines.set(key, value);
+        registryState.engines.set(key, value);
       }
     }
   });
@@ -994,8 +1137,8 @@ describe("Initialization guard", () => {
   it("ensureContextEnginesInitialized() is idempotent and registers legacy", async () => {
     const { ensureContextEnginesInitialized } = await import("./init.js");
 
-    expect(() => ensureContextEnginesInitialized()).not.toThrow();
-    expect(() => ensureContextEnginesInitialized()).not.toThrow();
+    expect(ensureContextEnginesInitialized()).toBeUndefined();
+    expect(ensureContextEnginesInitialized()).toBeUndefined();
 
     const ids = listContextEngineIds();
     expect(ids).toContain("legacy");

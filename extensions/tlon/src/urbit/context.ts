@@ -1,17 +1,14 @@
-export {
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  ssrfPolicyFromAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+export { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeUrbitHostname, validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
-export type UrbitContext = {
+type UrbitContext = {
   baseUrl: string;
   hostname: string;
   ship: string;
 };
 
-export function resolveShipFromHostname(hostname: string): string {
+function resolveShipFromHostname(hostname: string): string {
   const trimmed = normalizeUrbitHostname(hostname);
   if (!trimmed) {
     return "";
@@ -22,7 +19,7 @@ export function resolveShipFromHostname(hostname: string): string {
   return trimmed;
 }
 
-export function normalizeUrbitShip(ship: string | undefined, hostname: string): string {
+function normalizeUrbitShip(ship: string | undefined, hostname: string): string {
   const raw = ship?.replace(/^~/, "") ?? resolveShipFromHostname(hostname);
   return raw.trim();
 }

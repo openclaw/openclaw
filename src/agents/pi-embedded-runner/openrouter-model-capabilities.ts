@@ -18,11 +18,12 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
@@ -30,6 +31,7 @@ const log = createSubsystemLogger("openrouter-model-capabilities");
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
 const DISK_CACHE_FILENAME = "openrouter-models.json";
+const DISK_CACHE_VERSION = 3;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +49,7 @@ interface OpenRouterApiModel {
   max_completion_tokens?: number;
   max_output_tokens?: number;
   top_provider?: {
+    context_length?: number;
     max_completion_tokens?: number;
   };
   pricing?: {
@@ -61,6 +64,7 @@ export interface OpenRouterModelCapabilities {
   name: string;
   input: Array<"text" | "image">;
   reasoning: boolean;
+  supportsTools?: boolean;
   contextWindow: number;
   maxTokens: number;
   cost: {
@@ -72,6 +76,7 @@ export interface OpenRouterModelCapabilities {
 }
 
 interface DiskCachePayload {
+  version?: number;
   models: Record<string, OpenRouterModelCapabilities>;
 }
 
@@ -89,14 +94,12 @@ function resolveDiskCachePath(): string {
 
 function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
-    const cacheDir = resolveDiskCacheDir();
-    if (!existsSync(cacheDir)) {
-      mkdirSync(cacheDir, { recursive: true });
-    }
+    const cachePath = resolveDiskCachePath();
     const payload: DiskCachePayload = {
+      version: DISK_CACHE_VERSION,
       models: Object.fromEntries(map),
     };
-    writeFileSync(resolveDiskCachePath(), JSON.stringify(payload), "utf-8");
+    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);
@@ -128,7 +131,11 @@ function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
     if (!payload || typeof payload !== "object") {
       return undefined;
     }
-    const models = (payload as DiskCachePayload).models;
+    const cachePayload = payload as DiskCachePayload;
+    if (cachePayload.version !== DISK_CACHE_VERSION) {
+      return undefined;
+    }
+    const models = cachePayload.models;
     if (!models || typeof models !== "object") {
       return undefined;
     }
@@ -159,12 +166,16 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   if (inputModalities.includes("image")) {
     input.push("image");
   }
+  const supportedParameters = Array.isArray(model.supported_parameters)
+    ? model.supported_parameters
+    : undefined;
 
   return {
     name: model.name || model.id,
     input,
-    reasoning: model.supported_parameters?.includes("reasoning") ?? false,
-    contextWindow: model.context_length || 128_000,
+    reasoning: supportedParameters?.includes("reasoning") ?? false,
+    ...(supportedParameters ? { supportsTools: supportedParameters.includes("tools") } : {}),
+    contextWindow: model.top_provider?.context_length ?? model.context_length ?? 128_000,
     maxTokens:
       model.top_provider?.max_completion_tokens ??
       model.max_completion_tokens ??
@@ -238,7 +249,7 @@ function triggerFetch(): void {
  * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
-export function ensureOpenRouterModelCache(): void {
+function ensureOpenRouterModelCache(): void {
   if (cache) {
     return;
   }
@@ -260,6 +271,8 @@ export function ensureOpenRouterModelCache(): void {
  * Known cached entries return immediately. Unknown entries wait for at most
  * one catalog fetch, then leave sync resolution to read from the populated
  * cache on the same request.
+ *
+ * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
 export async function loadOpenRouterModelCapabilities(modelId: string): Promise<void> {
   ensureOpenRouterModelCache();
@@ -282,6 +295,8 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  *
  * If a model is not found but the cache exists, a background refresh is
  * triggered in case it's a newly added model not yet in the cache.
+ *
+ * @deprecated OpenRouter provider-owned catalog helper; do not use from third-party plugins.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,

@@ -7,7 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { writeBuildStamp } from "./build-stamp.mjs";
+import {
+  BUILD_STAMP_FILE,
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -16,6 +20,7 @@ const DEFAULTS = {
   readyTimeoutMs: 20_000,
   readySettleMs: 500,
   sigkillGraceMs: 10_000,
+  sigkillExitGraceMs: 2_000,
   cpuWarnMs: 1_000,
   cpuFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
@@ -64,6 +69,9 @@ function parseArgs(argv) {
         break;
       case "--sigkill-grace-ms":
         options.sigkillGraceMs = Number(readValue());
+        break;
+      case "--sigkill-exit-grace-ms":
+        options.sigkillExitGraceMs = Number(readValue());
         break;
       case "--cpu-warn-ms":
         options.cpuWarnMs = Number(readValue());
@@ -203,23 +211,6 @@ function snapshotTree(rootName) {
   return stats;
 }
 
-export function isIgnoredDistRuntimeWatchPath(entry) {
-  return (
-    entry === "dist-runtime/extensions/node_modules" ||
-    entry.startsWith("dist-runtime/extensions/node_modules/")
-  );
-}
-
-function summarizeDistRuntimeAddedPaths(added) {
-  const addedPaths = added.filter((entry) => entry.startsWith("dist-runtime/"));
-  const ignoredDependencyAddedPaths = addedPaths.filter(isIgnoredDistRuntimeWatchPath);
-  const topologyAddedPaths = addedPaths.filter((entry) => !isIgnoredDistRuntimeWatchPath(entry));
-  return {
-    ignoredDependencyAddedPaths,
-    topologyAddedPaths,
-  };
-}
-
 function writeSnapshot(snapshotDir) {
   ensureDir(snapshotDir);
   const pathEntries = [...listTreeEntries("dist"), ...listTreeEntries("dist-runtime")];
@@ -352,10 +343,14 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+export function hasGatewayReadyLog(text) {
+  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+}
+
 async function waitForGatewayReady(readText, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (/\[gateway\] ready \(/.test(readText())) {
+    if (hasGatewayReadyLog(readText())) {
       return true;
     }
     await sleep(100);
@@ -476,10 +471,6 @@ async function runTimedWatch(options, outputDir) {
     stderr += String(chunk);
   });
 
-  const exitPromise = new Promise((resolve) => {
-    child.on("exit", (code, signal) => resolve({ code, signal }));
-  });
-
   let watchPid = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (fs.existsSync(pidFilePath)) {
@@ -500,30 +491,7 @@ async function runTimedWatch(options, outputDir) {
   await sleep(options.windowMs);
   const idleCpuEndMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
 
-  if (watchPid) {
-    try {
-      process.kill(watchPid, "SIGTERM");
-    } catch {
-      // ignore
-    }
-  }
-
-  const gracefulExit = await Promise.race([
-    exitPromise,
-    sleep(options.sigkillGraceMs).then(() => null),
-  ]);
-
-  if (gracefulExit === null) {
-    if (watchPid) {
-      try {
-        process.kill(watchPid, "SIGKILL");
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const exit = (await exitPromise) ?? { code: null, signal: null };
+  const exit = await stopTimedWatchChild(child, watchPid, options);
   fs.writeFileSync(stdoutPath, stdout, "utf8");
   fs.writeFileSync(stderrPath, stderr, "utf8");
   const timing = fs.existsSync(timeFilePath)
@@ -542,6 +510,56 @@ async function runTimedWatch(options, outputDir) {
     stderrPath,
     timeFilePath,
   };
+}
+
+export async function stopTimedWatchChild(child, watchPid, options, deps = {}) {
+  const killProcess = deps.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const currentExit = () =>
+    child.exitCode !== null || child.signalCode !== null
+      ? { code: child.exitCode, signal: child.signalCode }
+      : null;
+  const exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const waitForExit = async (ms) =>
+    currentExit() ?? (await Promise.race([exited, sleep(ms).then(() => null)]));
+  const signalWatchProcess = (signal) => {
+    if (!watchPid) {
+      return;
+    }
+    try {
+      killProcess(watchPid, signal);
+    } catch {
+      // ignore
+    }
+  };
+
+  const existingExit = currentExit();
+  if (existingExit) {
+    return existingExit;
+  }
+
+  signalWatchProcess("SIGTERM");
+  const gracefulExit = await waitForExit(options.sigkillGraceMs);
+  if (gracefulExit) {
+    return gracefulExit;
+  }
+
+  signalWatchProcess("SIGKILL");
+  const killedExit = await waitForExit(options.sigkillExitGraceMs ?? DEFAULTS.sigkillExitGraceMs);
+  if (killedExit) {
+    return killedExit;
+  }
+
+  releaseUnsettledWatchChild(child);
+  return { code: null, signal: "SIGKILL" };
+}
+
+function releaseUnsettledWatchChild(child) {
+  child.stdin?.destroy?.();
+  child.stdout?.destroy?.();
+  child.stderr?.destroy?.();
+  child.unref?.();
 }
 
 function parsePathFile(filePath) {
@@ -590,7 +608,7 @@ function buildRunNodeDeps(env) {
     spawnSync,
     distRoot: path.join(cwd, "dist"),
     distEntry: path.join(cwd, "dist", "/entry.js"),
-    buildStampPath: path.join(cwd, "dist", ".buildstamp"),
+    buildStampPath: path.join(cwd, "dist", BUILD_STAMP_FILE),
     sourceRoots: ["src", "extensions"].map((sourceRoot) => ({
       name: sourceRoot,
       path: path.join(cwd, sourceRoot),
@@ -609,19 +627,25 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params) {
   );
 }
 
+export function writeBuildAndRuntimePostBuildStamps(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  writeBuildStamp({ cwd });
+  writeRuntimePostBuildStamp({ cwd });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
     runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
-    // Refresh the build stamp after the gateway build finishes so run-node
-    // does not spuriously rebuild inside the bounded watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    // Refresh both stamps after the gateway build finishes so run-node does not
+    // leave stale local artifact metadata after the bounded watch window.
+    writeBuildAndRuntimePostBuildStamps();
   } else {
     // Restored CI artifacts can be older than the fresh checkout mtimes.
-    // Refresh only the stamp so run-node trusts the already-built dist.
-    writeBuildStamp({ cwd: process.cwd() });
+    // Refresh the local artifact stamps so run-node trusts the already-built dist.
+    writeBuildAndRuntimePostBuildStamps();
   }
 
   let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
@@ -632,9 +656,9 @@ async function main() {
     })
   ) {
     // CI's skip-build path restores a built dist artifact after checkout.
-    // Refresh the stamp so checkout mtimes for package/config files do not
+    // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    writeBuildAndRuntimePostBuildStamps();
     preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
   }
   if (
@@ -670,10 +694,9 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeAddedPathSummary = summarizeDistRuntimeAddedPaths(diff.added);
-  const distRuntimeAddedPaths = distRuntimeAddedPathSummary.topologyAddedPaths.length;
-  const distRuntimeIgnoredDependencyAddedPaths =
-    distRuntimeAddedPathSummary.ignoredDependencyAddedPaths.length;
+  const distRuntimeAddedPaths = diff.added.filter((entry) =>
+    entry.startsWith("dist-runtime/"),
+  ).length;
   const distRuntimeFileGrowth = distRuntimeAddedPaths;
   const distRuntimeByteGrowth =
     distRuntimeAddedPaths === 0
@@ -707,7 +730,6 @@ async function main() {
     distRuntimeByteGrowth,
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
-    distRuntimeIgnoredDependencyAddedPaths,
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,

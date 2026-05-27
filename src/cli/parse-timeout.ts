@@ -12,9 +12,19 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
     if (!trimmed) {
       return undefined;
     }
-    value = Number.parseInt(trimmed, 10);
+    if (!/^\d+$/u.test(trimmed)) {
+      return undefined;
+    }
+    value = Number(trimmed);
   }
-  return Number.isFinite(value) ? value : undefined;
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+function invalidTimeout(value?: string): Error {
+  const suffix = value ? ` Received: "${value}".` : "";
+  return new Error(
+    `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000.${suffix}`,
+  );
 }
 
 export function parseTimeoutMsWithFallback(
@@ -37,7 +47,7 @@ export function parseTimeoutMsWithFallback(
 
   if (value === null) {
     if (options.invalidType === "error") {
-      throw new Error("invalid --timeout");
+      throw invalidTimeout();
     }
     return fallbackMs;
   }
@@ -46,9 +56,12 @@ export function parseTimeoutMsWithFallback(
     return fallbackMs;
   }
 
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
+  if (!/^\d+$/u.test(value)) {
+    throw invalidTimeout(value);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw invalidTimeout(value);
   }
   return parsed;
 }

@@ -1,6 +1,7 @@
 import { createServer } from "node:net";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 
@@ -28,7 +29,7 @@ export async function fetchHealthUrl(url: string): Promise<{ ok: boolean }> {
   }
 }
 
-export function describeError(error: unknown) {
+function describeError(error: unknown) {
   if (error instanceof Error) {
     return error.message;
   }
@@ -186,11 +187,9 @@ function parseDockerComposePsRows(stdout: string) {
     }
     return [parsed];
   } catch {
-    return trimmed
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { Health?: string; State?: string });
+    return normalizeStringEntries(trimmed.split("\n")).map(
+      (line) => JSON.parse(line) as { Health?: string; State?: string },
+    );
   }
 }
 
@@ -273,8 +272,3 @@ export async function resolveComposeServiceUrl(
   }
   return (await isHealthy(`${baseUrl}healthz`, fetchImpl)) ? baseUrl : null;
 }
-
-export const __testing = {
-  fetchHealthUrl,
-  normalizeDockerServiceStatus,
-};

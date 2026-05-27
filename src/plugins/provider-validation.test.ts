@@ -50,13 +50,13 @@ function normalizeProviderFixture(provider: ProviderPlugin) {
 
 function expectNormalizedProviderFixture(params: {
   provider: ProviderPlugin;
-  expectedProvider?: Record<string, unknown>;
+  expectedProvider?: unknown;
   expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
   expectedDiagnosticText?: readonly string[];
 }) {
   const result = normalizeProviderFixture(params.provider);
   if (params.expectedProvider) {
-    expect(result.provider).toMatchObject(params.expectedProvider);
+    expect(result.provider).toEqual(params.expectedProvider);
   }
   if (params.expectedDiagnostics) {
     expectDiagnosticMessages(result.diagnostics, params.expectedDiagnostics);
@@ -69,19 +69,22 @@ function expectNormalizedProviderFixture(params: {
 
 function expectProviderNormalizationResult(params: {
   provider: ProviderPlugin;
-  expectedProvider?: Record<string, unknown>;
+  expectedProvider?: unknown;
   expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
   expectedDiagnosticText?: readonly string[];
   assert?: (
     provider: ReturnType<typeof normalizeRegisteredProvider>,
     diagnostics: PluginDiagnostic[],
+    inputProvider: ProviderPlugin,
   ) => void;
 }) {
   const { diagnostics, provider } = expectNormalizedProviderFixture(params);
-  params.assert?.(provider, diagnostics);
+  params.assert?.(provider, diagnostics, params.provider);
 }
 
 describe("normalizeRegisteredProvider", () => {
+  const primaryAuthRun = async () => ({ profiles: [] });
+
   it.each([
     {
       name: "drops invalid and duplicate auth methods, and clears bad wizard method bindings",
@@ -98,13 +101,15 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: " demo-primary ",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
+                loadCatalog: true,
                 message: " Demo models ",
               },
             },
-            run: async () => ({ profiles: [] }),
+            run: primaryAuthRun,
           },
           {
             id: "primary",
@@ -117,6 +122,7 @@ describe("normalizeRegisteredProvider", () => {
         wizard: {
           setup: {
             choiceId: " demo-choice ",
+            onboardingFeatured: true,
             methodId: " missing ",
           },
           modelPicker: {
@@ -125,7 +131,7 @@ describe("normalizeRegisteredProvider", () => {
           },
         },
       }),
-      expectedProvider: {
+      expectedProvider: makeProvider({
         id: "demo",
         label: "Demo Provider",
         aliases: ["alias-one"],
@@ -135,25 +141,30 @@ describe("normalizeRegisteredProvider", () => {
           {
             id: "primary",
             label: "Primary",
+            kind: "custom",
             wizard: {
               choiceId: "demo-primary",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
+                loadCatalog: true,
                 message: "Demo models",
               },
             },
+            run: primaryAuthRun,
           },
         ],
         wizard: {
           setup: {
             choiceId: "demo-choice",
+            onboardingFeatured: true,
           },
           modelPicker: {
             label: "Demo models",
           },
         },
-      },
+      }),
       expectedDiagnostics: [
         {
           level: "error",
@@ -216,9 +227,52 @@ describe("normalizeRegisteredProvider", () => {
       expectedDiagnosticText: [
         'provider "demo" registered both catalog and discovery; using catalog',
       ],
-      assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
-        expect(provider?.catalog).toBeDefined();
-        expect(provider?.discovery).toBeUndefined();
+      assert: (
+        provider: ReturnType<typeof normalizeRegisteredProvider>,
+        _diagnostics: PluginDiagnostic[],
+        inputProvider: ProviderPlugin,
+      ) => {
+        if (!provider) {
+          throw new Error("expected provider");
+        }
+        expect(provider).toEqual({
+          id: "demo",
+          label: "Demo",
+          auth: [],
+          catalog: inputProvider.catalog,
+        });
+      },
+    },
+    {
+      name: "warns for legacy discovery-only providers",
+      provider: makeProvider({
+        id: "legacy-discovery-only",
+        discovery: {
+          run: async () => ({
+            provider: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          }),
+        },
+      }),
+      expectedDiagnosticText: [
+        'provider "legacy-discovery-only" uses deprecated discovery; use catalog',
+      ],
+      assert: (
+        provider: ReturnType<typeof normalizeRegisteredProvider>,
+        _diagnostics: PluginDiagnostic[],
+        inputProvider: ProviderPlugin,
+      ) => {
+        if (!provider) {
+          throw new Error("expected provider");
+        }
+        expect(provider).toEqual({
+          id: "legacy-discovery-only",
+          label: "Demo",
+          auth: [],
+          discovery: inputProvider.discovery,
+        });
       },
     },
   ] as const)(

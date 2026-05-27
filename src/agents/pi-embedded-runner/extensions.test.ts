@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
@@ -16,7 +16,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig) {
+function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",
@@ -26,6 +26,7 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
   const factories = buildEmbeddedExtensionFactories({
     cfg,
     sessionManager,
+    workspaceDir,
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
     model,
@@ -41,7 +42,10 @@ function expectSafeguardRuntime(
   const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
   expect(factories).toContain(compactionSafeguardExtension);
-  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
+  const runtime = getCompactionSafeguardRuntime(sessionManager);
+  expect(runtime?.contextWindowTokens).toBe(200_000);
+  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
+  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
@@ -96,6 +100,25 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("wires the run workspace into safeguard runtime", () => {
+    const { sessionManager } = buildSafeguardFactories(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "/tmp/openclaw-workspace",
+    );
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
+      "/tmp/openclaw-workspace",
+    );
   });
 
   it("enables cache-ttl pruning for custom anthropic-messages providers", () => {

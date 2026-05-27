@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const { tokenjuiceFactory, createTokenjuiceOpenClawEmbeddedExtension } = vi.hoisted(() => {
   const tokenjuiceFactory = vi.fn();
@@ -48,8 +48,8 @@ describe("tokenjuice bundled plugin", () => {
 
     expect(createTokenjuiceOpenClawEmbeddedExtension).toHaveBeenCalledTimes(1);
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
-    expect(registerAgentToolResultMiddleware).toHaveBeenCalledWith(expect.any(Function), {
-      runtimes: ["pi", "codex"],
-    });
+    const registration = registerAgentToolResultMiddleware.mock.calls[0];
+    expect(typeof registration?.[0]).toBe("function");
+    expect(registration?.[1]).toEqual({ runtimes: ["pi", "codex"] });
   });
 });

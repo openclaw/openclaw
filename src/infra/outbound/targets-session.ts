@@ -1,10 +1,12 @@
-import {
-  comparableChannelTargetsShareRoute,
-  parseExplicitTargetForLoadedChannel,
-  resolveComparableTargetForLoadedChannel,
-} from "../../channels/plugins/target-parsing-loaded.js";
+import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
@@ -14,14 +16,13 @@ import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
 } from "../../utils/message-channel-normalize.js";
+import { resolveTargetPrefixedChannel } from "./channel-target-prefix.js";
 
 export type SessionDeliveryTarget = {
   channel?: DeliverableMessageChannel;
   to?: string;
   accountId?: string;
   threadId?: string | number;
-  /** Whether threadId came from an explicit source (config/param/:topic: parsing) vs session history. */
-  threadIdExplicit?: boolean;
   mode: ChannelOutboundTargetMode;
   lastChannel?: DeliverableMessageChannel;
   lastTo?: string;
@@ -29,20 +30,29 @@ export type SessionDeliveryTarget = {
   lastThreadId?: string | number;
 };
 
-function parseExplicitTargetWithPlugin(params: {
-  channel?: DeliverableMessageChannel;
-  fallbackChannel?: DeliverableMessageChannel;
-  raw?: string;
+function resolveParsedRouteTarget(params: {
+  channel: string;
+  rawTarget?: string | null;
+  fallbackThreadId?: string | number | null;
 }) {
-  const raw = params.raw?.trim();
-  if (!raw) {
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
+  const rawTo = normalizeOptionalString(params.rawTarget);
+  if (!channel || !rawTo) {
     return null;
   }
-  const provider = params.channel ?? params.fallbackChannel;
-  if (!provider) {
-    return null;
-  }
-  return parseExplicitTargetForLoadedChannel(provider, raw);
+  const parsed = resolveExplicitDeliveryTargetCompat({
+    channel,
+    rawTarget: rawTo,
+    fallbackThreadId: params.fallbackThreadId,
+  });
+  const threadId = normalizeOptionalThreadValue(parsed?.threadId ?? params.fallbackThreadId);
+  return {
+    channel,
+    rawTo,
+    to: parsed?.to ?? rawTo,
+    ...(threadId != null ? { threadId } : {}),
+    chatType: parsed?.chatType,
+  };
 }
 
 export function resolveSessionDeliveryTarget(params: {
@@ -68,7 +78,7 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
-    ? resolveComparableTargetForLoadedChannel({
+    ? resolveParsedRouteTarget({
         channel: sessionLastChannel,
         rawTarget: context?.to,
         fallbackThreadId: context?.threadId,
@@ -78,7 +88,7 @@ export function resolveSessionDeliveryTarget(params: {
   const hasTurnSourceChannel = params.turnSourceChannel != null;
   const parsedTurnSourceTarget =
     hasTurnSourceChannel && params.turnSourceChannel
-      ? resolveComparableTargetForLoadedChannel({
+      ? resolveParsedRouteTarget({
           channel: params.turnSourceChannel,
           rawTarget: params.turnSourceTo,
           fallbackThreadId: params.turnSourceThreadId,
@@ -86,13 +96,15 @@ export function resolveSessionDeliveryTarget(params: {
       : null;
   const hasTurnSourceThreadId = parsedTurnSourceTarget?.threadId != null;
   const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
-  const lastTo = hasTurnSourceChannel ? params.turnSourceTo : context?.to;
+  const lastTo = hasTurnSourceChannel
+    ? (parsedTurnSourceTarget?.to ?? params.turnSourceTo)
+    : (parsedSessionTarget?.to ?? context?.to);
   const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
   const turnToMatchesSession =
     !params.turnSourceTo ||
     !context?.to ||
     (params.turnSourceChannel === sessionLastChannel &&
-      comparableChannelTargetsShareRoute({
+      channelRouteTargetsShareConversation({
         left: parsedTurnSourceTarget,
         right: parsedSessionTarget,
       }));
@@ -117,24 +129,30 @@ export function resolveSessionDeliveryTarget(params: {
       ? params.explicitTo.trim()
       : undefined;
 
-  let channel = requestedChannel === "last" ? lastChannel : requestedChannel;
+  const explicitPrefixedChannel =
+    requestedChannel === "last" ? resolveTargetPrefixedChannel(rawExplicitTo) : undefined;
+  let channel =
+    explicitPrefixedChannel && isDeliverableMessageChannel(explicitPrefixedChannel)
+      ? explicitPrefixedChannel
+      : requestedChannel === "last"
+        ? lastChannel
+        : requestedChannel;
   if (!channel && params.fallbackChannel && isDeliverableMessageChannel(params.fallbackChannel)) {
     channel = params.fallbackChannel;
   }
 
-  let explicitTo = rawExplicitTo;
-  const parsedExplicitTarget = parseExplicitTargetWithPlugin({
-    channel,
-    fallbackChannel: !channel ? lastChannel : undefined,
-    raw: rawExplicitTo,
-  });
-  if (parsedExplicitTarget?.to) {
-    explicitTo = parsedExplicitTarget.to;
-  }
-  const explicitThreadId =
-    params.explicitThreadId != null && params.explicitThreadId !== ""
-      ? params.explicitThreadId
-      : parsedExplicitTarget?.threadId;
+  const parsedExplicitTarget =
+    channel && rawExplicitTo
+      ? resolveExplicitDeliveryTargetCompat({
+          channel,
+          rawTarget: rawExplicitTo,
+          fallbackThreadId: params.explicitThreadId,
+        })
+      : null;
+  const explicitTo = parsedExplicitTarget?.to ?? rawExplicitTo;
+  const explicitThreadId = normalizeOptionalThreadValue(
+    parsedExplicitTarget?.threadId ?? params.explicitThreadId,
+  );
 
   let to = explicitTo;
   if (!to && lastTo) {
@@ -162,7 +180,6 @@ export function resolveSessionDeliveryTarget(params: {
     to,
     accountId,
     threadId: resolvedThreadId,
-    threadIdExplicit: resolvedThreadId != null && explicitThreadId != null,
     mode,
     lastChannel,
     lastTo,

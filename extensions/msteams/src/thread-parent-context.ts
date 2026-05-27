@@ -37,7 +37,7 @@ const parentCache = new Map<string, ParentCacheEntry>();
 const INJECTED_MAX = 200;
 const injectedParents = new Map<string, string>();
 
-export type ThreadParentContextFetcher = (
+type ThreadParentContextFetcher = (
   token: string,
   groupId: string,
   channelId: string,
@@ -88,7 +88,7 @@ export async function fetchParentMessageCached(
   return message;
 }
 
-export type ParentContextSummary = {
+type ParentContextSummary = {
   /** Display name of the parent message author, or "unknown". */
   sender: string;
   /** Stripped, single-line parent body text (or empty if unresolved). */
@@ -153,7 +153,7 @@ export function markParentContextInjected(sessionKey: string, parentId: string):
 }
 
 // Exported for test isolation.
-export function _resetThreadParentContextCachesForTest(): void {
+export function resetThreadParentContextCachesForTest(): void {
   parentCache.clear();
   injectedParents.clear();
 }
