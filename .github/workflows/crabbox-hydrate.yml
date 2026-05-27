@@ -41,7 +41,7 @@ env:
 jobs:
   hydrate:
     name: hydrate
-    if: ${{ inputs.crabbox_job == 'hydrate' }}
+    if: ${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:

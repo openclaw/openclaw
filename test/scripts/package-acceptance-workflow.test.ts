@@ -127,7 +127,9 @@ describe("package acceptance workflow", () => {
     const hydrateGithub = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-github");
 
     expect(crabboxConfig.actions?.job).toBe("hydrate");
-    expect(hydrate.if).toBe("${{ inputs.crabbox_job == 'hydrate' }}");
+    expect(hydrate.if).toBe(
+      "${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}",
+    );
     expect(workflowStep(hydrate, "Setup Node.js").uses).toBe("actions/setup-node@v6");
     expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
