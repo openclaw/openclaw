@@ -52,6 +52,18 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     promptBuildResult,
     legacyResult,
   });
+  const wrappedPrependSystemContext = wrapHookSystemContext(
+    joinPresentTextSegments([
+      promptBuildResult?.prependSystemContext,
+      legacyResult?.prependSystemContext,
+    ]),
+  );
+  const wrappedAppendSystemContext = wrapHookSystemContext(
+    joinPresentTextSegments([
+      promptBuildResult?.appendSystemContext,
+      legacyResult?.appendSystemContext,
+    ]),
+  );
   return {
     prompt:
       joinPresentTextSegments([
@@ -61,13 +73,19 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ]) ?? params.prompt,
     developerInstructions:
       joinPresentTextSegments([
-        promptBuildResult?.prependSystemContext,
-        legacyResult?.prependSystemContext,
+        wrappedPrependSystemContext,
         systemPrompt,
-        promptBuildResult?.appendSystemContext,
-        legacyResult?.appendSystemContext,
+        wrappedAppendSystemContext,
       ]) ?? systemPrompt,
   };
+}
+
+export function wrapHookSystemContext(segment: string | undefined): string | undefined {
+  if (!segment) {
+    return undefined;
+  }
+  const marker = "---";
+  return `${marker}\n${segment}\n${marker}`;
 }
 
 function resolvePromptBuildSystemPrompt(params: {
