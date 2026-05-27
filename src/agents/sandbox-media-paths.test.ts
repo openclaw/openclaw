@@ -42,4 +42,32 @@ describe("createSandboxBridgeReadFile", () => {
     expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
     expect(stat).not.toHaveBeenCalled();
   });
+
+  it("rewrites inbound media URIs before direct sandbox resolution", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      hostPath: `/tmp/sandbox-root/${filePath}`,
+      relativePath: filePath,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/tmp/sandbox-root",
+        bridge: {
+          resolvePath,
+        } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/photo.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolvePath).toHaveBeenCalledWith({
+      filePath: "media/inbound/photo.png",
+      cwd: "/tmp/sandbox-root",
+    });
+    expect(resolved).toEqual({
+      resolved: "/tmp/sandbox-root/media/inbound/photo.png",
+      rewrittenFrom: "media://inbound/photo.png",
+    });
+  });
 });
