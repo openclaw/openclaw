@@ -21,6 +21,22 @@ import { resolveReplyToMode } from "./reply-threading.js";
 export { handleContextCommand } from "./commands-context-command.js";
 export { handleWhoamiCommand } from "./commands-whoami.js";
 
+async function resolveSkillCommands(params: HandleCommandsParams) {
+  if (params.skillCommands !== undefined) {
+    return params.skillCommands;
+  }
+  if (params.loadSkillCommands) {
+    return params.loadSkillCommands();
+  }
+  const agentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
+  return listSkillCommandsForAgents({
+    cfg: params.cfg,
+    agentIds: agentId ? [agentId] : undefined,
+  });
+}
+
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -56,12 +72,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   const agentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
     : params.agentId;
-  const skillCommands =
-    params.skillCommands ??
-    listSkillCommandsForAgents({
-      cfg: params.cfg,
-      agentIds: agentId ? [agentId] : undefined,
-    });
+  const skillCommands = await resolveSkillCommands(params);
   const surface = params.ctx.Surface;
   const commandPlugin = surface ? getChannelPlugin(surface) : null;
   const paginated = buildCommandsMessagePaginated(params.cfg, skillCommands, {
@@ -123,15 +134,7 @@ export const handleSkillCommandUsage: CommandHandler = async (params, allowTextC
   }
 
   const [, rawName] = normalized.match(/^\/skill(?:\s+([^\s]+))?/u) ?? [];
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : params.agentId;
-  const skillCommands =
-    params.skillCommands ??
-    listSkillCommandsForAgents({
-      cfg: params.cfg,
-      agentIds: agentId ? [agentId] : undefined,
-    });
+  const skillCommands = await resolveSkillCommands(params);
   if (
     rawName &&
     resolveSkillCommandInvocation({ commandBodyNormalized: normalized, skillCommands })

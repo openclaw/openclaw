@@ -394,6 +394,8 @@ async function requestPluginToolApproval(params: {
         description: approval.description,
         severity: approval.severity,
         allowedDecisions: approval.allowedDecisions,
+        actions: approval.actions,
+        keepPendingWithoutRoute: approval.keepPendingWithoutRoute,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { telegramBotApi } from "./telegram-bot-api.ts";
 
 type CommandResult = {
   stderr: string;
@@ -418,11 +419,6 @@ function requireString(source: JsonObject, key: string) {
   throw new Error(`Missing ${key}.`);
 }
 
-function optionalString(source: JsonObject, key: string) {
-  const value = source[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function childProcessBaseEnv() {
   const keys = [
     "CI",
@@ -652,18 +648,7 @@ async function waitForLog(logPath: string, pattern: RegExp, label: string, timeo
 }
 
 async function telegram(token: string, method: string, body: JsonObject = {}) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json()) as JsonObject;
-  if (!response.ok || payload.ok !== true) {
-    throw new Error(
-      optionalString(payload, "description") ?? `${method} failed with HTTP ${response.status}`,
-    );
-  }
-  return payload.result;
+  return await telegramBotApi(token, method, body);
 }
 
 async function drainSutUpdates(sutToken: string) {

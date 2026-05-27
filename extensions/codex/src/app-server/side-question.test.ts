@@ -1178,6 +1178,21 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(120_000);
   });
 
+  it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "session_status",
+        arguments: { sessionKey: "current" },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(90_000);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {

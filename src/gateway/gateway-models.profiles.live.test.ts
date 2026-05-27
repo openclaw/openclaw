@@ -27,6 +27,7 @@ import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
+  getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
@@ -169,7 +170,9 @@ function providerScopedModelRegistryProviders(params: {
     return params.providerList;
   }
   if (!params.useExplicit) {
-    return undefined;
+    return getHighSignalLiveModelProviders().filter((provider) =>
+      params.providerFilter ? params.providerFilter.has(provider) : true,
+    );
   }
   return providerListFromExplicitModelFilter({
     modelFilter: params.modelFilter,
@@ -402,8 +405,10 @@ function enterProductionEnvForLiveRun() {
   const previous = {
     vitest: process.env.VITEST,
     nodeEnv: process.env.NODE_ENV,
+    testFast: process.env.OPENCLAW_TEST_FAST,
   };
   delete process.env.VITEST;
+  delete process.env.OPENCLAW_TEST_FAST;
   process.env.NODE_ENV = "production";
   return previous;
 }
@@ -411,16 +416,30 @@ function enterProductionEnvForLiveRun() {
 function restoreProductionEnvForLiveRun(previous: {
   vitest: string | undefined;
   nodeEnv: string | undefined;
+  testFast: string | undefined;
 }) {
   if (previous.vitest === undefined) {
     delete process.env.VITEST;
   } else {
     process.env.VITEST = previous.vitest;
   }
+  if (previous.testFast === undefined) {
+    delete process.env.OPENCLAW_TEST_FAST;
+  } else {
+    process.env.OPENCLAW_TEST_FAST = previous.testFast;
+  }
   if (previous.nodeEnv === undefined) {
     delete process.env.NODE_ENV;
   } else {
     process.env.NODE_ENV = previous.nodeEnv;
+  }
+}
+
+function restoreOptionalEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
   }
 }
 
@@ -932,6 +951,28 @@ describe("resolveExplicitLiveModelCandidates", () => {
 });
 
 describe("providerScopedModelRegistryProviders", () => {
+  it("uses curated high-signal providers for default modern sweeps", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: null,
+      }),
+    ).toEqual(getHighSignalLiveModelProviders());
+  });
+
+  it("intersects default modern sweeps with provider filters", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: new Set(["openai", "not-high-signal"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
   it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
     expect(
       providerScopedModelRegistryProviders({
@@ -999,6 +1040,31 @@ describe("buildLiveGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "pi" },
     });
+  });
+});
+
+describe("enterProductionEnvForLiveRun", () => {
+  it("clears Vitest fast-reply flags while preserving caller state", () => {
+    const previous = {
+      vitest: process.env.VITEST,
+      nodeEnv: process.env.NODE_ENV,
+      testFast: process.env.OPENCLAW_TEST_FAST,
+    };
+    process.env.VITEST = "1";
+    process.env.NODE_ENV = "test";
+    process.env.OPENCLAW_TEST_FAST = "1";
+
+    const runtimeEnv = enterProductionEnvForLiveRun();
+    try {
+      expect(process.env.VITEST).toBeUndefined();
+      expect(process.env.NODE_ENV).toBe("production");
+      expect(process.env.OPENCLAW_TEST_FAST).toBeUndefined();
+    } finally {
+      restoreProductionEnvForLiveRun(runtimeEnv);
+      restoreOptionalEnv("VITEST", previous.vitest);
+      restoreOptionalEnv("NODE_ENV", previous.nodeEnv);
+      restoreOptionalEnv("OPENCLAW_TEST_FAST", previous.testFast);
+    }
   });
 });
 

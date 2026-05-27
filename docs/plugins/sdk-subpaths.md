@@ -33,14 +33,17 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ### Deprecated compatibility and test helpers
 
-These subpaths remain package exports for older plugins and OpenClaw test suites,
-but new code should not add imports from them: `agent-runtime-test-contracts`,
+These subpaths remain package exports for older plugins, but new code should not
+add imports from them: `channel-runtime`, `compat`, `config-types`,
+`infra-runtime`, `text-runtime`, and `zod`. Import `zod` directly from `zod` in
+new plugin code.
+
+OpenClaw's Vitest-backed test-helper subpaths are repo-local only and are no
+longer package exports: `agent-runtime-test-contracts`,
 `channel-contract-testing`, `channel-target-testing`, `channel-test-helpers`,
-`plugin-test-api`, `plugin-test-contracts`, `provider-http-test-mocks`,
-`provider-test-contracts`, `test-env`, `test-fixtures`, `test-node-mocks`,
-`testing`, `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
-`text-runtime`, and `zod`. Import `zod` directly from `zod` in new plugin code.
-`plugin-test-runtime` is still an active focused test helper subpath.
+`plugin-test-api`, `plugin-test-contracts`, `plugin-test-runtime`,
+`provider-http-test-mocks`, `provider-test-contracts`, `test-env`,
+`test-fixtures`, `test-node-mocks`, and `testing`.
 
 ### Reserved bundled plugin helper subpaths
 

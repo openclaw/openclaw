@@ -377,7 +377,7 @@ export async function handleIrcInbound(params: {
     RawBody: rawBody,
     CommandBody: rawBody,
     From: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
-    To: `irc:${peerId}`,
+    To: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: message.isGroup ? "group" : "direct",

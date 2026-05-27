@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 export {
   doctorHealthConversionRules,
@@ -509,7 +510,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadModelCatalog({ config: ctx.cfg });
+  const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
@@ -816,6 +817,50 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   }
 }
 
+function formatRuntimeToolSchemaFindings(findings: readonly HealthFinding[]): string {
+  return findings
+    .map((finding) => {
+      const lines = [`- ${finding.message}`];
+      if (finding.path) {
+        lines.push(`  path: ${finding.path}`);
+      }
+      if (finding.requirement) {
+        lines.push(`  issue: ${finding.requirement}`);
+      }
+      if (finding.fixHint) {
+        lines.push(`  fix: ${finding.fixHint}`);
+      }
+      return lines.join("\n");
+    })
+    .join("\n");
+}
+
+async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const { getHealthCheck } = await import("./health-check-registry.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../terminal/note.js");
+
+  registerCoreHealthChecks();
+  const check = getHealthCheck("core/doctor/runtime-tool-schemas");
+  if (!check) {
+    return;
+  }
+  const findings = await check.detect({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+    configPath: ctx.configPath,
+  });
+  if (findings.length === 0) {
+    return;
+  }
+  ctx.healthOk = false;
+  note(formatRuntimeToolSchemaFindings(findings), "Doctor warnings");
+}
+
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
@@ -953,6 +998,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:tool-result-cap",
       label: "Tool result cap",
       run: runToolResultCapHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:runtime-tool-schemas",
+      label: "Runtime tool schemas",
+      healthCheckIds: ["core/doctor/runtime-tool-schemas"],
+      run: runRuntimeToolSchemasHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",

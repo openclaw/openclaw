@@ -431,6 +431,7 @@ export async function compactEmbeddedPiSessionDirect(
   });
   const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
   const fallbacksOverride = resolveCompactionFallbacksOverride(params);
   const fallbackAgentId = resolveSessionAgentIds({
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
@@ -461,7 +462,9 @@ export async function compactEmbeddedPiSessionDirect(
       classifyResult: ({ result, provider, model }) =>
         classifyCompactionFallbackResult(result, provider, model),
       run: async (provider, model) => {
-        const authProfileId = provider === primaryProvider ? params.authProfileId : undefined;
+        const preservesPrimaryAuth =
+          provider === primaryProvider || provider === requestedPrimaryProvider;
+        const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
         return await compactEmbeddedPiSessionDirectOnce({
           ...params,
           provider,
@@ -499,7 +502,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  // Keep the configured provider for context-window policy, while auth/model loading below can
+  // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   const modelConfigProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;

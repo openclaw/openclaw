@@ -264,18 +264,30 @@ install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TEL
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 
 npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
-if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
-  npm install -g "$install_source" --no-fund --no-audit
-elif command -v timeout >/dev/null 2>&1; then
-  if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-    timeout --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
-  else
-    timeout "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+run_npm_install() {
+  if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
+    npm install -g "$install_source" --no-fund --no-audit
+    return
   fi
-else
-  echo "timeout command not found; running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT" >&2
-  npm install -g "$install_source" --no-fund --no-audit
-fi
+
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2
+    return 127
+  fi
+
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  else
+    "$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  fi
+}
+run_npm_install
 command -v openclaw
 openclaw --version
 node -p "require('/npm-global/lib/node_modules/openclaw/package.json').version"

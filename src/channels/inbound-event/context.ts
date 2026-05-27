@@ -4,6 +4,10 @@ import {
   type CommandTurnContext,
 } from "../../auto-reply/command-turn-context.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import {
+  normalizeInboundTextNewlines,
+  sanitizeInboundSystemTags,
+} from "../../auto-reply/reply/inbound-text.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
@@ -43,6 +47,10 @@ export type BuildChannelInboundEventContextParams = {
   contextVisibility?: ContextVisibilityMode;
   extra?: Record<string, unknown>;
 };
+
+type UntrustedStructuredContextEntries = NonNullable<
+  FinalizedMsgContext["UntrustedStructuredContext"]
+>;
 
 export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
@@ -121,6 +129,41 @@ function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): b
     : commands?.authorizers?.some((entry) => entry.allowed);
 }
 
+function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  return normalized.trim().length > 0 ? normalized : undefined;
+}
+
+function resolveUntrustedStructuredContext(params: {
+  supplemental?: SupplementalContextFacts;
+  extra?: Record<string, unknown>;
+}): UntrustedStructuredContextEntries | undefined {
+  const entries: UntrustedStructuredContextEntries = [];
+  const extraEntries = params.extra?.UntrustedStructuredContext;
+  if (Array.isArray(extraEntries)) {
+    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+  }
+  entries.push(...(params.supplemental?.untrustedContext ?? []));
+
+  // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
+  // Keeping it with untrusted context prevents spoofed system markers from gaining prompt authority.
+  const groupPrompt = normalizeUntrustedGroupPrompt(
+    params.supplemental?.untrustedGroupSystemPrompt,
+  );
+  if (groupPrompt) {
+    entries.push({
+      label: "Group prompt context",
+      type: "group_prompt_context",
+      payload: { text: groupPrompt },
+    });
+  }
+
+  return entries.length > 0 ? entries : undefined;
+}
+
 function resolveChannelCommandContext(params: {
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
@@ -153,6 +196,10 @@ export function buildChannelInboundEventContext(
   const supplemental = filterChannelInboundSupplementalContext({
     supplemental: params.supplemental,
     contextVisibility: params.contextVisibility,
+  });
+  const untrustedStructuredContext = resolveUntrustedStructuredContext({
+    supplemental,
+    extra: params.extra,
   });
   const body = params.message.body ?? params.message.rawBody;
   const commandTurn = resolveChannelCommandContext({
@@ -196,7 +243,6 @@ export function buildChannelInboundEventContext(
     GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
     GroupSpace: params.conversation.spaceId,
     GroupSystemPrompt: supplemental?.groupSystemPrompt,
-    UntrustedStructuredContext: supplemental?.untrustedContext,
     SenderName: params.sender.name ?? params.sender.displayLabel,
     SenderId: params.sender.id,
     SenderUsername: params.sender.username,
@@ -214,5 +260,6 @@ export function buildChannelInboundEventContext(
     OriginatingTo: params.reply.originatingTo,
     ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,
     ...params.extra,
+    UntrustedStructuredContext: untrustedStructuredContext,
   });
 }

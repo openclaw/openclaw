@@ -20,6 +20,7 @@ import {
   resolvePluginLoaderTryNative,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
+  resolvePluginRuntimeModulePathWithDiagnostics,
   resolvePluginSdkAliasFile,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
@@ -1803,6 +1804,149 @@ export const syntheticRuntimeMarker = {
       env,
     });
     expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
+  });
+
+  it("falls back to ancestor runtime candidates when package-root markers are unavailable", () => {
+    const root = makeTempDir();
+    const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const loaderCachePath = path.join(root, ".cache", "tsx", "openclaw-loader.js");
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    fs.writeFileSync(distFile, "export const createPluginRuntime = () => ({});\n", "utf-8");
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    expect(
+      resolvePluginRuntimeModulePath({
+        modulePath: loaderCachePath,
+        argv1: path.join(root, "bin", "openclaw"),
+        pluginSdkResolution: "dist",
+      }),
+    ).toBe(distFile);
+  });
+
+  it("uses the default startup argv hint for runtime fallback when argv1 is omitted", () => {
+    const root = makeTempDir();
+    const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const loaderCacheRoot = makeTempDir();
+    const loaderCachePath = path.join(loaderCacheRoot, "tsx", "openclaw-loader.js");
+    const originalArgv1 = process.argv[1];
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    mkdirSafeDir(path.join(root, "bin"));
+    fs.writeFileSync(distFile, "export const createPluginRuntime = () => ({});\n", "utf-8");
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    process.argv[1] = path.join(root, "bin", "openclaw");
+    try {
+      expect(
+        resolvePluginRuntimeModulePath({
+          modulePath: loaderCachePath,
+          pluginSdkResolution: "dist",
+        }),
+      ).toBe(distFile);
+    } finally {
+      process.argv[1] = originalArgv1;
+    }
+  });
+
+  it("prefers startup argv runtime candidates over cache ancestor fallbacks", () => {
+    const root = makeTempDir();
+    const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const loaderCacheRoot = makeTempDir();
+    const cacheDistFile = path.join(loaderCacheRoot, "dist", "plugins", "runtime", "index.js");
+    const loaderCachePath = path.join(loaderCacheRoot, "tsx", "openclaw-loader.js");
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(cacheDistFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    mkdirSafeDir(path.join(root, "bin"));
+    fs.writeFileSync(distFile, "export const runtime = 'startup';\n", "utf-8");
+    fs.writeFileSync(cacheDistFile, "export const runtime = 'cache';\n", "utf-8");
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    expect(
+      resolvePluginRuntimeModulePath({
+        modulePath: loaderCachePath,
+        argv1: path.join(root, "bin", "openclaw"),
+        pluginSdkResolution: "dist",
+      }),
+    ).toBe(distFile);
+  });
+
+  it("resolves runtime fallback through symlinked startup argv", () => {
+    const root = makeTempDir();
+    const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const binFile = path.join(root, "bin", "openclaw");
+    const shimRoot = makeTempDir();
+    const shimFile = path.join(shimRoot, "bin", "openclaw");
+    const loaderCachePath = path.join(makeTempDir(), "tsx", "openclaw-loader.js");
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(binFile));
+    mkdirSafeDir(path.dirname(shimFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    fs.writeFileSync(distFile, "export const runtime = 'startup';\n", "utf-8");
+    fs.writeFileSync(binFile, "#!/usr/bin/env node\n", "utf-8");
+    fs.symlinkSync(binFile, shimFile);
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    expect(
+      resolvePluginRuntimeModulePath({
+        modulePath: loaderCachePath,
+        argv1: shimFile,
+        pluginSdkResolution: "dist",
+      }),
+    ).toBe(fs.realpathSync(distFile));
+  });
+
+  it("resolves runtime fallback through npm .bin startup argv", () => {
+    const root = makeTempDir();
+    const packageRoot = path.join(root, "node_modules", "openclaw");
+    const distFile = path.join(packageRoot, "dist", "plugins", "runtime", "index.js");
+    const projectDistFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const binFile = path.join(root, "node_modules", ".bin", "openclaw");
+    const loaderCachePath = path.join(makeTempDir(), "tsx", "openclaw-loader.js");
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(projectDistFile));
+    mkdirSafeDir(path.dirname(binFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    fs.writeFileSync(distFile, "export const runtime = 'startup';\n", "utf-8");
+    fs.writeFileSync(projectDistFile, "export const runtime = 'project';\n", "utf-8");
+    fs.writeFileSync(binFile, "#!/usr/bin/env node\n", "utf-8");
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    expect(
+      resolvePluginRuntimeModulePath({
+        modulePath: loaderCachePath,
+        argv1: binFile,
+        pluginSdkResolution: "dist",
+      }),
+    ).toBe(distFile);
+  });
+
+  it("reports loader, package root, and candidate paths when runtime resolution fails", () => {
+    const root = makeTempDir();
+    const modulePath = path.join(root, "dist", "plugins", "loader.js");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf-8",
+    );
+    mkdirSafeDir(path.dirname(modulePath));
+    fs.writeFileSync(modulePath, "export {};\n", "utf-8");
+
+    const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
+      modulePath,
+      pluginSdkResolution: "dist",
+    });
+
+    expect(resolution.resolvedPath).toBeNull();
+    expect(resolution.modulePath).toBe(modulePath);
+    expect(resolution.packageRoot).toBe(root);
+    expect(resolution.candidates).toContain(
+      path.join(root, "dist", "plugins", "runtime", "index.js"),
+    );
+    expect(resolution.candidates).toContain(
+      path.join(root, "src", "plugins", "runtime", "index.ts"),
+    );
   });
 });
 

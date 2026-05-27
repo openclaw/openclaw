@@ -146,6 +146,7 @@ Skills own workflows; root owns hard policy and routing.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
+- Cross-function state: when valid combos matter, return a closed mode/result shape. Avoid parallel nullable fields or derived booleans that callers must keep in sync; make impossible states unrepresentable.
 - Formatter-friendly shape: when oxfmt explodes an expression vertically, extract named booleans, payloads, or small helpers. Do not change width or use format-ignore for local compactness.
 - Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
 - Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.

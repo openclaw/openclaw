@@ -180,6 +180,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect explicit live tool-result cap overrides that are stale or ineffective; preserve deep-mode effective cap output as finding metadata.",
   },
   {
+    contributionId: "doctor:runtime-tool-schemas",
+    conversion: "detect-only",
+    target: ["core/doctor/runtime-tool-schemas"],
+    rule: "Validate active agent tool schemas against the runtime tool projection path and report fatal schema blockers before a turn starts.",
+  },
+  {
     contributionId: "doctor:systemd-linger",
     conversion: "interactive-maintenance",
     target: ["core/doctor/systemd-linger"],

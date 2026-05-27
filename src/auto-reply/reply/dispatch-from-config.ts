@@ -628,18 +628,24 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   }
 };
 
-function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+function shouldBypassPluginOwnedBindingForCommand(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
-  if (!commandTurn.authorized) {
+  if (
+    (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
+    !commandTurn.authorized
+  ) {
     return false;
   }
-  if (isNativeCommandTurn(commandTurn)) {
+  if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (commandTurn.kind !== "text-slash") {
+  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
@@ -674,6 +680,8 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   await updateSessionStoreEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
+    skipMaintenance: true,
+    takeCacheOwnership: true,
     update: async (entry) => {
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
@@ -1348,6 +1356,9 @@ export async function dispatchReplyFromConfig(
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
+    if (suppressAutomaticSourceDelivery) {
+      return false;
+    }
     const result = await routeReplyToOriginating(payload);
     if (result) {
       if (!result.ok) {
@@ -1432,10 +1443,11 @@ export async function dispatchReplyFromConfig(
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
-    ctx.InboundEventKind === "room_event" ||
+    (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      !isExplicitSourceReplyCommand(ctx) &&
-      effectiveVisibleReplies === "message_tool");
+      !isExplicitSourceReplyCommand(ctx, cfg) &&
+      (configuredVisibleReplies === "message_tool" ||
+        (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
@@ -1493,7 +1505,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
-    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1565,14 +1577,16 @@ export async function dispatchReplyFromConfig(
       return finishReplyOperationAbortedDispatch();
     }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
-    } else if (suppressDelivery) {
+    } else if (sendPolicyDenied || (suppressDelivery && !suppressAutomaticSourceDelivery)) {
       // Plugin-bound inbound handlers typically emit outbound replies we
-      // cannot rewind. When automatic delivery is suppressed, skip the plugin
-      // claim and fall through to normal suppressed agent processing.
+      // cannot rewind. When automatic delivery is explicitly denied, skip the
+      // plugin claim and fall through to normal suppressed agent processing.
+      // message_tool_only is the normal visible-reply mode for group chats and
+      // must still let the bound plugin own the turn unless sendPolicy denied it.
       logVerbose(
         `plugin-bound inbound skipped under ${deliverySuppressionReason} (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
       );
@@ -1615,6 +1629,19 @@ export async function dispatchReplyFromConfig(
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
+          if (
+            (chatType === "group" || chatType === "channel") &&
+            ctx.WasMentioned === false &&
+            !isExplicitSourceReplyCommand(ctx, cfg)
+          ) {
+            markIdle("plugin_binding_fallback_unmentioned");
+            recordProcessed("completed", { reason: pluginFallbackReason });
+            commitInboundDedupeIfClaimed();
+            return attachSourceReplyDeliveryMode({
+              queuedFinal: false,
+              counts: dispatcher.getQueuedCounts(),
+            });
+          }
           if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
             const didSendNotice = await sendBindingNotice(
               { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
