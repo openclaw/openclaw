@@ -969,14 +969,14 @@ describe("amazon-bedrock provider plugin", () => {
       expect(messages[0].content).toHaveLength(2);
     });
 
-    it("does not inject cache points for regular Anthropic model IDs (pi-ai handles them)", async () => {
+    it("does not inject cache points for regular Anthropic model IDs handled by the shared runtime", async () => {
       const provider = await registerWithConfig(undefined);
       const payload: Record<string, unknown> = {
         system: [{ text: "You are helpful." }],
         messages: [{ role: "user", content: [{ text: "Hello" }] }],
       };
 
-      // Regular model IDs contain "claude" so pi-ai handles caching natively.
+      // Regular model IDs contain "claude" so the shared runtime handles caching natively.
       // wrapStreamFn should not install an onPayload hook for these.
       const wrapped = provider.wrapStreamFn?.({
         provider: "amazon-bedrock",
@@ -997,7 +997,7 @@ describe("amazon-bedrock provider plugin", () => {
       expect(system).toHaveLength(1);
     });
 
-    it("does not inject cache points for older Claude models not in pi-ai's cache list", async () => {
+    it("does not inject cache points for older Claude models not in the shared runtime cache list", async () => {
       const provider = await registerWithConfig(undefined);
       const oldClaudeModel = "anthropic.claude-3-opus-20240229-v1:0";
       const payload: Record<string, unknown> = {
@@ -1005,7 +1005,7 @@ describe("amazon-bedrock provider plugin", () => {
         messages: [{ role: "user", content: [{ text: "Hello" }] }],
       };
 
-      // Claude 3 Opus is not in pi-ai's supportsPromptCaching list, but it's
+      // Claude 3 Opus is not in the shared runtime supportsPromptCaching list, but it's
       // also not an application inference profile — we should not inject.
       const wrapped = provider.wrapStreamFn?.({
         provider: "amazon-bedrock",

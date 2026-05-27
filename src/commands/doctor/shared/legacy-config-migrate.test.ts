@@ -842,33 +842,6 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
-describe("legacy bundled provider discovery migrate", () => {
-  it("sets compat mode for existing restrictive plugin allowlists", () => {
-    const res = migrateLegacyConfigForTest({
-      plugins: {
-        allow: ["telegram"],
-      },
-    });
-
-    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
-    expect(res.changes).toStrictEqual([
-      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-    ]);
-  });
-
-  it("does not override explicit bundled discovery mode", () => {
-    const res = migrateLegacyConfigForTest({
-      plugins: {
-        allow: ["telegram"],
-        bundledDiscovery: "allowlist",
-      },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
-  });
-});
-
 describe("legacy migrate sandbox scope aliases", () => {
   it("removes legacy agents.defaults.llm timeout config", () => {
     const res = migrateLegacyConfigForTest({
@@ -902,7 +875,7 @@ describe("legacy migrate sandbox scope aliases", () => {
         list: [
           {
             id: "reviewer",
-            agentRuntime: { fallback: "pi" },
+            agentRuntime: { fallback: "openclaw" },
             embeddedHarness: {
               runtime: "codex",
               fallback: "none",
@@ -985,7 +958,7 @@ describe("legacy migrate sandbox scope aliases", () => {
           agentRuntime: { id: "claude-cli" },
           model: "anthropic/claude-opus-4-7",
           models: {
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -997,7 +970,71 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults).toEqual({
       model: "anthropic/claude-opus-4-7",
       models: {
-        "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+        "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+      },
+    });
+  });
+
+  it("moves legacy embeddedPi config into embeddedAgent", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedPi: {
+            projectSettingsPolicy: "sanitize",
+            executionContract: "strict-agentic",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            embeddedPi: {
+              executionContract: "strict-agentic",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved agents.defaults.embeddedPi → agents.defaults.embeddedAgent.",
+      "Moved agents.list.0.embeddedPi → agents.list.0.embeddedAgent.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      embeddedAgent: {
+        projectSettingsPolicy: "sanitize",
+        executionContract: "strict-agentic",
+      },
+    });
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "worker",
+      embeddedAgent: {
+        executionContract: "strict-agentic",
+      },
+    });
+  });
+
+  it("merges legacy embeddedPi config without overwriting embeddedAgent", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          embeddedAgent: {
+            executionContract: "default",
+          },
+          embeddedPi: {
+            projectSettingsPolicy: "sanitize",
+            executionContract: "strict-agentic",
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Merged agents.defaults.embeddedPi → agents.defaults.embeddedAgent (filled missing fields from legacy; kept explicit embeddedAgent values).",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      embeddedAgent: {
+        executionContract: "default",
+        projectSettingsPolicy: "sanitize",
       },
     });
   });
@@ -1026,7 +1063,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       agents: {
         list: [
           {
-            id: "pi",
+            id: "openclaw",
             sandbox: {
               perSession: false,
             },

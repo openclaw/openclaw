@@ -101,7 +101,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
   }
   return {
     ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
-    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "pi" } } : {}),
+    ...(providerMeta.extensionId === "openai" ? { agentRuntime: { id: "openclaw" } } : {}),
     models: [],
     ...(typeof providerMeta.timeoutSeconds === "number"
       ? { timeoutSeconds: providerMeta.timeoutSeconds }

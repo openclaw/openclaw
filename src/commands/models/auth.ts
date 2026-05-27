@@ -246,15 +246,18 @@ async function resolveModelsAuthContext(params?: {
   const agentDir = resolveAgentDir(config, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const requestedProvider = params?.requestedProvider?.trim();
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
-    ...(params?.requestedProvider?.trim()
-      ? { providerRefs: [params.requestedProvider], activate: true }
+    ...(requestedProvider
+      ? {
+          providerRefs: [requestedProvider],
+          activate: true,
+        }
       : {}),
   });
   const authProviders = preferSetupAuthProviders({

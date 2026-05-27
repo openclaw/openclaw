@@ -133,14 +133,15 @@ structured entries:
 ```ts
 agentPromptGuidance: [
   "Global command hint.",
-  { text: "Only show this in the main PI prompt.", surfaces: ["pi_main"] },
+  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
 ];
 ```
 
-Structured `surfaces` may include `pi_main`, `codex_app_server`, `cli_backend`,
-`acp_backend`, or `subagent`. Omit `surfaces` for intentional all-surface
-guidance. Do not pass an empty `surfaces` array; it is rejected so accidental
-scope loss does not become global prompt text.
+Structured `surfaces` may include `openclaw_main`, `codex_app_server`,
+`cli_backend`, `acp_backend`, or `subagent`. `pi_main` remains a deprecated alias
+for `openclaw_main`. Omit `surfaces` for intentional all-surface guidance. Do
+not pass an empty `surfaces` array; it is rejected so accidental scope loss does
+not become global prompt text.
 
 Native Codex app-server developer instructions are stricter than other prompt
 surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
@@ -254,9 +255,9 @@ Examples of non-Plan consumers:
   seam for async output reducers such as tokenjuice.
 
 Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted runtime, for example `["pi", "codex"]`. External plugins
+targeted runtime, for example `["openclaw", "codex"]`. External plugins
 cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing. The old Pi-only embedded
+that does not need pre-model tool-result timing. The old embedded-runner-only
 extension factory registration path has been removed.
 </Accordion>
 

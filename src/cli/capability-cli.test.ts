@@ -655,7 +655,7 @@ describe("capability cli", () => {
     const preparedParams = firstPreparedModelParams();
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
-    expect(preparedParams?.skipPiDiscovery).toBe(true);
+    expect(preparedParams?.skipAgentDiscovery).toBe(true);
     const call = firstCompletionCall();
     expect(call?.context?.messages?.[0]?.role).toBe("user");
     expect(call?.context?.messages?.[0]?.content).toBe("hello");
@@ -668,7 +668,7 @@ describe("capability cli", () => {
     const params = firstPreparedModelParams();
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
-    expect(params?.skipPiDiscovery).toBe(true);
+    expect(params?.skipAgentDiscovery).toBe(true);
   });
 
   it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {

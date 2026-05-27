@@ -135,7 +135,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.input_tokens_details?.cached_tokens !== undefined ||
     raw.prompt_tokens_details?.cached_tokens !== undefined;
 
-  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
+  // Some providers (shared model runtime OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
   // include cached tokens in the reported prompt total. Normalize both cases
   // to uncached input tokens so downstream prompt-token math does not double-

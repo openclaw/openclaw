@@ -32,7 +32,6 @@ const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
 });
 const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
-const withBundledPluginAllowlistCompatMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
 const listImportedBundledPluginFacadeIdsMock = vi.fn();
 const listImportedRuntimePluginIdsMock = vi.fn();
@@ -89,8 +88,6 @@ vi.mock("./providers.js", () => ({
 }));
 
 vi.mock("./bundled-compat.js", () => ({
-  withBundledPluginAllowlistCompat: (...args: unknown[]) =>
-    withBundledPluginAllowlistCompatMock(...args),
   withBundledPluginEnablementCompat: (...args: unknown[]) =>
     withBundledPluginEnablementCompatMock(...args),
 }));
@@ -233,32 +230,26 @@ function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
 function createCompatChainFixture() {
   const config = { plugins: { allow: ["telegram"] } };
   const pluginIds = ["anthropic", "openai"];
-  const compatConfig = { plugins: { allow: ["telegram", ...pluginIds] } };
   const enabledConfig = {
     plugins: {
-      allow: ["telegram", ...pluginIds],
+      allow: ["telegram"],
       entries: {
         anthropic: { enabled: true },
         openai: { enabled: true },
       },
     },
   };
-  return { config, pluginIds, compatConfig, enabledConfig };
+  return { config, pluginIds, enabledConfig };
 }
 
 function expectBundledCompatChainApplied(params: {
   config: unknown;
   pluginIds: string[];
-  compatConfig: unknown;
   enabledConfig: unknown;
   loadModules: boolean;
 }) {
-  expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
-    config: params.config,
-    pluginIds: params.pluginIds,
-  });
   expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
-    config: params.compatConfig,
+    config: params.config,
     pluginIds: params.pluginIds,
   });
   if (params.loadModules) {
@@ -407,7 +398,6 @@ describe("plugin status reports", () => {
     loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
-    withBundledPluginAllowlistCompatMock.mockReset();
     withBundledPluginEnablementCompatMock.mockReset();
     listImportedBundledPluginFacadeIdsMock.mockReset();
     listImportedRuntimePluginIdsMock.mockReset();
@@ -431,9 +421,6 @@ describe("plugin status reports", () => {
       autoEnabledReasons: {},
     }));
     resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
-    withBundledPluginAllowlistCompatMock.mockImplementation(
-      (params: { config: unknown }) => params.config,
-    );
     withBundledPluginEnablementCompatMock.mockImplementation(
       (params: { config: unknown }) => params.config,
     );
@@ -597,10 +584,9 @@ describe("plugin status reports", () => {
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
-    const { config, pluginIds, compatConfig, enabledConfig } = createCompatChainFixture();
+    const { config, pluginIds, enabledConfig } = createCompatChainFixture();
     loadConfigMock.mockReturnValue(config);
     resolveBundledProviderCompatPluginIdsMock.mockReturnValue(pluginIds);
-    withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
     withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
     buildPluginSnapshotReport({ config });
@@ -608,7 +594,6 @@ describe("plugin status reports", () => {
     expectBundledCompatChainApplied({
       config,
       pluginIds,
-      compatConfig,
       enabledConfig,
       loadModules: false,
     });

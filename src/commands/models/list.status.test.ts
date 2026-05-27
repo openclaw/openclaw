@@ -1261,7 +1261,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("handles cli backend and aliased provider auth summaries", async () => {
+  it("handles cli backend and exact provider auth summaries", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
@@ -1308,9 +1308,9 @@ describe("modelsStatusCommand auth overview", () => {
       const aliasPayload = parseFirstJsonLog(aliasRuntime);
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
       expect(
-        providers.reduce((count, provider) => count + (provider.provider === "zai" ? 1 : 0), 0),
+        providers.reduce((count, provider) => count + (provider.provider === "z.ai" ? 1 : 0), 0),
       ).toBe(1);
-      expect(providers.map((provider) => provider.provider)).not.toContain("z.ai");
+      expect(providers.map((provider) => provider.provider)).not.toContain("zai");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

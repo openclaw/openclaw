@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   findModelInCatalog,
@@ -7,7 +8,6 @@ import {
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
-import { createOpenClawCodingTools } from "../agents/pi-tools.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
 import { inspectRuntimeToolInputSchemas } from "../agents/tool-schema-projection.js";

@@ -1,4 +1,4 @@
-import { completeSimple, getModel, type Api, type Model } from "@earendil-works/pi-ai";
+import { completeSimple, getModel, type Api, type Model } from "openclaw/plugin-sdk/llm";
 
 type Usage = {
   input?: number;
@@ -49,7 +49,7 @@ function median(values: number[]): number {
 
 async function runModel(opts: {
   label: string;
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   runs: number;
   prompt: string;

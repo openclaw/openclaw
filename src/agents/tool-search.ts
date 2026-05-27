@@ -1,11 +1,5 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
-import type {
-  AgentMessage,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-} from "@earendil-works/pi-agent-core";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -19,7 +13,9 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
   wrapToolWithBeforeToolCallHook,
-} from "./pi-tools.before-tool-call.js";
+} from "./agent-tools.before-tool-call.js";
+import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
+import type { ToolDefinition } from "./sessions/index.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -50,7 +46,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
   parentToolCallId?: string;
   input: unknown;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) => Promise<AgentToolResult<unknown>>;
 
 export type ToolSearchTargetTranscriptProjection = {
@@ -531,10 +527,6 @@ function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   return false;
 }
 
-function dropToolSearchControlTools(tools: AnyAgentTool[]): AnyAgentTool[] {
-  return tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name));
-}
-
 function readMessageToolResultId(message: AgentMessage): string | undefined {
   const record = message as unknown as Record<string, unknown>;
   const role = typeof record.role === "string" ? record.role : "";
@@ -698,54 +690,13 @@ export function applyToolSearchCatalog(params: {
   catalogRegistered: boolean;
 } {
   const config = resolveToolSearchConfig(params.config);
-  if (!config.enabled) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0, catalogRegistered: false };
-  }
-  const hasControlTool = params.tools.some(
-    (tool) =>
+  return applyToolCatalogCompaction({
+    ...params,
+    enabled: config.enabled,
+    isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
-  );
-  const key = sessionCatalogKey(params);
-  if (!hasControlTool || (!key && !params.catalogRef)) {
-    return {
-      tools: dropToolSearchControlTools(params.tools),
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-    };
-  }
-
-  const visible: AnyAgentTool[] = [];
-  const catalog: ToolSearchCatalogEntry[] = [];
-  for (const tool of params.tools) {
-    if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
-      if (shouldExposeControlTool(tool.name, config.mode)) {
-        visible.push(tool);
-      }
-      continue;
-    }
-    if (shouldCatalogTool(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      continue;
-    }
-    visible.push(tool);
-  }
-  registerToolSearchCatalog({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    runId: params.runId,
-    catalogRef: params.catalogRef,
-    entries: catalog,
-    append: false,
   });
-  return {
-    tools: visible,
-    compacted: catalog.length > 0,
-    catalogToolCount: catalog.length,
-    catalogRegistered: true,
-  };
 }
 
 export function addClientToolsToToolSearchCatalog(params: {
@@ -757,25 +708,10 @@ export function addClientToolsToToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
-  const config = resolveToolSearchConfig(params.config);
-  const key = sessionCatalogKey(params);
-  if (!config.enabled || (!key && !params.catalogRef)) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  const existing = params.catalogRef?.current ?? (key ? sessionCatalogs.get(key) : undefined);
-  if (!existing) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  registerToolSearchCatalog({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    runId: params.runId,
-    catalogRef: params.catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
-    append: true,
+  return addClientToolsToToolCatalog({
+    ...params,
+    enabled: resolveToolSearchConfig(params.config).enabled,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
 }
 
 export function registerToolSearchCatalog(params: {
@@ -1027,7 +963,7 @@ export class ToolSearchRuntime {
     options?: {
       parentToolCallId?: string;
       signal?: AbortSignal;
-      onUpdate?: AgentToolUpdateCallback<unknown>;
+      onUpdate?: AgentToolUpdateCallback;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
@@ -1102,6 +1038,9 @@ export function applyToolCatalogCompaction(params: {
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(tool);
+      continue;
+    }
+    if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
     if (shouldCatalog(tool)) {
@@ -1190,7 +1129,7 @@ async function runCodeMode(params: {
   code: string;
   config: ToolSearchConfig;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   const runtime = new ToolSearchRuntime(params.ctx, params.config);
   const logs: string[] = [];
@@ -1229,7 +1168,7 @@ async function runCodeModeBridgeRequest(
   options?: {
     parentToolCallId?: string;
     signal?: AbortSignal;
-    onUpdate?: AgentToolUpdateCallback<unknown>;
+    onUpdate?: AgentToolUpdateCallback;
   },
 ): Promise<unknown> {
   const values = Array.isArray(args) ? args : [];
@@ -1269,7 +1208,7 @@ function runCodeModeChild(params: {
   parentToolCallId: string;
   runtime: ToolSearchRuntime;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, buildCodeModeChildArgs(), {
@@ -1444,7 +1383,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         toolCallId: string,
         args: unknown,
         signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback<unknown>,
+        onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> =>
         jsonResult(
           await runCodeMode({ toolCallId, ctx, code: readCode(args), config, signal, onUpdate }),
@@ -1487,7 +1426,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         _toolCallId: string,
         args: unknown,
         signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback<unknown>,
+        onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
         const call = readCallArgs(args);
         return jsonResult(

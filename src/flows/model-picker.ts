@@ -27,7 +27,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
@@ -334,7 +334,7 @@ function createPreferredProviderMatcher(params: {
   env?: NodeJS.ProcessEnv;
 }): (entryProvider: string) => boolean {
   const normalizedPreferredProvider = normalizeProviderId(params.preferredProvider);
-  const preferredOwnerPluginIds = resolveOwningPluginIdsForProvider({
+  const preferredOwnerPluginIds = resolveOwningPluginIdsForProviderRef({
     provider: normalizedPreferredProvider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -355,7 +355,7 @@ function createPreferredProviderMatcher(params: {
     }
     const value =
       !!preferredOwnerPluginIdSet &&
-      !!resolveOwningPluginIdsForProvider({
+      !!resolveOwningPluginIdsForProviderRef({
         provider: normalizedEntryProvider,
         config: params.cfg,
         workspaceDir: params.workspaceDir,

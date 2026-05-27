@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
@@ -447,7 +447,7 @@ describe("openai transport stream", () => {
     ).toThrow(/Code mode payload tool surface violation/);
   });
 
-  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
+  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from provider overrides", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const headers = testing.buildOpenAIClientHeaders(
       {
@@ -457,8 +457,8 @@ describe("openai transport stream", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         headers: {
-          originator: "pi",
-          "User-Agent": "pi",
+          originator: "openclaw",
+          "User-Agent": "openclaw",
           "X-Provider": "model",
         },
         reasoning: true,
@@ -469,8 +469,8 @@ describe("openai transport stream", () => {
       } satisfies Model<"openai-responses">,
       { systemPrompt: "", messages: [] } as never,
       {
-        originator: "pi",
-        "User-Agent": "pi",
+        originator: "openclaw",
+        "User-Agent": "openclaw",
         "X-Caller": "request",
       },
     );
@@ -494,8 +494,8 @@ describe("openai transport stream", () => {
         provider: "openai-codex",
         baseUrl: "https://chatgpt.com/backend-api",
         headers: {
-          originator: "pi",
-          "User-Agent": "pi",
+          originator: "openclaw",
+          "User-Agent": "openclaw",
         },
         reasoning: true,
         input: ["text"],
@@ -3197,7 +3197,7 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("does not infer high reasoning when Pi passes thinking off", () => {
+  it("does not infer high reasoning when the runtime passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",

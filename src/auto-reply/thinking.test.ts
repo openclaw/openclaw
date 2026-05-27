@@ -377,7 +377,7 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
-  it("uses provider-advertised adaptive defaults for Bedrock aliases", () => {
+  it("does not apply provider-advertised adaptive defaults across Bedrock id variants", () => {
     providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
       ({ provider, context }) =>
         provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
@@ -387,7 +387,7 @@ describe("resolveThinkingDefaultForModel", () => {
 
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
-    ).toBe("adaptive");
+    ).toBe("off");
   });
 
   it("does not assume adaptive defaults without provider runtime", () => {

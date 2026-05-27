@@ -39,6 +39,7 @@
   "cron-store-runtime",
   "config-schema",
   "json-schema-runtime",
+  "json-unsafe-integers",
   "reply-runtime",
   "reply-dedupe",
   "reply-dispatch-runtime",
@@ -316,5 +317,8 @@
   "webhook-path",
   "web-media",
   "zalouser",
-  "zod"
+  "zod",
+  "agent-core",
+  "agent-sessions",
+  "llm"
 ]

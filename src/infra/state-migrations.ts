@@ -1502,7 +1502,7 @@ export async function autoMigrateLegacyState(params: {
     }
   };
 
-  if (env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
+  if (env.OPENCLAW_AGENT_DIR?.trim()) {
     const changes = [...stateDirResult.changes, ...orphanKeys.changes];
     const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
     logMigrationResults(changes, warnings);

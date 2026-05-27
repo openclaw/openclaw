@@ -305,8 +305,6 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
-  /** @deprecated Use providerCatalogEntry. */
-  providerDiscoveryEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
@@ -1646,7 +1644,6 @@ export function loadPluginManifest(
   const providers = normalizeTrimmedStringList(raw.providers);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerCatalogEntry = normalizeOptionalString(raw.providerCatalogEntry);
-  const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
     ownedProviders: new Set([...providers, ...cliBackends]),
@@ -1709,7 +1706,6 @@ export function loadPluginManifest(
       channels,
       providers,
       providerCatalogEntry,
-      providerDiscoveryEntry,
       modelSupport,
       modelCatalog,
       modelPricing,

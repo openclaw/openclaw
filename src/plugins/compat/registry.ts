@@ -78,7 +78,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["hook runner contract probe"],
     tests: [
       "src/plugins/hooks.security.test.ts",
-      "src/agents/pi-tools.before-tool-call.e2e.test.ts",
+      "src/agents/agent-tools.before-tool-call.e2e.test.ts",
     ],
   },
   {
@@ -429,6 +429,29 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+  },
+  {
+    code: "embedded-pi-agent-sdk-aliases",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-05-21",
+    deprecated: "2026-05-21",
+    warningStarts: "2026-05-21",
+    removeAfter: "2026-08-21",
+    replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
+    docsPath: "/plugins/sdk-runtime",
+    surfaces: [
+      "api.runtime.agent.runEmbeddedPiAgent",
+      "openclaw/extension-api runEmbeddedPiAgent",
+      "openclaw/plugin-sdk/agent-harness-runtime EmbeddedPi* aliases",
+    ],
+    diagnostics: ["plugin SDK compatibility registry"],
+    tests: [
+      "src/plugins/runtime/index.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
+    releaseNote:
+      "Legacy `runEmbeddedPiAgent` and `EmbeddedPi*` plugin aliases remain as deprecated SDK compatibility only.",
   },
   {
     code: "agent-harness-id-alias",

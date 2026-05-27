@@ -112,7 +112,7 @@ const resolveOwningPluginIdsForProvider = vi.hoisted(() =>
   }),
 );
 vi.mock("../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: resolveOwningPluginIdsForProvider,
 }));
 
 const providerModelPickerContributionRuntime = vi.hoisted(() => ({

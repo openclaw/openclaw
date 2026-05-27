@@ -7,10 +7,7 @@ import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
@@ -292,22 +289,14 @@ function buildPluginReport(
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
   // report the same loaded/disabled status the gateway uses at runtime.  Without
-  // this, bundled provider plugins are incorrectly shown as "disabled" when
-  // `plugins.allow` is set because the allowlist check runs before the
-  // bundled-default-enable check.  Scoped to bundled providers only (not all
-  // bundled plugins) to match the runtime compat surface in providers.runtime.ts.
   const bundledProviderIds = resolveBundledProviderCompatPluginIds({
     config,
     workspaceDir,
     env: params?.env,
     manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
-  const effectiveConfig = withBundledPluginAllowlistCompat({
-    config,
-    pluginIds: bundledProviderIds,
-  });
   const runtimeCompatConfig = withBundledPluginEnablementCompat({
-    config: effectiveConfig,
+    config,
     pluginIds: bundledProviderIds,
   });
   const onlyPluginIds =

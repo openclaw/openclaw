@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
@@ -111,6 +112,16 @@ const apiStub: ApiStub = {
 };
 
 const throttlerSpy = vi.fn(() => "throttler");
+let testStoreCounter = 0;
+let currentTestStorePath = path.join(
+  os.tmpdir(),
+  `telegram-media-sessions-${process.pid}-${testStoreCounter}.json`,
+);
+
+const defaultRuntimeConfig = (() =>
+  ({
+    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+  }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
 type TopicNameStoreFactory = NonNullable<
   Parameters<typeof setTelegramTopicNameStoreFactoryForTest>[0]
@@ -176,12 +187,9 @@ const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
 );
 
 export const telegramBotDepsForTest: TelegramBotDeps = {
-  getRuntimeConfig: (() =>
-    ({
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-    }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"],
+  getRuntimeConfig: defaultRuntimeConfig,
   resolveStorePath: vi.fn(
-    (storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json",
+    (storePath?: string) => storePath ?? currentTestStorePath,
   ) as TelegramBotDeps["resolveStorePath"],
   readChannelAllowFromStore: vi.fn(async () => []) as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest: vi.fn(async () => ({
@@ -201,6 +209,12 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 };
 
 beforeEach(() => {
+  testStoreCounter += 1;
+  currentTestStorePath = path.join(
+    os.tmpdir(),
+    `telegram-media-sessions-${process.pid}-${testStoreCounter}.json`,
+  );
+  telegramBotDepsForTest.getRuntimeConfig = defaultRuntimeConfig;
   resetInboundDedupe();
   topicNameStoresForTest.clear();
   resetTopicNameCacheForTest();

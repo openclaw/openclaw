@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw Fireworks provider plugin",
   "type": "module",
-  "dependencies": {
-    "@earendil-works/pi-ai": "0.75.5"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

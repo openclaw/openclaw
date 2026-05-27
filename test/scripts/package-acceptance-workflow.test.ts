@@ -535,6 +535,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-openai[\s\S]*?timeout_minutes: 60[\s\S]*?profiles: beta minimum stable full/u,
     );
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5",
+    );
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
     );
@@ -551,6 +554,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     );
+    expect(workflow).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
+    );
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000");
     expect(workflow).toContain("timeout --foreground --kill-after=30s 35m");
     expect(workflow).toMatch(/suite_id: live-gateway-docker[\s\S]*?timeout_minutes: 40/u);
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
@@ -1164,6 +1171,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
     expect(workflow).toContain("Write release validation manifest");
+    expect(workflow).toContain("PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}");
     expect(workflow).toContain("Upload release validation manifest");
     expect(workflow).toContain("Failed child detail: ${label}");
     expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");

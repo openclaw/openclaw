@@ -1,6 +1,7 @@
 [
   "agent-config-primitives",
   "agent-runtime-test-contracts",
+  "approval-reaction-runtime",
   "channel-config-schema-legacy",
   "channel-contract-testing",
   "channel-reply-pipeline",

@@ -8,9 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/vertex-sdk": "0.16.1",
-    "@earendil-works/pi-agent-core": "0.75.5",
-    "@earendil-works/pi-ai": "0.75.5"
+    "@anthropic-ai/vertex-sdk": "0.16.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

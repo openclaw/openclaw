@@ -112,7 +112,7 @@ function setSubagentControlDepsForTest(
   overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
 ) {
   testing.setDepsForTest({
-    abortEmbeddedPiRun: () => false,
+    abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     updateSessionStore: async <T>(
       storePath: string,

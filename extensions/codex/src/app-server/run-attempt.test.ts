@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   abortAgentHarnessRun,
   embeddedAgentLog,
@@ -13,6 +12,7 @@ import {
   type AgentEventPayload,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -2376,8 +2376,8 @@ describe("runCodexAppServerAttempt", () => {
           text: "Unscoped structured command guidance.",
         },
         {
-          text: "PI main command guidance.",
-          surfaces: ["pi_main"],
+          text: "OpenClaw main command guidance.",
+          surfaces: ["openclaw_main"],
         },
       ],
       handler: async () => ({ text: "ok" }),
@@ -2390,7 +2390,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(instructions).toContain("Codex app-server command guidance.");
     expect(instructions).not.toContain("Legacy global command guidance.");
     expect(instructions).not.toContain("Unscoped structured command guidance.");
-    expect(instructions).not.toContain("PI main command guidance.");
+    expect(instructions).not.toContain("OpenClaw main command guidance.");
   });
 
   it("keeps OpenClaw skills out of Codex developer instructions", async () => {
@@ -5306,7 +5306,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/started",
@@ -5761,7 +5761,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/completed",
@@ -5836,7 +5836,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/agentMessage/delta",
@@ -5919,7 +5919,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/agentMessage/delta",
@@ -6010,7 +6010,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/completed",
@@ -6090,7 +6090,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "rawResponseItem/completed",
@@ -6167,7 +6167,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "rawResponseItem/completed",
@@ -6244,7 +6244,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/started",
@@ -6327,7 +6327,7 @@ describe("runCodexAppServerAttempt", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      fastWait,
     );
     await notify({
       method: "item/started",
@@ -7073,10 +7073,14 @@ describe("runCodexAppServerAttempt", () => {
           },
         },
       } as never;
+      params.sessionId = "diagnostic-session-1";
+      params.sessionKey = "agent:diagnostic:diagnostic-session-1";
+      params.runId = "diagnostic-run-1";
       const run = runCodexAppServerAttempt(params, {
         nativeHookRelay: { enabled: false },
         turnCompletionIdleTimeoutMs: 5,
       });
+      await harness.waitForMethod("turn/start");
       await run;
       await vi.waitFor(
         () =>
@@ -7090,7 +7094,7 @@ describe("runCodexAppServerAttempt", () => {
       const completedEvent = diagnosticEvents.find(
         (event) => event.type === "model.call.completed",
       );
-      expect(startedEvent?.callId).toBe("run-1:codex-model:1");
+      expect(startedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
       expect(startedEvent?.trace?.traceId).toBeTypeOf("string");
       expect(JSON.stringify(startedEvent)).not.toContain("hello");
       const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
@@ -7098,7 +7102,16 @@ describe("runCodexAppServerAttempt", () => {
       expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );
-      expect(completedEvent?.callId).toBe("run-1:codex-model:1");
+      expect(startedContent?.toolDefinitions).toContainEqual(
+        expect.objectContaining({
+          name: "message",
+          parameters: expect.objectContaining({
+            type: "object",
+            additionalProperties: false,
+          }),
+        }),
+      );
+      expect(completedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
       expect(JSON.stringify(completedEvent)).not.toContain("hello back");
       expect(
         JSON.stringify(diagnosticContentByType.get("model.call.completed")?.modelContent),

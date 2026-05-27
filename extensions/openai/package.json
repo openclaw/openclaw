@@ -5,7 +5,6 @@
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-ai": "0.75.5",
     "ws": "8.21.0"
   },
   "devDependencies": {

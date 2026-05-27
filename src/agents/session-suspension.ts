@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 
 const log = createSubsystemLogger("session-suspension");
 
