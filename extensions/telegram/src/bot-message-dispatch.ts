@@ -2205,6 +2205,13 @@ export const dispatchTelegramMessage = async ({
       clearInterleavedTimer();
       progressDraftGate.cancel();
       await draftLaneEventQueue;
+      // Send one final timer-free render so a lingering "_Ns — still running_"
+      // suffix is not persisted in the durable message. The timer is now
+      // cleared, so renderInterleavedMessage omits the suffix. Skip when
+      // superseded — that lane is discarded below.
+      if (interleavedBody && !isDispatchSuperseded()) {
+        updateInterleavedLane();
+      }
       nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
