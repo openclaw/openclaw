@@ -119,6 +119,12 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import {
+  appendReasoningBody,
+  appendStatusLine,
+  renderInterleavedMessage,
+  resolveInterleavedProgressEnabled,
+} from "./interleaved-progress.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
@@ -1186,6 +1192,86 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
+  // ── Opt-in interleaved progress lane ────────────────────────────────────
+  // Projection-only. When channels.telegram.streaming.preview.interleavedProgress
+  // is enabled, reasoning text and structured runtime events (tool/item/plan/
+  // approval/command/patch) are rendered into ONE durable live message on the
+  // reasoning lane — CLI-style — instead of the separate tool-progress lane.
+  // Default off; gated on tool-progress already being enabled and a reasoning
+  // lane existing. Never changes prompts, routing, tools, auth, or default
+  // visibility. Every event line is whitespace-collapsed and length-capped, and
+  // callers fall back to pushStreamToolProgress when this returns false.
+  const interleavedProgressEnabled = resolveInterleavedProgressEnabled({
+    toolProgressEnabled: streamToolProgressEnabled,
+    configEnabled: telegramCfg.streaming?.preview?.interleavedProgress,
+    hasReasoningLane: Boolean(reasoningLane.stream),
+  });
+  let interleavedBody = "";
+  let interleavedReasoningPrev = "";
+  let interleavedTimer: ReturnType<typeof setInterval> | undefined;
+  let interleavedTimerStartedAt: number | undefined;
+  const clearInterleavedTimer = (): void => {
+    if (interleavedTimer) {
+      clearInterval(interleavedTimer);
+      interleavedTimer = undefined;
+    }
+    interleavedTimerStartedAt = undefined;
+  };
+  const updateInterleavedLane = (): boolean => {
+    if (!interleavedProgressEnabled || !reasoningLane.stream) {
+      return false;
+    }
+    reasoningLane.hasStreamedMessage = true;
+    reasoningLane.finalized = true;
+    reasoningLane.lastPartialText = renderInterleavedMessage({
+      body: interleavedBody,
+      timerStartedAt: interleavedTimerStartedAt,
+    });
+    reasoningLane.stream.update(reasoningLane.lastPartialText);
+    return true;
+  };
+  // Append a status line to the interleaved body and optionally arm the rolling
+  // timer. Returns false when interleaved mode is off so callers fall back to
+  // the default tool-progress lane. Callers must pass already-safe text (tool
+  // name / event title — never raw tool args or command output).
+  const appendInterleavedLine = (line: string, opts?: { startTimer?: boolean }): boolean => {
+    if (!interleavedProgressEnabled) {
+      return false;
+    }
+    clearInterleavedTimer();
+    interleavedBody = appendStatusLine({
+      body: interleavedBody,
+      line,
+      timestamp: new Date().toLocaleTimeString(),
+    });
+    if (opts?.startTimer) {
+      interleavedTimerStartedAt = Date.now();
+      interleavedTimer = setInterval(() => {
+        void enqueueDraftLaneEvent(async () => {
+          updateInterleavedLane();
+        });
+      }, 3000);
+    }
+    return updateInterleavedLane();
+  };
+  // Append the reasoning body to the interleaved message. The body is stored
+  // header-stripped (appendReasoningBody) so updateInterleavedLane's single
+  // "Thinking" header is not duplicated. Returns false when interleaved off.
+  const appendInterleavedReasoning = (rawText: string): boolean => {
+    if (!interleavedProgressEnabled) {
+      return false;
+    }
+    clearInterleavedTimer();
+    const next = appendReasoningBody({
+      body: interleavedBody,
+      previousBodyOnly: interleavedReasoningPrev,
+      formattedReasoning: splitTelegramReasoningText(rawText, true).reasoningText ?? "",
+    });
+    interleavedBody = next.body;
+    interleavedReasoningPrev = next.previousBodyOnly;
+    return updateInterleavedLane();
+  };
+
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
   const disableBlockStreaming = !streamDeliveryEnabled
     ? true
@@ -1930,6 +2016,11 @@ export const dispatchTelegramMessage = async ({
                   onReasoningStream: reasoningLane.stream
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
+                          // Interleaved mode appends reasoning into the single
+                          // durable message (no per-stream message splitting).
+                          if (appendInterleavedReasoning(payload.text ?? "")) {
+                            return;
+                          }
                           if (splitReasoningOnNextStream) {
                             reasoningLane.stream?.forceNewMessage();
                             resetDraftLaneState(reasoningLane);
@@ -1963,25 +2054,34 @@ export const dispatchTelegramMessage = async ({
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    const progressPromise = pushStreamToolProgress(
-                      formatChannelProgressDraftLineForEntry(
-                        telegramCfg,
-                        {
-                          event: "tool",
-                          name: toolName,
-                          phase: payload.phase,
-                          args: payload.args,
-                        },
-                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                      ),
-                      { toolName, startImmediately: true },
-                    );
+                    // Interleaved lane shows the tool name only (never raw args)
+                    // and arms the rolling timer; falls back to the default
+                    // tool-progress lane when interleaved mode is off.
+                    if (!appendInterleavedLine(toolName ? `tool: ${toolName}` : "tool running", {
+                      startTimer: true,
+                    })) {
+                      await pushStreamToolProgress(
+                        formatChannelProgressDraftLineForEntry(
+                          telegramCfg,
+                          {
+                            event: "tool",
+                            name: toolName,
+                            phase: payload.phase,
+                            args: payload.args,
+                          },
+                          payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                        ),
+                        { toolName, startImmediately: true },
+                      );
+                    }
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
                     }
-                    await progressPromise;
                   },
                   onItemEvent: async (payload) => {
+                    if (appendInterleavedLine(payload.title ?? payload.name ?? "working")) {
+                      return;
+                    }
                     await pushStreamToolProgress(
                       buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",
@@ -2001,6 +2101,9 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "update") {
                       return;
                     }
+                    if (appendInterleavedLine(`plan: ${payload.title}`)) {
+                      return;
+                    }
                     await pushStreamToolProgress(
                       formatChannelProgressDraftLine({
                         event: "plan",
@@ -2013,6 +2116,9 @@ export const dispatchTelegramMessage = async ({
                   },
                   onApprovalEvent: async (payload) => {
                     if (payload.phase !== "requested") {
+                      return;
+                    }
+                    if (appendInterleavedLine(`approval: ${payload.title}`)) {
                       return;
                     }
                     await pushStreamToolProgress(
@@ -2030,6 +2136,11 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "end") {
                       return;
                     }
+                    // Title only (e.g. "ran `cmd` (exit 0)") — never the raw
+                    // command output buffer.
+                    if (appendInterleavedLine(payload.title ?? "command")) {
+                      return;
+                    }
                     await pushStreamToolProgress(
                       formatChannelProgressDraftLine({
                         event: "command-output",
@@ -2043,6 +2154,9 @@ export const dispatchTelegramMessage = async ({
                   },
                   onPatchSummary: async (payload) => {
                     if (payload.phase !== "end") {
+                      return;
+                    }
+                    if (appendInterleavedLine(`patch: ${payload.title}`)) {
                       return;
                     }
                     await pushStreamToolProgress(
@@ -2086,8 +2200,18 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
+      // Deterministic cleanup: stop the interleaved rolling timer on every exit
+      // path (success, error, abort, supersede) so no interval leaks past the run.
+      clearInterleavedTimer();
       progressDraftGate.cancel();
       await draftLaneEventQueue;
+      // Send one final timer-free render so a lingering "_Ns — still running_"
+      // suffix is not persisted in the durable message. The timer is now
+      // cleared, so renderInterleavedMessage omits the suffix. Skip when
+      // superseded — that lane is discarded below.
+      if (interleavedBody && !isDispatchSuperseded()) {
+        updateInterleavedLane();
+      }
       nativeToolProgressDraft?.stop();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
