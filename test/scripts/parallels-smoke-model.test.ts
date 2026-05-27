@@ -608,6 +608,29 @@ if (isPrlctl) {
     expect(result.stdout).toBeTypeOf("string");
   });
 
+  it("does not wait for host commands that trap SIGTERM after a timeout", () => {
+    const startedAt = Date.now();
+    const result = run(
+      process.execPath,
+      [
+        "-e",
+        [
+          "process.on('SIGTERM', () => {});",
+          "setTimeout(() => process.exit(77), 700);",
+          "setInterval(() => {}, 1000);",
+        ].join(""),
+      ],
+      {
+        check: false,
+        quiet: true,
+        timeoutMs: 50,
+      },
+    );
+
+    expect(result.status).toBe(124);
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
   it("routes Windows host pnpm and npm shims through safe runners", () => {
     const comSpec = "C:\\Windows\\System32\\cmd.exe";
 

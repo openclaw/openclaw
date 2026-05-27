@@ -45,7 +45,9 @@ preserving issue/PR refs and thanks.
    - `### Changes`: new capabilities and behavior changes
    - `### Fixes`: user-facing fixes first, grouped by impact and surface
 6. Preserve attribution:
-   - keep `#issue`, `(#PR)`, GHSA ids, `Fixes #...`, and `Thanks @...`
+   - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
+   - do not add GHSA references, advisory IDs, or security advisory slugs to
+     changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`
    - if grouping multiple entries, carry all relevant refs and thanks into the
      grouped bullet
@@ -83,4 +85,3 @@ GitHub API:
 
 Only GitHub Release creation, workflow dispatch, run polling, artifact download,
 and issue/PR mutation need API quota.
-

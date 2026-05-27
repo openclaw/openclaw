@@ -472,6 +472,50 @@ stderr="$(<"$TMPDIR/stderr")"
     }
   });
 
+  it("uses a Node watchdog for Docker commands when timeout is unavailable", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-node-timeout-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "node"),
+        `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
+      );
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/bash\ninput="$(/bin/cat)"\nprintf "%s|%s\\n" "$*" "$input" >"$TMPDIR/docker-seen"\nexit 13\n`,
+      );
+      chmodSync(join(binDir, "node"), 0o755);
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export DOCKER_COMMAND_TIMEOUT=7s
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+set +e
+printf payload | docker_e2e_docker_cmd run -i demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "13" ]]
+[[ "$stderr" = *"timeout command not found; using Node watchdog for Docker command timeout 7s"* ]]
+[[ "$(<"$TMPDIR/docker-seen")" = "run -i demo|payload" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses plain timeout when kill-after is unsupported", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-plain-timeout-"));
 
@@ -962,7 +1006,9 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     expect(runner).toContain(
       'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS=$OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS")',
     );
-    expect(runner).toContain('if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS:-}" ]; then');
+    expect(runner).toContain(
+      'if [ -n "${OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS:-}" ]; then',
+    );
     expect(runner).toContain(
       'DOCKER_ENV_ARGS+=(-e "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS=$OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS")',
     );
@@ -1043,10 +1089,16 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
     const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
-    expect(runner).toContain('COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"');
+    expect(runner).toContain(
+      'COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
+    );
     expect(runner).toContain('-e OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT="$COMMAND_TIMEOUT"');
-    expect(runner).toContain('command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"');
-    expect(runner).toContain('openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN');
+    expect(runner).toContain(
+      'command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
+    );
+    expect(runner).toContain(
+      'openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN',
+    );
     expect(runner).toContain(
       'openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive',
     );
@@ -1056,7 +1108,9 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     expect(runner).toContain(
       'openclaw_e2e_maybe_timeout "$command_timeout" openclaw gateway status',
     );
-    expect(runner).toContain('openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured');
+    expect(runner).toContain(
+      'openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured',
+    );
 
     expect(publishedRunner).toContain(
       'COMMAND_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
@@ -1233,8 +1287,7 @@ test -f "$TMPDIR/docker-cmd-seen"
       { path: KITCHEN_SINK_RPC_DOCKER_E2E_PATH, label: "kitchen-sink-rpc" },
     ]) {
       const runner = readFileSync(path, "utf8");
-      const resourceAssertion =
-        `node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" ${label}`;
+      const resourceAssertion = `node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" ${label}`;
 
       expect(runner, path).toContain('RUN_LOG="$(mktemp');
       expect(runner, path).toContain('STATS_LOG="$(mktemp');
@@ -1248,7 +1301,9 @@ test -f "$TMPDIR/docker-cmd-seen"
       expect(runner, path).not.toMatch(/(^|\n)docker (?:inspect|stats) /u);
       expect(runner, path).toMatch(/cleanup\(\) \{[\s\S]*rm -f "\$RUN_LOG" "\$STATS_LOG"/u);
       expect(runner, path).toContain(`if [ "$run_status" -eq 0 ]; then\n  ${resourceAssertion}`);
-      expect(runner, path).toContain(`elif [ -s "$STATS_LOG" ]; then\n  ${resourceAssertion} || true`);
+      expect(runner, path).toContain(
+        `elif [ -s "$STATS_LOG" ]; then\n  ${resourceAssertion} || true`,
+      );
       expect(runner, path).not.toContain(`${resourceAssertion}\n\nexit "$run_status"`);
     }
   });
@@ -1470,11 +1525,21 @@ test -f "$TMPDIR/docker-cmd-seen"
   it("routes doctor install switch commands through the E2E timeout helper", () => {
     const scenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
 
-    expect(scenario).toContain('command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"');
-    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"');
-    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"');
-    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force');
-    expect(scenario).toContain('openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes');
+    expect(scenario).toContain(
+      'command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"',
+    );
+    expect(scenario).toContain(
+      'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"',
+    );
+    expect(scenario).toContain(
+      'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"',
+    );
+    expect(scenario).toContain(
+      'openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force',
+    );
+    expect(scenario).toContain(
+      'openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes',
+    );
     expect(scenario).not.toMatch(/^\s*if ! timeout "\$command_timeout"/mu);
   });
 
