@@ -526,11 +526,12 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const { profile: trailingProfile } = splitTrailingAuthProfile(trimmed);
+      const { model: modelWithoutProfile, profile: trailingProfile } =
+        splitTrailingAuthProfile(trimmed);
       const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
-        raw: trimmed,
+        raw: modelWithoutProfile,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
       });

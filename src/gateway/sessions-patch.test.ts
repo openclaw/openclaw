@@ -882,4 +882,29 @@ describe("gateway sessions patch", () => {
     expect(entry.authProfileOverride).toBe("openai-codex:user@example.com");
     expect(entry.authProfileOverrideSource).toBe("user");
   });
+
+  test("resolves bare allowlisted model ids before persisting @profile suffix", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4" },
+              models: {
+                "opencode-go/kimi-k2.6": {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "kimi-k2.6@work" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "opencode-go", id: "kimi-k2.6", name: "kimi-k2.6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("opencode-go");
+    expect(entry.modelOverride).toBe("kimi-k2.6");
+    expect(entry.authProfileOverride).toBe("work");
+  });
 });
