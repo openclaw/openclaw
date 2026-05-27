@@ -6195,3 +6195,270 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 });
+
+describe("web_fetch full channel callback sequence (ClawSweeper P2 regression)", () => {
+  // Drives the SAME onToolStart + onItemEvent bridges the channel adapters
+  // consume, and pushes every payload through the production shared
+  // renderer `buildChannelProgressDraftLine`. The assertions lock in:
+  //   1. `phase:"update"` tool events with `suppressChannelProgress: true`
+  //      are skipped by the `onToolStart` bridge, so no bare
+  //      "🌐 Web Fetch" row duplicates with the safe progressText line.
+  //      (Non-allowlisted non-exec tools or exec/bash do not set the
+  //      marker and continue to be bridged as before — that path is
+  //      covered by the earlier general regressions.)
+  //   2. The start-line rendered text contains only the request host —
+  //      never the URL path / query / fragment / userinfo, because
+  //      `resolveWebFetchDetail` is now host-only.
+  //   3. The two safe progressText lines render via `onItemEvent`
+  //      through the same shared renderer and never leak URL bits either.
+  it("renders host-only start line, safe progressText updates, and zero bare 'Web Fetch' duplicates across the full sequence", async () => {
+    const { buildChannelProgressDraftLine } = await import("../../plugin-sdk/channel-streaming.js");
+
+    const onToolStart = vi.fn();
+    const onItemEvent = vi.fn();
+
+    const sensitiveUrl =
+      "https://api.example.com/secret-path/users?token=ABC123XYZ&q=SENSITIVE_QUERY";
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      // 1) Tool start — upstream emits BOTH a stream:"tool" phase:"start"
+      //    (which agent-runner-execution.ts bridges to onToolStart) AND a
+      //    stream:"item" kind:"tool" phase:"start" (which bridges to
+      //    onItemEvent).
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          toolCallId: "fetch-1",
+          name: "web_fetch",
+          phase: "start",
+          args: { url: sensitiveUrl, extractMode: "text", maxChars: 1000 },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:fetch-1",
+          toolCallId: "fetch-1",
+          kind: "tool",
+          name: "web_fetch",
+          title: "web_fetch",
+          phase: "start",
+          status: "running",
+        },
+      });
+
+      // 2) Two safe progress milestones (this is what the patch adds).
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:fetch-1",
+          toolCallId: "fetch-1",
+          kind: "tool",
+          name: "web_fetch",
+          title: "web_fetch",
+          phase: "update",
+          status: "running",
+          progressText: "web_fetch: connecting to api.example.com…",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:fetch-1",
+          toolCallId: "fetch-1",
+          kind: "tool",
+          name: "web_fetch",
+          title: "web_fetch",
+          phase: "update",
+          status: "running",
+          progressText: "web_fetch: HTTP 200 application/json, reading body…",
+        },
+      });
+
+      // 3) Upstream stream:"tool" phase:"update" events (ACP/TUI/gateway
+      //    consumers see these) — args is undefined on update. For
+      //    allowlisted tools (web_fetch here) handlers.tools.ts sets
+      //    `suppressChannelProgress: true` so the bridge skips onToolStart
+      //    for them and avoids the bare-row duplicate next to the safe
+      //    progressText line.
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          toolCallId: "fetch-1",
+          name: "web_fetch",
+          phase: "update",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          toolCallId: "fetch-1",
+          name: "web_fetch",
+          phase: "update",
+          suppressChannelProgress: true,
+        },
+      });
+
+      // 3b) Non-allowlisted non-exec tool emitting `phase:"update"` WITHOUT
+      //     the marker. The bridge must still fire onToolStart for it
+      //     (otherwise this PR would regress channel progress for arbitrary
+      //     plugin tools that emit partialResult).
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          toolCallId: "plugin-1",
+          name: "third_party_plugin_tool",
+          phase: "update",
+        },
+      });
+
+      // 4) Tool end.
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:fetch-1",
+          toolCallId: "fetch-1",
+          kind: "tool",
+          name: "web_fetch",
+          title: "web_fetch",
+          phase: "end",
+          status: "completed",
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { onToolStart, onItemEvent } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+
+    // Assertion 1a: onToolStart fires for the web_fetch phase:"start"
+    //               (with full args, which the host-only resolver redacts).
+    // Assertion 1b: onToolStart does NOT fire for the two web_fetch
+    //               phase:"update" events that carried `suppressChannelProgress`.
+    // Assertion 1c: onToolStart STILL fires for the non-allowlisted plugin
+    //               tool's phase:"update" (no marker) so we don't regress
+    //               channel progress for arbitrary plugin tools.
+    const webFetchStartCalls = onToolStart.mock.calls.filter((call) => {
+      const payload = call[0] as { name?: string; phase?: string };
+      return payload.name === "web_fetch" && payload.phase === "start";
+    });
+    expect(webFetchStartCalls).toHaveLength(1);
+    expect(webFetchStartCalls[0]?.[0]).toEqual({
+      name: "web_fetch",
+      phase: "start",
+      args: { url: sensitiveUrl, extractMode: "text", maxChars: 1000 },
+      detailMode: undefined,
+    });
+
+    const webFetchUpdateCalls = onToolStart.mock.calls.filter((call) => {
+      const payload = call[0] as { name?: string; phase?: string };
+      return payload.name === "web_fetch" && payload.phase === "update";
+    });
+    expect(webFetchUpdateCalls).toHaveLength(0);
+
+    const pluginUpdateCalls = onToolStart.mock.calls.filter((call) => {
+      const payload = call[0] as { name?: string; phase?: string };
+      return payload.name === "third_party_plugin_tool" && payload.phase === "update";
+    });
+    expect(pluginUpdateCalls).toHaveLength(1);
+
+    // Render every onToolStart payload through the shared channel renderer
+    // and assert privacy on the rendered text — that is what the channel
+    // adapter actually displays. We separate web_fetch's rendered start
+    // line from the unrelated plugin update line; the web_fetch line MUST
+    // be host-only.
+    const webFetchRenderedLines: string[] = [];
+    for (const call of onToolStart.mock.calls) {
+      const payload = call[0] as {
+        name: string;
+        phase: string;
+        args: Record<string, unknown> | undefined;
+        detailMode?: "explain" | "raw";
+      };
+      if (payload.name !== "web_fetch") {
+        continue;
+      }
+      const line = buildChannelProgressDraftLine(
+        {
+          event: "tool",
+          name: payload.name,
+          phase: payload.phase,
+          args: payload.args,
+        },
+        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+      );
+      if (line?.text) {
+        webFetchRenderedLines.push(line.text);
+      }
+    }
+    expect(webFetchRenderedLines).toHaveLength(1);
+    expect(webFetchRenderedLines[0]).toContain("api.example.com");
+    expect(webFetchRenderedLines[0]).not.toContain("/secret-path");
+    expect(webFetchRenderedLines[0]).not.toContain("ABC123XYZ");
+    expect(webFetchRenderedLines[0]).not.toContain("SENSITIVE_QUERY");
+    expect(webFetchRenderedLines[0]).not.toContain("token=");
+    expect(webFetchRenderedLines[0]).not.toMatch(/[?&]/);
+
+    // Render every onItemEvent payload through the shared channel renderer
+    // and assert: (a) the two progressText lines render their safe text,
+    // and (b) no rendered item line contains the URL path / query.
+    const itemRenderedLines: string[] = [];
+    for (const call of onItemEvent.mock.calls) {
+      const payload = call[0] as {
+        itemId?: string;
+        kind?: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        summary?: string;
+        progressText?: string;
+        meta?: string;
+      };
+      const line = buildChannelProgressDraftLine({
+        event: "item",
+        itemId: payload.itemId,
+        itemKind: payload.kind,
+        title: payload.title,
+        name: payload.name,
+        phase: payload.phase,
+        status: payload.status,
+        summary: payload.summary,
+        progressText: payload.progressText,
+        meta: payload.meta,
+      });
+      if (line?.text) {
+        itemRenderedLines.push(line.text);
+      }
+    }
+    const progressLines = itemRenderedLines.filter((t) => t.includes("web_fetch: "));
+    expect(progressLines).toHaveLength(2);
+    expect(progressLines[0]).toContain("connecting to api.example.com");
+    expect(progressLines[1]).toContain("HTTP 200 application/json");
+    for (const line of itemRenderedLines) {
+      expect(line).not.toContain("/secret-path");
+      expect(line).not.toContain("ABC123XYZ");
+      expect(line).not.toContain("SENSITIVE_QUERY");
+      expect(line).not.toContain("token=");
+      expect(line).not.toMatch(/[?&]/);
+    }
+
+    // Assertion 2: zero `phase:"update"` onToolStart calls for the
+    // allowlisted web_fetch path (the bridge respected the
+    // `suppressChannelProgress` marker). Plugin tools that did not set
+    // the marker keep firing — verified by `pluginUpdateCalls` above.
+    const webFetchAllCalls = onToolStart.mock.calls.filter(
+      (call) => (call[0] as { name?: string }).name === "web_fetch",
+    );
+    expect(webFetchAllCalls.every((call) => (call[0] as { phase: string }).phase === "start")).toBe(
+      true,
+    );
+  });
+});

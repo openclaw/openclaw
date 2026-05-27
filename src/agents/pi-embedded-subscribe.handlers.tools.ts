@@ -1145,6 +1145,20 @@ export function handleToolExecutionUpdate(
   // Exec retains its existing 250 ms throttle on this path because exec lives
   // alone alongside the heavier `kind:"command"` rendering downstream.
   const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
+  // Tools listed in `NON_EXEC_PROGRESS_SAFE_TOOLS` emit a sibling
+  // `stream:"item"` event below carrying the canonical safe `progressText`
+  // for channel renderers. The channel-progress bridge in
+  // `agent-runner-execution.ts` should NOT also render a bare tool-name row
+  // from this `stream:"tool"` `phase:"update"` event (`args` is omitted on
+  // update events, so the channel renderer would produce a duplicate
+  // `🌐 Tool Name` row next to the safe item progress). We mark this event
+  // with `suppressChannelProgress: true` so the bridge skips its
+  // `onToolStart` call for this tick only. Other upstream consumers (ACP
+  // `tool_call_update`, TUI verbose output, gateway subscribers) keep
+  // receiving the raw event with the full `partialResult`. Non-allowlisted
+  // non-exec tools (and exec) do not set the marker and continue to bridge
+  // their `phase:"update"` events as before.
+  const suppressBareChannelToolRow = !isExecTool && isNonExecProgressSafeTool(toolName);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -1154,6 +1168,7 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         partialResult: liveResult,
+        ...(suppressBareChannelToolRow ? { suppressChannelProgress: true } : {}),
       },
     });
   }
@@ -1216,12 +1231,18 @@ export function handleToolExecutionUpdate(
     };
     emitTrackedItemEvent(ctx, itemData);
   }
+  // Per-run callback path that the channel-progress bridge in
+  // `agent-runner-execution.ts` actually consumes. The marker MUST be set
+  // here too (not just on the global `emitAgentEvent` above) so the
+  // bridge sees `suppressChannelProgress: true` and skips its
+  // `onToolStart` call for allowlisted safe-progress tools.
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
       phase: "update",
       name: toolName,
       toolCallId,
+      ...(suppressBareChannelToolRow ? { suppressChannelProgress: true } : {}),
     },
   });
   if (isExecTool) {

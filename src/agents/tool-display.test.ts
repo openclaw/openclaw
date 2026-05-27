@@ -428,4 +428,70 @@ describe("tool display details", () => {
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
   });
+
+  describe("web_fetch detail redacts URL path / query / credentials (channel-visible privacy)", () => {
+    it("renders the request host only, not the URL path, query string, or token", () => {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "web_fetch",
+          args: {
+            url: "https://api.example.com/secret-path/users?token=ABC123XYZ&q=SENSITIVE_QUERY",
+            extractMode: "text",
+            maxChars: 1000,
+          },
+        }),
+      );
+
+      expect(detail).toBe("from api.example.com (mode text, max 1000 chars)");
+      expect(detail).not.toContain("/secret-path");
+      expect(detail).not.toContain("ABC123XYZ");
+      expect(detail).not.toContain("SENSITIVE_QUERY");
+      expect(detail).not.toContain("token=");
+      expect(detail).not.toMatch(/[?&]/);
+    });
+
+    it("redacts URL fragment as well", () => {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "web_fetch",
+          args: {
+            url: "https://docs.example.com/page#section-private",
+          },
+        }),
+      );
+
+      expect(detail).toBe("from docs.example.com");
+      expect(detail).not.toContain("#section-private");
+      expect(detail).not.toContain("/page");
+    });
+
+    it("redacts URL userinfo (credentials embedded in URL)", () => {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "web_fetch",
+          args: {
+            url: "https://user:p%40ssw0rd@private.example.com/api",
+          },
+        }),
+      );
+
+      expect(detail).toBeDefined();
+      expect(detail).not.toContain("user:");
+      expect(detail).not.toContain("p@ssw0rd");
+      expect(detail).not.toContain("p%40ssw0rd");
+      expect(detail).not.toContain("/api");
+    });
+
+    it("falls back to a safe `url` placeholder when the URL is unparseable", () => {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "web_fetch",
+          args: { url: "not-a-valid-url" },
+        }),
+      );
+
+      expect(detail).toBe("from url");
+      expect(detail).not.toContain("not-a-valid-url");
+    });
+  });
 });

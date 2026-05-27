@@ -117,7 +117,15 @@ async function forwardFollowupProgressEvent(params: {
   if (evt.stream === "tool") {
     const phase = readStringValue(evt.data.phase) ?? "";
     const name = readStringValue(evt.data.name);
-    if (phase === "start" || phase === "update") {
+    // Mirror the suppression check from `agent-runner-execution.ts`: when a
+    // tool update opts out via `suppressChannelProgress: true`, the
+    // canonical channel-visible render lives on a sibling
+    // `stream:"item"` event (e.g. `web_fetch`'s safe `progressText`).
+    // Bridging the bare update tick here would re-introduce the
+    // duplicate `🌐 Tool Name` row in follow-up channel replies.
+    const toolEventSuppressChannelProgress =
+      phase === "update" && evt.data.suppressChannelProgress === true;
+    if (phase === "start" || (phase === "update" && !toolEventSuppressChannelProgress)) {
       await opts?.onToolStart?.({
         name,
         phase,

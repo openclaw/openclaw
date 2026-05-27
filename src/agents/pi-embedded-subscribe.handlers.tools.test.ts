@@ -1883,14 +1883,21 @@ describe("handleToolExecutionUpdate non-exec progress", () => {
       } as never,
     );
 
-    // Sanity: the stored meta should contain the URL + extractMode + maxChars
-    // (derived from args via inferToolMetaFromArgs with detailKeys:
-    // ["url", "extractMode", "maxChars"]). If this ever changes the test
-    // setup needs review.
+    // Sanity: the stored meta is derived from args via `resolveWebFetchDetail`,
+    // which now redacts the URL down to the host only (and keeps the safe
+    // `mode`/`max …` suffix). The pre-redaction state stored the full URL
+    // including path and query — that's the leak surface ClawSweeper P2
+    // flagged in the start-line render. The current host-only contract is
+    // the binding precondition for the rest of this test: the channel
+    // renderer (via the same shared formatter) cannot leak path/query when
+    // the stored meta itself doesn't carry them.
     const storedMeta = ctx.state.toolMetaById.get("tool-clawsweeper-p2")?.meta;
     expect(storedMeta).toBeDefined();
     expect(storedMeta).toContain("httpbin.org");
-    expect(storedMeta).toContain("secret-path");
+    expect(storedMeta).not.toContain("secret-path");
+    expect(storedMeta).not.toContain("ABC123XYZ");
+    expect(storedMeta).not.toContain("token=");
+    expect(storedMeta).not.toMatch(/[?&]/);
     expect(storedMeta).toContain("text");
     expect(storedMeta).toMatch(/1000/);
 

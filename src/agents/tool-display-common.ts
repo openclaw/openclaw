@@ -616,6 +616,20 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
+  // Privacy: show only the request host, never the URL path, query string,
+  // fragment, or any credentials embedded in the URL. The full URL is
+  // still available to the model via the tool's args and to runtime logs;
+  // this redaction applies only to the channel-visible tool-start /
+  // tool-progress detail that flows through `formatToolDetailText`. Without
+  // this, slow web_fetch calls show a progress line like
+  // `from https://example.com/secret-path?token=…` for the entire wait.
+  let displayHost: string;
+  try {
+    displayHost = new URL(url).host || "url";
+  } catch {
+    displayHost = "url";
+  }
+
   const mode = normalizeOptionalString(record.extractMode);
   const maxChars =
     typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
@@ -630,7 +644,7 @@ function resolveWebFetchDetail(args: unknown): string | undefined {
     suffix = suffix ? `${suffix}, max ${maxChars} chars` : `max ${maxChars} chars`;
   }
 
-  return suffix ? `from ${url} (${suffix})` : `from ${url}`;
+  return suffix ? `from ${displayHost} (${suffix})` : `from ${displayHost}`;
 }
 
 function resolveActionSpec(

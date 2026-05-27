@@ -2284,7 +2284,31 @@ export async function runAgentTurnWithFallback(params: {
                         if (shouldSuppressProgressAfterMessageToolDelivery()) {
                           return;
                         }
-                        if (phase === "start" || phase === "update") {
+                        // Fire `onToolStart` on `phase: "start"` (always) and
+                        // on `phase: "update"` only when the emitter has not
+                        // opted out via `suppressChannelProgress: true`. The
+                        // upstream `emitAgentEvent` path emits a tool update
+                        // event for every per-partial-result tick; some tools
+                        // (e.g. `web_fetch` via the
+                        // `NON_EXEC_PROGRESS_SAFE_TOOLS` allow-list) emit a
+                        // sibling `stream:"item"` event with the canonical
+                        // safe `progressText`, and rendering BOTH the
+                        // sibling item AND a bare `🌐 Tool Name` from this
+                        // bridge would duplicate channel-visible rows. The
+                        // emitter signals that the canonical render lives
+                        // elsewhere by setting `suppressChannelProgress:
+                        // true` on its `stream:"tool"` update event; tools
+                        // that have no sibling item progress (default) still
+                        // see their update ticks bridged here as before.
+                        // ACP `tool_call_update`, TUI verbose output, and
+                        // gateway subscribers continue to receive the raw
+                        // upstream event regardless.
+                        const toolEventSuppressChannelProgress =
+                          phase === "update" && evt.data.suppressChannelProgress === true;
+                        if (
+                          phase === "start" ||
+                          (phase === "update" && !toolEventSuppressChannelProgress)
+                        ) {
                           const toolStartProgressPromise = params.opts?.onToolStart?.({
                             name,
                             phase,
