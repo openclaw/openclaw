@@ -16,6 +16,11 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalThreadValue } from "../../shared/string-coerce.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  WebchatNotDeliverableError,
+} from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -139,6 +144,26 @@ export async function resolveDeliveryTarget(
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await loadDeliveryTargetRuntime();
+
+  // Reject webchat BEFORE resolveSessionDeliveryTarget normalizes the
+  // requested channel away. The session-target resolver treats non-deliverable
+  // channels (webchat is INTERNAL_MESSAGE_CHANNEL, not a deliverable plugin)
+  // as "no channel" and would then defer to resolveMessageChannelSelection
+  // with only `{ cfg }` — erasing the original `webchat` request and
+  // surfacing the old generic "no configured channels" error instead of the
+  // typed WebchatNotDeliverableError. Raw `jobs.json` / RPC cron callers that
+  // bypass the CLI guardrails hit this path; the CLI rejects the same shape
+  // at create/edit time.
+  if (
+    typeof jobPayload.channel === "string" &&
+    normalizeMessageChannel(jobPayload.channel) === INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return {
+      ok: false,
+      mode: explicitTo ? "explicit" : "implicit",
+      error: new WebchatNotDeliverableError(),
+    };
+  }
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
