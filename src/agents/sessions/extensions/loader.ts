@@ -75,53 +75,83 @@ const require = createRequire(import.meta.url);
  */
 let aliases: Record<string, string> | null = null;
 
+const PLUGIN_SDK_SOURCE_ALIASES = {
+  "openclaw/plugin-sdk/agent-core": "src/plugin-sdk/agent-core.ts",
+  "openclaw/plugin-sdk/llm": "src/plugin-sdk/llm.ts",
+  "openclaw/plugin-sdk/llm-anthropic": "src/plugin-sdk/llm-anthropic.ts",
+  "openclaw/plugin-sdk/llm-bedrock": "src/plugin-sdk/llm-bedrock.ts",
+  "openclaw/plugin-sdk/llm-google-shared": "src/plugin-sdk/llm-google-shared.ts",
+  "openclaw/plugin-sdk/llm-oauth": "src/plugin-sdk/llm-oauth.ts",
+  "openclaw/plugin-sdk/llm-openai-codex-responses": "src/plugin-sdk/llm-openai-codex-responses.ts",
+  "openclaw/plugin-sdk/llm-openai-completions": "src/plugin-sdk/llm-openai-completions.ts",
+  "openclaw/plugin-sdk/llm-openai-responses": "src/plugin-sdk/llm-openai-responses.ts",
+  "openclaw/plugin-sdk/llm-provider-runtime": "src/plugin-sdk/llm-provider-runtime.ts",
+} as const;
+
+function findPackageRoot(startDir: string): string {
+  let current = startDir;
+  while (true) {
+    if (fs.existsSync(path.join(current, "package.json"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return startDir;
+    }
+    current = parent;
+  }
+}
+
+function resolveModuleEntryForJiti(params: { moduleId: string; sourcePath?: string }): string {
+  const currentModuleDir = path.dirname(fileURLToPath(import.meta.url));
+  const sourceEntry = params.sourcePath
+    ? path.join(findPackageRoot(currentModuleDir), params.sourcePath)
+    : undefined;
+  if (
+    sourceEntry &&
+    currentModuleDir.split(path.sep).includes("src") &&
+    fs.existsSync(sourceEntry)
+  ) {
+    return sourceEntry;
+  }
+
+  const resolved = fileURLToPath(import.meta.resolve(params.moduleId));
+  if (fs.existsSync(resolved) || !params.sourcePath) {
+    return resolved;
+  }
+
+  return sourceEntry && fs.existsSync(sourceEntry) ? sourceEntry : resolved;
+}
+
+function resolvePluginSdkAliasesForJiti(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(PLUGIN_SDK_SOURCE_ALIASES).map(([moduleId, sourcePath]) => [
+      moduleId,
+      resolveModuleEntryForJiti({ moduleId, sourcePath }),
+    ]),
+  );
+}
+
 function getAliases(): Record<string, string> {
   if (aliases) {
     return aliases;
   }
 
   const currentDirname = path.dirname(fileURLToPath(import.meta.url));
-  const agentSessionsEntry = path.resolve(currentDirname, "..", "extension-sdk.js");
+  const agentSessionsEntry = fs.existsSync(path.resolve(currentDirname, "..", "extension-sdk.js"))
+    ? path.resolve(currentDirname, "..", "extension-sdk.js")
+    : path.resolve(currentDirname, "..", "extension-sdk.ts");
 
   const typeboxEntry = require.resolve("typebox");
   const typeboxCompileEntry = require.resolve("typebox/compile");
   const typeboxValueEntry = require.resolve("typebox/value");
 
-  const agentCoreEntry = fileURLToPath(import.meta.resolve("openclaw/plugin-sdk/agent-core"));
   const tuiEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-tui"));
-  const llmEntry = fileURLToPath(import.meta.resolve("openclaw/plugin-sdk/llm"));
-  const llmAnthropicEntry = fileURLToPath(import.meta.resolve("openclaw/plugin-sdk/llm-anthropic"));
-  const llmBedrockEntry = fileURLToPath(import.meta.resolve("openclaw/plugin-sdk/llm-bedrock"));
-  const llmGoogleSharedEntry = fileURLToPath(
-    import.meta.resolve("openclaw/plugin-sdk/llm-google-shared"),
-  );
-  const llmOauthEntry = fileURLToPath(import.meta.resolve("openclaw/plugin-sdk/llm-oauth"));
-  const llmOpenAiCodexResponsesEntry = fileURLToPath(
-    import.meta.resolve("openclaw/plugin-sdk/llm-openai-codex-responses"),
-  );
-  const llmOpenAiCompletionsEntry = fileURLToPath(
-    import.meta.resolve("openclaw/plugin-sdk/llm-openai-completions"),
-  );
-  const llmOpenAiResponsesEntry = fileURLToPath(
-    import.meta.resolve("openclaw/plugin-sdk/llm-openai-responses"),
-  );
-  const llmProviderRuntimeEntry = fileURLToPath(
-    import.meta.resolve("openclaw/plugin-sdk/llm-provider-runtime"),
-  );
 
   aliases = {
     "openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
-    "openclaw/plugin-sdk/agent-core": agentCoreEntry,
+    ...resolvePluginSdkAliasesForJiti(),
     "@earendil-works/pi-tui": tuiEntry,
-    "openclaw/plugin-sdk/llm": llmEntry,
-    "openclaw/plugin-sdk/llm-anthropic": llmAnthropicEntry,
-    "openclaw/plugin-sdk/llm-bedrock": llmBedrockEntry,
-    "openclaw/plugin-sdk/llm-google-shared": llmGoogleSharedEntry,
-    "openclaw/plugin-sdk/llm-oauth": llmOauthEntry,
-    "openclaw/plugin-sdk/llm-openai-codex-responses": llmOpenAiCodexResponsesEntry,
-    "openclaw/plugin-sdk/llm-openai-completions": llmOpenAiCompletionsEntry,
-    "openclaw/plugin-sdk/llm-openai-responses": llmOpenAiResponsesEntry,
-    "openclaw/plugin-sdk/llm-provider-runtime": llmProviderRuntimeEntry,
     typebox: typeboxEntry,
     "typebox/compile": typeboxCompileEntry,
     "typebox/value": typeboxValueEntry,

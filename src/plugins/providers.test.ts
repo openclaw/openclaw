@@ -245,10 +245,6 @@ function getLastRuntimeRegistryCall(): Record<string, unknown> {
   >;
 }
 
-function cloneOptions<T>(value: T): T {
-  return structuredClone(value);
-}
-
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -373,19 +369,6 @@ function getLastSetupLoadedPluginConfig() {
         };
       }
     | undefined;
-}
-
-function createBundledProviderCompatOptions(params?: { onlyPluginIds?: readonly string[] }) {
-  return {
-    config: {
-      plugins: {
-        allow: ["openrouter"],
-        bundledDiscovery: "compat" as const,
-      },
-    },
-    bundledProviderAllowlistCompat: true,
-    ...(params?.onlyPluginIds !== undefined ? { onlyPluginIds: params.onlyPluginIds } : {}),
-  };
 }
 
 function createAutoEnabledProviderConfig() {
@@ -721,7 +704,7 @@ describe("resolvePluginProviders", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("reuses declared external auth plugin ids for compat fallback filtering", () => {
+  it("keeps undeclared external auth provider fallback scoped to active external providers", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "declared-auth-owner",
@@ -787,7 +770,7 @@ describe("resolvePluginProviders", () => {
     expect(discovered).toEqual(["openrouter"]);
   });
 
-  it("returns all bundled provider plugins in explicit compat mode", () => {
+  it("filters bundled provider plugins through restrictive allowlists", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "kilocode",
@@ -813,13 +796,12 @@ describe("resolvePluginProviders", () => {
       config: {
         plugins: {
           allow: ["openrouter"],
-          bundledDiscovery: "compat",
         },
       },
       env: {} as NodeJS.ProcessEnv,
     });
 
-    expect(discovered).toEqual(["kilocode", "moonshot", "openrouter"]);
+    expect(discovered).toEqual(["openrouter"]);
   });
 
   it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {
@@ -838,53 +820,6 @@ describe("resolvePluginProviders", () => {
       }),
     ).toStrictEqual([]);
   });
-
-  it.each([
-    {
-      name: "can augment restrictive allowlists for bundled provider compatibility",
-      options: createBundledProviderCompatOptions(),
-      expectedAllow: ["openrouter", "google", "kilocode", "moonshot"],
-      expectedEntries: {
-        google: { enabled: true },
-        kilocode: { enabled: true },
-        moonshot: { enabled: true },
-      },
-    },
-    {
-      name: "does not reintroduce the retired google auth plugin id into compat allowlists",
-      options: createBundledProviderCompatOptions(),
-      expectedAllow: ["google"],
-      unexpectedAllow: ["google-gemini-cli-auth"],
-    },
-    {
-      name: "does not inject non-bundled provider plugin ids into compat allowlists",
-      options: createBundledProviderCompatOptions(),
-      unexpectedAllow: ["workspace-provider"],
-    },
-    {
-      name: "scopes bundled provider compat expansion to the requested plugin ids",
-      options: createBundledProviderCompatOptions({
-        onlyPluginIds: ["moonshot"],
-      }),
-      expectedAllow: ["openrouter", "moonshot"],
-      unexpectedAllow: ["google", "kilocode"],
-      expectedOnlyPluginIds: ["moonshot"],
-    },
-  ] as const)(
-    "$name",
-    ({ options, expectedAllow, expectedEntries, expectedOnlyPluginIds, unexpectedAllow }) => {
-      resolvePluginProviders(
-        cloneOptions(options) as unknown as Parameters<typeof resolvePluginProviders>[0],
-      );
-
-      expectResolvedAllowlistState({
-        expectedAllow,
-        expectedEntries,
-        expectedOnlyPluginIds,
-        unexpectedAllow,
-      });
-    },
-  );
 
   it("can enable bundled provider plugins under Vitest when no explicit plugin config exists", () => {
     resolvePluginProviders({
@@ -954,42 +889,10 @@ describe("resolvePluginProviders", () => {
   });
 
   it("loads only provider plugins on the provider runtime path", () => {
-    resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
-    });
+    resolvePluginProviders({});
 
     expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-  });
-
-  it("includes present bundled providers in bundled compat expansion", () => {
-    setManifestPlugins([
-      createManifestProviderPlugin({
-        id: "google",
-        providerIds: ["google"],
-      }),
-      createManifestProviderPlugin({
-        id: "codex",
-        providerIds: ["codex"],
-      }),
-    ]);
-
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-        },
-      },
-      bundledProviderAllowlistCompat: true,
-    });
-
-    expectResolvedAllowlistState({
-      expectedAllow: ["openrouter", "google", "codex"],
-    });
-    expectLastRuntimeRegistryLoad({
-      onlyPluginIds: ["codex", "google"],
     });
   });
 
@@ -1012,108 +915,6 @@ describe("resolvePluginProviders", () => {
       entries: {
         google: { enabled: true },
       },
-    });
-  });
-
-  it("excludes untrusted workspace provider plugins from setup discovery by default", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-          entries: {
-            google: { enabled: false },
-          },
-        },
-      },
-      mode: "setup",
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-    expectPluginConfigState(getLastSetupLoadedPluginConfig(), {
-      allow: ["openrouter", "google", "kilocode", "moonshot"],
-      entries: {
-        google: { enabled: false },
-        kilocode: { enabled: true },
-        moonshot: { enabled: true },
-      },
-    });
-  });
-
-  it("loads explicitly included untrusted workspace provider plugins in setup discovery", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: true,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot", "workspace-provider"],
-    });
-  });
-
-  it("excludes untrusted workspace provider plugins from setup discovery when explicitly requested", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter"],
-          bundledDiscovery: "compat",
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-  });
-
-  it("does not keep trusted but disabled workspace provider plugins eligible in setup discovery", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter", "workspace-provider"],
-          bundledDiscovery: "compat",
-          entries: {
-            "workspace-provider": { enabled: false },
-          },
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
-    });
-  });
-
-  it("does not include trusted-but-disabled workspace providers when denylist blocks them", () => {
-    resolvePluginProviders({
-      config: {
-        plugins: {
-          allow: ["openrouter", "workspace-provider"],
-          bundledDiscovery: "compat",
-          deny: ["workspace-provider"],
-          entries: {
-            "workspace-provider": { enabled: false },
-          },
-        },
-      },
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-    });
-
-    expectLastSetupRegistryLoad({
-      onlyPluginIds: ["google", "kilocode", "moonshot"],
     });
   });
 
@@ -1762,7 +1563,6 @@ describe("resolvePluginProviders", () => {
     const providers = resolvePluginProviders({
       config: {},
       modelRefs: ["qwen3.6-27b@iq3_xxs"],
-      bundledProviderAllowlistCompat: true,
     });
 
     expectResolvedProviders(providers, [
@@ -1801,7 +1601,6 @@ describe("resolvePluginProviders", () => {
     const providers = resolvePluginProviders({
       config: {},
       modelRefs: ["gpt-5.4"],
-      bundledProviderAllowlistCompat: true,
     });
 
     expectResolvedProviders(providers, [

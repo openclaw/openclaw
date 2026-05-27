@@ -1171,7 +1171,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("pairs a provider when config uses an alias key", async () => {
+  it("does not pair provider aliases through core normalization", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
         version: 1,
@@ -1197,10 +1197,7 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "amazon-bedrock/vision-1",
-      });
-      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
     });
   });
 

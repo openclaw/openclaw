@@ -8,7 +8,6 @@ import type {
   RuntimeParityDrift,
   RuntimeParityResult,
 } from "./runtime-parity.js";
-import { openclawRuntimeParityCell } from "./runtime-parity.js";
 import {
   readScenarioRuntimeToolCoverageMetadata,
   type QaRuntimeCapabilityLayer,
@@ -192,8 +191,7 @@ function countRuntimeToolCalls(
   if (!result || !toolName) {
     return 0;
   }
-  const cell =
-    runtime === "openclaw" ? openclawRuntimeParityCell(result.cells) : result.cells.codex;
+  const cell = runtime === "openclaw" ? result.cells.openclaw : result.cells.codex;
   return cell.toolCalls.filter((call) => call.tool === toolName).length;
 }
 
@@ -219,7 +217,7 @@ function buildRow(params: {
     fixtureCount: params.group.scenarios.length,
     scenarios: params.group.scenarios.map((scenario) => scenario.id),
     sourcePaths: params.group.scenarios.map((scenario) => scenario.sourcePath),
-    openclaw: result ? cellStatus(openclawRuntimeParityCell(result.cells)) : "not-run",
+    openclaw: result ? cellStatus(result.cells.openclaw) : "not-run",
     codex: result ? cellStatus(result.cells.codex) : "not-run",
     drift: result?.drift ?? "not-run",
     openclawToolCalls: countRuntimeToolCalls(result, "openclaw", runtimeToolName),

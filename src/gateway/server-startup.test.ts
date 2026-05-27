@@ -9,7 +9,6 @@ const ensureOpenClawModelsJsonMock = vi.fn<
   ) => Promise<{ agentDir: string; wrote: boolean }>
 >(async () => ({ agentDir: "/tmp/agent", wrote: false }));
 const agentModelModuleLoadedMock = vi.fn();
-const resolveEmbeddedAgentRuntimeMock = vi.fn(() => "auto");
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentDir: () => "/tmp/agent",
@@ -28,10 +27,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => {
     resolveModel: () => ({}),
   };
 });
-
-vi.mock("../agents/agent-runtime-id.js", () => ({
-  resolveEmbeddedAgentRuntime: () => resolveEmbeddedAgentRuntimeMock(),
-}));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipStartupModelPrewarm;
@@ -59,8 +54,6 @@ describe("gateway startup primary model warmup", () => {
   beforeEach(() => {
     ensureOpenClawModelsJsonMock.mockClear();
     agentModelModuleLoadedMock.mockClear();
-    resolveEmbeddedAgentRuntimeMock.mockClear();
-    resolveEmbeddedAgentRuntimeMock.mockReturnValue("auto");
   });
 
   it("prewarms an explicit configured primary model", async () => {
@@ -128,46 +121,6 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(agentModelModuleLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("skips static warmup when a non-OpenClaw agent runtime is forced", async () => {
-    resolveEmbeddedAgentRuntimeMock.mockReturnValue("codex");
-    await prewarmConfiguredPrimaryModel({
-      cfg: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "codex/gpt-5.4",
-            },
-          },
-        },
-      } as OpenClawConfig,
-      log: { warn: vi.fn() },
-    });
-
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(agentModelModuleLoadedMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps OpenClaw static warmup when the OpenClaw agent runtime is forced", async () => {
-    resolveEmbeddedAgentRuntimeMock.mockReturnValue("openclaw");
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai-codex/gpt-5.4",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await prewarmConfiguredPrimaryModel({
-      cfg,
-      log: { warn: vi.fn() },
-    });
-
-    expectModelsJsonPrewarmCall(cfg);
     expect(agentModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 

@@ -39,6 +39,7 @@
   "cron-store-runtime",
   "config-schema",
   "json-schema-runtime",
+  "json-unsafe-integers",
   "reply-runtime",
   "reply-dedupe",
   "reply-dispatch-runtime",

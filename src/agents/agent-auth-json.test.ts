@@ -188,7 +188,7 @@ describe("ensureAgentAuthJsonFromAuthProfiles", () => {
     expect(result.wrote).toBe(false);
   });
 
-  it("normalizes provider ids when writing auth.json keys", async () => {
+  it("preserves provider ids when writing auth.json keys", async () => {
     const agentDir = await createAgentDir();
 
     writeProfiles(agentDir, {
@@ -203,8 +203,8 @@ describe("ensureAgentAuthJsonFromAuthProfiles", () => {
     expect(result.wrote).toBe(true);
 
     const auth = await readAuthJson(agentDir);
-    expectApiKeyAuth(auth, "zai", "sk-zai");
-    expect(auth["z.ai"]).toBeUndefined();
+    expectApiKeyAuth(auth, "z.ai", "sk-zai");
+    expect(auth.zai).toBeUndefined();
   });
 
   it("preserves existing auth.json entries not in auth-profiles", async () => {

@@ -16,10 +16,6 @@ describe("embedded runner compatibility aliases", () => {
     expect(normalizeEmbeddedAgentRuntime("codex-app-server")).toBe("codex");
   });
 
-  it("normalizes legacy persisted runtime ids at plugin boundaries", () => {
-    expect(normalizeEmbeddedAgentRuntime("pi")).toBe("openclaw");
-  });
-
   it("does not rewrite custom runtime ids", () => {
     expect(normalizeEmbeddedAgentRuntime("custom-harness")).toBe("custom-harness");
   });

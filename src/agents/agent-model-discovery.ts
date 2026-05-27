@@ -2,7 +2,6 @@ import path from "node:path";
 import type { Model } from "../llm/types.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
-  applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   normalizeProviderResolvedModelWithPlugin,
 } from "../plugins/provider-runtime.js";
@@ -57,8 +56,8 @@ export function normalizeDiscoveredAgentModel<T>(value: T, agentDir: string): T 
         agentDir,
       },
     }) ?? model;
-  const compatNormalized =
-    applyProviderResolvedModelCompatWithPlugins({
+  const transportNormalized =
+    applyProviderResolvedTransportWithPlugin({
       provider: model.provider,
       context: {
         provider: model.provider,
@@ -67,16 +66,6 @@ export function normalizeDiscoveredAgentModel<T>(value: T, agentDir: string): T 
         agentDir,
       },
     }) ?? pluginNormalized;
-  const transportNormalized =
-    applyProviderResolvedTransportWithPlugin({
-      provider: model.provider,
-      context: {
-        provider: model.provider,
-        modelId: model.id,
-        model: compatNormalized as unknown as ProviderRuntimeModelLike,
-        agentDir,
-      },
-    }) ?? compatNormalized;
   if (
     !isRecord(transportNormalized) ||
     typeof transportNormalized.id !== "string" ||

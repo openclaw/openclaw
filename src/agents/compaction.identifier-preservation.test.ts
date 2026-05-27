@@ -1,10 +1,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
-import * as agentSessions from "openclaw/plugin-sdk/agent-sessions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as agentSessions from "./sessions/index.js";
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
-  const actual = await vi.importActual<typeof agentSessions>("openclaw/plugin-sdk/agent-sessions");
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof agentSessions>("./sessions/index.js");
   return {
     ...actual,
     generateSummary: vi.fn(),

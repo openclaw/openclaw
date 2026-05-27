@@ -22,7 +22,6 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin,

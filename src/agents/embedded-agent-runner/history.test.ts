@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { getHistoryLimitFromSessionKey } from "./history.js";
 
 describe("getHistoryLimitFromSessionKey", () => {
-  it("matches channel history limits across canonical provider aliases", () => {
+  it("does not match channel history limits across provider id variants", () => {
     expect(
       getHistoryLimitFromSessionKey("agent:main:z-ai:channel:general", {
         channels: {
@@ -12,7 +12,7 @@ describe("getHistoryLimitFromSessionKey", () => {
           },
         },
       }),
-    ).toBe(17);
+    ).toBeUndefined();
   });
 
   it("returns undefined when sessionKey or config is undefined", () => {

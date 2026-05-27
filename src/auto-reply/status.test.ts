@@ -3,6 +3,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -34,10 +35,25 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  cliBackendsTesting.resetDepsForTest();
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
+
+function registerAnthropicCliBackendForTest(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
 
 describe("buildStatusMessage", () => {
   it("summarizes agent readiness and context usage", () => {
@@ -186,7 +202,7 @@ describe("buildStatusMessage", () => {
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -202,7 +218,7 @@ describe("buildStatusMessage", () => {
           source: "pre-prompt-estimate",
           updatedAt: 1,
           provider: "anthropic",
-          model: "pi:opus",
+          model: "claude-sonnet-4.6",
           route: "fits",
           shouldCompact: false,
           estimatedPromptTokens: 640_000,
@@ -233,7 +249,7 @@ describe("buildStatusMessage", () => {
   it("prefers fresh totalTokens over estimated context budget status", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -247,7 +263,7 @@ describe("buildStatusMessage", () => {
           source: "pre-prompt-estimate",
           updatedAt: 1,
           provider: "anthropic",
-          model: "pi:opus",
+          model: "claude-sonnet-4.6",
           route: "fits",
           shouldCompact: false,
           estimatedPromptTokens: 640_000,
@@ -277,7 +293,7 @@ describe("buildStatusMessage", () => {
   it("uses estimated context budget status when token usage is absent", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -289,7 +305,7 @@ describe("buildStatusMessage", () => {
           source: "pre-prompt-estimate",
           updatedAt: 1,
           provider: "anthropic",
-          model: "pi:opus",
+          model: "claude-sonnet-4.6",
           route: "fits",
           shouldCompact: false,
           estimatedPromptTokens: 125_000,
@@ -959,6 +975,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("renders CLI runtime aliases as the selected model route", () => {
+    registerAnthropicCliBackendForTest();
+
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-7",

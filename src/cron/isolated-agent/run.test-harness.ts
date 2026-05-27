@@ -77,7 +77,7 @@ export const ensureRuntimePluginsLoadedMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
-const resolveCronAgentLaneMock = createMock();
+export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();

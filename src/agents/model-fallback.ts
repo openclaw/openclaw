@@ -763,7 +763,6 @@ function resolveFallbackCandidateCacheKey(
       env,
       ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
       activate: false,
-      bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
     })
   ) {

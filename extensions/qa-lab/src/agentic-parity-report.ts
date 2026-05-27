@@ -3,11 +3,7 @@ import {
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
 import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
-import {
-  isRuntimeParityResultPass,
-  openclawRuntimeParityCell,
-  runtimeParityCellStatus,
-} from "./runtime-parity.js";
+import { isRuntimeParityResultPass, runtimeParityCellStatus } from "./runtime-parity.js";
 
 type QaParityReportStep = {
   name: string;
@@ -649,7 +645,7 @@ export function buildQaRuntimeParityReport(params: {
       } satisfies QaRuntimeParityScenarioReport;
     }
     driftCounts[parity.drift] += 1;
-    const openclawCell = openclawRuntimeParityCell(parity.cells);
+    const openclawCell = parity.cells.openclaw;
     const codexCell = parity.cells.codex;
     const openclawStatus = runtimeParityCellStatus(openclawCell);
     const codexStatus = runtimeParityCellStatus(codexCell);

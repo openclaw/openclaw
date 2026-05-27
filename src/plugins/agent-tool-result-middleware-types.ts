@@ -3,13 +3,8 @@ import type { AgentToolResult } from "../agents/runtime/index.js";
 export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
 
 export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex";
-/** @deprecated Use "openclaw". */
-export type AgentToolResultMiddlewareLegacyRuntime = "pi";
 /** @deprecated Use AgentToolResultMiddlewareRuntime. */
-export type AgentToolResultMiddlewareHarness =
-  | AgentToolResultMiddlewareRuntime
-  | AgentToolResultMiddlewareLegacyRuntime
-  | "codex-app-server";
+export type AgentToolResultMiddlewareHarness = AgentToolResultMiddlewareRuntime | "codex-app-server";
 
 export type AgentToolResultMiddlewareEvent = {
   threadId?: string;
@@ -42,7 +37,7 @@ export type AgentToolResultMiddleware = (
 ) => Promise<AgentToolResultMiddlewareResult | void> | AgentToolResultMiddlewareResult | void;
 
 export type AgentToolResultMiddlewareOptions = {
-  runtimes?: Array<AgentToolResultMiddlewareRuntime | AgentToolResultMiddlewareLegacyRuntime>;
+  runtimes?: AgentToolResultMiddlewareRuntime[];
   /** @deprecated Use runtimes. */
   harnesses?: AgentToolResultMiddlewareHarness[];
 };

@@ -12,17 +12,16 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
-import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
 
@@ -1067,26 +1066,6 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(toolNameList(cronTools)).toContain("message");
   });
-
-  it.each(providerAliasCases)(
-    "applies canonical tools.byProvider deny policy to core tools for alias %s",
-    (alias, canonical) => {
-      const tools = createOpenClawCodingTools({
-        config: {
-          tools: {
-            byProvider: {
-              [canonical]: { deny: ["read"] },
-            },
-          },
-        } as OpenClawConfig,
-        modelProvider: alias,
-      });
-      const names = new Set(tools.map((tool) => tool.name));
-
-      expect(names.has("read")).toBe(false);
-      expect(names.has("write")).toBe(true);
-    },
-  );
 
   it("expands group shorthands in global tool policy", () => {
     const tools = createOpenClawCodingTools({

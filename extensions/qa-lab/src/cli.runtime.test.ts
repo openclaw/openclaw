@@ -289,37 +289,16 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("normalizes deprecated pi runtime-pair aliases at the CLI boundary", async () => {
-    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      await runQaSuiteCommand({
+  it("rejects unknown runtime-pair ids at the CLI boundary", async () => {
+    await expect(
+      runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
         providerMode: "mock-openai",
         scenarioIds: ["approval-turn-tool-followthrough"],
-        runtimePair: "pi,codex",
-      });
-
-      expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        outputDir: undefined,
-        transportId: "qa-channel",
-        providerMode: "mock-openai",
-        primaryModel: undefined,
-        alternateModel: undefined,
-        fastMode: undefined,
-        scenarioIds: ["approval-turn-tool-followthrough"],
-        runtimePair: ["openclaw", "codex"],
-      });
-      expect(emitWarning).toHaveBeenCalledWith(
-        'QA runtime "pi" is deprecated; use "openclaw" instead.',
-        {
-          code: "OPENCLAW_QA_LEGACY_RUNTIME_ALIAS",
-          type: "DeprecationWarning",
-        },
-      );
-    } finally {
-      emitWarning.mockRestore();
-    }
+        runtimePair: "legacy-runtime,codex",
+      }),
+    ).rejects.toThrow('--runtime-pair only supports "openclaw" and "codex".');
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("drops blank suite model refs so provider defaults apply", async () => {

@@ -33,7 +33,6 @@ import { defaultQaModelForMode } from "./run-config.js";
 import {
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
-  openclawRuntimeParityCell,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -363,7 +362,7 @@ function buildRuntimeParityScenarioResult(params: {
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
   const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
-  const openclawCell = openclawRuntimeParityCell(params.result.cells);
+  const openclawCell = params.result.cells.openclaw;
   return {
     name: params.scenarioName,
     status: driftStepStatus,

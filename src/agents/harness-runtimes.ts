@@ -167,25 +167,16 @@ function pushConfiguredAgentModelRuntimeIds(
 }
 
 export type ConfiguredAgentHarnessRuntimeOptions = {
-  includeEnvRuntime?: boolean;
   includeImplicitRuntimePreferences?: boolean;
 };
 
 export function collectConfiguredAgentHarnessRuntimes(
   config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
   options: ConfiguredAgentHarnessRuntimeOptions = {},
 ): string[] {
   const runtimes = new Set<string>();
-  const includeEnvRuntime = options.includeEnvRuntime ?? true;
   const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
 
-  if (includeEnvRuntime) {
-    const envRuntime = normalizeConfiguredRuntimeId(env.OPENCLAW_AGENT_RUNTIME);
-    if (isSelectablePluginRuntime(envRuntime)) {
-      runtimes.add(envRuntime);
-    }
-  }
   pushConfiguredModelRuntimeIds(config, runtimes);
   pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 

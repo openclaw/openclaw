@@ -966,9 +966,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     platform: params.platform,
   });
   const requiredAgentHarnessRuntimes = new Set(
-    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env, {
-      includeEnvRuntime: false,
-    }),
+    collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);

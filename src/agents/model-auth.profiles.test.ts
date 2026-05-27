@@ -811,7 +811,7 @@ describe("getApiKeyForModel", () => {
         env: {},
         store,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       hasAuthForModelProvider({
         provider: "vllm",

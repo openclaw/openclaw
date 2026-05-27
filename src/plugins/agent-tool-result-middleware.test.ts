@@ -16,13 +16,6 @@ describe("normalizeAgentToolResultMiddlewareRuntimes", () => {
     ).toEqual(["codex", "openclaw"]);
   });
 
-  it("normalizes legacy runtime names to openclaw", () => {
-    expect(normalizeAgentToolResultMiddlewareRuntimes({ runtimes: ["pi", "codex"] })).toEqual([
-      "openclaw",
-      "codex",
-    ]);
-  });
-
   it("falls back to legacy harnesses when runtimes is undefined", () => {
     expect(
       normalizeAgentToolResultMiddlewareRuntimes({

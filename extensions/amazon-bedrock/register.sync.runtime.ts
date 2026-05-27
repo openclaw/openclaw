@@ -438,15 +438,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return bedrockRegionRe.exec(baseUrl)?.[1];
   }
 
-  /**
-   * Resolve the AWS region for Bedrock API calls.
-   * Provider-specific baseUrl wins over global bedrockDiscovery to avoid signing
-   * with the wrong region when discovery and provider target different regions.
-   */
+  /** Resolve the AWS region for Bedrock API calls from provider-specific baseUrl. */
   function resolveBedrockRegion(
-    config:
-      | { models?: { bedrockDiscovery?: { region?: string }; providers?: Record<string, unknown> } }
-      | undefined,
+    config: { models?: { providers?: Record<string, unknown> } } | undefined,
   ): string | undefined {
     // Try provider-specific baseUrl first.
     const providers = config?.models?.providers;
@@ -469,7 +463,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         }
       }
     }
-    return config?.models?.bedrockDiscovery?.region;
+    return undefined;
   }
 
   api.registerProvider({
@@ -483,7 +477,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         const { resolveImplicitBedrockProvider } = await import("./discovery.js");
         const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitBedrockProvider({
-          config: ctx.config,
           pluginConfig: currentPluginConfig,
           env: ctx.env,
         });

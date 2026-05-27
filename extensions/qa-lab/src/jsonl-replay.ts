@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  openclawRuntimeParityCell,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -223,7 +222,7 @@ export async function runJsonlReplay(
             providerMode: input.providerMode,
           }),
       });
-      cells.openclaw.push(openclawRuntimeParityCell(parity.cells));
+      cells.openclaw.push(parity.cells.openclaw);
       cells.codex.push(parity.cells.codex);
       drift.push(parity.drift);
       if (firstDriftAtTurn === undefined && parity.drift !== "none") {

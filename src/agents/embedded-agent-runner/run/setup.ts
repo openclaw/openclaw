@@ -50,7 +50,7 @@ export async function resolveHookModelSelection(params: {
   let provider = params.provider;
   let modelId = params.modelId;
   let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
-  let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
+  let beforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
   const hookRunner = params.hookRunner;
 
   // Run before_model_resolve hooks early so plugins can override the
@@ -71,18 +71,19 @@ export async function resolveHookModelSelection(params: {
 
   if (hookRunner?.hasHooks("before_agent_start")) {
     try {
-      legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
+      beforeAgentStartResult = await hookRunner.runBeforeAgentStart(
         { prompt: params.prompt },
         params.hookContext,
       );
       modelResolveOverride = {
         providerOverride:
-          modelResolveOverride?.providerOverride ?? legacyBeforeAgentStartResult?.providerOverride,
-        modelOverride:
-          modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
+          modelResolveOverride?.providerOverride ?? beforeAgentStartResult?.providerOverride,
+        modelOverride: modelResolveOverride?.modelOverride ?? beforeAgentStartResult?.modelOverride,
       };
     } catch (hookErr) {
-      log.warn(`before_agent_start hook (legacy model resolve path) failed: ${String(hookErr)}`);
+      log.warn(
+        `deprecated before_agent_start hook failed during model resolve: ${String(hookErr)}`,
+      );
     }
   }
 
@@ -98,7 +99,7 @@ export async function resolveHookModelSelection(params: {
   return {
     provider,
     modelId,
-    legacyBeforeAgentStartResult,
+    beforeAgentStartResult,
   };
 }
 

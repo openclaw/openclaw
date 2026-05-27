@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import {
   testing as embeddedRunTesting,
   abortEmbeddedAgentRun,
@@ -40,6 +41,27 @@ function createCliBackendTestConfig() {
       },
     },
   };
+}
+
+function registerCliBackendsForTest(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+      {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        pluginId: "google",
+        config: { command: "gemini" },
+        bundleMcp: false,
+      },
+    ],
+  });
 }
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
@@ -189,6 +211,7 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
 }
 
 beforeEach(() => {
+  registerCliBackendsForTest();
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   resetSystemEventsForTest();
@@ -224,6 +247,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   resetSystemEventsForTest();

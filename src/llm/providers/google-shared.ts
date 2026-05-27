@@ -2,8 +2,26 @@
  * Shared utilities for Google Generative AI and Google Vertex providers.
  */
 
-import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
-import type { Context, ImageContent, Model, StopReason, TextContent, Tool } from "../types.js";
+import {
+  type Content,
+  FinishReason,
+  FunctionCallingConfigMode,
+  type GenerateContentResponse,
+  type Part,
+} from "@google/genai";
+import { calculateCost } from "../model-utils.js";
+import type {
+  AssistantMessage,
+  Context,
+  ImageContent,
+  Model,
+  StopReason,
+  TextContent,
+  ThinkingContent,
+  Tool,
+  ToolCall,
+} from "../types.js";
+import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -381,6 +399,185 @@ export function mapStopReason(reason: FinishReason): StopReason {
       throw new Error(`Unhandled stop reason: ${String(exhaustive)}`);
     }
   }
+}
+
+export async function consumeGoogleGenerateContentStream<T extends GoogleApiType>(params: {
+  chunks: AsyncIterable<GenerateContentResponse>;
+  model: Model<T>;
+  output: AssistantMessage;
+  stream: AssistantMessageEventStream;
+  signal?: AbortSignal;
+  nextToolCallId: (name: string | undefined) => string;
+}): Promise<void> {
+  params.stream.push({ type: "start", partial: params.output });
+  let currentBlock: TextContent | ThinkingContent | null = null;
+  const blocks = params.output.content;
+  const blockIndex = () => blocks.length - 1;
+
+  const endCurrentBlock = () => {
+    if (!currentBlock) {
+      return;
+    }
+    if (currentBlock.type === "text") {
+      params.stream.push({
+        type: "text_end",
+        contentIndex: blockIndex(),
+        content: currentBlock.text,
+        partial: params.output,
+      });
+    } else {
+      params.stream.push({
+        type: "thinking_end",
+        contentIndex: blockIndex(),
+        content: currentBlock.thinking,
+        partial: params.output,
+      });
+    }
+    currentBlock = null;
+  };
+
+  for await (const chunk of params.chunks) {
+    params.output.responseId ||= chunk.responseId;
+    const candidate = chunk.candidates?.[0];
+    if (candidate?.content?.parts) {
+      for (const part of candidate.content.parts) {
+        if (part.text !== undefined) {
+          const isThinking = isThinkingPart(part);
+          if (
+            !currentBlock ||
+            (isThinking && currentBlock.type !== "thinking") ||
+            (!isThinking && currentBlock.type !== "text")
+          ) {
+            endCurrentBlock();
+            if (isThinking) {
+              currentBlock = { type: "thinking", thinking: "", thinkingSignature: undefined };
+              params.output.content.push(currentBlock);
+              params.stream.push({
+                type: "thinking_start",
+                contentIndex: blockIndex(),
+                partial: params.output,
+              });
+            } else {
+              currentBlock = { type: "text", text: "" };
+              params.output.content.push(currentBlock);
+              params.stream.push({
+                type: "text_start",
+                contentIndex: blockIndex(),
+                partial: params.output,
+              });
+            }
+          }
+          if (currentBlock.type === "thinking") {
+            currentBlock.thinking += part.text;
+            currentBlock.thinkingSignature = retainThoughtSignature(
+              currentBlock.thinkingSignature,
+              part.thoughtSignature,
+            );
+            params.stream.push({
+              type: "thinking_delta",
+              contentIndex: blockIndex(),
+              delta: part.text,
+              partial: params.output,
+            });
+          } else {
+            currentBlock.text += part.text;
+            currentBlock.textSignature = retainThoughtSignature(
+              currentBlock.textSignature,
+              part.thoughtSignature,
+            );
+            params.stream.push({
+              type: "text_delta",
+              contentIndex: blockIndex(),
+              delta: part.text,
+              partial: params.output,
+            });
+          }
+        }
+
+        if (part.functionCall) {
+          endCurrentBlock();
+          const providedId = part.functionCall.id;
+          const needsNewId =
+            !providedId ||
+            params.output.content.some(
+              (block) => block.type === "toolCall" && block.id === providedId,
+            );
+          const toolCall: ToolCall = {
+            type: "toolCall",
+            id: needsNewId ? params.nextToolCallId(part.functionCall.name) : providedId,
+            name: part.functionCall.name || "",
+            arguments: (part.functionCall.args as Record<string, unknown>) ?? {},
+            ...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
+          };
+
+          params.output.content.push(toolCall);
+          params.stream.push({
+            type: "toolcall_start",
+            contentIndex: blockIndex(),
+            partial: params.output,
+          });
+          params.stream.push({
+            type: "toolcall_delta",
+            contentIndex: blockIndex(),
+            delta: JSON.stringify(toolCall.arguments),
+            partial: params.output,
+          });
+          params.stream.push({
+            type: "toolcall_end",
+            contentIndex: blockIndex(),
+            toolCall,
+            partial: params.output,
+          });
+        }
+      }
+    }
+
+    if (candidate?.finishReason) {
+      params.output.stopReason = mapStopReason(candidate.finishReason);
+      if (params.output.content.some((block) => block.type === "toolCall")) {
+        params.output.stopReason = "toolUse";
+      }
+    }
+
+    if (chunk.usageMetadata) {
+      params.output.usage = {
+        input:
+          (chunk.usageMetadata.promptTokenCount || 0) -
+          (chunk.usageMetadata.cachedContentTokenCount || 0),
+        output:
+          (chunk.usageMetadata.candidatesTokenCount || 0) +
+          (chunk.usageMetadata.thoughtsTokenCount || 0),
+        cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
+        cacheWrite: 0,
+        totalTokens: chunk.usageMetadata.totalTokenCount || 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      };
+      calculateCost(params.model, params.output.usage);
+    }
+  }
+
+  endCurrentBlock();
+
+  if (params.signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+
+  if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {
+    throw new Error("An unknown error occurred");
+  }
+
+  params.stream.push({
+    type: "done",
+    reason: params.output.stopReason,
+    message: params.output,
+  });
+  params.stream.end();
 }
 
 /**

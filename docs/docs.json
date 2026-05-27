@@ -73,14 +73,6 @@
       "destination": "/cli/mcp"
     },
     {
-      "source": "/pi",
-      "destination": "/agent-runtime-architecture"
-    },
-    {
-      "source": "/pi-dev",
-      "destination": "/openclaw-agent-runtime"
-    },
-    {
       "source": "/providers/modelstudio",
       "destination": "/providers/qwen"
     },

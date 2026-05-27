@@ -1648,7 +1648,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("matches provider-prefixed configured model ids through provider aliases", () => {
+  it("does not match provider-prefixed configured model ids through core provider aliases", () => {
     const cfg = {
       models: {
         providers: {
@@ -1668,14 +1668,10 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("bytedance", "vision-model", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      id: "volcengine/vision-model",
-      input: ["text", "image"],
-    });
+    expect(result.error).toBe("Unknown model: bytedance/vision-model");
   });
 
-  it("resolves direct moonshotai refs through the Moonshot provider alias", () => {
+  it("does not resolve direct moonshotai refs through core provider aliases", () => {
     const cfg = {
       models: {
         providers: {
@@ -1696,17 +1692,10 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("moonshotai", "kimi-k2.6", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "moonshot",
-      id: "kimi-k2.6",
-      api: "openai-completions",
-      baseUrl: "https://api.moonshot.ai/v1",
-      input: ["text", "image"],
-    });
+    expect(result.error).toBe("Unknown model: moonshotai/kimi-k2.6");
   });
 
-  it("resolves direct moonshot-ai refs through the Moonshot provider alias", () => {
+  it("does not resolve direct moonshot-ai refs through core provider aliases", () => {
     const cfg = {
       models: {
         providers: {
@@ -1721,11 +1710,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("moonshot-ai", "kimi-k2.6", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
-      provider: "moonshot",
-      id: "kimi-k2.6",
-    });
+    expect(result.error).toBe("Unknown model: moonshot-ai/kimi-k2.6");
   });
 
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
@@ -3123,7 +3108,6 @@ describe("resolveModel", () => {
       authStorage: { mocked: true } as never,
       modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
       runtimeHooks: {
-        applyProviderResolvedModelCompatWithPlugins: () => undefined,
         buildProviderUnknownModelHintWithPlugin: () => undefined,
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,

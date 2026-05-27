@@ -4,7 +4,6 @@ import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registr
 import type { Api, Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
-  applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   normalizeProviderTransportWithPlugin,
@@ -48,9 +47,6 @@ import { normalizeResolvedProviderModel } from "./model.provider-normalization.j
 import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
-  applyProviderResolvedModelCompatWithPlugins?: (
-    params: Parameters<typeof applyProviderResolvedModelCompatWithPlugins>[0],
-  ) => unknown;
   applyProviderResolvedTransportWithPlugin?: (
     params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
   ) => unknown;
@@ -78,20 +74,17 @@ const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderResolvedModelWithPlugin,
   // Target-provider resolution keeps owner hooks, but avoids broad
   // cross-provider hooks that can load unrelated bundled provider runtimes.
-  applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
 };
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   ...TARGET_PROVIDER_RUNTIME_HOOKS,
-  applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
 
 const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
   prepareProviderDynamicModel: async () => {},
@@ -265,7 +258,7 @@ function normalizeResolvedModel(params: {
       model: normalizedInputModel,
     },
   }) as Model | undefined;
-  const compatNormalized = runtimeHooks.applyProviderResolvedModelCompatWithPlugins?.({
+  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -278,19 +271,6 @@ function normalizeResolvedModel(params: {
       model: (pluginNormalized ?? normalizedInputModel) as never,
     },
   }) as Model | undefined;
-  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
-    provider: params.provider,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    context: {
-      config: params.cfg,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      provider: params.provider,
-      modelId: normalizedInputModel.id,
-      model: (compatNormalized ?? pluginNormalized ?? normalizedInputModel) as never,
-    },
-  }) as Model | undefined;
   const fallbackTransportNormalized =
     transportNormalized ??
     applyResolvedTransportFallback({
@@ -298,14 +278,13 @@ function normalizeResolvedModel(params: {
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       runtimeHooks,
-      model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+      model: pluginNormalized ?? normalizedInputModel,
     });
   return canonicalizeLegacyResolvedModel({
     provider: params.provider,
     model: normalizeResolvedProviderModel({
       provider: params.provider,
-      model:
-        fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+      model: fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
     }),
   });
 }

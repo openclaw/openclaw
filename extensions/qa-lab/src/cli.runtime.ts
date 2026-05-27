@@ -169,25 +169,9 @@ function normalizeQaOptionalModelRef(input: string | undefined) {
   return model && model.length > 0 ? model : undefined;
 }
 
-const LEGACY_QA_RUNTIME_ALIASES: Record<string, RuntimeId> = {
-  pi: "openclaw",
-};
-const warnedLegacyQaRuntimeAliases = new Set<string>();
-
 function normalizeQaRuntimeId(value: string): RuntimeId | undefined {
   if (value === "openclaw" || value === "codex") {
     return value;
-  }
-  const replacement = LEGACY_QA_RUNTIME_ALIASES[value];
-  if (replacement) {
-    if (!warnedLegacyQaRuntimeAliases.has(value)) {
-      warnedLegacyQaRuntimeAliases.add(value);
-      process.emitWarning(`QA runtime "${value}" is deprecated; use "${replacement}" instead.`, {
-        code: "OPENCLAW_QA_LEGACY_RUNTIME_ALIAS",
-        type: "DeprecationWarning",
-      });
-    }
-    return replacement;
   }
   return undefined;
 }
@@ -206,9 +190,7 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
   }
   const [left, right] = runtimes;
   if (!left || !right) {
-    throw new Error(
-      '--runtime-pair only supports "openclaw" and "codex"; "pi" is a deprecated alias for "openclaw".',
-    );
+    throw new Error('--runtime-pair only supports "openclaw" and "codex".');
   }
   if (left === right) {
     throw new Error("--runtime-pair must compare two different runtimes.");

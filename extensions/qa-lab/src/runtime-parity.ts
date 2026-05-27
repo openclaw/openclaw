@@ -56,17 +56,9 @@ export type RuntimeParityResult = {
   cells: {
     openclaw: RuntimeParityCell;
     codex: RuntimeParityCell;
-    /** @deprecated Legacy qa-lab summaries used cells.pi before the OpenClaw rename. */
-    pi?: RuntimeParityCell;
   };
   drift: RuntimeParityDrift;
   driftDetails?: string;
-};
-
-type LegacyRuntimeParityCells = {
-  openclaw?: RuntimeParityCell;
-  codex: RuntimeParityCell;
-  pi?: RuntimeParityCell;
 };
 
 export type RuntimeParityScenarioExecution = {
@@ -87,17 +79,9 @@ export function runtimeParityCellStatus(
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
   return (
     result.drift !== "failure-mode" &&
-    runtimeParityCellStatus(openclawRuntimeParityCell(result.cells)) === "pass" &&
+    runtimeParityCellStatus(result.cells.openclaw) === "pass" &&
     runtimeParityCellStatus(result.cells.codex) === "pass"
   );
-}
-
-export function openclawRuntimeParityCell(cells: LegacyRuntimeParityCells): RuntimeParityCell {
-  const cell = cells.openclaw ?? cells.pi;
-  if (!cell) {
-    throw new Error("Runtime parity result is missing the OpenClaw cell");
-  }
-  return cell;
 }
 
 type QaGatewayLike = {

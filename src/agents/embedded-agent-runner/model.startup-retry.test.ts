@@ -32,7 +32,6 @@ vi.mock("../agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -44,7 +43,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 
 describe("resolveModelAsync startup retry", () => {
   const runtimeHooks = {
-    applyProviderResolvedModelCompatWithPlugins: () => undefined,
     buildProviderUnknownModelHintWithPlugin: () => undefined,
     normalizeProviderResolvedModelWithPlugin: () => undefined,
     normalizeProviderTransportWithPlugin: () => undefined,

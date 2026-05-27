@@ -174,11 +174,11 @@ describe("model provider localService config", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts bundled provider alias timeout overlays without custom provider fields", () => {
+  it("accepts bundled provider timeout overlays without custom provider fields", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "z.ai": {
+          zai: {
             timeoutSeconds: 600,
           },
         },
@@ -187,8 +187,8 @@ describe("model provider localService config", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.models?.providers?.["z.ai"]?.models).toEqual([]);
-      expect(result.config.models?.providers?.["z.ai"]?.baseUrl).toBe("");
+      expect(result.config.models?.providers?.zai?.models).toEqual([]);
+      expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
     }
   });
 

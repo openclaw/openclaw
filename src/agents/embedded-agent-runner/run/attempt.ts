@@ -3873,7 +3873,7 @@ export async function runEmbeddedAttempt(
               messages: promptBuildMessages,
               hookCtx,
               hookRunner,
-              legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+              beforeAgentStartResult: params.beforeAgentStartResult,
             });
         {
           if (hookResult?.prependContext) {
