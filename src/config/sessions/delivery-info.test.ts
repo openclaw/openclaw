@@ -277,8 +277,9 @@ describe("extractDeliveryInfo", () => {
   });
 
   it("derives delivery info from stored last route metadata when deliveryContext is missing", () => {
-    const sessionKey = "agent:main:matrix:channel:!lowercased:example.org";
-    storeState.store[sessionKey] = {
+    const sessionKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const legacyKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[legacyKey] = {
       sessionId: "session-1",
       updatedAt: Date.now(),
       origin: {
@@ -361,25 +362,24 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("prefers an older routable lowercased artifact over a fresher non-routable exact entry", () => {
-    // Same room, two legit aliases: the exact mixed-case key (fresher, non-routable)
-    // and its lowercased legacy artifact (older, routable, delivering to the real
-    // mixed-case room). Routable wins. (Rewritten from a prior 3-casing setup that
-    // relied on cross-room folded reuse — openclaw#87366 codex review.)
-    const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    const artifactKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    storeState.store[queriedKey] = {
-      sessionId: "fresh-nonroutable-exact",
+  it("prefers an older routable normalized alias over a fresher non-routable alias for non-opaque keys", () => {
+    const queriedKey = "agent:main:telegram:group:MiXeDCase";
+    const routableAlias = "agent:main:telegram:group:MixedCase";
+    const canonicalKey = "agent:main:telegram:group:mixedcase";
+    storeState.store[canonicalKey] = {
+      sessionId: "fresh-normalized-session",
       updatedAt: Date.now(),
-      origin: { provider: "matrix" },
+      origin: {
+        provider: "telegram",
+      },
     };
-    storeState.store[artifactKey] = {
-      sessionId: "older-routable-artifact",
+    storeState.store[routableAlias] = {
+      sessionId: "older-routable-session",
       updatedAt: Date.now() - 1_000,
       deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
+        channel: "telegram",
+        to: "telegram:MixedCase",
+        accountId: "telegram-account",
       },
     };
 
@@ -387,45 +387,12 @@ describe("extractDeliveryInfo", () => {
 
     expect(result).toEqual({
       deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
+        channel: "telegram",
+        to: "telegram:MixedCase",
+        accountId: "telegram-account",
       },
       threadId: undefined,
     });
-  });
-
-  it("does NOT return a case-distinct room via the folded delivery index (codex #87366)", () => {
-    // Only a mixed-case room exists; a lookup for the case-distinct lowercase room
-    // must NOT be routed to it through the folded index.
-    const mixedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    storeState.store[mixedKey] = {
-      sessionId: "mixed-room-session",
-      updatedAt: Date.now(),
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
-    };
-    const result = extractDeliveryInfo("agent:main:matrix:channel:!mixedcase:example.org");
-    expect(result.deliveryContext).toBeUndefined();
-  });
-
-  it("does NOT leak a mixed-case room for a lowercase request via the exact path (codex #87366)", () => {
-    // Mislabeled legacy artifact: the KEY is lowercase but deliveryContext.to points at
-    // the mixed-case room. A lowercase request must not be routed to the mixed-case room.
-    storeState.store["agent:main:matrix:channel:!mixedcase:example.org"] = {
-      sessionId: "mislabeled-artifact",
-      updatedAt: Date.now(),
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
-    };
-    const result = extractDeliveryInfo("agent:main:matrix:channel:!mixedcase:example.org");
-    expect(result.deliveryContext).toBeUndefined();
   });
 
   it("finds legacy lowercase Signal group entries for mixed-case group keys", () => {
@@ -485,6 +452,117 @@ describe("extractDeliveryInfo", () => {
         accountId: "matrix-account",
       },
       threadId: undefined,
+    });
+  });
+
+  it("does not return a case-distinct lowercase Matrix sibling when the mixed-case key has no exact entry", () => {
+    const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const lowercaseSiblingKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[lowercaseSiblingKey] = buildEntry({
+      channel: "matrix",
+      to: "room:!mixedcase:example.org",
+      accountId: "matrix-account",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("does not return a mixed-case Matrix sibling for a lowercase room query", () => {
+    const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    const mixedSiblingKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    storeState.store[mixedSiblingKey] = buildEntry({
+      channel: "matrix",
+      to: "room:!MixedCase:Example.Org",
+      accountId: "matrix-account",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("does not return an exact lowercase Matrix key with mixed-case delivery metadata", () => {
+    const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[queriedKey] = buildEntry({
+      channel: "matrix",
+      to: "room:!MixedCase:Example.Org",
+      accountId: "matrix-account",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it("returns a confirmed lowercased Matrix legacy artifact for a mixed-case key", () => {
+    const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const legacyArtifactKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[legacyArtifactKey] = buildEntry({
+      channel: "matrix",
+      to: "room:!MixedCase:Example.Org",
+      accountId: "matrix-account",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("returns a confirmed lowercased Matrix room-alias artifact", () => {
+    const queriedKey = "agent:main:matrix:channel:#MixedAlias:Example.Org";
+    const legacyArtifactKey = "agent:main:matrix:channel:#mixedalias:example.org";
+    storeState.store[legacyArtifactKey] = buildEntry({
+      channel: "matrix",
+      to: "room:#MixedAlias:Example.Org",
+      accountId: "matrix-account",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:#MixedAlias:Example.Org",
+        accountId: "matrix-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("does not return a folded Matrix thread artifact when the stored thread id differs by case", () => {
+    const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org:thread:$ThreadRootAbC";
+    const foldedThreadKey =
+      "agent:main:matrix:channel:!mixedcase:example.org:thread:$threadrootabc";
+    storeState.store[foldedThreadKey] = buildEntry({
+      channel: "matrix",
+      to: "room:!MixedCase:Example.Org",
+      accountId: "matrix-account",
+      threadId: "$threadrootabc",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: undefined,
+      threadId: "$ThreadRootAbC",
     });
   });
 

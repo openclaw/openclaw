@@ -6,10 +6,13 @@ import {
   isCasePreservingPeer,
   normalizeSessionKeyPreservingOpaquePeerIds,
   normalizeSessionPeerId,
+  requiresFoldedSessionKeyAliasProof,
 } from "./session-key-utils.js";
 
 const ROOM_MIXED_KEY = "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org";
 const ROOM_LOWER_KEY = "agent:main:matrix:channel:!mixedroomabcdef:example.org";
+const ROOM_MIXED_THREAD_KEY = `${ROOM_MIXED_KEY}:thread:$ThreadRootAbC`;
+const ROOM_LOWER_THREAD_KEY = `${ROOM_LOWER_KEY}:thread:$threadrootabc`;
 const entry = (to: string, updatedAt: number): SessionEntry =>
   ({ updatedAt, deliveryContext: { channel: "matrix", to } }) as unknown as SessionEntry;
 
@@ -34,6 +37,14 @@ describe("isCasePreservingPeer", () => {
 
   it("is case-insensitive on the channel/peerKind labels", () => {
     expect(isCasePreservingPeer("Matrix", "Channel")).toBe(true);
+  });
+});
+
+describe("requiresFoldedSessionKeyAliasProof", () => {
+  it("requires alias proof only for tail-preserved Matrix room keys", () => {
+    expect(requiresFoldedSessionKeyAliasProof(`agent:main:matrix:channel:${ROOM_A}`)).toBe(true);
+    expect(requiresFoldedSessionKeyAliasProof("agent:ops:signal:group:AbC123=")).toBe(false);
+    expect(requiresFoldedSessionKeyAliasProof("agent:main:telegram:group:MixedHandle")).toBe(false);
   });
 });
 
@@ -111,6 +122,14 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
   it("preserves the Matrix room id AND the :thread:<event> suffix", () => {
     const key = `agent:main:matrix:channel:${ROOM_A}:thread:${EVENT}`;
     expect(normalizeSessionKeyPreservingOpaquePeerIds(key)).toBe(key);
+  });
+
+  it("lowercases the Matrix thread marker while preserving room and event ids", () => {
+    expect(
+      normalizeSessionKeyPreservingOpaquePeerIds(
+        `agent:main:matrix:channel:${ROOM_A}:Thread:${EVENT}`,
+      ),
+    ).toBe(`agent:main:matrix:channel:${ROOM_A}:thread:${EVENT}`);
   });
 
   it("lowercases the structural head but keeps the opaque tail", () => {
@@ -216,6 +235,17 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(r.existing).toBeUndefined();
   });
 
+  it("does not return an exact lowercase Matrix key whose delivery target is mixed-case", () => {
+    const store: Record<string, SessionEntry> = {
+      [ROOM_LOWER_KEY]: entry("room:!MixedRoomAbCdEf:example.org", 50),
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_LOWER_KEY });
+
+    expect(r.legacyKeys).toEqual([]);
+    expect(r.existing).toBeUndefined();
+  });
+
   it("still returns + collapses a confirmed lowercased artifact as `existing` when no exact key exists", () => {
     // Legitimate migration read: artifact key is lowercased but delivers to the
     // mixed-case room, so it IS this room's session.
@@ -225,5 +255,92 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_KEY });
     expect(r.legacyKeys).toContain(ROOM_LOWER_KEY);
     expect(r.existing?.deliveryContext?.to).toBe("room:!MixedRoomAbCdEf:example.org");
+  });
+
+  it("recognizes lowercased Matrix artifacts with inbound origin room metadata", () => {
+    const store: Record<string, SessionEntry> = {
+      [ROOM_LOWER_KEY]: {
+        updatedAt: 50,
+        origin: {
+          provider: "matrix",
+          nativeChannelId: "!MixedRoomAbCdEf:example.org",
+        },
+      } as unknown as SessionEntry,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_KEY });
+
+    expect(r.legacyKeys).toContain(ROOM_LOWER_KEY);
+    expect(r.existing).toBe(store[ROOM_LOWER_KEY]);
+  });
+
+  it("recognizes lowercased Matrix alias artifacts with room-prefixed delivery targets", () => {
+    const mixedAliasKey = "agent:main:matrix:channel:#MixedRoomAlias:example.org";
+    const lowerAliasKey = "agent:main:matrix:channel:#mixedroomalias:example.org";
+    const store: Record<string, SessionEntry> = {
+      [lowerAliasKey]: {
+        updatedAt: 50,
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:#MixedRoomAlias:example.org",
+        },
+      } as unknown as SessionEntry,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: mixedAliasKey });
+
+    expect(r.legacyKeys).toContain(lowerAliasKey);
+    expect(r.existing).toBe(store[lowerAliasKey]);
+  });
+
+  it("does not collapse Matrix thread artifacts when the stored thread id differs by case", () => {
+    const store: Record<string, SessionEntry> = {
+      [ROOM_LOWER_THREAD_KEY]: {
+        updatedAt: 50,
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!MixedRoomAbCdEf:example.org",
+          threadId: "$threadrootabc",
+        },
+      } as unknown as SessionEntry,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_THREAD_KEY });
+
+    expect(r.legacyKeys).not.toContain(ROOM_LOWER_THREAD_KEY);
+    expect(r.existing).toBeUndefined();
+  });
+
+  it("collapses Matrix thread artifacts when room and thread metadata both match", () => {
+    const store: Record<string, SessionEntry> = {
+      [ROOM_LOWER_THREAD_KEY]: {
+        updatedAt: 50,
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!MixedRoomAbCdEf:example.org",
+          threadId: "$ThreadRootAbC",
+        },
+      } as unknown as SessionEntry,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: ROOM_MIXED_THREAD_KEY });
+
+    expect(r.legacyKeys).toContain(ROOM_LOWER_THREAD_KEY);
+    expect(r.existing).toBe(store[ROOM_LOWER_THREAD_KEY]);
+  });
+
+  it("keeps legacy lowercase Signal group fallback without delivery metadata", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const mixedKey = `agent:main:signal:group:${mixedGroupId}`;
+    const lowerKey = mixedKey.toLowerCase();
+    const signalEntry = { sessionId: "signal-session" } as unknown as SessionEntry;
+    const store: Record<string, SessionEntry> = {
+      [lowerKey]: signalEntry,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: mixedKey });
+
+    expect(r.legacyKeys).toContain(lowerKey);
+    expect(r.existing).toBe(signalEntry);
   });
 });

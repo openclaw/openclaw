@@ -57,7 +57,22 @@ export function isCasePreservingPeer(
 ): boolean {
   const c = normalizeLowercaseStringOrEmpty(channel);
   const k = normalizeLowercaseStringOrEmpty(peerKind);
-  return CASE_PRESERVING_PEERS.some((d) => d.channel === c && d.peerKinds.has(k));
+  return findCasePreservingPeerDescriptor(c, k) !== undefined;
+}
+
+function findCasePreservingPeerDescriptor(
+  channel: string | undefined | null,
+  peerKind: string | undefined | null,
+): CasePreservingPeerDescriptor | undefined {
+  const c = normalizeLowercaseStringOrEmpty(channel);
+  const k = normalizeLowercaseStringOrEmpty(peerKind);
+  return CASE_PRESERVING_PEERS.find((d) => d.channel === c && d.peerKinds.has(k));
+}
+
+export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
+  const ref = parseRawSessionConversationRef(sessionKey);
+  const descriptor = findCasePreservingPeerDescriptor(ref?.channel, ref?.kind);
+  return descriptor?.span === "tail";
 }
 
 export function normalizeSessionPeerId(params: {
@@ -107,8 +122,21 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
         const re = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
         const match = re.exec(raw);
         if (match && match[0].length < raw.length) {
-          // Tail spans are opaque and preserved verbatim (room id + thread suffix).
-          spans.push({ start: match[0].length, end: raw.length, trim: false });
+          // Preserve Matrix room/event IDs, but keep structural thread marker
+          // casing canonical so `:Thread:` cannot fork a session key.
+          const tailStart = match[0].length;
+          const tail = raw.slice(tailStart);
+          const threadMarker = ":thread:";
+          const markerIndex = normalizeLowercaseStringOrEmpty(tail).lastIndexOf(threadMarker);
+          if (markerIndex === -1) {
+            spans.push({ start: tailStart, end: raw.length, trim: false });
+            continue;
+          }
+          spans.push({ start: tailStart, end: tailStart + markerIndex, trim: false });
+          const threadIdStart = tailStart + markerIndex + threadMarker.length;
+          if (threadIdStart < raw.length) {
+            spans.push({ start: threadIdStart, end: raw.length, trim: false });
+          }
         }
       }
     }
@@ -125,7 +153,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   }
   const spans = collectCasePreservedSpans(raw)
     .filter((span) => span.end > span.start)
-    .sort((a, b) => a.start - b.start);
+    .toSorted((a, b) => a.start - b.start);
 
   let normalized = "";
   let cursor = 0;
