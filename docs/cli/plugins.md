@@ -329,6 +329,11 @@ openclaw plugins install -l ./my-plugin
 Standalone plugin files must be listed in `plugins.load.paths` rather than placed directly in `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions`. Those auto-discovered roots load plugin package or bundle directories, while top-level script files are treated as local helpers and skipped.
 
 <Note>
+Workspace-origin plugins, including linked local plugins, are not imported or
+executed until they are explicitly enabled or trusted. This fail-closed rule also
+applies to setup-only validation paths, so local channel plugin setup code will
+not run while the workspace plugin remains disabled.
+
 `--force` is not supported with `--link` because linked installs reuse the source path instead of copying over a managed install target.
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in the managed plugin index while keeping the default behavior unpinned.
