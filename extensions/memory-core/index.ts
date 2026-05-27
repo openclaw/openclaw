@@ -260,6 +260,9 @@ export default definePluginEntry({
   name: "Memory (Core)",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
+  reload: {
+    restartPrefixes: ["plugins.entries.memory-core.config.memoryAudit"],
+  },
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);

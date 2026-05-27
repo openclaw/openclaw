@@ -80,6 +80,11 @@ type MemoryAuditActionPayload = {
   conflict?: unknown;
 };
 
+type ConfigPatchResult = {
+  noop?: unknown;
+  restart?: unknown;
+};
+
 export type MemoryAuditState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -218,6 +223,7 @@ export function buildMemoryAuditConfigPatch(
     plugins: {
       entries: {
         [pluginId]: {
+          ...(draft.enabled ? { enabled: true } : {}),
           config: {
             memoryAudit: {
               enabled: draft.enabled,
@@ -480,6 +486,16 @@ function methodUnavailableMessage(method: string): string {
   return `Memory Audit is unavailable on this Gateway. Missing method: ${method}`;
 }
 
+function memoryAuditSettingsSavedMessage(payload: ConfigPatchResult): string {
+  if (payload.noop === true) {
+    return "Memory Audit settings already matched the saved config.";
+  }
+  if (asRecord(payload.restart)) {
+    return "Memory Audit settings saved. Gateway restart scheduled to reconcile audit schedules.";
+  }
+  return "Memory Audit settings saved. Restart the Gateway to reconcile audit schedules.";
+}
+
 export async function loadMemoryAuditSuggestions(state: MemoryAuditState): Promise<void> {
   if (!state.client || !state.connected || state.memoryAuditLoading) {
     return;
@@ -551,7 +567,7 @@ export async function saveMemoryAuditSettings(state: MemoryAuditState): Promise<
   state.memoryAuditSettingsError = null;
   state.memoryAuditSettingsMessage = null;
   try {
-    await state.client.request("config.patch", {
+    const patchResult = await state.client.request<ConfigPatchResult>("config.patch", {
       baseHash,
       raw: JSON.stringify(buildMemoryAuditConfigPatch(pluginId, state.memoryAuditSettingsDraft)),
       sessionKey: state.applySessionKey,
@@ -560,7 +576,7 @@ export async function saveMemoryAuditSettings(state: MemoryAuditState): Promise<
     state.memoryAuditSettingsOriginal = { ...state.memoryAuditSettingsDraft };
     state.memoryAuditSettingsMessage = {
       kind: "success",
-      text: "Memory Audit settings saved. The Gateway will restart to reconcile audit schedules.",
+      text: memoryAuditSettingsSavedMessage(patchResult ?? {}),
     };
     await loadMemoryAuditSettings(state);
     return true;

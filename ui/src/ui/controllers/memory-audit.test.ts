@@ -77,6 +77,7 @@ describe("memory audit controller", () => {
         slots: { memory: "memory-plus" },
         entries: {
           "memory-plus": {
+            enabled: true,
             config: {
               memoryAudit: {
                 enabled: true,
@@ -153,6 +154,7 @@ describe("memory audit controller", () => {
       plugins: {
         entries: {
           "memory-core": {
+            enabled?: true;
             config: {
               memoryAudit: {
                 agentId: null;
@@ -171,6 +173,7 @@ describe("memory audit controller", () => {
       };
     };
 
+    expect(patch.plugins.entries["memory-core"].enabled).toBeUndefined();
     expect(patch.plugins.entries["memory-core"].config.memoryAudit.agentId).toBeNull();
     expect(patch.plugins.entries["memory-core"].config.memoryAudit.model).toBeNull();
     expect(patch.plugins.entries["memory-core"].config.memoryAudit.timezone).toBeNull();
@@ -233,7 +236,7 @@ describe("memory audit controller", () => {
     };
     request.mockImplementation(async (method: string) => {
       if (method === "config.patch") {
-        return {};
+        return { restart: { ok: true, signal: "SIGUSR1" } };
       }
       if (method === "config.get") {
         return { hash: "hash-2", config: {} };
@@ -257,6 +260,56 @@ describe("memory audit controller", () => {
           },
         },
       },
+    });
+    expect(state.memoryAuditSettingsMessage).toEqual({
+      kind: "success",
+      text: "Memory Audit settings saved. Gateway restart scheduled to reconcile audit schedules.",
+    });
+  });
+
+  it("reports no-op audit settings saves without restart copy", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = { hash: "hash-1", config: {} };
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.patch") {
+        return { noop: true };
+      }
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return {};
+    });
+
+    await saveMemoryAuditSettings(state);
+
+    expect(state.memoryAuditSettingsMessage).toEqual({
+      kind: "success",
+      text: "Memory Audit settings already matched the saved config.",
+    });
+  });
+
+  it("reports manual restart when audit settings save without a scheduled restart", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = { hash: "hash-1", config: {} };
+    state.memoryAuditSettingsDraft = {
+      ...DEFAULT_MEMORY_AUDIT_SETTINGS,
+      enabled: true,
+    };
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.patch") {
+        return {};
+      }
+      if (method === "config.get") {
+        return { hash: "hash-2", config: {} };
+      }
+      return {};
+    });
+
+    await saveMemoryAuditSettings(state);
+
+    expect(state.memoryAuditSettingsMessage).toEqual({
+      kind: "success",
+      text: "Memory Audit settings saved. Restart the Gateway to reconcile audit schedules.",
     });
   });
 
