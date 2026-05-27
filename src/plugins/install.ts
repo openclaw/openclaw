@@ -916,12 +916,15 @@ async function installPluginFromManagedNpmRoot(
   // install and trigger a rollback that would remove the plugin.
   const expectedNpmResolution: NpmSpecResolution =
     preserveAgainstDowngrade && installedDependency?.version
-      ? {
-          ...params.npmResolution,
+      ? // Describe the preserved (kept) dependency, not the older incoming
+        // resolution. Only carry fields we can attribute to the kept version
+        // (name/version/integrity from the managed root); leave incoming-only
+        // fields (resolvedSpec/shasum/resolvedAt) unset so persisted install
+        // records do not mix stale metadata from the rejected downgrade target.
+        {
+          name: params.npmResolution.name ?? params.packageName,
           version: installedDependency.version,
-          ...(installedDependency.integrity
-            ? { integrity: installedDependency.integrity }
-            : { integrity: undefined }),
+          integrity: installedDependency.integrity,
         }
       : params.npmResolution;
   const resolutionMismatch = resolveInstalledNpmResolutionMismatch({

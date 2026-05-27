@@ -786,6 +786,13 @@ describe("installPluginFromNpmSpec downgrade guard (#85184 integration)", () => 
     // downstream install records/config match the managed npm root.
     if (result.ok) {
       expect(result.npmResolution?.version).toBe("0.11.2");
+      // P2: the preserved resolution must not carry stale metadata from the
+      // rejected downgrade target (incoming 0.10.0 reported shasum "abc" and a
+      // 0.10.0 integrity). Only kept-version fields should survive, so install
+      // records do not mix the kept version with the downgrade target's hashes.
+      expect(result.npmResolution?.shasum).toBeUndefined();
+      expect(result.npmResolution?.resolvedSpec).toBeUndefined();
+      expect(result.npmResolution?.integrity).not.toBe("sha512-0.10.0");
     }
   });
 

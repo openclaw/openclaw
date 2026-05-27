@@ -373,6 +373,21 @@ describe("managed npm root", () => {
     });
   });
 
+  it("returns null for a fresh managed root without a package-lock.json", async () => {
+    // #85184 P1: the downgrade guard reads installed dependency metadata before
+    // npm install creates package-lock.json. A fresh managed root has no
+    // lockfile yet, so the reader must return null instead of throwing -
+    // otherwise a fresh plugin install crashes before npm can create the
+    // lockfile (regression caught by the downgrade guard's pre-install read).
+    const npmRoot = await makeTempRoot();
+    await expect(
+      readManagedNpmRootInstalledDependency({
+        npmRoot,
+        packageName: "@openclaw/discord",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("syncs managed peer dependencies from npm's resolved lockfile plan", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

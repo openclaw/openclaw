@@ -1002,7 +1002,10 @@ export async function readManagedNpmRootInstalledDependency(params: {
   packageName: string;
 }): Promise<ManagedNpmRootInstalledDependency | null> {
   const lockPath = path.join(params.npmRoot, "package-lock.json");
-  const parsed = await readJson<unknown>(lockPath);
+  // A fresh managed npm root has no package-lock.json yet (npm install creates
+  // it). Use the ENOENT-safe reader so a missing lockfile yields null (no
+  // installed dependency) instead of throwing and breaking fresh installs.
+  const parsed = await readJsonIfExists<unknown>(lockPath);
   if (!isRecord(parsed) || !isRecord(parsed.packages)) {
     return null;
   }
