@@ -1,11 +1,37 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./error-format.mjs";
 import { splitCommandLine } from "./mcp-command-line.mjs";
+
+function verifyPayloadSignature(parsed) {
+  const secret = process.env.OPENCLAW_MCP_PROXY_SECRET;
+  if (!secret) {
+    return;
+  }
+
+  const { signature, ...rest } = parsed;
+  if (!signature) {
+    throw new Error(
+      "MCP proxy payload missing required signature (OPENCLAW_MCP_PROXY_SECRET is set)",
+    );
+  }
+
+  const hmac = createHmac("sha256", secret);
+  
+  // We expect the signature to be over the canonical JSON of the payload minus the signature itself
+  const canonicalBody = JSON.stringify(rest);
+  hmac.update(canonicalBody);
+  const expected = hmac.digest("hex");
+
+  if (signature !== expected) {
+    throw new Error("MCP proxy payload signature verification failed");
+  }
+}
 
 function decodePayload(argv) {
   const payloadIndex = argv.indexOf("--payload");
@@ -16,10 +42,14 @@ function decodePayload(argv) {
   if (!encoded) {
     throw new Error("Missing MCP proxy payload value");
   }
-  const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+  const parsed = JSON.parse(decoded);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Invalid MCP proxy payload");
   }
+
+  verifyPayloadSignature(parsed);
+
   if (typeof parsed.targetCommand !== "string" || parsed.targetCommand.trim() === "") {
     throw new Error("MCP proxy payload missing targetCommand");
   }
@@ -83,9 +113,19 @@ function isMainModule() {
   return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
 }
 
+function assertSafeCommand(target) {
+  const allowedPrefix = process.env.OPENCLAW_MCP_PROXY_ALLOWED_COMMAND_PREFIX;
+  if (allowedPrefix && !target.command.startsWith(allowedPrefix)) {
+    throw new Error(
+      `MCP proxy blocked command: does not start with allowed prefix "${allowedPrefix}"`,
+    );
+  }
+}
+
 function main() {
   const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
   const target = splitCommandLine(targetCommand);
+  assertSafeCommand(target);
   const child = spawn(target.command, target.args, createTargetSpawnOptions());
 
   if (!child.stdin || !child.stdout) {
