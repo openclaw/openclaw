@@ -1510,7 +1510,7 @@ export async function sendMessageTelegram(
       mediaParams,
       mediaSender.label,
       opts.verbose,
-      target.chatType !== "direct",
+      allowThreadlessFallback,
       async (effectiveParams, retryLabel) => {
         const threadlessPlainMediaParams = removeMessageThreadIdParam(plainMediaParams);
         return await sendMedia(
@@ -1520,7 +1520,6 @@ export async function sendMessageTelegram(
           threadlessPlainMediaParams,
         );
       },
-      { allowThreadlessFallback },
     );
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);

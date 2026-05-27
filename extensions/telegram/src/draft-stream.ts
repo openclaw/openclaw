@@ -336,9 +336,7 @@ export function createTelegramDraftStream(params: {
       delete (threadlessSendMessageParams as { message_thread_id?: number }).message_thread_id;
       const threadlessRichMessageParams = { ...richMessageParams };
       delete (threadlessRichMessageParams as { message_thread_id?: number }).message_thread_id;
-      params.warn?.(
-        "telegram stream preview message_thread_id not found, retrying without thread",
-      );
+      params.warn?.("telegram stream preview message_thread_id not found, retrying without thread");
       return await sendRenderedMessage(
         preview,
         threadlessSendMessageParams,

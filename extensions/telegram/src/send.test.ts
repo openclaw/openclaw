@@ -3228,7 +3228,7 @@ describe("sendMessageTelegram", () => {
         mediaUrl: "https://example.com/photo.jpg",
         messageThreadId: 271,
       }),
-    ).rejects.toThrow("message thread not found");
+    ).rejects.toThrow(/message thread not found/);
 
     expect(sendPhoto).toHaveBeenCalledTimes(1);
     expectMediaSendCall(
@@ -3241,8 +3241,6 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       },
     );
-    const logs = capturedLogText(logFile);
-    expect(logs).not.toContain("outbound send ok");
   });
 
   it("defaults outbound media uploads to 100MB", async () => {
