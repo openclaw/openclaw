@@ -507,7 +507,11 @@ describe("tui session actions", () => {
 
     await abortActive({ preferActive: true });
 
-    expect(abortChat).toHaveBeenCalledWith({
+    expect(abortChat).toHaveBeenNthCalledWith(1, {
+      sessionKey: "agent:main:main",
+      runId: "run-queued",
+    });
+    expect(abortChat).toHaveBeenNthCalledWith(2, {
       sessionKey: "agent:main:main",
       runId: "run-active",
     });

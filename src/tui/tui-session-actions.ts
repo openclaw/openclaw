@@ -404,20 +404,26 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
-    const runId =
-      !params?.preferActive && state.activeChatRunId && state.pendingChatRunId
-        ? state.pendingChatRunId
-        : (state.activeChatRunId ?? state.pendingChatRunId ?? null);
-    if (!runId) {
+    const runIds =
+      params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+        ? [state.pendingChatRunId, state.activeChatRunId]
+        : [
+            !params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+              ? state.pendingChatRunId
+              : (state.activeChatRunId ?? state.pendingChatRunId ?? null),
+          ].filter((runId) => runId !== null);
+    if (runIds.length === 0) {
       chatLog.addSystem("no active run", { coalesceConsecutive: true });
       tui.requestRender();
       return;
     }
     try {
-      await client.abortChat({
-        sessionKey: state.currentSessionKey,
-        runId,
-      });
+      for (const runId of runIds) {
+        await client.abortChat({
+          sessionKey: state.currentSessionKey,
+          runId,
+        });
+      }
       state.pendingChatRunId = null;
       setActivityStatus("aborted");
     } catch (err) {
