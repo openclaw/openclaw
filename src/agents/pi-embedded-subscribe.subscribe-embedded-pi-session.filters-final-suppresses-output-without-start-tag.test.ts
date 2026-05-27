@@ -119,6 +119,28 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads.some((payload) => payload.replace)).toBe(false);
   });
 
+  it("preserves literal custom XML tag openers split after a bare <", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    for (const delta of ["<", "xiaohai-banli>milk tea</xiaohai-banli>"]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe(
+      "<xiaohai-banli>milk tea</xiaohai-banli>",
+    );
+  });
+
   it("strips self-closing and attributed final tags from streamed deltas", () => {
     const { session, emit } = createStubSessionHarness();
 
