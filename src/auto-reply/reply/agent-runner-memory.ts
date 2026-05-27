@@ -1,14 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { resolveCompactionReserveTokensFloor } from "../../agents/agent-settings.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
   classifyCompactionReason,
   DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { resolveCompactionReserveTokensFloor } from "../../agents/agent-settings.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../../agents/harness/compaction-recovery.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";

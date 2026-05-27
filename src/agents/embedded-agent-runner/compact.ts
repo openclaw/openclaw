@@ -41,7 +41,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
-import { resolveAgentCompactionConfig, resolveAgentConfig } from "../agent-scope-config.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,

@@ -75,7 +75,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
-import { resolveAgentCompactionConfig, resolveAgentConfig } from "../../agent-scope-config.js";
+import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
   applyAgentAutoCompactionGuard,

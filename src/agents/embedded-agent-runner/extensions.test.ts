@@ -1,8 +1,8 @@
 import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
-import type { ModelRegistry } from "../../llm/model-registry.js";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
 import { getCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
@@ -129,13 +129,13 @@ describe("buildEmbeddedExtensionFactories", () => {
       provider: "anthropic",
       api: "anthropic",
       contextWindow: 200_000,
-    } as Model<Api>;
+    } as Model;
     const compactionModel = {
       id: "claude-opus-4-5",
       provider: "anthropic",
       api: "anthropic",
       contextWindow: 50_000,
-    } as Model<Api>;
+    } as Model;
     const modelRegistry = {
       find: vi.fn((provider: string, modelId: string) =>
         provider === "anthropic" && modelId === "claude-opus-4-5" ? compactionModel : null,
