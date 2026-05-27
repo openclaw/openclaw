@@ -88,4 +88,54 @@ describe("parseChannelBrokerTarget", () => {
       conversationType: "channel",
     });
   });
+
+  it("keeps Telegram inference behind the account default conversation type", () => {
+    const telegramAccount = {
+      ...account,
+      platforms: ["telegram"],
+      defaultPlatform: "telegram",
+      defaultConversationType: "channel",
+      config: { defaultConversationType: "channel" },
+    } satisfies ResolvedChannelBrokerAccount;
+
+    expect(
+      parseChannelBrokerTarget({
+        rawTarget: "broker:12345",
+        account: telegramAccount,
+      }),
+    ).toEqual({
+      platform: "telegram",
+      conversationId: "12345",
+      conversationType: "channel",
+    });
+    expect(
+      parseChannelBrokerTarget({
+        rawTarget: "broker:telegram:-100123",
+        account: telegramAccount,
+      }),
+    ).toEqual({
+      platform: "telegram",
+      conversationId: "-100123",
+      conversationType: "channel",
+    });
+  });
+
+  it("lets explicit Telegram conversation type override the account default", () => {
+    expect(
+      parseChannelBrokerTarget({
+        rawTarget: "broker:telegram:12345?conversationType=direct",
+        account: {
+          ...account,
+          platforms: ["telegram"],
+          defaultPlatform: "telegram",
+          defaultConversationType: "channel",
+          config: { defaultConversationType: "channel" },
+        },
+      }),
+    ).toEqual({
+      platform: "telegram",
+      conversationId: "12345",
+      conversationType: "direct",
+    });
+  });
 });
