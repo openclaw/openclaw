@@ -1414,11 +1414,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
 }
 
 function scopedAwsMacosEnvCommand(commandArgs) {
-  if (
-    commandArgs.length <= 1 ||
-    shellWordBasename(commandArgs[0]) !== "env" ||
-    commandArgs[0].includes("/")
-  ) {
+  if (commandArgs.length <= 1 || shellWordBasename(commandArgs[0]) !== "env" || commandArgs[0].includes("/")) {
     return null;
   }
 
@@ -1428,10 +1424,7 @@ function scopedAwsMacosEnvCommand(commandArgs) {
   }
 
   const targetEntrypoint = shellWordBasename(targetWords[0]);
-  if (
-    !jsRuntimeEntrypoints.has(targetEntrypoint) &&
-    !awsMacosCorepackEntrypoints.has(targetEntrypoint)
-  ) {
+  if (!jsRuntimeEntrypoints.has(targetEntrypoint) && !awsMacosCorepackEntrypoints.has(targetEntrypoint)) {
     return null;
   }
 
@@ -1447,8 +1440,7 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const directScopedEnvCommand = hasOption(commandArgs, "--shell")
     ? null
     : scopedAwsMacosEnvCommand(runArgs);
-  const runtimeEntrypoint =
-    directScopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
+  const runtimeEntrypoint = directScopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
   if (!isAwsMacosRemoteTarget(commandArgs, providerName) || !runtimeEntrypoint) {
     return commandArgs;
   }
@@ -1466,8 +1458,7 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
       ? remoteCommand[0]
       : shellJoin(remoteCommand));
   const shellCommand = `${remoteAwsMacosJsBootstrap({
-    packageManager:
-      directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
+    packageManager: directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
   })} && { ${originalShellCommand}\n}`;
 
   if (!hasOption(normalizedArgs, "--shell")) {
