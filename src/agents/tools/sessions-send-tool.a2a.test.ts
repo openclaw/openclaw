@@ -111,6 +111,46 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.threadId).toBeUndefined();
   });
 
+  it("bypasses the announce decider for same-session channel replies", async () => {
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:channel:target-room",
+      requesterChannel: "discord",
+      roundOneReply: "Substantive channel reply",
+    });
+
+    expect(runAgentStep).not.toHaveBeenCalled();
+    const sendCall = requireGatewayCall("send");
+    const sendParams = sendCall.params as Record<string, unknown>;
+    expect(sendParams.channel).toBe("discord");
+    expect(sendParams.to).toBe("channel:target-room");
+    expect(sendParams.message).toBe("Substantive channel reply");
+  });
+
+  it("keeps the announce decider for same-session sends from a different channel", async () => {
+    vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:channel:target-room",
+      requesterChannel: "webchat",
+      roundOneReply: "Substantive channel reply",
+    });
+
+    expect(runAgentStep).toHaveBeenCalledTimes(1);
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.message).toBe("Agent-to-agent announce step.");
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
   it.each([
     {
       source: "deliveryContext.accountId",
@@ -207,7 +247,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it.each(["NO_REPLY", "HEARTBEAT_OK"])(
+  it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP"])(
     "suppresses exact announce control reply %s before channel delivery",
     async (announceReply) => {
       vi.mocked(runAgentStep).mockResolvedValueOnce(announceReply);
