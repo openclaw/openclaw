@@ -94,7 +94,7 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     runtimeContextMessage.customType === "openclaw.runtime-context",
     "unexpected custom message type",
   );
-  assert(runtimeContextMessage.display === false, "runtime custom message should be hidden");
+  assert(!runtimeContextMessage.display, "runtime custom message should be hidden");
   assert(
     runtimeContextMessage.content.includes("secret docker context"),
     "runtime custom message lost context",
