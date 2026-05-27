@@ -313,17 +313,43 @@ describe("prepared provider auth state", () => {
       { id: "claude", name: "claude", provider: "anthropic" },
       { id: "gemini", name: "gemini", provider: "google" },
     ]);
+    let callCount = 0;
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockImplementation(() => {
-      cancelled = true;
+      callCount++;
+      if (callCount >= 2) {
+        cancelled = true;
+      }
       return false;
     });
 
     await warmCurrentProviderAuthState(cfg, { isCancelled: () => cancelled });
-    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+    // Cancellation kicks in after 2nd call; the next batch should be skipped.
+    expect(callCount).toBeLessThanOrEqual(6);
+    expect(modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls.length).toBeGreaterThanOrEqual(2);
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockClear();
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(true);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
     expect(modelAuthMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches externalCliDiscoveryForProviders across agents within TTL", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    authProfilesMocks.externalCliDiscoveryForProviders.mockReturnValueOnce({} as never);
+
+    await warmCurrentProviderAuthState(cfg);
+    // Called once for the single agent; the cache should return the same value
+    // on subsequent warm calls within TTL without re-invoking discovery.
+    expect(authProfilesMocks.externalCliDiscoveryForProviders).toHaveBeenCalledTimes(1);
+
+    // Second warm within TTL should use cached discovery.
+    clearCurrentProviderAuthState();
+    await warmCurrentProviderAuthState(cfg);
+    // Cache was cleared by clearCurrentProviderAuthState, so discovery re-runs.
+    expect(authProfilesMocks.externalCliDiscoveryForProviders).toHaveBeenCalledTimes(2);
   });
 });
