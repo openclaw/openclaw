@@ -191,8 +191,12 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("maven_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("MAKEFLAGS")).toBe(true);
     expect(isDangerousHostEnvVarName("makeflags")).toBe(true);
+    expect(isDangerousHostEnvVarName("NODE_REDIRECT_WARNINGS")).toBe(true);
+    expect(isDangerousHostEnvVarName("node_redirect_warnings")).toBe(true);
     expect(isDangerousHostEnvVarName("NODE_REPL_EXTERNAL_MODULE")).toBe(true);
     expect(isDangerousHostEnvVarName("node_repl_external_module")).toBe(true);
+    expect(isDangerousHostEnvVarName("NODE_REPL_HISTORY")).toBe(true);
+    expect(isDangerousHostEnvVarName("node_repl_history")).toBe(true);
     expect(isDangerousHostEnvVarName("NODE_V8_COVERAGE")).toBe(true);
     expect(isDangerousHostEnvVarName("node_v8_coverage")).toBe(true);
     expect(isDangerousHostEnvVarName("MFLAGS")).toBe(true);
@@ -332,7 +336,9 @@ describe("sanitizeHostExecEnv", () => {
         DOCKER_CONTEXT: "trusted-remote",
         DOCKER_HOST: "tcp://docker.example.test:2376",
         LD_PRELOAD: "/tmp/pwn.so",
+        NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
         NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+        NODE_REPL_HISTORY: "/tmp/node-repl-history",
         NODE_V8_COVERAGE: "/tmp/coverage",
         OK: "1",
       },
@@ -424,7 +430,9 @@ describe("sanitizeHostExecEnv", () => {
         CPLUS_INCLUDE_PATH: "/tmp/evil-cpp-headers",
         OBJC_INCLUDE_PATH: "/tmp/evil-objc-headers",
         HELM_HOME: "/tmp/override-helm",
+        NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
         NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+        NODE_REPL_HISTORY: "/tmp/node-repl-history",
         NODE_V8_COVERAGE: "/tmp/coverage",
         NODE_EXTRA_CA_CERTS: "/tmp/evil-ca.pem",
         SSL_CERT_FILE: "/tmp/evil-cert.pem",
@@ -536,7 +544,9 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GOPATH).toBeUndefined();
     expect(env.CARGO_HOME).toBeUndefined();
     expect(env.HELM_HOME).toBeUndefined();
+    expect(env.NODE_REDIRECT_WARNINGS).toBeUndefined();
     expect(env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+    expect(env.NODE_REPL_HISTORY).toBeUndefined();
     expect(env.NODE_V8_COVERAGE).toBeUndefined();
     expect(env.PYTHONUSERBASE).toBeUndefined();
     expect(env.VIRTUAL_ENV).toBeUndefined();
@@ -992,7 +1002,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
         MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         HELM_HOME: "/tmp/evil-helm",
+        NODE_REDIRECT_WARNINGS: "/tmp/node-warnings.log",
         NODE_REPL_EXTERNAL_MODULE: "/tmp/pwn.js",
+        NODE_REPL_HISTORY: "/tmp/node-repl-history",
         NODE_V8_COVERAGE: "/tmp/coverage",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
@@ -1055,7 +1067,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "MAKEFLAGS",
       "MFLAGS",
       "NODE_EXTRA_CA_CERTS",
+      "NODE_REDIRECT_WARNINGS",
       "NODE_REPL_EXTERNAL_MODULE",
+      "NODE_REPL_HISTORY",
       "NODE_TLS_REJECT_UNAUTHORIZED",
       "NODE_V8_COVERAGE",
       "OBJC_INCLUDE_PATH",
@@ -1138,7 +1152,9 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CARGO_HOME).toBeUndefined();
     expect(result.env.HGRCPATH).toBeUndefined();
     expect(result.env.HELM_HOME).toBeUndefined();
+    expect(result.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
     expect(result.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+    expect(result.env.NODE_REPL_HISTORY).toBeUndefined();
     expect(result.env.NODE_V8_COVERAGE).toBeUndefined();
     expect(result.env.HTTPS_PROXY).toBeUndefined();
     expect(result.env.JAVA_OPTS).toBeUndefined();
