@@ -18,7 +18,10 @@ import {
   resolveDefaultAgentDir,
   resolveDefaultAgentId,
 } from "./agent-scope.js";
+import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
+import { updateAuthProfileStoreWithLock } from "./auth-profiles/store.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { stableStringify } from "./stable-stringify.js";
 
@@ -92,6 +95,82 @@ async function readExistingModelsFile(pathname: string): Promise<{
       raw: "",
       parsed: null,
     };
+  }
+}
+
+function collectPlaintextApiKeysFromExistingModelsJson(
+  existingParsed: unknown,
+): Array<{ provider: string; apiKey: string }> {
+  if (!existingParsed || typeof existingParsed !== "object" || Array.isArray(existingParsed)) {
+    return [];
+  }
+  const providers = (existingParsed as { providers?: unknown }).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+    return [];
+  }
+  const keys: Array<{ provider: string; apiKey: string }> = [];
+  for (const [provider, entry] of Object.entries(providers)) {
+    if (!provider.trim() || !entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const apiKey = (entry as { apiKey?: unknown }).apiKey;
+    if (typeof apiKey !== "string") {
+      continue;
+    }
+    const trimmedApiKey = apiKey.trim();
+    if (!trimmedApiKey || isNonSecretApiKeyMarker(trimmedApiKey)) {
+      continue;
+    }
+    keys.push({ provider: provider.trim(), apiKey: trimmedApiKey });
+  }
+  return keys;
+}
+
+async function migrateExistingModelsJsonApiKeysToAuthProfiles(params: {
+  agentDir: string;
+  existingParsed: unknown;
+}): Promise<void> {
+  const keys = collectPlaintextApiKeysFromExistingModelsJson(params.existingParsed);
+  for (const { provider, apiKey } of keys) {
+    const migrated = await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      saveOptions: {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      },
+      updater: (store) => {
+        const existingProfileIds = listProfilesForProvider(store, provider);
+        if (
+          existingProfileIds.some((profileId) => {
+            const profile = store.profiles[profileId];
+            return profile?.type === "api_key" && profile.key === apiKey;
+          })
+        ) {
+          return false;
+        }
+
+        let profileId = `${provider}:models-json`;
+        for (let suffix = 2; store.profiles[profileId]; suffix += 1) {
+          profileId = `${provider}:models-json-${suffix}`;
+        }
+        store.profiles[profileId] = {
+          type: "api_key",
+          provider,
+          key: apiKey,
+          displayName: "Migrated from models.json",
+        };
+        store.order = {
+          ...store.order,
+          [provider]: [profileId, ...(store.order?.[provider] ?? [])],
+        };
+        return true;
+      },
+    });
+    if (!migrated) {
+      throw new Error(
+        `Refusing to rewrite models.json before migrating existing plaintext apiKey for provider "${provider}" to auth-profiles.json.`,
+      );
+    }
   }
 }
 
@@ -210,6 +289,10 @@ export async function ensureOpenClawModelsJson(
     // are available to provider discovery without mutating process.env.
     const env = createConfigRuntimeEnv(cfg);
     const existingModelsFile = await readExistingModelsFile(targetPath);
+    await migrateExistingModelsJsonApiKeysToAuthProfiles({
+      agentDir,
+      existingParsed: existingModelsFile.parsed,
+    });
     const plan = await planOpenClawModelsJson({
       cfg,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
