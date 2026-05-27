@@ -172,12 +172,12 @@ function selectAgentHarnessDecision(params: {
       }
       if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
         return buildSelectionDecision({
-          harness: piHarness,
+          harness: openClawHarness,
           policy: {
             ...policy,
-            runtime: "pi",
+            runtime: "openclaw",
           },
-          selectedReason: "cli_runtime_passthrough_pi",
+          selectedReason: "cli_runtime_passthrough_openclaw",
           candidates: listHarnessCandidates(pluginHarnesses),
         });
       }
