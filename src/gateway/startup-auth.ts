@@ -230,7 +230,7 @@ export async function ensureGatewayStartupAuth(params: {
   };
 }
 
-/** Prevent hook ingress and Gateway auth from sharing the same bearer token. */
+/** Prevent hook ingress and Gateway shared-secret auth from sharing a secret. */
 export function assertHooksTokenSeparateFromGatewayAuth(params: {
   cfg: OpenClawConfig;
   auth: ResolvedGatewayAuth;
@@ -242,15 +242,19 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   if (!hooksToken) {
     return;
   }
-  const gatewayToken =
-    params.auth.mode === "token" ? (normalizeOptionalString(params.auth.token) ?? "") : "";
-  if (!gatewayToken) {
+  const gatewaySecret =
+    params.auth.mode === "token"
+      ? (normalizeOptionalString(params.auth.token) ?? "")
+      : params.auth.mode === "password" || params.auth.mode === "trusted-proxy"
+        ? (normalizeOptionalString(params.auth.password) ?? "")
+        : "";
+  if (!gatewaySecret) {
     return;
   }
-  if (hooksToken !== gatewayToken) {
+  if (hooksToken !== gatewaySecret) {
     return;
   }
   throw new Error(
-    "Invalid config: hooks.token must not match gateway auth token. Set a distinct hooks.token for hook ingress.",
+    "Invalid config: hooks.token must not match gateway auth token or password. Set a distinct hooks.token for hook ingress.",
   );
 }

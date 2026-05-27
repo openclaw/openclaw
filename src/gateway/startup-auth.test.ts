@@ -377,12 +377,31 @@ describe("ensureGatewayStartupAuth", () => {
     ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
-  it("does not block startup when hooks token reuses gateway password auth", async () => {
+  it("throws when hooks token reuses gateway password auth during startup", async () => {
+    await expect(
+      runStartupAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-password-1234567890",
+          },
+          gateway: {
+            auth: {
+              mode: "password",
+              password: "shared-gateway-password-1234567890", // pragma: allowlist secret
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/hooks\.token must not match gateway auth token or password/i);
+  });
+
+  it("allows distinct hooks token with gateway password auth during startup", async () => {
     const result = await runStartupAuth({
       cfg: {
         hooks: {
           enabled: true,
-          token: "shared-gateway-password-1234567890",
+          token: "distinct-hooks-token-1234567890",
         },
         gateway: {
           auth: {
@@ -557,29 +576,43 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
     ).toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
-  it("allows hooks token reuse of gateway password auth", () => {
-    expectHooksGatewayAuthAllowed({
-      hooksToken: "shared-gateway-password-1234567890",
-      auth: {
-        mode: "password",
-        modeSource: "config",
-        password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-        allowTailscale: false,
-      },
-    });
+  it("throws when hooks token reuses gateway password auth", () => {
+    expect(() =>
+      assertHooksTokenSeparateFromGatewayAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-password-1234567890",
+          },
+        },
+        auth: {
+          mode: "password",
+          modeSource: "config",
+          password: "shared-gateway-password-1234567890", // pragma: allowlist secret
+          allowTailscale: false,
+        },
+      }),
+    ).toThrow(/hooks\.token must not match gateway auth token or password/i);
   });
 
-  it("allows hooks token reuse of trusted-proxy local password fallback", () => {
-    expectHooksGatewayAuthAllowed({
-      hooksToken: "trusted-proxy-local-password-1234567890",
-      auth: {
-        mode: "trusted-proxy",
-        modeSource: "config",
-        trustedProxy: { userHeader: "x-forwarded-user" },
-        password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
-        allowTailscale: false,
-      },
-    });
+  it("throws when hooks token reuses trusted-proxy local password fallback", () => {
+    expect(() =>
+      assertHooksTokenSeparateFromGatewayAuth({
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "trusted-proxy-local-password-1234567890",
+          },
+        },
+        auth: {
+          mode: "trusted-proxy",
+          modeSource: "config",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+          password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
+          allowTailscale: false,
+        },
+      }),
+    ).toThrow(/hooks\.token must not match gateway auth token or password/i);
   });
 
   it("allows distinct hooks token when gateway auth is password mode", () => {
