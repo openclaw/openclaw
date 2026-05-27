@@ -93,7 +93,6 @@ export async function applyInlineDirectivesFastLane(
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
-    commandAuthorized,
     senderIsOwner: params.senderIsOwner,
     workspaceDir: params.workspaceDir,
   });

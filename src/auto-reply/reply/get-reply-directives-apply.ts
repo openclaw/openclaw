@@ -249,7 +249,6 @@ export async function applyInlineDirectiveOverrides(params: {
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
-    commandAuthorized: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
   };
 
@@ -343,7 +342,6 @@ export async function applyInlineDirectiveOverrides(params: {
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
-      commandAuthorized: command.isAuthorizedSender,
       senderIsOwner: command.senderIsOwner,
       workspaceDir,
     });
