@@ -117,6 +117,14 @@ describe("resolveLocalAgentHardTimeoutPlan", () => {
     });
   });
 
+  it("stops parsing agent flags after a value option consumes the flag terminator", () => {
+    expect(
+      resolveLocalAgentHardTimeoutPlan({
+        argv: agentLocalArgv("--message", "--", "--timeout", "1"),
+      }),
+    ).toBeNull();
+  });
+
   it("does not arm the wall-clock timer when timeout is omitted", () => {
     expect(
       resolveLocalAgentHardTimeoutPlan({

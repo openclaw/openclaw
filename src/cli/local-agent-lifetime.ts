@@ -7,6 +7,7 @@ const CLI_COMPLETION_STREAM_DRAIN_TIMEOUT_MS = 250;
 const CLI_COMPLETION_FORCE_KILL_TIMEOUT_MS = 3_000;
 const OTEL_PRE_EXIT_SYMBOL = Symbol.for("openclaw.otel.preExit");
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
+// Keep this list aligned with agent command options that consume the next argv token.
 const AGENT_VALUE_FLAGS = new Set([
   "-m",
   "--message",
@@ -144,6 +145,9 @@ function parseLocalAgentArgs(argv: string[]): ParsedLocalAgentArgs | null {
       continue;
     }
     const optionValue = value ?? argv[index + 1];
+    if (optionValue === FLAG_TERMINATOR) {
+      break;
+    }
     if (flag === "--timeout") {
       parsed.timeoutRaw = optionValue;
     }
