@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ThinkingContent, UserMessage, Usage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -1493,6 +1493,34 @@ describe("sanitizeSessionHistory", () => {
       ]);
     },
   );
+
+  it("strips invalid direct Anthropic thinking signatures from prior assistant turns when a user follows up", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "empty signature",
+          signature: "",
+        } as unknown as ThinkingContent,
+        { type: "thinking", thinking: "blank signature", thinkingSignature: "   " },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeAnthropicHistory({
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      messages,
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
 
   it.each([
     {
