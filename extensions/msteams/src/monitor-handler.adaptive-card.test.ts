@@ -17,7 +17,7 @@ const runtimeApiMockState = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", () => {
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => {
   return {
     dispatchReplyFromConfigWithSettledDispatcher:
       runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,

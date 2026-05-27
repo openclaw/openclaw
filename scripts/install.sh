@@ -1232,10 +1232,18 @@ parse_args() {
                 shift
                 ;;
             --install-method|--method)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 INSTALL_METHOD="$2"
                 shift 2
                 ;;
             --version)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 OPENCLAW_VERSION="$2"
                 shift 2
                 ;;
@@ -1252,6 +1260,10 @@ parse_args() {
                 shift
                 ;;
             --git-dir|--dir)
+                if [[ $# -lt 2 || "${2:-}" == --* ]]; then
+                    ui_error "Missing value for $1"
+                    return 2
+                fi
                 GIT_DIR="$2"
                 shift 2
                 ;;
@@ -1260,7 +1272,8 @@ parse_args() {
                 shift
                 ;;
             *)
-                shift
+                ui_error "Unknown option: $1"
+                return 2
                 ;;
         esac
     done
@@ -2256,7 +2269,7 @@ ensure_user_local_bin_on_path() {
 
 npm_global_bin_dir() {
     local prefix=""
-    prefix="$(npm prefix -g 2>/dev/null || true)"
+    prefix="$(bounded_probe_output "npm prefix -g" npm prefix -g || true)"
     if [[ -n "$prefix" ]]; then
         if [[ "$prefix" == /* ]]; then
             echo "${prefix%/}/bin"
@@ -2264,7 +2277,7 @@ npm_global_bin_dir() {
         fi
     fi
 
-    prefix="$(npm config get prefix 2>/dev/null || true)"
+    prefix="$(bounded_probe_output "npm config get prefix" npm config get prefix || true)"
     if [[ -n "$prefix" && "$prefix" != "undefined" && "$prefix" != "null" ]]; then
         if [[ "$prefix" == /* ]]; then
             echo "${prefix%/}/bin"
@@ -2483,6 +2496,51 @@ maybe_nodenv_rehash() {
     fi
 }
 
+bounded_probe_output() {
+    local label="$1"
+    shift
+    local timeout_seconds="${OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS:-5}"
+    local output_file status_file timeout_file pid watchdog status
+    output_file="$(mktemp)"
+    status_file="$(mktemp)"
+    timeout_file="$(mktemp)"
+    TMPFILES+=("$output_file" "$status_file" "$timeout_file")
+
+    (
+        "$@" >"$output_file" 2>/dev/null
+        printf '%s' "$?" >"$status_file"
+    ) &
+    pid="$!"
+
+    (
+        sleep "$timeout_seconds"
+        if kill -0 "$pid" 2>/dev/null; then
+            printf '1' >"$timeout_file"
+            kill "$pid" 2>/dev/null || true
+            sleep 0.1
+            kill -9 "$pid" 2>/dev/null || true
+            printf 'timeout' >"$status_file"
+        fi
+    ) &
+    watchdog="$!"
+
+    wait "$pid" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+
+    status="$(cat "$status_file" 2>/dev/null || true)"
+    if [[ -s "$timeout_file" || "$status" == "timeout" ]]; then
+        echo "Warning: timed out during installer finalization probe: ${label}" >&2
+        return 124
+    fi
+
+    cat "$output_file" 2>/dev/null || true
+    if [[ -n "$status" && "$status" =~ ^[0-9]+$ ]]; then
+        return "$status"
+    fi
+    return 1
+}
+
 warn_openclaw_not_found() {
     ui_warn "Installed, but openclaw is not discoverable on PATH in this shell"
     echo "  Try: hash -r (bash) or rehash (zsh), then retry."
@@ -2496,7 +2554,7 @@ warn_openclaw_not_found() {
     fi
 
     local npm_prefix=""
-    npm_prefix="$(npm prefix -g 2>/dev/null || true)"
+    npm_prefix="$(bounded_probe_output "npm prefix -g" npm prefix -g || true)"
     local npm_bin=""
     npm_bin="$(npm_global_bin_dir 2>/dev/null || true)"
     if [[ -n "$npm_prefix" ]]; then
@@ -2893,7 +2951,7 @@ is_gateway_daemon_loaded() {
     fi
 
     local status_json=""
-    status_json="$("$claw" daemon status --json 2>/dev/null || true)"
+    status_json="$(bounded_probe_output "openclaw daemon status --json" "$claw" daemon status --json || true)"
     if [[ -z "$status_json" ]]; then
         return 1
     fi

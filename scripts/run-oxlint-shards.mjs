@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
@@ -8,6 +9,8 @@ import {
 } from "./lib/local-heavy-check-runtime.mjs";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
+const FAST_LOCAL_CHECK_MIN_CPUS = 12;
+const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
@@ -32,9 +35,7 @@ export function createOxlintShards({
   readDir = fs.readdirSync,
 } = {}) {
   const extensionShards =
-    platform === "win32"
-      ? createWindowsExtensionShards({ cwd, env, readDir })
-      : [EXTENSIONS_SHARD];
+    platform === "win32" ? createWindowsExtensionShards({ cwd, env, readDir }) : [EXTENSIONS_SHARD];
 
   return [CORE_SHARD, ...extensionShards, SCRIPTS_SHARD];
 }
@@ -80,6 +81,38 @@ export function resolveWindowsExtensionChunkSize(env = process.env) {
   return Number.isFinite(parsedValue) && parsedValue > 0
     ? parsedValue
     : DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE;
+}
+
+export function shouldRunOxlintShardsSerial({
+  env = process.env,
+  platform = process.platform,
+  hostResources,
+} = {}) {
+  const explicitMode = env.OPENCLAW_OXLINT_SHARDS_SERIAL?.trim();
+  if (explicitMode === "1") {
+    return true;
+  }
+  if (platform === "win32") {
+    return true;
+  }
+  if (explicitMode === "0") {
+    return false;
+  }
+  const localCheckMode = env.OPENCLAW_LOCAL_CHECK_MODE?.trim().toLowerCase();
+  if (localCheckMode === "full" || localCheckMode === "fast") {
+    return false;
+  }
+  if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
+    return true;
+  }
+  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
+    return false;
+  }
+  const resources = resolveHostResources(hostResources);
+  return (
+    resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+    resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+  );
 }
 
 function listExtensionEntries({ cwd, readDir }) {
@@ -153,7 +186,10 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
     if ((prepareResult.status ?? 1) !== 0) {
       process.exitCode = prepareResult.status ?? 1;
     } else {
-      const runSerial = env.OPENCLAW_OXLINT_SHARDS_SERIAL === "1" || process.platform === "win32";
+      const runSerial = shouldRunOxlintShardsSerial({
+        env,
+        platform: process.platform,
+      });
       const results = runSerial
         ? await runShardsSerial({ entries: shards, env, extraArgs, runner })
         : await Promise.all(shards.map((shard) => runShard({ env, extraArgs, runner, shard })));
@@ -166,6 +202,18 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
 
 if (import.meta.main) {
   await main();
+}
+
+function resolveHostResources(hostResources) {
+  if (hostResources) {
+    return hostResources;
+  }
+
+  return {
+    totalMemoryBytes: os.totalmem(),
+    logicalCpuCount:
+      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+  };
 }
 
 async function runShardsSerial({ entries, env, extraArgs, runner }) {
