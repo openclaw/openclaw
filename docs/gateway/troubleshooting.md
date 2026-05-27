@@ -503,12 +503,10 @@ What to do:
 4. **Optional: prevent maintenance sleep entirely with `caffeinate`** while the gateway is running. macOS ships a `caffeinate` utility that asserts power-management flags to keep the system awake; with `-w <pid>` the assertions are bound to a specific process and released automatically when that process exits. This is an out-of-tree operator pattern (OpenClaw does not ship a `caffeinate` wrapper and prior proposals to add one upstream were declined), but it is well established for always-on Mac services — Plex Media Server's community recipe prepends `/usr/bin/caffeinate -ims --` to the Plex `LaunchAgent` `ProgramArguments` for the same reason. The pattern is documented in [Apple's `caffeinate(8)` manpage](https://ss64.com/mac/caffeinate.html) and used by general-purpose helpers such as the open-source [`alwaysBeCaffeinating`](https://github.com/thomstratton/alwaysBeCaffeinating) LaunchDaemon.
 
    Two shapes operators have used:
-
    - **Sidecar `LaunchAgent`** that runs alongside the gateway and watches its PID. The supervisor spawns `caffeinate -s -i -w <gateway-pid>`; when the gateway dies, `caffeinate -w` exits with it, the supervisor finds the new gateway PID after launchd respawns it, and a fresh `caffeinate` re-attaches. This survives `openclaw doctor` regenerating the gateway's own plist, because the sidecar is a separate `LaunchAgent`.
    - **Wrapper inside the gateway plist's `ProgramArguments`** (Plex-style). Simpler to set up, but `openclaw doctor` rewrites the gateway plist on every run, so this gets stomped unless you re-apply it after each `doctor` run or each upgrade.
 
    Trade-offs to be aware of:
-
    - Effective: holds `PreventSystemSleep` and `PreventUserIdleSystemSleep` as long as the gateway runs, so en0 does not flap and no `ENETDOWN`s occur in the first place. On an Apple Silicon Mac mini observed across a ~20 hour window after enabling: zero Maintenance Sleep events, zero new uncaught-exception bundles.
    - Out of scope for OpenClaw itself. Two prior PRs proposing this as a built-in (#15444, #40846) were declined. If you adopt it, own the `LaunchAgent`.
    - Power-management impact. The host will not idle-sleep while the gateway is alive. On Mac minis or always-on desktops that is intended behavior; on laptops or shared-use Macs it is usually not.
