@@ -26,6 +26,7 @@ struct ChatProTab: View {
                             composerChrome: .clean,
                             messagePlaceholder: "Message \(self.agentDisplayName)...",
                             talkControl: self.talkControl)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     } else {
                         ProCard {
                             VStack(alignment: .leading, spacing: 8) {
