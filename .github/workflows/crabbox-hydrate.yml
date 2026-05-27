@@ -149,6 +149,8 @@ jobs:
           $env:PNPM_CONFIG_STORE_DIR = Join-Path $cacheRoot "openclaw-pnpm-store"
           $env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"
           $env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $workspace "node_modules\.pnpm"
+          $env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"
+          $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
           New-Item -ItemType Directory -Force `
             $env:XDG_CACHE_HOME, `
             $env:COREPACK_HOME, `
@@ -162,6 +164,8 @@ jobs:
             "PNPM_CONFIG_STORE_DIR=$env:PNPM_CONFIG_STORE_DIR"
             "PNPM_CONFIG_MODULES_DIR=$env:PNPM_CONFIG_MODULES_DIR"
             "PNPM_CONFIG_VIRTUAL_STORE_DIR=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD"
+            "PNPM_CONFIG_SIDE_EFFECTS_CACHE=$env:PNPM_CONFIG_SIDE_EFFECTS_CACHE"
           ) | Add-Content -Path $env:GITHUB_ENV
           $env:PNPM_HOME | Add-Content -Path $env:GITHUB_PATH
 
@@ -195,16 +199,18 @@ jobs:
             "--ignore-scripts=false",
             "--config.engine-strict=false",
             "--config.enable-pre-post-scripts=true",
-            "--config.side-effects-cache=true",
+            "--config.side-effects-cache=false",
             "--frozen-lockfile",
             "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
             "--modules-dir=$env:PNPM_CONFIG_MODULES_DIR",
             "--network-concurrency=$env:PNPM_CONFIG_NETWORK_CONCURRENCY",
+            "--package-import-method=$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD",
             "--store-dir=$env:PNPM_CONFIG_STORE_DIR",
             "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
           )
           pnpm @installArgs
           if ($LASTEXITCODE -ne 0) {
+            Remove-Item -Recurse -Force $env:PNPM_CONFIG_MODULES_DIR -ErrorAction SilentlyContinue
             pnpm @installArgs
           }
           if ($LASTEXITCODE -ne 0) {
