@@ -253,19 +253,28 @@ function createChatSessionPickerRequestParams(
     configuredAgentsOnly: overrides.configuredAgentsOnly,
     limit: overrides.limit,
   };
-  const activeAgentSession = parseAgentSessionKey(state.sessionKey);
-  const activeSessionRow = state.sessionsResult?.sessions.find(
-    (row) => row.key === state.sessionKey,
-  );
-  const isGlobalScopeSession =
-    activeSessionRow?.kind === "global" ||
-    activeSessionRow?.kind === "unknown" ||
-    state.sessionKey === "global" ||
-    state.sessionKey === "unknown";
-  if (activeAgentSession || !isGlobalScopeSession) {
-    params.agentId = normalizeAgentId(
-      activeAgentSession?.agentId ?? state.agentsList?.defaultId ?? "main",
-    );
+  // Use agentId from overrides if set (sessionKey in agent:xxx:yyy format).
+  // Otherwise fallback to agentsList.defaultId or "main" for non-agent session keys.
+  const agentId = normalizeOptionalString(overrides.agentId);
+  if (agentId) {
+    params.agentId = agentId;
+  } else {
+    const parsed = parseAgentSessionKey(state.sessionKey);
+    if (!parsed) {
+      // sessionKey is not in agent:xxx:yyy format (e.g., "main", "global", "unknown").
+      // For non-global scope, add agentId fallback.
+      const activeSessionRow = state.sessionsResult?.sessions.find(
+        (row) => row.key === state.sessionKey,
+      );
+      const isGlobalScopeSession =
+        activeSessionRow?.kind === "global" ||
+        activeSessionRow?.kind === "unknown" ||
+        state.sessionKey === "global" ||
+        state.sessionKey === "unknown";
+      if (!isGlobalScopeSession) {
+        params.agentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+      }
+    }
   }
   const offset =
     typeof overrides.offset === "number" && Number.isFinite(overrides.offset)
