@@ -890,6 +890,22 @@ describe("install.sh", () => {
     expect(output).toContain("version=v22.22.1");
   });
 
+  it("installs Homebrew lazily before macOS Git installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      install_homebrew() { echo "install_homebrew"; }
+      run_quiet_step() { echo "run_quiet_step:$*"; return 0; }
+      install_git
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      /install_homebrew\s+run_quiet_step:Installing Git brew install git/,
+    );
+  });
+
   it("promotes a supported Linux Node binary over stale PATH entries", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-promote-"));
     const staleBin = join(tmp, "usr-local-bin");
