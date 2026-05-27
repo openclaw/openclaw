@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 const scriptPath = "scripts/package-mac-app.sh";
 
 function makePlist(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plistbuddy-"));
-  tempDirs.push(dir);
+  tempDirCleanups.push(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
   const plist = path.join(dir, "Info.plist");
   writeFileSync(
     plist,
@@ -48,8 +50,8 @@ function getPackageManagerHelperBlock(): string {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+  for (const cleanup of tempDirCleanups.splice(0)) {
+    cleanup();
   }
 });
 
@@ -71,7 +73,14 @@ describe("package-mac-app plist stamping", () => {
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
     const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
     const logPath = path.join(tempRoot, "corepack.log");
-    tempDirs.push(tempRoot, toolsDir);
+    tempDirCleanups.push(
+      () => {
+        rmSync(tempRoot, { recursive: true, force: true });
+      },
+      () => {
+        rmSync(toolsDir, { recursive: true, force: true });
+      },
+    );
 
     const corepackPath = path.join(toolsDir, "corepack");
     writeFileSync(
@@ -79,8 +88,8 @@ describe("package-mac-app plist stamping", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "printf '%s|%s\\n' \"$PWD\" \"$*\" >> \"$OPENCLAW_TEST_LOG\"",
-        "if [[ \"${1:-}\" == \"pnpm\" && \"${2:-}\" == \"--version\" ]]; then",
+        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
         "  echo '11.2.2'",
         "fi",
         "",
@@ -112,7 +121,14 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
     const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
-    tempDirs.push(tempRoot, toolsDir);
+    tempDirCleanups.push(
+      () => {
+        rmSync(tempRoot, { recursive: true, force: true });
+      },
+      () => {
+        rmSync(toolsDir, { recursive: true, force: true });
+      },
+    );
 
     const result = runHelper(`
       set -euo pipefail
@@ -156,11 +172,15 @@ describe("package-mac-app plist stamping", () => {
   it("fails closed when required bundled resources are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
     const modelCatalogBlock = script.slice(
-      script.indexOf('MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"'),
+      script.indexOf(
+        'MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"',
+      ),
       script.indexOf('echo "📦 Copying Control UI assets"'),
     );
     const openClawKitBlock = script.slice(
-      script.indexOf('OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"'),
+      script.indexOf(
+        'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
+      ),
       script.indexOf('echo "📦 Copying Textual resources"'),
     );
 

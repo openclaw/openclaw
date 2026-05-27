@@ -8,17 +8,19 @@ import {
   renderEvidenceComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+  for (const cleanup of tempDirCleanups.splice(0)) {
+    cleanup();
   }
 });
 
 function makeLane(name: string) {
   const repo = mkdtempSync(path.join(tmpdir(), `mantis-telegram-${name}-repo-`));
-  tempDirs.push(repo);
+  tempDirCleanups.push(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
   const outputDir = path.join(repo, ".artifacts", "qa-e2e", name);
   mkdirSync(outputDir, { recursive: true });
   const gif = path.join(outputDir, "telegram-user-crabbox-session-motion-telegram-window.gif");
@@ -49,7 +51,9 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     const baseline = makeLane("baseline");
     const candidate = makeLane("candidate");
     const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-proof-"));
-    tempDirs.push(outputDir);
+    tempDirCleanups.push(() => {
+      rmSync(outputDir, { recursive: true, force: true });
+    });
 
     const result = writeTelegramDesktopProofEvidence([
       "--output-dir",

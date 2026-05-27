@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
 const runtimeSmokePath = path.resolve(
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
@@ -22,7 +22,9 @@ type PluginListEntry = {
 
 function makePackageRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-probe-"));
-  tempDirs.push(root);
+  tempDirCleanups.push(() => {
+    fs.rmSync(root, { force: true, recursive: true });
+  });
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n', "utf8");
   fs.mkdirSync(path.join(root, "dist"), { recursive: true });
   return root;
@@ -127,8 +129,8 @@ async function closeServer(server: HttpServer | NetServer): Promise<void> {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { force: true, recursive: true });
+  for (const cleanup of tempDirCleanups.splice(0)) {
+    cleanup();
   }
 });
 
@@ -212,7 +214,10 @@ describe("bundled plugin install/uninstall probe", () => {
   it("creates runtime smoke state with OPENCLAW_HOME at the test home", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const env = runtimeSmoke.createIsolatedStateEnv("runtime-env");
-    tempDirs.push(path.dirname(env.HOME));
+    const homeRoot = path.dirname(env.HOME);
+    tempDirCleanups.push(() => {
+      fs.rmSync(homeRoot, { force: true, recursive: true });
+    });
 
     expect(env.USERPROFILE).toBe(env.HOME);
     expect(env.OPENCLAW_HOME).toBe(env.HOME);

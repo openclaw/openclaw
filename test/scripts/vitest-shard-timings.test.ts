@@ -9,11 +9,11 @@ import {
   writeShardTimings,
 } from "../../scripts/lib/vitest-shard-timings.mjs";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  for (const cleanup of tempDirCleanups.splice(0)) {
+    cleanup();
   }
 });
 
@@ -56,7 +56,9 @@ describe("scripts/lib/vitest-shard-timings.mjs", () => {
 
   it("persists include-pattern timing metadata", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shard-timings-"));
-    tempDirs.push(tempDir);
+    tempDirCleanups.push(() => {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
     const env = {
       OPENCLAW_TEST_PROJECTS_TIMINGS_PATH: path.join(tempDir, "timings.json"),
       OPENCLAW_VITEST_SHARD_NAME: "auto-reply-reply-agent-runner",

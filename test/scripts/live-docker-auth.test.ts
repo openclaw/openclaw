@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 
 function makeTempBin(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
-  tempDirs.push(dir);
+  tempDirCleanups.push(() => {
+    rmSync(dir, { force: true, recursive: true });
+  });
   return dir;
 }
 
@@ -60,8 +62,8 @@ function failDockerRunArgs(pathPrefix: string) {
 }
 
 afterEach(() => {
-  while (tempDirs.length > 0) {
-    rmSync(tempDirs.pop()!, { force: true, recursive: true });
+  while (tempDirCleanups.length > 0) {
+    tempDirCleanups.pop()!();
   }
 });
 
@@ -93,14 +95,9 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-plain-");
     writeExecutable(
       path.join(binDir, "timeout"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--kill-after=1s" ]; then',
-        "  exit 1",
-        "fi",
-        "exit 0",
-        "",
-      ].join("\n"),
+      ["#!/bin/sh", 'if [ "$1" = "--kill-after=1s" ]; then', "  exit 1", "fi", "exit 0", ""].join(
+        "\n",
+      ),
     );
 
     expect(resolveDockerRunArgs(binDir)).toEqual(["timeout", "42s", "docker", "run"]);

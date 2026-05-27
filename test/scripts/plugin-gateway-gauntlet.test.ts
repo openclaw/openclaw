@@ -23,14 +23,18 @@ import {
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
+  let repoRootCleanup: (() => Promise<void>) | null = null;
 
   beforeEach(async () => {
-    repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-gauntlet-"));
+    const tempRepoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-gauntlet-"));
+    repoRoot = tempRepoRoot;
+    repoRootCleanup = () => fs.rm(tempRepoRoot, { recursive: true, force: true });
     await fs.mkdir(path.join(repoRoot, "extensions"), { recursive: true });
   });
 
   afterEach(async () => {
-    await fs.rm(repoRoot, { recursive: true, force: true });
+    await repoRootCleanup?.();
+    repoRootCleanup = null;
   });
 
   async function writeManifest(pluginDir: string, fileName: string, source: string) {
@@ -332,9 +336,7 @@ describe("plugin gateway gauntlet helpers", () => {
   it("does not count prebuild setup as gauntlet work", () => {
     expect(hasGauntletWorkRows([])).toBe(false);
     expect(hasGauntletWorkRows([{ phase: "prebuild" }])).toBe(false);
-    expect(hasGauntletWorkRows([{ phase: "prebuild" }, { phase: "lifecycle:install" }])).toBe(
-      true,
-    );
+    expect(hasGauntletWorkRows([{ phase: "prebuild" }, { phase: "lifecycle:install" }])).toBe(true);
     expect(hasGauntletWorkRows([{ phase: "slash:help" }])).toBe(true);
     expect(hasGauntletWorkRows([{ phase: "qa:rpc" }])).toBe(true);
   });

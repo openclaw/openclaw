@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   DEPENDENCY_EVIDENCE_REPORTS,
   collectDependencyEvidenceSummaryCounts,
@@ -11,6 +11,12 @@ import {
   resolvePreviousReleaseTag,
   resolveReleaseTag,
 } from "../../scripts/generate-dependency-release-evidence.mjs";
+
+const tempDirCleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirCleanups.splice(0).map((cleanup) => cleanup()));
+});
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -105,6 +111,7 @@ describe("generate-dependency-release-evidence", () => {
 
   it("collects report counts and renders human summaries", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
+    tempDirCleanups.push(() => rm(dir, { recursive: true, force: true }));
     await writeJson(dir, "dependency-vulnerability-gate.json", {
       blockers: [{ id: "GHSA-blocker" }],
       findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],

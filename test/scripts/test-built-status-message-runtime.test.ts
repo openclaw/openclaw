@@ -5,17 +5,19 @@ import { afterEach, describe, expect, it } from "vitest";
 import { findBuiltStatusMessageRuntimePath } from "../../scripts/test-built-status-message-runtime.mjs";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  for (const cleanup of tempDirCleanups.splice(0)) {
+    cleanup();
   }
 });
 
 function makeDistDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-runtime-"));
-  tempDirs.push(root);
+  tempDirCleanups.push(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   const distDir = path.join(root, "dist");
   fs.mkdirSync(distDir, { recursive: true });
   return distDir;

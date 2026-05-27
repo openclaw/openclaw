@@ -4,17 +4,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectSourceFileContents } from "../../scripts/lib/source-file-scan-cache.mjs";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => Promise<void>> = [];
 
 async function makeTempRepo() {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-source-scan-"));
-  tempDirs.push(repoRoot);
+  tempDirCleanups.push(() => rm(repoRoot, { recursive: true, force: true }));
   return repoRoot;
 }
 
 describe("source file scan cache", () => {
   afterEach(async () => {
-    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+    await Promise.all(tempDirCleanups.splice(0).map((cleanup) => cleanup()));
   });
 
   it("bounds concurrent source file reads while preserving sorted output", async () => {

@@ -8,6 +8,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const scriptPath = path.join(process.cwd(), "scripts", "committer");
 const { createTempDir } = createScriptTestHarness();
 let templateRepo: string;
+let templateRepoCleanup: (() => void) | null = null;
 
 function run(cwd: string, command: string, args: string[]) {
   return execFileSync(command, args, {
@@ -28,6 +29,9 @@ function createRepo() {
 
 function createTemplateRepo() {
   const repo = mkdtempSync(path.join(tmpdir(), "committer-template-"));
+  templateRepoCleanup = () => {
+    rmSync(repo, { recursive: true, force: true });
+  };
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test User");
@@ -83,7 +87,8 @@ describe("scripts/committer", () => {
   });
 
   afterAll(() => {
-    rmSync(templateRepo, { recursive: true, force: true });
+    templateRepoCleanup?.();
+    templateRepoCleanup = null;
   });
 
   it("accepts supported path argument shapes", () => {

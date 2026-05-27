@@ -27,10 +27,10 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
 );
 const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
 const execFileAsync = promisify(execFile);
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  await Promise.all(tempDirCleanups.splice(0).map((cleanup) => cleanup()));
 });
 
 describe("RTT harness", () => {
@@ -149,8 +149,8 @@ describe("RTT harness", () => {
     expect(script).toContain(
       '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(script).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
-    expect(script).toContain("timeout_bin=\"gtimeout\"");
+    expect(script).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(script).toContain('timeout_bin="gtimeout"');
     expect(script).toContain(
       'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
     );
@@ -158,7 +158,9 @@ describe("RTT harness", () => {
     expect(script).toContain(
       '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(script).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
+    expect(script).not.toContain(
+      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+    );
     expect(script).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
     expect(script).not.toContain("run_logged docker run --rm");
     expect(heartbeatStartIndex).toBeGreaterThan(sourceIndex);
@@ -180,7 +182,7 @@ describe("RTT harness", () => {
 
   it("generates final-only Telegram RTT delivery config for release packages", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-config-test-"));
-    tempDirs.push(tempDir);
+    tempDirCleanups.push(() => fs.rm(tempDir, { recursive: true, force: true }));
     const configPath = path.join(tempDir, "config.json");
 
     await execFileAsync(process.execPath, [
@@ -292,7 +294,7 @@ describe("RTT harness", () => {
 
   it("appends JSONL rows", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-test-"));
-    tempDirs.push(tempDir);
+    tempDirCleanups.push(() => fs.rm(tempDir, { recursive: true, force: true }));
     const jsonlPath = path.join(tempDir, "data/rtt.jsonl");
     await appendJsonl(jsonlPath, { run: 1 });
     await appendJsonl(jsonlPath, { run: 2 });

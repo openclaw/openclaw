@@ -5,11 +5,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = path.resolve("scripts/ci-docker-pull-retry.sh");
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 
 function makeTempBin(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
-  tempDirs.push(dir);
+  tempDirCleanups.push(() => {
+    rmSync(dir, { force: true, recursive: true });
+  });
   return dir;
 }
 
@@ -38,8 +40,8 @@ function runPullHelperWithEnv(binDir: string, env: Record<string, string>) {
 }
 
 afterEach(() => {
-  while (tempDirs.length > 0) {
-    rmSync(tempDirs.pop()!, { force: true, recursive: true });
+  while (tempDirCleanups.length > 0) {
+    tempDirCleanups.pop()!();
   }
 });
 
@@ -128,7 +130,9 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
     const result = runPullHelper(binDir);
 
     expect(result.status).toBe(127);
-    expect(result.stderr).toContain("timeout command not found; cannot bound Docker pull after 42s");
+    expect(result.stderr).toContain(
+      "timeout command not found; cannot bound Docker pull after 42s",
+    );
     expect(existsSync(dockerArgsPath)).toBe(false);
   });
 
@@ -162,6 +166,8 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
 
     expect(result.status).toBe(42);
     expect(result.stderr).toContain("Docker pull failed or timed out after 42s: status=42");
-    expect(execFileSync("wc", ["-l", dockerArgsPath], { encoding: "utf8" }).trim()).toMatch(/^2\b/u);
+    expect(execFileSync("wc", ["-l", dockerArgsPath], { encoding: "utf8" }).trim()).toMatch(
+      /^2\b/u,
+    );
   });
 });

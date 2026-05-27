@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const tempDirs: string[] = [];
+const tempDirCleanups: Array<() => void> = [];
 const repoRoot = process.cwd();
 const fakeCrabboxBinDirs = new Map<string, string>();
 
@@ -14,7 +14,9 @@ function makeFakeCrabbox(helpText: string): string {
     return cached;
   }
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-crabbox-"));
-  tempDirs.push(binDir);
+  tempDirCleanups.push(() => {
+    rmSync(binDir, { recursive: true, force: true });
+  });
   writeFakeCrabbox(binDir, helpText);
   fakeCrabboxBinDirs.set(helpText, binDir);
   return binDir;
@@ -126,7 +128,9 @@ function makeFakeGit(
   responses: Record<string, { status?: number; stdout?: string; stderr?: string }>,
 ): string {
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-git-"));
-  tempDirs.push(binDir);
+  tempDirCleanups.push(() => {
+    rmSync(binDir, { recursive: true, force: true });
+  });
   const gitPath = path.join(binDir, "git");
   if (process.platform !== "win32") {
     const script = [
@@ -272,8 +276,8 @@ function expectGroupedShellCommand(remoteCommand: string, command: string): void
 }
 
 afterAll(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+  for (const cleanup of tempDirCleanups.splice(0)) {
+    cleanup();
   }
 });
 
@@ -386,11 +390,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps explicit provider env overrides for Windows runs", () => {
-    const result = runWrapper(
-      azureProviderHelp,
-      ["run", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
-    );
+    const result = runWrapper(azureProviderHelp, ["run", "--target", "windows", "--", "echo ok"], {
+      env: { CRABBOX_PROVIDER: "aws" },
+    });
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toEqual([
@@ -1400,7 +1402,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     "finds a Crabbox checkout next to the Git common dir in linked worktrees",
     () => {
       const fakeWorkspaceParent = mkdtempSync(path.join(tmpdir(), "openclaw-linked-worktree-"));
-      tempDirs.push(fakeWorkspaceParent);
+      tempDirCleanups.push(() => {
+        rmSync(fakeWorkspaceParent, { recursive: true, force: true });
+      });
       const gitCommonDir = path.join(fakeWorkspaceParent, "openclaw", ".git");
       const crabboxBinDir = path.join(fakeWorkspaceParent, "crabbox", "bin");
       mkdirSync(gitCommonDir, { recursive: true });
@@ -1460,7 +1464,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   if (process.platform !== "win32") {
     it("keeps POSIX PATH lookup semantics for non-executable entries", () => {
       const staleBinDir = mkdtempSync(path.join(tmpdir(), "openclaw-stale-crabbox-"));
-      tempDirs.push(staleBinDir);
+      tempDirCleanups.push(() => {
+        rmSync(staleBinDir, { recursive: true, force: true });
+      });
       writeFileSync(path.join(staleBinDir, "crabbox"), "not executable\n", "utf8");
       const result = runWrapper("provider: aws\n", ["run", "--provider", "aws", "--", "echo ok"], {
         extraPathEntries: [staleBinDir],
