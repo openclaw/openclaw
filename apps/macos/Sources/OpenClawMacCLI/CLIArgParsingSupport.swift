@@ -8,9 +8,11 @@ enum CLIArgParsingSupport {
     }
 }
 
-enum CLISecretInputError: Error, CustomStringConvertible {
+enum CLISecretInputError: Error, CustomStringConvertible, LocalizedError, Equatable {
     case missingValue(String)
     case mutuallyExclusive(String)
+    case emptyValue(String)
+    case missingEnvironment(String)
     case unreadableFile(String)
 
     var description: String {
@@ -19,10 +21,16 @@ enum CLISecretInputError: Error, CustomStringConvertible {
             return "\(flag) requires a value"
         case let .mutuallyExclusive(name):
             return "only one \(name) input flag may be used"
+        case let .emptyValue(source):
+            return "\(source) did not provide a non-empty secret"
+        case let .missingEnvironment(name):
+            return "environment variable \(name) is not set"
         case let .unreadableFile(path):
             return "could not read secret file: \(path)"
         }
     }
+
+    var errorDescription: String? { description }
 }
 
 enum CLISecretInput: Equatable {
@@ -37,19 +45,42 @@ enum CLISecretInput: Equatable {
             return value.trimmingCharacters(in: .whitespacesAndNewlines)
         case .stdin:
             let data = FileHandle.standardInput.readDataToEndOfFile()
-            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let value = String(data: data, encoding: .utf8) else {
+                throw CLISecretInputError.emptyValue("--password-stdin")
+            }
+            return try nonEmptySecret(value, source: "--password-stdin")
         case let .file(path):
+            let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedPath.isEmpty else {
+                throw CLISecretInputError.missingValue("--password-file")
+            }
             do {
-                let expandedPath = NSString(string: path).expandingTildeInPath
-                return try String(contentsOfFile: expandedPath, encoding: .utf8)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let expandedPath = NSString(string: trimmedPath).expandingTildeInPath
+                let value = try String(contentsOfFile: expandedPath, encoding: .utf8)
+                return try nonEmptySecret(value, source: "--password-file")
+            } catch let error as CLISecretInputError {
+                throw error
             } catch {
-                throw CLISecretInputError.unreadableFile(path)
+                throw CLISecretInputError.unreadableFile(trimmedPath)
             }
         case let .environment(name):
-            return ProcessInfo.processInfo.environment[name]?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedName.isEmpty else {
+                throw CLISecretInputError.missingValue("--password-env")
+            }
+            guard let value = ProcessInfo.processInfo.environment[trimmedName] else {
+                throw CLISecretInputError.missingEnvironment(trimmedName)
+            }
+            return try nonEmptySecret(value, source: "--password-env \(trimmedName)")
         }
+    }
+
+    private func nonEmptySecret(_ value: String, source: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw CLISecretInputError.emptyValue(source)
+        }
+        return trimmed
     }
 }
 
