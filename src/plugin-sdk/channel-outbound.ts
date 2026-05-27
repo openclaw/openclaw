@@ -5,7 +5,6 @@ import type {
 } from "../channels/message/index.js";
 import type { ChannelMessageReceiveAdapterShape } from "../channels/message/index.js";
 import type {
-  DurableMessageBatchSendParams,
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
   DurableMessageSendContextParams,
@@ -190,7 +189,7 @@ export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModu
   };
 
 export async function sendDurableMessageBatch(
-  params: DurableMessageBatchSendParams,
+  params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await import("../channels/message/runtime.js");
   return await mod.sendDurableMessageBatch(params);
