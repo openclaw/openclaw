@@ -398,6 +398,7 @@ export function createSessionActions(context: SessionActionContext) {
     if (
       opts.local === true &&
       state.activityStatus === "finishing context" &&
+      !params?.preferActive &&
       !state.pendingChatRunId
     ) {
       chatLog.addSystem("agent is finishing context; wait for it to finish before aborting");

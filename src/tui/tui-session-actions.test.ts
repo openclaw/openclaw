@@ -437,6 +437,31 @@ describe("tui session actions", () => {
     expect(state.activeChatRunId).toBe("run-finishing");
   });
 
+  it("aborts local post-turn maintenance for explicit stop", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: "run-finishing",
+      pendingChatRunId: null,
+      activityStatus: "finishing context",
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      opts: { local: true },
+      state,
+      setActivityStatus,
+    });
+
+    await abortActive({ preferActive: true });
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-finishing",
+    });
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
   it("aborts the queued pending run after a local finishing turn accepts the next send", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const setActivityStatus = vi.fn();
