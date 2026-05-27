@@ -1512,6 +1512,7 @@ async function findSourceReplyTranscriptMirrorByMetadata(params: {
 async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
+  originAgent?: string;
   content?: Array<Record<string, unknown>>;
   sessionId: string;
   storePath: string | undefined;
@@ -1567,6 +1568,7 @@ async function appendAssistantTranscriptMessage(params: {
     transcriptPath,
     message: params.message,
     label: params.label,
+    originAgent: params.originAgent,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
@@ -3691,6 +3693,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       message: string;
       label?: string;
+      originAgent?: string;
     };
 
     // Load session to find transcript file
@@ -3705,6 +3708,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const appended = await appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
+      originAgent: p.originAgent,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
