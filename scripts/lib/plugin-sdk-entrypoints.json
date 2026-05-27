@@ -242,6 +242,7 @@
   "persistent-dedupe",
   "keyed-async-queue",
   "qa-runner-runtime",
+  "qa-runner-shared-runtime",
   "memory-core",
   "memory-core-engine-runtime",
   "memory-core-host-engine-embeddings",

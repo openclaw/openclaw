@@ -8,7 +8,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
-} from "openclaw/plugin-sdk/qa-runner-runtime";
+} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";

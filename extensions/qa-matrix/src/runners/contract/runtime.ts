@@ -4,13 +4,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
-  loadQaRuntimeModule,
   renderQaMarkdownReport,
   type QaReportCheck,
-} from "openclaw/plugin-sdk/qa-runner-runtime";
+} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";

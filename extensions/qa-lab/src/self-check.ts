@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runner-shared-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { runQaScenario, type QaScenarioResult } from "./scenario.js";

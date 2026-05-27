@@ -8,7 +8,7 @@ import {
   renderQaMarkdownReport,
   type QaReportCheck,
   type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runner-runtime";
+} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {

@@ -10,7 +10,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   appendQaLiveLaneIssue as appendLiveLaneIssue,
   buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
-} from "openclaw/plugin-sdk/qa-runner-runtime";
+} from "openclaw/plugin-sdk/qa-runner-shared-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
