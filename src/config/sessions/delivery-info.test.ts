@@ -395,6 +395,41 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("keeps freshest routable alias ordering for non-opaque keys", () => {
+    const queriedKey = "agent:main:telegram:group:MiXeDCase";
+    const canonicalKey = "agent:main:telegram:group:mixedcase";
+    const routableAlias = "agent:main:telegram:group:MixedCase";
+    storeState.store[canonicalKey] = {
+      sessionId: "older-canonical-session",
+      updatedAt: Date.now() - 1_000,
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:old-route",
+        accountId: "telegram-account",
+      },
+    };
+    storeState.store[routableAlias] = {
+      sessionId: "fresh-routable-session",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:fresh-route",
+        accountId: "telegram-account",
+      },
+    };
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:fresh-route",
+        accountId: "telegram-account",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("finds legacy lowercase Signal group entries for mixed-case group keys", () => {
     const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
     const queriedKey = `agent:main:signal:group:${mixedGroupId}`;

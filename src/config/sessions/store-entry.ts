@@ -138,7 +138,8 @@ export function resolveSessionStoreEntry(params: {
   const usableExactEntry = hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalizedKey)
     ? undefined
     : exactEntry;
-  const hasExactEntry = usableExactEntry !== undefined;
+  const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalizedKey);
+  const hasExactEntry = exactKeyWins && usableExactEntry !== undefined;
   let existing =
     usableExactEntry ??
     foldedLegacyEntry ??
@@ -162,8 +163,8 @@ export function resolveSessionStoreEntry(params: {
     }
     legacyKeySet.add(candidateKey);
     if (hasExactEntry) {
-      // Keep collecting legacy aliases for write-time collapse, but never let a
-      // fresher legacy entry override the exact mixed-case entry.
+      // Matrix/tail-preserved exact entries keep their case-sensitive room state.
+      // Ordinary lowercase-canonical channels still use freshest alias ordering.
       continue;
     }
     const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;

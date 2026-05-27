@@ -97,9 +97,9 @@ function findSessionEntryInStore(
   let bestUpdatedAt = 0;
   let bestRoutable = false;
   let bestExact = false;
-  // Preference order: routable delivery context first; then an exact mixed-case
-  // (opaque-preserving-normalized) key over a folded legacy alias (openclaw#75670);
-  // then freshness. Exact ranks below routability so delivery correctness still wins.
+  // Preference order: routable delivery context first; then Matrix/tail-preserved
+  // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
+  // channels keep the previous freshest-routable alias behavior.
   const acceptCandidate = (candidate: unknown, isExact = false) => {
     if (!candidate) {
       return;
@@ -125,6 +125,7 @@ function findSessionEntryInStore(
     const trimmed = key.trim();
     const normalized = normalizeStoreSessionKey(key);
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
     if (
       Object.prototype.hasOwnProperty.call(store, normalized) &&
@@ -133,7 +134,7 @@ function findSessionEntryInStore(
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(asSessionEntry(store[normalized])),
       );
-      acceptCandidate(store[normalized], /* isExact */ true);
+      acceptCandidate(store[normalized], exactKeyWins);
     }
     if (
       foldedLegacyKey !== normalized &&

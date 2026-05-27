@@ -343,4 +343,26 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(r.legacyKeys).toContain(lowerKey);
     expect(r.existing).toBe(signalEntry);
   });
+
+  it("keeps freshest alias ordering for ordinary lowercase-canonical channels", () => {
+    const canonicalKey = "agent:main:telegram:group:mixedcase";
+    const legacyAliasKey = "agent:main:telegram:group:MixedCase";
+    const staleCanonical = {
+      sessionId: "stale-canonical",
+      updatedAt: 100,
+    } as unknown as SessionEntry;
+    const freshAlias = {
+      sessionId: "fresh-alias",
+      updatedAt: 200,
+    } as unknown as SessionEntry;
+    const store: Record<string, SessionEntry> = {
+      [canonicalKey]: staleCanonical,
+      [legacyAliasKey]: freshAlias,
+    };
+
+    const r = resolveSessionStoreEntry({ store, sessionKey: legacyAliasKey });
+
+    expect(r.legacyKeys).toContain(legacyAliasKey);
+    expect(r.existing).toBe(freshAlias);
+  });
 });
