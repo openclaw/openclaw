@@ -22,7 +22,16 @@ replacement for scheduled work, detached tasks, or standing instructions.
 Enable the bundled goal plugin before using `/goal`:
 
 ```bash
-openclaw config set plugins.entries.goal.enabled true
+openclaw plugins enable goal
+```
+
+If your config uses a restrictive `plugins.allow` list, include `goal` there
+before enabling it. Otherwise the enable command is blocked and `/goal` will
+not be registered:
+
+```bash
+openclaw config set plugins.allow '["codex","discord","goal"]'
+openclaw plugins enable goal
 ```
 
 Restart or reload the Gateway after changing plugin configuration so the command
