@@ -191,6 +191,30 @@ describe("message hook mappers", () => {
     expect(claimEvent.metadata?.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
   });
 
+  it("preserves media metadata for plugin message_received payloads", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaType: undefined,
+        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaUrls: ["https://example.test/tree.jpg", "https://example.test/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+      }),
+    );
+
+    const receivedEvent = toPluginMessageReceivedEvent(canonical);
+    expect(receivedEvent.metadata?.mediaPath).toBe("/tmp/tree.jpg");
+    expect(receivedEvent.metadata?.mediaUrl).toBe("https://example.test/tree.jpg");
+    expect(receivedEvent.metadata?.mediaType).toBe("image/jpeg");
+    expect(receivedEvent.metadata?.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
+    expect(receivedEvent.metadata?.mediaUrls).toEqual([
+      "https://example.test/tree.jpg",
+      "https://example.test/ramp.jpg",
+    ]);
+    expect(receivedEvent.metadata?.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const trace: DiagnosticTraceContext = {
       traceId: "11111111111111111111111111111111",
