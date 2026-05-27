@@ -2720,6 +2720,7 @@ describe("gateway agent handler", () => {
             runId: "task-registry-agent-run-abort-error",
             status: "timeout",
             summary: "aborted",
+            stopReason: "rpc",
           },
         );
       });
@@ -2762,6 +2763,7 @@ describe("gateway agent handler", () => {
             runId: "task-registry-agent-run-timeout-error",
             status: "timeout",
             summary: "aborted",
+            stopReason: "timeout",
           },
         );
       });
@@ -2808,6 +2810,7 @@ describe("gateway agent handler", () => {
               runId: "task-registry-agent-run-wrapped-timeout-error",
               status: "timeout",
               summary: "aborted",
+              stopReason: "timeout",
             },
           );
           expect(

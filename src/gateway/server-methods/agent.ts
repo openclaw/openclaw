@@ -631,6 +631,10 @@ function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): bool
   return isAbortError(error) || readErrorName(error) === "TimeoutError";
 }
 
+function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "rpc" | "timeout" {
+  return readErrorName(signal.reason) === "TimeoutError" ? "timeout" : "rpc";
+}
+
 function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
   return entry?.abortStopReason?.trim() || "rpc";
 }
@@ -732,11 +736,12 @@ function dispatchAgentRunFromGateway(params: {
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
+      const stopReason = resolveGatewayAgentAbortStopReason(params.abortController.signal);
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
         summary: aborted ? "aborted" : renderedErr,
-        ...(aborted ? { stopReason: "rpc", timeoutPhase: "gateway_draining" as const } : {}),
+        ...(aborted ? { stopReason, timeoutPhase: "gateway_draining" as const } : {}),
       };
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
