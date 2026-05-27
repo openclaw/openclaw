@@ -42,6 +42,8 @@ describe("nvidia provider catalog", () => {
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
@@ -73,6 +75,8 @@ describe("nvidia provider catalog", () => {
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
     expect(provider.models[0]).toMatchObject({
       name: "GLM 5.1",
@@ -101,7 +105,17 @@ describe("nvidia provider catalog", () => {
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
+  });
+
+  it("retains shipped NVIDIA model refs as bundled fallback compatibility rows", () => {
+    const provider = buildNvidiaProvider();
+
+    expect(provider.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["minimaxai/minimax-m2.5", "z-ai/glm5"]),
+    );
   });
 
   it("ignores malformed featured catalog rows and keeps valid entries", async () => {
@@ -135,6 +149,8 @@ describe("nvidia provider catalog", () => {
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
   });
 

@@ -19,6 +19,8 @@ describe("nvidia onboard", () => {
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
     // Config stores the canonical form; the picker label shows the literal
     // form via preserveLiteralProviderPrefix.
@@ -44,6 +46,8 @@ describe("nvidia onboard", () => {
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
   });
 });

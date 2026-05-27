@@ -205,6 +205,8 @@ describe("nvidia provider hooks", () => {
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
@@ -221,6 +223,8 @@ describe("nvidia provider hooks", () => {
       "moonshotai/kimi-k2.5",
       "minimaxai/minimax-m2.7",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
@@ -246,6 +250,8 @@ describe("nvidia provider hooks", () => {
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
       "z-ai/glm-5.1",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
   });
 
@@ -292,6 +298,8 @@ describe("nvidia provider hooks", () => {
       "static:nvidia/moonshotai/kimi-k2.5",
       "static:nvidia/minimaxai/minimax-m2.7",
       "static:nvidia/z-ai/glm-5.1",
+      "static:nvidia/minimaxai/minimax-m2.5",
+      "static:nvidia/z-ai/glm5",
     ]);
 
     await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);
@@ -302,6 +310,8 @@ describe("nvidia provider hooks", () => {
       "live:nvidia/nvidia/nemotron-3-super-120b-a12b",
       "live:nvidia/moonshotai/kimi-k2.5",
       "live:nvidia/z-ai/glm-5.1",
+      "live:nvidia/minimaxai/minimax-m2.5",
+      "live:nvidia/z-ai/glm5",
     ]);
   });
 });
