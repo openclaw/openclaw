@@ -1,3 +1,15 @@
+import {
+  consumeJsonToolClosingMarker,
+  END_TOOL_REQUEST,
+  findBracketedJsonPayloadStart,
+  findHarmonyJsonPayloadStart,
+  findJsonObjectEnd,
+  findXmlishToolCallEnd,
+  isPlainTextToolNameChar,
+  isXmlishNameChar,
+  matchesLiteralPrefix,
+} from "./plain-text-tool-call-grammar.js";
+
 export type PlainTextToolCallNameMatcher = {
   hasExactName(name: string): boolean;
   hasNamePrefix(prefix: string): boolean;
@@ -28,18 +40,6 @@ type PlainTextToolCallBufferState = "possible" | "impossible" | "over-cap";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function matchesLiteralPrefix(text: string, literal: string): boolean {
-  return literal.startsWith(text) || text.startsWith(literal);
-}
-
-function isPlainTextToolNameChar(char: string | undefined): boolean {
-  return Boolean(char && /[A-Za-z0-9_-]/.test(char));
-}
-
-function isXmlishNameChar(char: string | undefined): boolean {
-  return Boolean(char && /[A-Za-z0-9_.:-]/.test(char));
 }
 
 function couldStillBeJsonPayload(text: string, start: number): boolean {
@@ -263,198 +263,6 @@ function couldStillBeHarmonyStandaloneToolCall(
   return text[cursor] === "{";
 }
 
-function findJsonObjectEnd(text: string, start: number): number | null {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      depth += 1;
-      continue;
-    }
-    if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return index + 1;
-      }
-    }
-  }
-  return null;
-}
-
-function skipSerializedToolCallTrailingLineBreak(text: string, cursor: number): number {
-  if (text[cursor] === "\r") {
-    return text[cursor + 1] === "\n" ? cursor + 2 : cursor + 1;
-  }
-  return text[cursor] === "\n" ? cursor + 1 : cursor;
-}
-
-function consumeJsonToolClosingMarker(text: string, cursor: number): number {
-  let markerStart = cursor;
-  while (markerStart < text.length && /\s/.test(text[markerStart] ?? "")) {
-    markerStart += 1;
-  }
-  const rest = text.slice(markerStart);
-  if (rest.startsWith("[END_TOOL_REQUEST]")) {
-    return skipSerializedToolCallTrailingLineBreak(text, markerStart + "[END_TOOL_REQUEST]".length);
-  }
-  const bracketClose = /^\[\/[A-Za-z0-9_-]+\]/.exec(rest);
-  if (bracketClose) {
-    return skipSerializedToolCallTrailingLineBreak(text, markerStart + bracketClose[0].length);
-  }
-  const harmonyClose = "<|call|>";
-  if (rest.startsWith(harmonyClose)) {
-    return skipSerializedToolCallTrailingLineBreak(text, markerStart + harmonyClose.length);
-  }
-  return skipSerializedToolCallTrailingLineBreak(text, cursor);
-}
-
-function findBracketedJsonPayloadStart(text: string): number | null {
-  if (!text.startsWith("[")) {
-    return null;
-  }
-  const close = text.indexOf("]");
-  if (close === -1) {
-    return null;
-  }
-  let cursor = close + 1;
-  while (text[cursor] === " " || text[cursor] === "\t") {
-    cursor += 1;
-  }
-  cursor = skipSerializedToolCallTrailingLineBreak(text, cursor);
-  while (text[cursor] === " " || text[cursor] === "\t") {
-    cursor += 1;
-  }
-  return text[cursor] === "{" ? cursor : null;
-}
-
-function findHarmonyJsonPayloadStart(text: string): number | null {
-  const channelMarker = "<|channel|>";
-  let cursor = 0;
-  if (text.startsWith(channelMarker)) {
-    cursor = channelMarker.length;
-  }
-  const rest = text.slice(cursor);
-  const channel = ["commentary", "analysis", "final"].find((candidate) =>
-    rest.startsWith(candidate),
-  );
-  if (!channel) {
-    return null;
-  }
-  cursor += channel.length;
-  while (text[cursor] === " " || text[cursor] === "\t") {
-    cursor += 1;
-  }
-  const toMarker = "to=";
-  if (!text.slice(cursor).startsWith(toMarker)) {
-    return null;
-  }
-  cursor += toMarker.length;
-  const nameStart = cursor;
-  while (isPlainTextToolNameChar(text[cursor])) {
-    cursor += 1;
-  }
-  if (cursor === nameStart) {
-    return null;
-  }
-  while (text[cursor] === " " || text[cursor] === "\t") {
-    cursor += 1;
-  }
-  const codeMarker = "code";
-  if (!text.slice(cursor).startsWith(codeMarker)) {
-    return null;
-  }
-  cursor += codeMarker.length;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-    cursor += 1;
-  }
-  const messageMarker = "<|message|>";
-  if (text.slice(cursor).startsWith(messageMarker)) {
-    cursor += messageMarker.length;
-    while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-      cursor += 1;
-    }
-  }
-  return text[cursor] === "{" ? cursor : null;
-}
-
-function startsWithAsciiMarkerIgnoreCase(text: string, cursor: number, marker: string): boolean {
-  return text.slice(cursor, cursor + marker.length).toLowerCase() === marker;
-}
-
-function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start: number): number {
-  let cursor = start;
-  while (cursor < text.length) {
-    const next = text.indexOf(marker[0] ?? "", cursor);
-    if (next === -1) {
-      return -1;
-    }
-    if (startsWithAsciiMarkerIgnoreCase(text, next, marker)) {
-      return next;
-    }
-    cursor = next + 1;
-  }
-  return -1;
-}
-
-function findXmlishToolCallEnd(text: string): number | null {
-  let cursor: number;
-  const xmlFunction = /^<function=[A-Za-z0-9_.:-]+>/i.exec(text);
-  if (xmlFunction) {
-    cursor = xmlFunction[0].length;
-  } else {
-    const bracketed = /^\[(?:tool:)?[A-Za-z0-9_-]+\]/.exec(text);
-    if (!bracketed) {
-      return null;
-    }
-    cursor = bracketed[0].length;
-    while (text[cursor] === " " || text[cursor] === "\t") {
-      cursor += 1;
-    }
-    cursor = skipSerializedToolCallTrailingLineBreak(text, cursor);
-  }
-
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-    cursor += 1;
-  }
-  if (!startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=")) {
-    return null;
-  }
-
-  while (cursor < text.length) {
-    const parameterClose = indexOfAsciiMarkerIgnoreCase(text, "</parameter>", cursor);
-    if (parameterClose === -1) {
-      return null;
-    }
-    cursor = parameterClose + "</parameter>".length;
-    while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-      cursor += 1;
-    }
-    if (startsWithAsciiMarkerIgnoreCase(text, cursor, "</function>")) {
-      return skipSerializedToolCallTrailingLineBreak(text, cursor + "</function>".length);
-    }
-    if (!startsWithAsciiMarkerIgnoreCase(text, cursor, "<parameter=")) {
-      return skipSerializedToolCallTrailingLineBreak(text, cursor);
-    }
-  }
-  return null;
-}
-
 function hasExactSerializedToolCallPrefix(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
@@ -567,7 +375,7 @@ function hasSuppressedToolCallClosingMarker(text: string): boolean {
   return (
     lowerText.includes("</parameter>") ||
     lowerText.includes("</function>") ||
-    text.includes("[END_TOOL_REQUEST]") ||
+    text.includes(END_TOOL_REQUEST) ||
     text.includes("<|call|>") ||
     text.includes("}") ||
     /\[\/[A-Za-z0-9_.:-]+\]/.test(text)

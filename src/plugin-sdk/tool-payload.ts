@@ -1,3 +1,15 @@
+import {
+  consumeLineBreak,
+  END_TOOL_REQUEST,
+  findJsonObjectEnd,
+  HARMONY_CALL_MARKER,
+  HARMONY_CHANNEL_MARKER,
+  HARMONY_MESSAGE_MARKER,
+  isPlainTextToolNameChar,
+  skipHorizontalWhitespace,
+  skipWhitespace,
+} from "../shared/plain-text-tool-call-grammar.js";
+
 type ToolPayloadTextBlock = {
   type: "text";
   text: string;
@@ -56,10 +68,6 @@ export type PlainTextToolCallParseOptions = {
 };
 
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
-const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
-const HARMONY_CHANNEL_MARKER = "<|channel|>";
-const HARMONY_MESSAGE_MARKER = "<|message|>";
-const HARMONY_CALL_MARKER = "<|call|>";
 
 type PlainTextToolCallOpening = {
   allowsOptionalXmlishClose?: boolean;
@@ -67,36 +75,6 @@ type PlainTextToolCallOpening = {
   name: string;
   requiresClosing: boolean;
 };
-
-function isToolNameChar(char: string | undefined): boolean {
-  return Boolean(char && /[A-Za-z0-9_-]/.test(char));
-}
-
-function skipHorizontalWhitespace(text: string, start: number): number {
-  let index = start;
-  while (index < text.length && (text[index] === " " || text[index] === "\t")) {
-    index += 1;
-  }
-  return index;
-}
-
-function skipWhitespace(text: string, start: number): number {
-  let index = start;
-  while (index < text.length && /\s/.test(text[index] ?? "")) {
-    index += 1;
-  }
-  return index;
-}
-
-function consumeLineBreak(text: string, start: number): number | null {
-  if (text[start] === "\r") {
-    return text[start + 1] === "\n" ? start + 2 : start + 1;
-  }
-  if (text[start] === "\n") {
-    return start + 1;
-  }
-  return null;
-}
 
 function parseBracketOpening(text: string, start: number): PlainTextToolCallOpening | null {
   if (text[start] !== "[") {
@@ -106,7 +84,7 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
   if (text.startsWith("tool:", cursor)) {
     cursor += "tool:".length;
     const nameStart = cursor;
-    while (isToolNameChar(text[cursor])) {
+    while (isPlainTextToolNameChar(text[cursor])) {
       cursor += 1;
     }
     if (cursor === nameStart || text[cursor] !== "]") {
@@ -120,7 +98,7 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
     };
   }
   const nameStart = cursor;
-  while (isToolNameChar(text[cursor])) {
+  while (isPlainTextToolNameChar(text[cursor])) {
     cursor += 1;
   }
   if (cursor === nameStart || text[cursor] !== "]") {
@@ -155,7 +133,7 @@ function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpen
   }
   cursor += 3;
   const nameStart = cursor;
-  while (isToolNameChar(text[cursor])) {
+  while (isPlainTextToolNameChar(text[cursor])) {
     cursor += 1;
   }
   if (cursor === nameStart) {
@@ -195,47 +173,20 @@ function consumeJsonObject(
   if (text[cursor] !== "{") {
     return null;
   }
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = cursor; index < text.length; index += 1) {
-    const char = text[index];
-    if (index + 1 - cursor > maxPayloadBytes) {
+  const end = findJsonObjectEnd(text, cursor, maxPayloadBytes);
+  if (end === null) {
+    return null;
+  }
+  const rawJson = text.slice(cursor, end);
+  try {
+    const parsed = JSON.parse(rawJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        const rawJson = text.slice(cursor, index + 1);
-        try {
-          const parsed = JSON.parse(rawJson) as unknown;
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            return null;
-          }
-          return { end: index + 1, value: parsed as Record<string, unknown> };
-        } catch {
-          return null;
-        }
-      }
-    }
+    return { end, value: parsed as Record<string, unknown> };
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function parseClosing(text: string, start: number, name: string): number | null {
