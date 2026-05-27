@@ -21,11 +21,11 @@ vi.mock("../agents/model-selection.js", async (importOriginal) => ({
   resolveDefaultModelForAgent: mocks.resolveDefaultModelForAgent,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: mocks.createBundleMcpToolRuntime,
 }));
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: mocks.createOpenClawCodingTools,
 }));
 
