@@ -422,6 +422,9 @@ function collectAutoPromptEntries(dir: string): string[] {
       }
 
       const fullPath = join(dir, entry.name);
+      if (!isRealPathWithinRoot(dir, fullPath)) {
+        continue;
+      }
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         try {
@@ -467,6 +470,9 @@ function collectAutoThemeEntries(dir: string): string[] {
       }
 
       const fullPath = join(dir, entry.name);
+      if (!isRealPathWithinRoot(dir, fullPath)) {
+        continue;
+      }
       let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
         try {
@@ -502,7 +508,7 @@ function readResourceManifestFile(packageJsonPath: string): ResourceManifest | n
   }
 }
 
-function resolveExtensionEntries(dir: string): string[] | null {
+function resolveExtensionEntries(dir: string, rootDir = dir): string[] | null {
   const packageJsonPath = join(dir, "package.json");
   if (existsSync(packageJsonPath)) {
     const manifest = readResourceManifestFile(packageJsonPath);
@@ -510,7 +516,7 @@ function resolveExtensionEntries(dir: string): string[] | null {
       const entries: string[] = [];
       for (const extPath of manifest.extensions) {
         const resolvedExtPath = resolve(dir, extPath);
-        if (existsSync(resolvedExtPath)) {
+        if (existsSync(resolvedExtPath) && isRealPathWithinRoot(rootDir, resolvedExtPath)) {
           entries.push(resolvedExtPath);
         }
       }
@@ -522,10 +528,10 @@ function resolveExtensionEntries(dir: string): string[] | null {
 
   const indexTs = join(dir, "index.ts");
   const indexJs = join(dir, "index.js");
-  if (existsSync(indexTs)) {
+  if (existsSync(indexTs) && isRealPathWithinRoot(rootDir, indexTs)) {
     return [indexTs];
   }
-  if (existsSync(indexJs)) {
+  if (existsSync(indexJs) && isRealPathWithinRoot(rootDir, indexJs)) {
     return [indexJs];
   }
 
@@ -559,6 +565,9 @@ function collectAutoExtensionEntries(dir: string): string[] {
       }
 
       const fullPath = join(dir, entry.name);
+      if (!isRealPathWithinRoot(dir, fullPath)) {
+        continue;
+      }
       let isDir = entry.isDirectory();
       let isFile = entry.isFile();
 
@@ -581,7 +590,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
       if (isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
         entries.push(fullPath);
       } else if (isDir) {
-        const resolvedEntries = resolveExtensionEntries(fullPath);
+        const resolvedEntries = resolveExtensionEntries(fullPath, dir);
         if (resolvedEntries) {
           entries.push(...resolvedEntries);
         }
@@ -622,7 +631,10 @@ function isPathWithinRoot(root: string, candidate: string): boolean {
 }
 
 function isRealPathWithinRoot(root: string, candidate: string): boolean {
-  return isPathWithinRoot(resolveRealPathIfPossible(resolve(root)), resolveRealPathIfPossible(candidate));
+  return isPathWithinRoot(
+    resolveRealPathIfPossible(resolve(root)),
+    resolveRealPathIfPossible(candidate),
+  );
 }
 
 function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {

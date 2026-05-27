@@ -120,6 +120,50 @@ describe("DefaultPackageManager", () => {
     );
   });
 
+  it("keeps auto-discovered project resources inside their resource roots", async () => {
+    const root = await makeTempDir("openclaw-package-manager-");
+    const configRoot = join(root, ".openclaw");
+    const outsideRoot = join(root, "outside");
+    const insidePrompt = join(configRoot, "prompts", "inside.md");
+    const insideTheme = join(configRoot, "themes", "inside.json");
+    const insideExtension = join(configRoot, "extensions", "inside.ts");
+    await mkdir(join(root, ".git"));
+    await mkdir(join(configRoot, "prompts"), { recursive: true });
+    await mkdir(join(configRoot, "themes"), { recursive: true });
+    await mkdir(join(configRoot, "extensions"), { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    await writeFile(insidePrompt, "# Inside\n", "utf-8");
+    await writeFile(insideTheme, "{}\n", "utf-8");
+    await writeFile(insideExtension, "export default {};\n", "utf-8");
+    await writeFile(join(outsideRoot, "outside.md"), "# Outside\n", "utf-8");
+    await writeFile(join(outsideRoot, "outside.json"), "{}\n", "utf-8");
+    await writeFile(join(outsideRoot, "outside.ts"), "export default {};\n", "utf-8");
+
+    try {
+      await symlink(join(outsideRoot, "outside.md"), join(configRoot, "prompts", "linked.md"));
+      await symlink(join(outsideRoot, "outside.json"), join(configRoot, "themes", "linked.json"));
+      await symlink(join(outsideRoot, "outside.ts"), join(configRoot, "extensions", "linked.ts"));
+      await symlink(outsideRoot, join(configRoot, "extensions", "linked-dir"), "dir");
+    } catch {
+      // Some filesystems disallow symlinks; the inside assertions still prove discovery.
+    }
+
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({}),
+    });
+
+    const resolved = await manager.resolve();
+
+    expect(resolved.prompts.map((prompt) => prompt.path)).toContain(insidePrompt);
+    expect(resolved.themes.map((theme) => theme.path)).toContain(insideTheme);
+    expect(resolved.extensions.map((extension) => extension.path)).toContain(insideExtension);
+    expect(resolved.prompts.some((prompt) => prompt.path.includes("linked"))).toBe(false);
+    expect(resolved.themes.some((theme) => theme.path.includes("linked"))).toBe(false);
+    expect(resolved.extensions.some((extension) => extension.path.includes("linked"))).toBe(false);
+  });
+
   it("does not auto-install missing npm package resources", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const manager = new DefaultPackageManager({
