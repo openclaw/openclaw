@@ -10,6 +10,11 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: pixverse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/pixverse/**"
+          - "docs/providers/pixverse.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:

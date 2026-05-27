@@ -134,6 +134,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Provider plugins that proxy Claude models should reuse `resolveClaudeThinkingProfile(modelId)` from `openclaw/plugin-sdk/provider-model-shared` so direct Anthropic and proxy catalogs stay aligned.
 - Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, or `max`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
+- Profile hooks receive merged catalog facts when available, including `reasoning`, `compat.thinkingFormat`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload.
 - Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists.
 - Tool plugins with access to configured custom model metadata can pass `catalog` into `resolveThinkingPolicy` so `compat.supportedReasoningEfforts` opt-ins are reflected in plugin-side validation.
 - Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.

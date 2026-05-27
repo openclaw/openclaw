@@ -41,6 +41,10 @@ function normalizeOverrides(overrides) {
   return normalizeOverrideValue(overrides);
 }
 
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
 function readWorkspaceOverrides() {
   const workspace = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-workspace.yaml"), "utf8"));
   return normalizeOverrides(workspace?.overrides);
@@ -162,8 +166,148 @@ function readPnpmLockVersionOverrides() {
   );
 }
 
+function addNestedOverride(overrides, parentSelector, dependencyName, version, conflicts) {
+  const current = overrides[parentSelector];
+  if (current !== undefined && !isPlainObject(current)) {
+    conflicts.add(parentSelector);
+    return;
+  }
+  const nested = current ?? {};
+  const existing = nested[dependencyName];
+  if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(version)) {
+    conflicts.add(parentSelector);
+    return;
+  }
+  nested[dependencyName] = version;
+  overrides[parentSelector] = nested;
+}
+
+function expandScopedOverrideValue(overrides, dependencyName, version, seen = new Set()) {
+  const childSelector = `${dependencyName}@${version}`;
+  if (seen.has(childSelector)) {
+    return version;
+  }
+  const childOverrides = overrides[childSelector];
+  if (!isPlainObject(childOverrides)) {
+    return version;
+  }
+  const childSeen = new Set(seen);
+  childSeen.add(childSelector);
+  return Object.fromEntries(
+    [
+      [".", version],
+      ...Object.entries(childOverrides).map(([nestedName, nestedVersion]) => [
+        nestedName,
+        typeof nestedVersion === "string"
+          ? expandScopedOverrideValue(overrides, nestedName, nestedVersion, childSeen)
+          : nestedVersion,
+      ]),
+    ].toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function expandScopedOverrideChildren(overrides) {
+  return Object.fromEntries(
+    Object.entries(overrides)
+      .map(([parentSelector, nestedOverrides]) => [
+        parentSelector,
+        isPlainObject(nestedOverrides)
+          ? Object.fromEntries(
+              Object.entries(nestedOverrides)
+                .map(([dependencyName, version]) => [
+                  dependencyName,
+                  typeof version === "string"
+                    ? expandScopedOverrideValue(overrides, dependencyName, version)
+                    : version,
+                ])
+                .toSorted(([left], [right]) => left.localeCompare(right)),
+            )
+          : typeof nestedOverrides === "string" &&
+              exactVersionFromOverrideSpec(nestedOverrides) !== null
+            ? isPlainObject(
+                overrides[`${parentSelector}@${exactVersionFromOverrideSpec(nestedOverrides)}`],
+              )
+              ? expandScopedOverrideValue(
+                  overrides,
+                  parentSelector,
+                  exactVersionFromOverrideSpec(nestedOverrides),
+                )
+              : nestedOverrides
+            : nestedOverrides,
+      ])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function readPnpmLockScopedVersionOverrides() {
+  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const versionsByName = collectPnpmLockPackageVersions(lockfile);
+  if (versionsByName.size === 0) {
+    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+  }
+  const forkedPackageNames = new Set(
+    [...versionsByName.entries()]
+      .filter(
+        ([, versions]) =>
+          versions.size > 1 && pnpmLockOverrideVersionForVersions(versions) === null,
+      )
+      .map(([name]) => name),
+  );
+  if (forkedPackageNames.size === 0) {
+    return {};
+  }
+
+  const overrides = {};
+  const conflicts = new Set();
+  for (const [snapshotKey, snapshot] of Object.entries(lockfile?.snapshots ?? {})) {
+    const parent = parsePnpmPackageKey(snapshotKey);
+    const dependencies = snapshot?.dependencies;
+    if (
+      !parent ||
+      !dependencies ||
+      typeof dependencies !== "object" ||
+      Array.isArray(dependencies)
+    ) {
+      continue;
+    }
+    const parentSelector = `${parent.name}@${parent.version}`;
+    for (const [dependencyName, dependencySpec] of Object.entries(dependencies)) {
+      if (!forkedPackageNames.has(dependencyName)) {
+        continue;
+      }
+      const version = exactVersionFromOverrideSpec(String(dependencySpec));
+      if (!version || !versionsByName.get(dependencyName)?.has(version)) {
+        continue;
+      }
+      addNestedOverride(overrides, parentSelector, dependencyName, version, conflicts);
+    }
+  }
+
+  for (const parentSelector of conflicts) {
+    delete overrides[parentSelector];
+  }
+  return expandScopedOverrideChildren(overrides);
+}
+
 function setKey(values) {
   return [...values].toSorted((left, right) => left.localeCompare(right)).join("\0");
+}
+
+function mergeOverrideEntry(merged, name, spec) {
+  const current = merged[name];
+  if (current === undefined) {
+    merged[name] = spec;
+    return;
+  }
+  if (isPlainObject(current) && isPlainObject(spec)) {
+    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
+      mergeOverrideEntry(current, nestedName, nestedSpec);
+    }
+    return;
+  }
+  if (JSON.stringify(current) !== JSON.stringify(spec)) {
+    throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
+  }
 }
 
 function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides) {
@@ -172,17 +316,19 @@ function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides)
     ...Object.entries(workspaceOverrides),
     ...Object.entries(pnpmLockOverrides),
   ]) {
-    const current = merged[name];
-    if (current !== undefined && JSON.stringify(current) !== JSON.stringify(spec)) {
-      throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
-    }
-    merged[name] = spec;
+    mergeOverrideEntry(merged, name, spec);
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function readShrinkwrapOverrides() {
-  return mergeOverrides(undefined, readWorkspaceOverrides(), readPnpmLockVersionOverrides());
+  return expandScopedOverrideChildren(
+    mergeOverrides(
+      undefined,
+      readWorkspaceOverrides(),
+      mergeOverrides(readPnpmLockVersionOverrides(), readPnpmLockScopedVersionOverrides(), {}),
+    ),
+  );
 }
 
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
@@ -536,6 +682,46 @@ function declaredPackageDependencies(packageJson) {
   return dependencies;
 }
 
+function packageNameForLockPath(lockPath) {
+  return parseLockPackagePath(lockPath).at(-1)?.name;
+}
+
+function dependencyCandidatePaths(parentLockPath, dependencyName) {
+  const candidates = new Set();
+  if (parentLockPath) {
+    candidates.add(`${parentLockPath}/node_modules/${dependencyName}`);
+  }
+
+  let current = parentLockPath;
+  while (current) {
+    const nestedNodeModulesIndex = current.lastIndexOf("/node_modules/");
+    if (nestedNodeModulesIndex === -1) {
+      candidates.add(`node_modules/${dependencyName}`);
+      break;
+    }
+    const ancestorPackagePath = current.slice(0, nestedNodeModulesIndex);
+    candidates.add(`${ancestorPackagePath}/node_modules/${dependencyName}`);
+    current = ancestorPackagePath;
+  }
+  if (!parentLockPath) {
+    candidates.add(`node_modules/${dependencyName}`);
+  }
+  return [...candidates];
+}
+
+function resolveShrinkwrapDependency(packages, parentLockPath, dependencyName) {
+  for (const candidatePath of dependencyCandidatePaths(parentLockPath, dependencyName)) {
+    const candidate = packages[candidatePath];
+    if (candidate?.version) {
+      return {
+        path: candidatePath,
+        version: candidate.version,
+      };
+    }
+  }
+  return null;
+}
+
 function collectCurrentShrinkwrapOverrides(
   shrinkwrap,
   declaredDependencies = new Set(),
@@ -550,7 +736,7 @@ function collectCurrentShrinkwrapOverrides(
     if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
       continue;
     }
-    const packageName = metadata.name ?? parseLockPackagePath(lockPath).at(-1)?.name;
+    const packageName = metadata.name ?? packageNameForLockPath(lockPath);
     if (
       !packageName ||
       declaredDependencies.has(packageName) ||
@@ -562,12 +748,47 @@ function collectCurrentShrinkwrapOverrides(
     versions.add(metadata.version);
     versionsByName.set(packageName, versions);
   }
-  return Object.fromEntries(
+
+  const overrides = Object.fromEntries(
     [...versionsByName.entries()]
       .filter(([, versions]) => versions.size === 1)
       .map(([name, versions]) => [name, [...versions][0]])
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
+  const forkedPackageNames = new Set(
+    [...versionsByName.entries()].filter(([, versions]) => versions.size > 1).map(([name]) => name),
+  );
+  const conflicts = new Set();
+  for (const [lockPath, metadata] of Object.entries(packages)) {
+    if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
+      continue;
+    }
+    const parentName = metadata.name ?? packageNameForLockPath(lockPath);
+    const dependencies = metadata.dependencies;
+    if (
+      !parentName ||
+      !dependencies ||
+      typeof dependencies !== "object" ||
+      Array.isArray(dependencies)
+    ) {
+      continue;
+    }
+    const parentSelector = `${parentName}@${metadata.version}`;
+    for (const dependencyName of Object.keys(dependencies)) {
+      if (!forkedPackageNames.has(dependencyName)) {
+        continue;
+      }
+      const resolved = resolveShrinkwrapDependency(packages, lockPath, dependencyName);
+      if (!resolved || !pnpmLockPackages.has(`${dependencyName}@${resolved.version}`)) {
+        continue;
+      }
+      addNestedOverride(overrides, parentSelector, dependencyName, resolved.version, conflicts);
+    }
+  }
+  for (const parentSelector of conflicts) {
+    delete overrides[parentSelector];
+  }
+  return expandScopedOverrideChildren(overrides);
 }
 
 function readCurrentShrinkwrapOverrides(

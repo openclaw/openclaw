@@ -21,6 +21,7 @@ import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import {
+  modelKey,
   normalizeConfiguredProviderCatalogModelId,
   type ProviderModelIdNormalizationOptions,
 } from "./model-ref-shared.js";
@@ -112,7 +113,8 @@ function instantiatePiModelRegistry(
 }
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
-  return `${normalizeProviderId(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
+  const normalizedProvider = normalizeProviderId(provider);
+  return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));
 }
 
 function appendCatalogEntriesIfAbsent(
@@ -127,6 +129,52 @@ function appendCatalogEntriesIfAbsent(
     }
     models.push(entry);
     seen.add(key);
+  }
+}
+
+function mergeCatalogCompat(
+  base: ModelCatalogEntry["compat"] | undefined,
+  override: ModelCatalogEntry["compat"] | undefined,
+): ModelCatalogEntry["compat"] | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return { ...base, ...override };
+}
+
+function overlayConfiguredCatalogMetadata(
+  base: ModelCatalogEntry,
+  configured: ModelCatalogEntry,
+): ModelCatalogEntry {
+  return {
+    ...base,
+    ...(configured.contextWindow !== undefined ? { contextWindow: configured.contextWindow } : {}),
+    ...(configured.contextTokens !== undefined ? { contextTokens: configured.contextTokens } : {}),
+    ...(configured.reasoning !== undefined ? { reasoning: configured.reasoning } : {}),
+    ...(configured.input !== undefined ? { input: configured.input } : {}),
+    compat: mergeCatalogCompat(base.compat, configured.compat),
+  };
+}
+
+function mergeConfiguredCatalogEntries(
+  models: ModelCatalogEntry[],
+  entries: ModelCatalogEntry[],
+): void {
+  const indexByKey = new Map(
+    models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id), index]),
+  );
+  for (const entry of entries) {
+    const key = catalogEntryDedupeKey(entry.provider, entry.id);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      models.push(entry);
+      indexByKey.set(key, models.length - 1);
+      continue;
+    }
+    models[existingIndex] = overlayConfiguredCatalogMetadata(models[existingIndex], entry);
   }
 }
 
@@ -319,7 +367,7 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
   });
   if (configuredModels.length > 0) {
-    appendCatalogEntriesIfAbsent(models, configuredModels);
+    mergeConfiguredCatalogEntries(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
@@ -371,7 +419,7 @@ function loadReadOnlyStaticModelCatalog(params?: {
     manifestPlugins: configuredManifestPlugins,
   });
   if (configuredModels.length > 0) {
-    appendCatalogEntriesIfAbsent(models, configuredModels);
+    mergeConfiguredCatalogEntries(models, configuredModels);
   }
   return sortModelCatalogEntries(models);
 }
@@ -537,7 +585,7 @@ export async function loadModelCatalog(params?: {
         manifestPlugins: hasConfiguredProviderModelRows(cfg) ? getManifestPlugins() : undefined,
       });
       if (configuredModels.length > 0) {
-        appendCatalogEntriesIfAbsent(models, configuredModels);
+        mergeConfiguredCatalogEntries(models, configuredModels);
       }
       logStage("configured-models-merged", `entries=${models.length}`);
 

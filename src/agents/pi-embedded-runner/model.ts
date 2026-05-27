@@ -5,7 +5,7 @@ import {
   type AuthStorage,
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import type { ModelMediaInputConfig } from "../../config/types.models.js";
+import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -688,6 +688,14 @@ function applyConfiguredProviderOverrides(params: {
     metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
   const resolvedMaxTokens =
     metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens ?? discoveredModel.maxTokens;
+  const resolvedCompat = mergeModelCompat(discoveredModel.compat, metadataOverrideModel?.compat);
+  const resolvedReasoning = resolveMergedConfiguredModelReasoning({
+    provider: params.provider,
+    configuredCompat: metadataOverrideModel?.compat,
+    resolvedCompat,
+    configuredReasoning: metadataOverrideModel?.reasoning,
+    discoveredReasoning: discoveredModel.reasoning,
+  });
   const requestConfig = resolveProviderRequestConfig({
     provider: params.provider,
     api:
@@ -710,7 +718,7 @@ function applyConfiguredProviderOverrides(params: {
         ...discoveredModel,
         api: requestConfig.api ?? "openai-responses",
         baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-        reasoning: metadataOverrideModel?.reasoning ?? discoveredModel.reasoning,
+        reasoning: resolvedReasoning,
         input: normalizedInput,
         cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
         contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
@@ -725,7 +733,7 @@ function applyConfiguredProviderOverrides(params: {
         ...(resolvedParams ? { params: resolvedParams } : {}),
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
-        compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
+        compat: resolvedCompat,
         mediaInput: mergeModelMediaInput(
           discoveredModel.mediaInput,
           metadataOverrideModel?.mediaInput,
@@ -778,6 +786,11 @@ function resolveExplicitModelWithRegistry(params: {
         workspaceDir,
         model: {
           ...inlineMatch,
+          reasoning: resolveConfiguredModelReasoning({
+            provider,
+            compat: inlineMatch.compat,
+            reasoning: inlineMatch.reasoning,
+          }),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         } as Model<Api>,
@@ -842,6 +855,11 @@ function resolveExplicitModelWithRegistry(params: {
         workspaceDir,
         model: {
           ...fallbackInlineMatch,
+          reasoning: resolveConfiguredModelReasoning({
+            provider,
+            compat: fallbackInlineMatch.compat,
+            reasoning: fallbackInlineMatch.reasoning,
+          }),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         } as Model<Api>,
@@ -961,6 +979,11 @@ function resolveConfiguredFallbackModel(params: {
     capability: "llm",
     transport: "stream",
   });
+  const fallbackReasoning = resolveConfiguredFallbackReasoning({
+    provider,
+    compat: configuredModel?.compat,
+    reasoning: configuredModel?.reasoning,
+  });
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -974,7 +997,7 @@ function resolveConfiguredFallbackModel(params: {
           api: requestConfig.api ?? "openai-responses",
           provider,
           baseUrl: requestConfig.baseUrl,
-          reasoning: configuredModel?.reasoning ?? false,
+          reasoning: fallbackReasoning,
           input: resolveProviderModelInput({
             provider,
             modelId,
@@ -999,6 +1022,7 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
+          compat: configuredModel?.compat,
           mediaInput: configuredModel?.mediaInput,
         } as Model<Api>,
         providerRequest,
@@ -1031,6 +1055,71 @@ function shouldCompareProviderRuntimeResolvedModel(params: {
       },
     }) ?? false
   );
+}
+
+function resolveConfiguredFallbackReasoning(params: {
+  provider: string;
+  compat?: { thinkingFormat?: string } | null;
+  reasoning?: boolean;
+}): boolean {
+  return resolveConfiguredModelReasoning(params) ?? false;
+}
+
+function resolveConfiguredModelReasoning(params: {
+  provider: string;
+  compat?: { thinkingFormat?: string } | null;
+  reasoning?: boolean;
+}): boolean | undefined {
+  if (params.reasoning !== undefined) {
+    return params.reasoning;
+  }
+  return isVllmQwenThinkingCompat(params) ? true : undefined;
+}
+
+function resolveMergedConfiguredModelReasoning(params: {
+  provider: string;
+  configuredCompat?: { thinkingFormat?: string } | null;
+  resolvedCompat?: { thinkingFormat?: string } | null;
+  configuredReasoning?: boolean;
+  discoveredReasoning?: boolean;
+}): boolean {
+  if (params.configuredReasoning !== undefined) {
+    return params.configuredReasoning;
+  }
+  if (isVllmQwenThinkingCompat({ provider: params.provider, compat: params.configuredCompat })) {
+    return true;
+  }
+  return (
+    resolveConfiguredModelReasoning({
+      provider: params.provider,
+      compat: params.resolvedCompat,
+      reasoning: params.discoveredReasoning,
+    }) ?? false
+  );
+}
+
+function isVllmQwenThinkingCompat(params: {
+  provider: string;
+  compat?: { thinkingFormat?: string } | null;
+}): boolean {
+  const thinkingFormat = params.compat?.thinkingFormat;
+  return (
+    normalizeProviderId(params.provider) === "vllm" &&
+    (thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template")
+  );
+}
+
+function mergeModelCompat(
+  base: ModelCompatConfig | undefined,
+  override: ModelCompatConfig | undefined,
+): ModelCompatConfig | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return { ...base, ...override };
 }
 
 function preferProviderRuntimeResolvedModel(params: {

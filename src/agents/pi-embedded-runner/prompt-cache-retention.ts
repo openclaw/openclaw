@@ -19,6 +19,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
+  supportsPromptCacheKey?: boolean,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -29,8 +30,16 @@ export function resolveCacheRetention(
     hasExplicitCacheConfig,
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
+  // OpenAI-compatible completions backends (oMLX, llama.cpp, etc.) opt into
+  // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
+  // flag they sit outside the anthropic/google family gates, so issue #81281
+  // dropped the user's explicit `cacheRetention` before the transport layer
+  // could emit it. Proxies that route non-cacheable models via the same
+  // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
+  // the flag unset, so the existing family gate still applies to them.
+  const cacheKeyEligible = supportsPromptCacheKey === true;
 
-  if (!family && !googleEligible) {
+  if (!family && !googleEligible && !cacheKeyEligible) {
     return undefined;
   }
 
@@ -40,10 +49,10 @@ export function resolveCacheRetention(
   }
 
   const legacy = extraParams?.cacheControlTtl;
-  if (legacy === "5m") {
+  if (legacy === "5m" && (family || googleEligible)) {
     return "short";
   }
-  if (legacy === "1h") {
+  if (legacy === "1h" && (family || googleEligible)) {
     return "long";
   }
 

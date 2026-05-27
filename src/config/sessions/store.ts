@@ -633,6 +633,8 @@ async function persistResolvedSessionEntry(params: {
   store: Record<string, SessionEntry>;
   resolved: ReturnType<typeof resolveSessionStoreEntry>;
   next: SessionEntry;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
 }): Promise<SessionEntry> {
   params.store[params.resolved.normalizedKey] = params.next;
   for (const legacyKey of params.resolved.legacyKeys) {
@@ -640,6 +642,8 @@ async function persistResolvedSessionEntry(params: {
   }
   await saveSessionStoreUnlocked(params.storePath, params.store, {
     activeSessionKey: params.resolved.normalizedKey,
+    skipMaintenance: params.skipMaintenance,
+    takeCacheOwnership: params.takeCacheOwnership,
   });
   return params.next;
 }
@@ -648,6 +652,8 @@ export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
   return await runExclusiveSessionStoreWrite(storePath, async () => {
@@ -667,6 +673,8 @@ export async function updateSessionStoreEntry(params: {
       store,
       resolved,
       next,
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership,
     });
   });
 }

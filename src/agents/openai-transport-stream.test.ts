@@ -4637,6 +4637,67 @@ describe("openai transport stream", () => {
     expect(notOptedIn.prompt_cache_key).toBeUndefined();
   });
 
+  it("emits prompt_cache_retention=24h for completions when cacheRetention is long", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const longRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "long",
+    }) as { prompt_cache_key?: string; prompt_cache_retention?: string };
+
+    expect(longRetention.prompt_cache_key).toBe("session-123");
+    expect(longRetention.prompt_cache_retention).toBe("24h");
+  });
+
+  it("omits prompt_cache_retention for completions when cacheRetention is short or unset", () => {
+    const model = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      compat: { supportsPromptCacheKey: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const shortRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+      cacheRetention: "short",
+    });
+    const defaultRetention = buildOpenAICompletionsParams(model, context, {
+      sessionId: "session-123",
+    });
+
+    expect(shortRetention).not.toHaveProperty("prompt_cache_retention");
+    expect(defaultRetention).not.toHaveProperty("prompt_cache_retention");
+  });
+
   it("sorts Chat Completions tools by function name for stable prompt-cache payloads", () => {
     const model = {
       id: "custom-model",

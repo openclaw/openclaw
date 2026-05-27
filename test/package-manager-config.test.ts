@@ -2,8 +2,10 @@ import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
+  collectCurrentShrinkwrapOverrides,
   collectPnpmLockViolations,
   parsePnpmPackageKey,
+  readShrinkwrapOverrides,
 } from "../scripts/generate-npm-shrinkwrap.mjs";
 
 type PnpmBuildConfig = {
@@ -76,6 +78,58 @@ describe("package manager build policy", () => {
         String(workspace.overrides?.[packageName]),
       );
     }
+  });
+
+  it("pins forked transitive dependencies with parent-scoped shrinkwrap overrides", () => {
+    const overrides = readShrinkwrapOverrides() as Record<string, unknown>;
+
+    expect(overrides["lru-cache"]).toBeUndefined();
+    expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
+      "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
+    });
+    expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.1" });
+  });
+
+  it("can preserve current forked shrinkwrap dependencies with parent-scoped overrides", () => {
+    const overrides = collectCurrentShrinkwrapOverrides(
+      {
+        packages: {
+          "": { dependencies: { "current-parent": "1.0.0" } },
+          "node_modules/current-parent": {
+            version: "1.0.0",
+            dependencies: { "forked-child": "^2.0.0" },
+          },
+          "node_modules/current-parent/node_modules/forked-child": {
+            version: "2.0.0",
+          },
+          "node_modules/legacy-parent": {
+            version: "1.0.0",
+            dependencies: { "forked-child": "1.0.0" },
+          },
+          "node_modules/legacy-parent/node_modules/forked-child": {
+            version: "1.0.0",
+          },
+          "node_modules/stable-child": {
+            version: "3.0.0",
+          },
+        },
+      },
+      new Set(["current-parent"]),
+      new Set([
+        "current-parent@1.0.0",
+        "legacy-parent@1.0.0",
+        "forked-child@1.0.0",
+        "forked-child@2.0.0",
+        "stable-child@3.0.0",
+      ]),
+    );
+
+    expect(overrides).toEqual({
+      "current-parent@1.0.0": { "forked-child": "2.0.0" },
+      "legacy-parent": { ".": "1.0.0", "forked-child": "1.0.0" },
+      "legacy-parent@1.0.0": { "forked-child": "1.0.0" },
+      "stable-child": "3.0.0",
+    });
   });
 
   it("keeps npm shrinkwrap package versions inside the pnpm lock graph", () => {

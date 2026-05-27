@@ -223,6 +223,29 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("automatic");
   });
 
+  it("treats authorized control-command bodies as explicit replies even when CommandSource is missing", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: {
+          ChatType: "direct",
+          CommandAuthorized: true,
+          CommandBody: "/reset",
+        },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: {
+          ChatType: "direct",
+          CommandAuthorized: true,
+          CommandBody: "hey can you /status please",
+        },
+      }),
+    ).toBe("message_tool_only");
+  });
+
   it("keeps unauthorized text slash command turns tool-only under the default group mode", () => {
     expect(
       resolveSourceReplyDeliveryMode({

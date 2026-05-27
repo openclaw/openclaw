@@ -577,6 +577,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.contextTokens": "Model Provider Context Tokens",
   "models.providers.*.maxTokens": "Model Provider Max Tokens",
   "models.providers.*.timeoutSeconds": "Model Provider Request Timeout",
+  "models.providers.*.region": "Model Provider Region",
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
   "models.providers.*.params": "Model Provider Runtime Parameters",
   "models.providers.*.headers": "Model Provider Headers",

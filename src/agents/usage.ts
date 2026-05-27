@@ -50,6 +50,14 @@ export type NormalizedUsage = {
   total?: number;
 };
 
+export type OpenAiChatCompletionsUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tokens_details?: { cached_tokens: number };
+  completion_tokens_details?: { reasoning_tokens: number };
+};
+
 export type AssistantUsageSnapshot = {
   input: number;
   output: number;
@@ -195,13 +203,15 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
  *
  * `total_tokens` is the greater of the component sum and aggregate `total` when
  * present, so a partial breakdown cannot discard a valid upstream total.
+ *
+ * `prompt_tokens_details.cached_tokens` is emitted when `cacheRead > 0` so
+ * downstream chat-completions clients can compute the cache-aware blended
+ * cost. Field name and shape match OpenAI's documented usage breakdown:
+ * https://platform.openai.com/docs/guides/prompt-caching
  */
-export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  completion_tokens_details?: { reasoning_tokens: number };
-} {
+export function toOpenAiChatCompletionsUsage(
+  usage: NormalizedUsage | undefined,
+): OpenAiChatCompletionsUsage {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
@@ -221,6 +231,7 @@ export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined)
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
+    ...(cacheRead > 0 ? { prompt_tokens_details: { cached_tokens: cacheRead } } : {}),
     ...(reasoningTokens !== undefined
       ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } }
       : {}),

@@ -628,18 +628,24 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   }
 };
 
-function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+function shouldBypassPluginOwnedBindingForCommand(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
-  if (!commandTurn.authorized) {
+  if (
+    (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
+    !commandTurn.authorized
+  ) {
     return false;
   }
-  if (isNativeCommandTurn(commandTurn)) {
+  if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (commandTurn.kind !== "text-slash") {
+  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
@@ -674,6 +680,8 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   await updateSessionStoreEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
+    skipMaintenance: true,
+    takeCacheOwnership: true,
     update: async (entry) => {
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
@@ -1437,7 +1445,7 @@ export async function dispatchReplyFromConfig(
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
     (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      !isExplicitSourceReplyCommand(ctx) &&
+      !isExplicitSourceReplyCommand(ctx, cfg) &&
       (configuredVisibleReplies === "message_tool" ||
         (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
@@ -1569,7 +1577,7 @@ export async function dispatchReplyFromConfig(
       return finishReplyOperationAbortedDispatch();
     }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
@@ -1624,7 +1632,7 @@ export async function dispatchReplyFromConfig(
           if (
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !isExplicitSourceReplyCommand(ctx)
+            !isExplicitSourceReplyCommand(ctx, cfg)
           ) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });

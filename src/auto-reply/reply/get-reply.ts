@@ -520,6 +520,8 @@ export async function getReplyFromConfig(
           await updateSessionStoreEntry({
             storePath,
             sessionKey,
+            skipMaintenance: true,
+            takeCacheOwnership: true,
             update: async () => ({
               pendingFinalDelivery: undefined,
               pendingFinalDeliveryText: undefined,
@@ -548,6 +550,8 @@ export async function getReplyFromConfig(
           await updateSessionStoreEntry({
             storePath,
             sessionKey,
+            skipMaintenance: true,
+            takeCacheOwnership: true,
             update: async () => ({
               pendingFinalDeliveryText: replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,

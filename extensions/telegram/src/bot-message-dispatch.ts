@@ -13,12 +13,15 @@ import {
 import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
+  runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   createChannelMessageReplyPipeline,
+  createOutboundPayloadPlan,
   deriveDurableFinalDeliveryRequirements,
-} from "openclaw/plugin-sdk/channel-message";
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
@@ -34,19 +37,14 @@ import {
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -1617,7 +1615,7 @@ export const dispatchTelegramMessage = async ({
     });
 
     try {
-      const turnResult = await runInboundReplyTurn({
+      const turnResult = await runChannelInboundEvent({
         channel: "telegram",
         accountId: route.accountId,
         raw: dispatchContext,

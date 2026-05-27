@@ -562,10 +562,6 @@ function buildModelCatalogMetadata(
     if (rawKey.trim().endsWith("/*")) {
       continue;
     }
-    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
-      continue;
-    }
     const key = resolveAllowlistModelKey({
       cfg: params.cfg,
       raw: rawKey,
@@ -577,7 +573,10 @@ function buildModelCatalogMetadata(
     if (!key) {
       continue;
     }
-    aliasByKey.set(key, alias);
+    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    if (alias) {
+      aliasByKey.set(key, alias);
+    }
   }
 
   return { configuredByKey, aliasByKey };
@@ -598,7 +597,10 @@ function applyModelCatalogMetadata(params: {
   const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
-  const nextCompat = configuredEntry?.compat ?? params.entry.compat;
+  const nextCompat =
+    params.entry.compat || configuredEntry?.compat
+      ? { ...params.entry.compat, ...configuredEntry?.compat }
+      : undefined;
 
   return {
     ...params.entry,
@@ -1180,9 +1182,14 @@ export function buildConfiguredModelCatalog(params: {
         typeof model?.contextTokens === "number" && model.contextTokens > 0
           ? model.contextTokens
           : undefined;
-      const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
       const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
+      const reasoning =
+        typeof model?.reasoning === "boolean"
+          ? model.reasoning
+          : isVllmQwenThinkingCompat(providerId, compat)
+            ? true
+            : undefined;
       catalog.push({
         provider: providerId,
         id,
@@ -1197,6 +1204,16 @@ export function buildConfiguredModelCatalog(params: {
   }
 
   return catalog;
+}
+
+function isVllmQwenThinkingCompat(
+  providerId: string,
+  compat?: { thinkingFormat?: unknown } | null,
+): boolean {
+  return (
+    providerId === "vllm" &&
+    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
+  );
 }
 
 export function resolveHooksGmailModel(
