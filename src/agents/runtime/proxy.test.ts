@@ -40,21 +40,20 @@ describe("streamProxy", () => {
   });
 
   it("flushes a final SSE frame without a trailing newline", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        responseFromText(
-          `data: ${JSON.stringify({
-            type: "done",
-            reason: "stop",
-            usage,
-          })}`,
-        ),
+    const fetchMock = vi.fn(async () =>
+      responseFromText(
+        `data: ${JSON.stringify({
+          type: "done",
+          reason: "stop",
+          usage,
+        })}`,
       ),
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     const stream = streamProxy(model, context, {
       authToken: "token",
+      headers: { Authorization: "Bearer upstream", "x-api-key": "secret" },
       proxyUrl: "https://proxy.example",
     });
     const events = [];
@@ -68,6 +67,10 @@ describe("streamProxy", () => {
       stopReason: "stop",
       usage,
     });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      options?: { headers?: unknown };
+    };
+    expect(body.options).not.toHaveProperty("headers");
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {
