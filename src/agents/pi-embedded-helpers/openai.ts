@@ -185,10 +185,11 @@ function createOpenAIResponsesToolCallIdResolver(): {
 }
 
 /**
- * OpenAI Responses validates replayed `function_call.call_id`,
- * `function_call.id`, and matching `function_call_output.call_id` values.
- * Keep canonical ids unchanged, but deterministically rewrite overlong or
- * malformed persisted ids before pi-ai splits `call_id|fc_id` pairs.
+ * OpenAI Responses rejects replayed `function_call.call_id`,
+ * `function_call.id`, and matching `function_call_output.call_id` values
+ * that exceed its 64-char `call_*` / `fc_*` shape. pi-ai skips its own
+ * normalizer for same-model replay, then splits persisted `call_id|fc_id`
+ * pairs directly into the provider payload, so OpenClaw must normalize here.
  */
 export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
