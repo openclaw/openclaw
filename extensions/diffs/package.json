@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/diffs",
   "version": "2026.5.27",
-  "description": "OpenClaw diff viewer plugin",
+  "description": "OpenClaw read-only diff viewer plugin and file renderer for agents.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

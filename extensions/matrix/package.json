@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/matrix",
   "version": "2026.5.27",
-  "description": "OpenClaw Matrix channel plugin",
+  "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

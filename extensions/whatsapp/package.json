@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/whatsapp",
   "version": "2026.5.27",
-  "description": "OpenClaw WhatsApp channel plugin",
+  "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

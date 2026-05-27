@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/lobster",
   "version": "2026.5.27",
-  "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
+  "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

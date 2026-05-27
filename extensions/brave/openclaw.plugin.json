@@ -1,5 +1,7 @@
 {
   "id": "brave",
+  "name": "Brave",
+  "description": "OpenClaw Brave Search provider plugin for web search.",
   "activation": {
     "onStartup": false
   },

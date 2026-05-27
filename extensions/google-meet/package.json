@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/google-meet",
   "version": "2026.5.27",
-  "description": "OpenClaw Google Meet participant plugin",
+  "description": "OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/codex",
   "version": "2026.5.27",
-  "description": "OpenClaw Codex harness and model provider plugin",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

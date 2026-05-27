@@ -2,7 +2,7 @@
   "name": "@openclaw/qqbot",
   "version": "2026.5.27",
   "private": false,
-  "description": "OpenClaw QQ Bot channel plugin",
+  "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

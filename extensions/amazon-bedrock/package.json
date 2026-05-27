@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
   "version": "2026.5.27",
-  "description": "OpenClaw Amazon Bedrock provider plugin",
+  "description": "OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

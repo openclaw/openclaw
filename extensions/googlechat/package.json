@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/googlechat",
   "version": "2026.5.27",
-  "description": "OpenClaw Google Chat channel plugin",
+  "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

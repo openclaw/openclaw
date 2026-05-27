@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/diagnostics-otel",
   "version": "2026.5.27",
-  "description": "OpenClaw diagnostics OpenTelemetry exporter",
+  "description": "OpenClaw diagnostics OpenTelemetry exporter for metrics and traces.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/zalouser",
   "version": "2026.5.27",
-  "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
+  "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"

@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/acpx",
   "version": "2026.5.27",
-  "description": "OpenClaw ACP runtime backend",
+  "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
