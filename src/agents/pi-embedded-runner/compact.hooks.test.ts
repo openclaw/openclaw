@@ -587,7 +587,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
   });
 
-  it("preserves direct OpenAI API-key compaction when no Codex auth is configured", async () => {
+  it("routes compaction through Codex OAuth when Codex runtime is active even without explicit Codex auth", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [] },
@@ -614,7 +614,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelMock)).toBe("openai");
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
   });
 
