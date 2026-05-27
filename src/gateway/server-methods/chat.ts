@@ -10,6 +10,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -49,10 +50,19 @@ import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-mess
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  INTER_SESSION_PROMPT_PREFIX_BASE,
+  normalizeInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnInput,
+  type UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
@@ -973,18 +983,11 @@ async function persistChatSendImages(params: {
   return saved;
 }
 
-function buildChatSendTranscriptMessage(params: {
-  message: string;
-  savedImages: SavedMedia[];
-  timestamp: number;
-}) {
-  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
-  return {
-    role: "user" as const,
-    content: params.message,
-    timestamp: params.timestamp,
-    ...mediaFields,
-  };
+function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
+  return savedMedia.map((entry) => ({
+    path: entry.path,
+    contentType: entry.contentType,
+  }));
 }
 
 function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
@@ -1146,6 +1149,7 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   transcriptPath: string;
   sessionKey: string;
   message: string;
+  idempotencyKey?: string;
   savedImages: SavedMedia[];
   cfg: OpenClawConfig;
 }) {
@@ -1154,6 +1158,11 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     return;
   }
   const index = await readSessionTranscriptIndex(params.transcriptPath);
+  // Anchor the media rewrite to the recorder-issued idempotency key for the
+  // current turn (e.g. `${clientRunId}:user`).  Matching on raw message
+  // text caused two same-text sends overlapping (or a retry/idempotency
+  // collapse) to attach media to the wrong transcript entry.  See PR #87192
+  // P2 finding `chat.ts:1157-1172`.
   const target = index?.entries.toReversed().find((entry) => {
     const message = entry.record.message as Record<string, unknown> | undefined;
     if (!message || message.role !== "user") {
@@ -1168,6 +1177,15 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
       (existingPaths && existingPaths.length > 0)
     ) {
       return false;
+    }
+    if (params.idempotencyKey) {
+      const messageIdempotency = (message as { idempotencyKey?: unknown }).idempotencyKey;
+      if (typeof messageIdempotency === "string" && messageIdempotency === params.idempotencyKey) {
+        return true;
+      }
+      // No idempotency key on the entry — fall through to text match as a
+      // best-effort fallback for older transcript rows that pre-date the
+      // recorder write path.
     }
     return extractTranscriptUserText((message as { content?: unknown }).content) === params.message;
   });
@@ -1218,6 +1236,79 @@ function extractChatHistoryBlockText(message: unknown): string | undefined {
     })
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
+}
+
+function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const value = meta?.recordTimestampMs;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const timestamp = asOptionalRecord(message)?.timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
+  const record = asOptionalRecord(message);
+  if (!record || record.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+    return true;
+  }
+  const text = extractChatHistoryBlockText(record);
+  return (
+    typeof text === "string" &&
+    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
+    text.includes("sourceTool=subagent_announce")
+  );
+}
+
+function isChatHistoryAssistantMessage(message: unknown): boolean {
+  return asOptionalRecord(message)?.role === "assistant";
+}
+
+/**
+ * Drop subagent-announce inter-session user messages (and their adjacent
+ * assistant replies) that predate the current session's start.  This is the
+ * raw-message equivalent of the projection-time orphan trim and runs against
+ * the augmented but unprojected message stream so timestamp metadata stored
+ * under `__openclaw.recordTimestampMs` is still intact.  See PR #85648.
+ */
+export function dropPreSessionStartAnnouncePairs(
+  messages: unknown[],
+  sessionStartedAt: number | undefined,
+): unknown[] {
+  if (sessionStartedAt === undefined || messages.length === 0) {
+    return messages;
+  }
+  let changed = false;
+  const kept: unknown[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const current = messages[i];
+    if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
+      const ts = readChatHistoryRecordTimestampMs(current);
+      if (typeof ts === "number" && ts < sessionStartedAt) {
+        const next = messages[i + 1];
+        const nextTs = readChatHistoryRecordTimestampMs(next);
+        if (
+          isChatHistoryAssistantMessage(next) &&
+          typeof nextTs === "number" &&
+          nextTs < sessionStartedAt
+        ) {
+          // Skip only an assistant reply that is also pre-session-start;
+          // recent or timestampless assistants may be real fresh-session
+          // context.
+          i++;
+        }
+        changed = true;
+        continue;
+      }
+    }
+    kept.push(current);
+  }
+  return changed ? kept : messages;
 }
 
 function appendCanvasBlockToAssistantHistoryMessage(params: {
@@ -2242,23 +2333,29 @@ export const chatHandlers: GatewayRequestHandlers = {
       localMessages,
     });
     const importMs = markMetricMs();
+    // Drop pre-session-start subagent-announce user messages and their
+    // adjacent assistant replies *before* projection so the announce-pair
+    // filter works uniformly for both `messages` and `turns` (now the default
+    // for WebChat-style clients).  Operating on raw messages preserves the
+    // `__openclaw.recordTimestampMs` and `provenance` metadata that the
+    // projection layer strips.  See ClawSweeper P2 on chat.ts:2253 and #85648.
+    const sessionStartedAt =
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined;
+    const sessionFilteredMessages = dropPreSessionStartAnnouncePairs(rawMessages, sessionStartedAt);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const projectedMessages = projectRecentChatDisplayMessages(rawMessages, {
+    const projectedMessages = projectRecentChatDisplayMessages(sessionFilteredMessages, {
       maxChars: effectiveMaxChars,
       // Use scanMax for turns (turn grouper needs the full window) but trim
       // to the requested max for messages mode so the overread boundary
       // message is dropped after announce-pair filtering.
       maxMessages: historyMode === "turns" ? scanMax : max,
     });
-    // Drop leading orphaned assistant messages that predate the current
-    // session.  These are replies to announce-user messages that fell outside
-    // the read window (the overread only extends by one).  The old pipeline
-    // handled this via dropLocalHistoryOverreadContextMessage; the projection
-    // path replicates the behaviour with a timestamp check.
-    const sessionStartedAt =
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined;
+    // Belt-and-suspenders: if any orphaned assistant replies remain leading
+    // the projection (e.g. the timestamped announce-user fell outside the
+    // read window and only its reply made it in), drop them in both modes
+    // before the turn grouper or the safe-mode projection runs.
     let trimmedMessages = projectedMessages;
-    if (sessionStartedAt !== undefined && historyMode !== "turns") {
+    if (sessionStartedAt !== undefined) {
       let dropCount = 0;
       for (const msg of trimmedMessages) {
         if (msg.role !== "assistant") {
@@ -3016,6 +3113,56 @@ export const chatHandlers: GatewayRequestHandlers = {
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
       const hasBeforeAgentRunGate = getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
+      // Restore the pre-projection-refactor user-turn recorder so the
+      // before_message_write hook contract (redaction + block) and the
+      // idempotency key carry through both the inline (no before_agent_run)
+      // and gated (post-agent-run / fallback) transcript writes.  See PR
+      // #87192 P1: prior to this the chat.send path was emitting
+      // `emitSessionTranscriptUpdate` directly with the raw parsed message,
+      // which bypassed the harness and persisted sensitive prompts before
+      // hook authors could redact or block them.
+      const userTurnMediaPromise = persistedImagesPromise.then(buildChatSendUserTurnMedia);
+      const baseUserTurnInput: UserTurnInput = {
+        text: rawMessage,
+        timestamp: now,
+        idempotencyKey: `${clientRunId}:user`,
+        ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
+      };
+      const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
+        ...baseUserTurnInput,
+        ...(media.length > 0
+          ? {
+              media,
+              mediaOnlyText: "[User sent media without caption]",
+            }
+          : {}),
+      }));
+      const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        input: baseUserTurnInput,
+        resolveInput: () => userTurnInputPromise,
+        target: () => {
+          const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
+          if (!resolvedSessionId) {
+            return undefined;
+          }
+          return {
+            sessionId: resolvedSessionId,
+            sessionKey,
+            sessionEntry: latestEntry ?? entry,
+            storePath: latestStorePath,
+            agentId,
+            config: cfg,
+          };
+        },
+        errorContext: "gateway chat user turn transcript",
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        onPersistenceError: (error) => {
+          context.logGateway.warn(
+            `gateway user transcript persistence failed: ${formatForLog(error)}`,
+          );
+        },
+      });
       const emitUserTranscriptUpdate = async () => {
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
@@ -3025,31 +3172,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           await measureDiagnosticsTimelineSpan(
             "gateway.chat_send.emit_user_transcript",
             async () => {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
-              const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
-              if (!resolvedSessionId) {
-                return;
-              }
-              const transcriptPath = resolveTranscriptPath({
-                sessionId: resolvedSessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-                agentId,
-              });
-              if (!transcriptPath) {
-                return;
-              }
-              const persistedImages = await persistedImagesPromise;
-              emitSessionTranscriptUpdate({
-                sessionFile: transcriptPath,
-                sessionKey,
-                message: buildChatSendTranscriptMessage({
-                  message: parsedMessage,
-                  savedImages: persistedImages,
-                  timestamp: now,
-                }),
-              });
+              // Route the user-turn write through the recorder so
+              // applyBeforeMessageWriteToUserTurn fires the before_message_write
+              // hook (with redaction + block support) before any transcript
+              // update event is emitted.  The recorder also tags the entry
+              // with `${clientRunId}:user` so repeated dispatches and the
+              // post-agent-run fallback collapse to a single transcript row.
+              await userTurnRecorder.persistApproved();
             },
             {
               phase: "agent-turn",
@@ -3091,6 +3220,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           transcriptPath,
           sessionKey,
           message: parsedMessage,
+          idempotencyKey: `${clientRunId}:user`,
           savedImages: await persistedImagesPromise,
           cfg,
         });
@@ -3215,8 +3345,8 @@ export const chatHandlers: GatewayRequestHandlers = {
 
       void measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
-        () =>
-          dispatchInboundMessage({
+        async () => {
+          const dispatchResult = await dispatchInboundMessage({
             ctx,
             cfg,
             dispatcher,
@@ -3227,6 +3357,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
+              userTurnTranscriptRecorder: userTurnRecorder,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 if (!hasBeforeAgentRunGate) {
@@ -3260,7 +3391,12 @@ export const chatHandlers: GatewayRequestHandlers = {
                 onModelSelected(modelSelection);
               },
             },
-          }),
+          });
+          if (dispatchResult.beforeAgentRunBlocked === true) {
+            userTurnRecorder.markBlocked();
+          }
+          return dispatchResult;
+        },
         {
           phase: "agent-turn",
           config: cfg,
