@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
@@ -454,6 +457,100 @@ describe("getCachedPluginModuleLoader", () => {
       sourceTransformFallbacks: 0,
       sourceTransformForced: 0,
     });
+  });
+
+  it("tries native loading before source-transforming compiled plugin-sdk imports", async () => {
+    const fromSourceTransformer = vi.fn();
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    const nativeStub = vi.fn((target: string) => ({
+      ok: true as const,
+      moduleExport: { loadedFrom: target },
+    }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: (p: string) =>
+        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=plugin-sdk-native-first");
+
+    const cache = new Map();
+    const loader = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/codex/index.js",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "file:///repo/src/plugins/loader.ts",
+      aliasMap: {
+        "openclaw/plugin-sdk/agent-runtime": "/repo/dist/plugin-sdk/agent-runtime.js",
+      },
+      tryNative: true,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
+    });
+
+    const result = loader("/repo/dist/extensions/codex/index.js") as { loadedFrom: string };
+    expect(result.loadedFrom).toBe("/repo/dist/extensions/codex/index.js");
+    expect(createJiti).not.toHaveBeenCalled();
+    expect(fromSourceTransformer).not.toHaveBeenCalled();
+    expectNativeOptions(nativeStub, "/repo/dist/extensions/codex/index.js");
+    expectStats(getPluginModuleLoaderStats(), {
+      calls: 1,
+      nativeHits: 1,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 0,
+    });
+  });
+
+  it("falls back to alias source transform when native loading declines plugin-sdk imports", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-loader-"));
+    const target = path.join(tempDir, "codex-plugin.js");
+    fs.writeFileSync(
+      target,
+      'import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";\n',
+      "utf8",
+    );
+    const fromSourceTransformer = vi.fn(() => ({ fromSourceTransform: true }));
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    const nativeStub = vi.fn(() => ({ ok: false as const }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=plugin-sdk-alias-fallback");
+
+    const cache = new Map();
+    const loader = getCachedPluginModuleLoader({
+      cache,
+      modulePath: target,
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "file:///repo/src/plugins/loader.ts",
+      aliasMap: {
+        "openclaw/plugin-sdk/agent-runtime": "/repo/dist/plugin-sdk/agent-runtime.js",
+      },
+      tryNative: true,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
+    });
+
+    const result = loader(target) as {
+      fromSourceTransform: boolean;
+    };
+    expect(result.fromSourceTransform).toBe(true);
+    expectNativeOptions(nativeStub, target);
+    expectJitiOptions(createJiti, 0, "file:///repo/src/plugins/loader.ts", {
+      tryNative: false,
+    });
+    expect(fromSourceTransformer).toHaveBeenCalledWith(target);
+    const stats = expectStats(getPluginModuleLoaderStats(), {
+      calls: 1,
+      nativeHits: 0,
+      nativeMisses: 1,
+      sourceTransformFallbacks: 1,
+      sourceTransformForced: 0,
+    });
+    expect(stats.topSourceTransformTargets).toEqual([{ target, count: 1 }]);
   });
 
   it("does not source-transform fallback after native loading reaches a missing dependency", async () => {
