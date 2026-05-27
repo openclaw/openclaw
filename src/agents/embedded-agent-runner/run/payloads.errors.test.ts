@@ -614,6 +614,22 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text });
   });
 
+  it("suppresses recovered read-only native command failures when explicitly flagged non-mutating", () => {
+    const text = "Config loaded.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "bash",
+        meta: "jq '.agents | keys' ~/.openclaw/openclaw.json",
+        error: "jq: error: null has no keys",
+        mutatingAction: false,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],

@@ -22,6 +22,7 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
+import { classifyNativeCommandSideEffect } from "./native-command-side-effects.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -980,13 +981,23 @@ export class CodexAppServerEventProjector {
       }
       return;
     }
+    const isMutatingAction = isMutatingNativeToolItem(params.item);
+    if (!isMutatingAction && this.lastNativeToolError?.mutatingAction) {
+      return;
+    }
     const error = itemToolError(params.item, params.status, this.toolResultOutputTextByItem);
-    const actionFingerprint = nativeToolActionFingerprint(params.item);
+    const actionFingerprint = isMutatingAction
+      ? nativeToolActionFingerprint(params.item)
+      : undefined;
     this.lastNativeToolError = {
       toolName: params.name,
       ...(params.meta ? { meta: params.meta } : {}),
       ...(error ? { error } : {}),
-      ...(isMutatingNativeToolItem(params.item) ? { mutatingAction: true } : {}),
+      ...(params.item.type === "commandExecution"
+        ? { mutatingAction: isMutatingAction }
+        : isMutatingAction
+          ? { mutatingAction: true }
+          : {}),
       ...(actionFingerprint ? { actionFingerprint } : {}),
     };
   }
@@ -1809,7 +1820,13 @@ function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
 }
 
 function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
-  return item.type === "commandExecution" || item.type === "fileChange";
+  if (item.type === "fileChange") {
+    return true;
+  }
+  if (item.type === "commandExecution") {
+    return classifyNativeCommandSideEffect(item.command ?? "") !== "readOnlyDiagnostic";
+  }
+  return false;
 }
 
 function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {

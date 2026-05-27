@@ -1508,6 +1508,86 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("marks read-only diagnostic command errors as non-mutating", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-readonly-failure",
+          command: `/bin/zsh -lc "jq '.agents | keys' ~/.openclaw/openclaw.json"`,
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "failed",
+          commandActions: [],
+          aggregatedOutput: "jq: error: null has no keys",
+          exitCode: 5,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "jq '.agents | keys' ~/.openclaw/openclaw.json (workspace)",
+      error: "jq: error: null has no keys",
+      mutatingAction: false,
+    });
+  });
+
+  it("does not let later read-only diagnostic failures clobber unresolved mutating errors", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-write-failure",
+          command: "pnpm install",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "failed",
+          commandActions: [],
+          aggregatedOutput: "install failed",
+          exitCode: 1,
+          durationMs: 42,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-readonly-failure",
+          command: "jq '.agents | keys' ~/.openclaw/openclaw.json",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "failed",
+          commandActions: [],
+          aggregatedOutput: "jq: error: null has no keys",
+          exitCode: 5,
+          durationMs: 42,
+        },
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
+      toolName: "bash",
+      meta: "install dependencies (workspace)",
+      error: "install failed",
+      mutatingAction: true,
+      actionFingerprint: JSON.stringify({
+        type: "commandExecution",
+        command: "pnpm install",
+        cwd: "/workspace",
+      }),
+    });
+  });
+
   it("does not duplicate native tool starts when the snapshot completes a started item", async () => {
     const onAgentEvent = vi.fn();
     const trajectoryRecorder = {
