@@ -207,6 +207,26 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
+  it("does not prune bindings from malformed agent entries", () => {
+    const config = {
+      agents: {
+        list: [null],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config.bindings).toEqual(config.bindings);
+    expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
   it("does not set group visible replies without channels or when already explicit", () => {
     expect(
       normalizeCompatibilityConfigValues({

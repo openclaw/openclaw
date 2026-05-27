@@ -1,6 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import {
+  commitConfigWriteWithPendingPluginInstalls,
+  hasPluginInstallRecordsUnsetPath,
+} from "../cli/plugins-install-record-commit.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -12,7 +15,6 @@ import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { PLUGIN_INSTALLS_CONFIG_PATH } from "../plugins/installed-plugin-index-records.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -41,13 +43,6 @@ let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
 let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
 let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
 
-function isPluginInstallsUnsetPath(path: readonly string[]): boolean {
-  return (
-    path.length === PLUGIN_INSTALLS_CONFIG_PATH.length &&
-    path.every((part, index) => part === PLUGIN_INSTALLS_CONFIG_PATH[index])
-  );
-}
-
 function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
   authChoiceModulePromise ??= import("../commands/auth-choice.js");
   return authChoiceModulePromise;
@@ -71,13 +66,12 @@ async function writeWizardConfigFile(
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
     commit: async (nextConfig, writeOptions) => {
-      const allowPluginInstallMigrationSizeDrop =
-        writeOptions?.unsetPaths?.some(isPluginInstallsUnsetPath) === true;
       return await replaceConfigFile({
         nextConfig,
         writeOptions: {
           ...writeOptions,
-          allowConfigSizeDrop: allowConfigSizeDrop || allowPluginInstallMigrationSizeDrop,
+          allowConfigSizeDrop:
+            allowConfigSizeDrop || hasPluginInstallRecordsUnsetPath(writeOptions),
         },
         afterWrite: { mode: "auto" },
       });

@@ -28,6 +28,18 @@ function mergeUnsetPaths(
   return merged.length > 0 ? merged : undefined;
 }
 
+export function hasPluginInstallRecordsUnsetPath(
+  writeOptions: Pick<ConfigWriteOptions, "unsetPaths"> | undefined,
+): boolean {
+  return (
+    writeOptions?.unsetPaths?.some(
+      (path) =>
+        path.length === PLUGIN_INSTALLS_CONFIG_PATH.length &&
+        path.every((part, index) => part === PLUGIN_INSTALLS_CONFIG_PATH[index]),
+    ) === true
+  );
+}
+
 type ConfigCommit = (
   config: OpenClawConfig,
   writeOptions?: ConfigWriteOptions,

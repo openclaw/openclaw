@@ -1,4 +1,8 @@
 import { formatCliCommand } from "../../cli/command-format.js";
+import {
+  commitConfigWriteWithPendingPluginInstalls,
+  hasPluginInstallRecordsUnsetPath,
+} from "../../cli/plugins-install-record-commit.js";
 import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -207,11 +211,22 @@ export async function runNonInteractiveLocalSetup(params: {
   // Ordinary onboard reruns must preserve existing agents.list / bindings.
   // Only explicit --reset is allowed to shrink the config — see openclaw#84692.
   const allowConfigSizeDrop = opts.reset === true;
-  await replaceConfigFile({
+  const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
     writeOptions: { allowConfigSizeDrop },
+    commit: async (config, writeOptions) => {
+      return await replaceConfigFile({
+        nextConfig: config,
+        ...(baseHash !== undefined ? { baseHash } : {}),
+        writeOptions: {
+          ...writeOptions,
+          allowConfigSizeDrop:
+            allowConfigSizeDrop || hasPluginInstallRecordsUnsetPath(writeOptions),
+        },
+      });
+    },
   });
+  nextConfig = committed.config;
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {

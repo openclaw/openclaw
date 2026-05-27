@@ -181,6 +181,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [DAEMON_VITEST_CONFIG, 36],
   [BOUNDARY_VITEST_CONFIG, 34],
   ["test/vitest/vitest.tooling.config.ts", 32],
+  ["test/vitest/vitest.tooling-isolated.config.ts", 1],
   [UNIT_SECURITY_VITEST_CONFIG, 30],
   [UNIT_SUPPORT_VITEST_CONFIG, 28],
   [EXTENSION_ZALO_VITEST_CONFIG, 24],
@@ -234,6 +235,7 @@ const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.t
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
+const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
@@ -326,6 +328,7 @@ const VITEST_CONFIG_BY_KIND = {
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
   tasks: TASKS_VITEST_CONFIG,
+  toolingIsolated: TOOLING_ISOLATED_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
   tuiPty: TUI_PTY_VITEST_CONFIG,
@@ -1580,6 +1583,9 @@ function classifyTarget(arg, cwd) {
   if (isBoundaryTestFile(relative)) {
     return "boundary";
   }
+  if (relative === "test/scripts/openclaw-e2e-instance.test.ts") {
+    return "toolingIsolated";
+  }
   if (
     relative.startsWith("test/") ||
     relative.startsWith("src/scripts/") ||
@@ -1780,6 +1786,7 @@ export function buildVitestRunPlans(
     "unitFast",
     "default",
     "boundary",
+    "toolingIsolated",
     "tooling",
     "contractsChannelSurface",
     "contractsChannelConfig",
@@ -2150,7 +2157,8 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
 
   return !(
     runSpecs.length === 1 &&
-    runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
+    (runSpecs[0]?.config === TOOLING_VITEST_CONFIG ||
+      runSpecs[0]?.config === TOOLING_ISOLATED_VITEST_CONFIG) &&
     runSpecs[0]?.watchMode === false &&
     Array.isArray(runSpecs[0]?.includePatterns) &&
     runSpecs[0].includePatterns.length > 0
