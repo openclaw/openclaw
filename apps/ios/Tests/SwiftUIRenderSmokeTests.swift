@@ -14,16 +14,6 @@ import UIKit
         return window
     }
 
-    @Test @MainActor func statusPillConnectingBuildsAViewHierarchy() {
-        let root = StatusPill(gateway: .connecting, voiceWakeEnabled: true, brighten: true) {}
-        _ = Self.host(root)
-    }
-
-    @Test @MainActor func statusPillDisconnectedBuildsAViewHierarchy() {
-        let root = StatusPill(gateway: .disconnected, voiceWakeEnabled: false) {}
-        _ = Self.host(root)
-    }
-
     @Test @MainActor func settingsProTabBuildsAViewHierarchy() {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)

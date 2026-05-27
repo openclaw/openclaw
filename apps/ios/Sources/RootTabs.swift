@@ -9,7 +9,6 @@ struct RootTabs: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
     @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
@@ -336,16 +335,8 @@ struct RootTabs: View {
             ?? .system
     }
 
-    private var gatewayStatus: StatusPill.GatewayState {
+    private var gatewayStatus: GatewayDisplayState {
         GatewayStatusBuilder.build(appModel: self.appModel)
-    }
-
-    private var statusActivity: StatusPill.Activity? {
-        StatusActivityBuilder.build(
-            appModel: self.appModel,
-            voiceWakeEnabled: self.voiceWakeEnabled,
-            cameraHUDText: self.appModel.cameraHUDText,
-            cameraHUDKind: self.appModel.cameraHUDKind)
     }
 
     private func updateIdleTimer() {
