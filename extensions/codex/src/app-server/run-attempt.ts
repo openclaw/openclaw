@@ -134,6 +134,7 @@ import {
   sanitizeCodexToolArguments,
   sanitizeCodexToolResponse,
 } from "./tool-progress-normalization.js";
+import { filterToolsForToolSearchSupport } from "./tool-search-support.js";
 import {
   createCodexTrajectoryRecorder,
   normalizeCodexTrajectoryError,
@@ -2343,8 +2344,11 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
+  const toolSearchFilteredTools = filterToolsForToolSearchSupport(visionFilteredTools, {
+    modelId: params.modelId,
+  });
   const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(toolSearchFilteredTools, toolsAllow);
   return normalizeAgentRuntimeTools({
     runtimePlan: params.runtimePlan,
     tools: filteredTools,
@@ -3284,6 +3288,7 @@ export const __testing = {
   filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
+  filterToolsForToolSearchSupport,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   remapCodexContextFilePath,

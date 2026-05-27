@@ -629,6 +629,45 @@ describe("runCodexAppServerAttempt", () => {
     ).toEqual(["message"]);
   });
 
+  it("excludes the tool_search family for OpenAI nano models that reject it (#85806)", () => {
+    const tools = [
+      "message",
+      "tool_search",
+      "tool_search_code",
+      "tool_describe",
+      "tool_call",
+      "web_search",
+    ].map((name) => ({ name }));
+
+    expect(
+      __testing
+        .filterToolsForToolSearchSupport(tools, { modelId: "gpt-5.4-nano" })
+        .map((tool) => tool.name),
+    ).toEqual(["message", "web_search"]);
+  });
+
+  it("keeps the tool_search family for non-nano models", () => {
+    const tools = ["message", "tool_search", "tool_search_code", "tool_describe", "tool_call"].map(
+      (name) => ({ name }),
+    );
+
+    expect(
+      __testing
+        .filterToolsForToolSearchSupport(tools, { modelId: "gpt-5.5" })
+        .map((tool) => tool.name),
+    ).toEqual(["message", "tool_search", "tool_search_code", "tool_describe", "tool_call"]);
+  });
+
+  it("treats an undefined modelId as supporting tool_search (preserves prior behavior)", () => {
+    const tools = ["message", "tool_search"].map((name) => ({ name }));
+
+    expect(
+      __testing
+        .filterToolsForToolSearchSupport(tools, { modelId: undefined })
+        .map((tool) => tool.name),
+    ).toEqual(["message", "tool_search"]);
+  });
+
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
