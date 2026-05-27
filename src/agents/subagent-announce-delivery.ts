@@ -220,6 +220,13 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
 }
 
+function isPermanentAnnounceDeliveryError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  return Boolean(
+    message && PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message)),
+  );
+}
+
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) {
     return;
@@ -784,6 +791,9 @@ async function sendSubagentAnnounceDirectly(params: {
           }),
       });
     } catch (err) {
+      if (isPermanentAnnounceDeliveryError(err)) {
+        throw err;
+      }
       let didFallback = false;
       try {
         didFallback = await sendCompletionFallback({

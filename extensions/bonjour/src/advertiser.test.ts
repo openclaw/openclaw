@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -205,6 +206,38 @@ describe("gateway bonjour advertiser", () => {
 
     expect(createService).not.toHaveBeenCalled();
     await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("auto-disables Bonjour in detected containers", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it("honors explicit Bonjour opt-in inside detected containers", async () => {
+    enableAdvertiserUnitMode();
+    process.env.OPENCLAW_DISABLE_BONJOUR = "0";
+    vi.spyOn(fs, "existsSync").mockImplementation((filePath) => String(filePath) === "/.dockerenv");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+
+    await started.stop();
   });
 
   it("attaches conflict listeners for services", async () => {
@@ -490,6 +523,8 @@ describe("gateway bonjour advertiser", () => {
 
     const stateRef = { value: "announcing" };
     const events: string[] = [];
+    const cleanupException = vi.fn();
+    const cleanupRejection = vi.fn();
     let advertiseCount = 0;
     const destroy = vi.fn().mockImplementation(async () => {
       events.push("destroy");
@@ -505,6 +540,8 @@ describe("gateway bonjour advertiser", () => {
       return Promise.resolve();
     });
     mockCiaoService({ advertise, destroy, stateRef });
+    registerUncaughtExceptionHandler.mockImplementation(() => cleanupException);
+    registerUnhandledRejectionHandler.mockImplementation(() => cleanupRejection);
 
     const started = await startAdvertiser({
       gatewayPort: 18789,
@@ -513,6 +550,8 @@ describe("gateway bonjour advertiser", () => {
 
     expect(createService).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(1);
+    expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
+    expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(15_000);
 
@@ -521,11 +560,15 @@ describe("gateway bonjour advertiser", () => {
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(shutdown).not.toHaveBeenCalled();
+    expect(cleanupException).not.toHaveBeenCalled();
+    expect(cleanupRejection).not.toHaveBeenCalled();
     expect(events).toEqual(["advertise:1", "destroy", "advertise:2"]);
 
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(2);
     expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(cleanupException).toHaveBeenCalledTimes(1);
+    expect(cleanupRejection).toHaveBeenCalledTimes(1);
   });
 
   it("treats probing-to-announcing churn as one unhealthy window", async () => {

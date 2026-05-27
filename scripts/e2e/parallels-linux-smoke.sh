@@ -42,6 +42,7 @@ TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S:-300}"
 TIMEOUT_GATEWAY_S=240
 PHASE_STALE_WARN_S=60
+DISABLE_BONJOUR_FOR_GATEWAY=0
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -230,6 +231,11 @@ esac
 
 API_KEY_VALUE="${!API_KEY_ENV:-}"
 [[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
+case "${OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR:-}" in
+  1|true|TRUE|yes|YES|on|ON)
+    DISABLE_BONJOUR_FOR_GATEWAY=1
+    ;;
+esac
 
 resolve_vm_name() {
   local json requested explicit
@@ -460,7 +466,18 @@ restore_snapshot() {
   wait_for_guest_ready || die "guest did not become ready in $VM_NAME"
 }
 
+sync_guest_clock() {
+  local host_now
+  host_now="@$(date -u '+%s')"
+  guest_exec date -u -s "$host_now" >/dev/null
+  guest_exec hwclock --systohc >/dev/null 2>&1 || true
+  guest_exec timedatectl set-ntp true >/dev/null 2>&1 || true
+  guest_exec systemctl restart systemd-timesyncd >/dev/null 2>&1 || true
+  guest_exec date -u
+}
+
 bootstrap_guest() {
+  sync_guest_clock
   guest_exec apt-get -o Acquire::Check-Date=false update
   guest_exec apt-get install -y curl ca-certificates
 }
@@ -725,12 +742,16 @@ EOF
 }
 
 start_gateway_background() {
-  local cmd api_key_value_q
+  local cmd api_key_value_q bonjour_env
   api_key_value_q="$(shell_quote "$API_KEY_VALUE")"
+  bonjour_env=""
+  if [[ "$DISABLE_BONJOUR_FOR_GATEWAY" -eq 1 ]]; then
+    bonjour_env=" OPENCLAW_DISABLE_BONJOUR=1"
+  fi
   cmd="$(cat <<EOF
 pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
 rm -f /tmp/openclaw-parallels-linux-gateway.log
-setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
+setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json${bonjour_env} ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
 EOF
 )"
   guest_exec bash -lc "$cmd"

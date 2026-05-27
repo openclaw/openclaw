@@ -120,6 +120,12 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
     expect(
       shouldCreateBundleMcpRuntimeForAttempt({
         toolsEnabled: true,
+        toolsAllow: ["bundle-mcp"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
         toolsAllow: ["strict__strict_probe"],
       }),
     ).toBe(true);

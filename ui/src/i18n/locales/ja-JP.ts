@@ -279,6 +279,8 @@ export const ja_JP: TranslationMap = {
       tailscaleDocsLink: "ドキュメント: Tailscale Serve",
       insecureHttpDocsTitle: "安全でない HTTP に関するドキュメント（新しいタブで開きます）",
       insecureHttpDocsLink: "ドキュメント: 安全でない HTTP",
+      copyCommand: "コマンドをコピー",
+      copyCommandAria: "コマンドをコピー: {command}",
     },
     cards: {
       cost: "コスト",
@@ -314,6 +316,30 @@ export const ja_JP: TranslationMap = {
     palette: {
       placeholder: "コマンドを入力…",
       noResults: "結果がありません",
+      categories: {
+        search: "検索",
+        navigation: "ナビゲーション",
+        skills: "Skills",
+      },
+      items: {
+        overview: "概要",
+        sessions: "セッション",
+        scheduled: "スケジュール済み",
+        skills: "Skills",
+        settings: "設定",
+        agents: "エージェント",
+        shellCommand: "シェルコマンド",
+        debugMode: "デバッグモード",
+      },
+      descriptions: {
+        shellCommand: "シェルを実行",
+        debugMode: "デバッグを切り替え",
+      },
+      footer: {
+        navigate: "移動",
+        select: "選択",
+        close: "閉じる",
+      },
     },
   },
   dreaming: {

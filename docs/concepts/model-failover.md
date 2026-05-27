@@ -265,6 +265,7 @@ That means fallback retries have to coordinate with live model switching:
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
+- If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
 - If the fallback attempt fails, the runner rolls back only the override fields it wrote, and only if they still match that failed candidate.
 
 This prevents the classic race:

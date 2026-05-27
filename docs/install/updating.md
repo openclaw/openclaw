@@ -67,6 +67,20 @@ Add `--no-onboard` to skip onboarding. To force a specific install type through
 the installer, pass `--install-method git --no-onboard` or
 `--install-method npm --no-onboard`.
 
+If `openclaw update` fails after the npm package install phase, re-run the
+installer. The installer does not call the old updater; it runs the global
+package install directly and can recover a partially updated npm install.
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
+```
+
+To pin the recovery to a specific version or dist-tag, add `--version`:
+
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --version <version-or-dist-tag>
+```
+
 ## Alternative: manual npm, pnpm, or bun
 
 ```bash

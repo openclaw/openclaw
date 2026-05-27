@@ -1630,6 +1630,38 @@ describe("provider-runtime", () => {
     );
   });
 
+  it("matches provider hooks through a custom provider's native api owner", () => {
+    const ollamaPlugin: ProviderPlugin = {
+      id: "ollama",
+      label: "Ollama",
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    resolvePluginProvidersMock.mockReturnValue([ollamaPlugin]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "ollama-spark",
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toBe(ollamaPlugin);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["ollama-spark", "ollama"],
+      }),
+    );
+  });
+
   it("merges compat contributions from owner and foreign provider plugins", () => {
     resolvePluginProvidersMock.mockImplementation((params) => {
       const onlyPluginIds = params.onlyPluginIds ?? [];

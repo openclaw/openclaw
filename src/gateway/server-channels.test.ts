@@ -50,6 +50,7 @@ function createTestPlugin(params?: {
   order?: number;
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
+  listAccountIds?: ChannelPlugin<TestAccount>["config"]["listAccountIds"];
   includeDescribeAccount?: boolean;
   describeAccount?: ChannelPlugin<TestAccount>["config"]["describeAccount"];
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
@@ -59,7 +60,7 @@ function createTestPlugin(params?: {
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
   const config: ChannelPlugin<TestAccount>["config"] = {
-    listAccountIds: () => [DEFAULT_ACCOUNT_ID],
+    listAccountIds: params?.listAccountIds ?? (() => [DEFAULT_ACCOUNT_ID]),
     resolveAccount: params?.resolveAccount ?? (() => account),
     isEnabled: (resolved) => resolved.enabled !== false,
     ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
@@ -434,6 +435,35 @@ describe("server-channels auto restart", () => {
 
     expect(failingStart).toHaveBeenCalledTimes(1);
     expect(succeedingStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts stale account lifecycle state during whole-channel reload", async () => {
+    let accountIds = [DEFAULT_ACCOUNT_ID];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount, listAccountIds: () => accountIds }));
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = [];
+    await manager.stopChannel("discord");
+    await manager.startChannel("discord");
+
+    accountIds = [DEFAULT_ACCOUNT_ID];
+    await manager.startChannel("discord");
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.reconnectAttempts).toBe(0);
+    expect(account?.lastStopAt).toBeUndefined();
+
+    await manager.stopChannel("discord");
   });
 
   it("reuses plugin account resolution for health monitor overrides", () => {

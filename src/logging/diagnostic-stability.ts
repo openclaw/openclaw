@@ -31,6 +31,9 @@ export type DiagnosticStabilityEventRecord = {
   provider?: string;
   model?: string;
   durationMs?: number;
+  requestBytes?: number;
+  responseBytes?: number;
+  timeToFirstByteMs?: number;
   resultCount?: number;
   commandLength?: number;
   exitCode?: number;
@@ -341,11 +344,17 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
+      record.requestBytes = event.requestPayloadBytes;
+      record.responseBytes = event.responseStreamBytes;
+      record.timeToFirstByteMs = event.timeToFirstByteMs;
       break;
     case "model.call.error":
       record.provider = event.provider;
       record.model = event.model;
       record.durationMs = event.durationMs;
+      record.requestBytes = event.requestPayloadBytes;
+      record.responseBytes = event.responseStreamBytes;
+      record.timeToFirstByteMs = event.timeToFirstByteMs;
       assignReasonCode(record, event.errorCategory);
       break;
     case "log.record":

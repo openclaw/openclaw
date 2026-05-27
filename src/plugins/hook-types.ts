@@ -212,6 +212,9 @@ export type PluginHookModelCallEndedEvent = PluginHookModelCallBaseEvent & {
   durationMs: number;
   outcome: "completed" | "error";
   errorCategory?: string;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
   upstreamRequestIdHash?: string;
 };
 

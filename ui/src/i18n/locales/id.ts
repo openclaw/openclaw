@@ -275,6 +275,8 @@ export const id: TranslationMap = {
       tailscaleDocsLink: "Dokumentasi: Tailscale Serve",
       insecureHttpDocsTitle: "Dokumentasi HTTP tidak aman (dibuka di tab baru)",
       insecureHttpDocsLink: "Dokumentasi: HTTP tidak aman",
+      copyCommand: "Salin perintah",
+      copyCommandAria: "Salin perintah: {command}",
     },
     cards: {
       cost: "Biaya",
@@ -310,6 +312,30 @@ export const id: TranslationMap = {
     palette: {
       placeholder: "Ketik perintah…",
       noResults: "Tidak ada hasil",
+      categories: {
+        search: "Cari",
+        navigation: "Navigasi",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Ikhtisar",
+        sessions: "Sesi",
+        scheduled: "Terjadwal",
+        skills: "Skills",
+        settings: "Pengaturan",
+        agents: "Agen",
+        shellCommand: "Perintah shell",
+        debugMode: "Mode debug",
+      },
+      descriptions: {
+        shellCommand: "Jalankan shell",
+        debugMode: "Alihkan debug",
+      },
+      footer: {
+        navigate: "navigasi",
+        select: "pilih",
+        close: "tutup",
+      },
     },
   },
   dreaming: {

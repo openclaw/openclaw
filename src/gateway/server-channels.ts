@@ -282,6 +282,27 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return channelRuntime ?? resolveChannelRuntime?.();
   };
 
+  const evictStaleChannelAccountState = (
+    channelId: ChannelId,
+    store: ChannelRuntimeStore,
+    accountIds: readonly string[],
+  ) => {
+    const activeAccountIds = new Set(accountIds);
+    for (const id of store.runtimes.keys()) {
+      if (
+        activeAccountIds.has(id) ||
+        store.aborts.has(id) ||
+        store.starting.has(id) ||
+        store.tasks.has(id)
+      ) {
+        continue;
+      }
+      store.runtimes.delete(id);
+      restartAttempts.delete(restartKey(channelId, id));
+      manuallyStopped.delete(restartKey(channelId, id));
+    }
+  };
+
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
@@ -297,6 +318,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
     const accountIds = accountId ? [accountId] : plugin.config.listAccountIds(cfg);
+    if (!accountId) {
+      evictStaleChannelAccountState(channelId, store, accountIds);
+    }
     if (accountIds.length === 0) {
       return;
     }

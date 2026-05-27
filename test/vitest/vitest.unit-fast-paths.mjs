@@ -5,6 +5,7 @@ import {
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
+import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
@@ -71,6 +72,7 @@ const broadUnitFastCandidateSkipGlobs = [
   "src/plugin-sdk/browser-subpaths.test.ts",
   "src/security/**/*.test.ts",
   "src/secrets/**/*.test.ts",
+  ...boundaryTestFiles,
 ];
 
 const disqualifyingPatterns = [
@@ -84,7 +86,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /runtime-module-mocks/u,
+    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers)/u,
   },
   {
     code: "vitest-mock-api",

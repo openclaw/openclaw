@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+
+describe("detectCronDenialToken", () => {
+  it("matches host denial markers case-sensitively", () => {
+    expect(detectCronDenialToken("SYSTEM_RUN_DENIED: approval blocked")).toBe("SYSTEM_RUN_DENIED");
+    expect(detectCronDenialToken("INVALID_REQUEST: denied")).toBe("INVALID_REQUEST");
+    expect(detectCronDenialToken("system_run_denied: approval blocked")).toBeUndefined();
+    expect(detectCronDenialToken("invalid_request: denied")).toBeUndefined();
+  });
+
+  it("matches model-narrated denial phrases case-insensitively", () => {
+    expect(detectCronDenialToken("Approval Cannot Safely Bind this runtime command")).toBe(
+      "approval cannot safely bind",
+    );
+    expect(detectCronDenialToken("The runtime denied the operation.")).toBe("runtime denied");
+    expect(detectCronDenialToken("I could not run the script.")).toBe("could not run");
+    expect(detectCronDenialToken("The command did not run to completion.")).toBe("did not run");
+    expect(detectCronDenialToken("The request was denied by policy.")).toBe("was denied");
+  });
+
+  it("ignores empty and non-token text", () => {
+    expect(detectCronDenialToken(undefined)).toBeUndefined();
+    expect(
+      detectCronDenialToken("The denied claim was reviewed, then the job succeeded."),
+    ).toBeUndefined();
+  });
+});
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
@@ -133,5 +159,48 @@ describe("resolveCronPayloadOutcome", () => {
       { text: "Working on it..." },
       { text: "Final weather summary" },
     ]);
+  });
+
+  it("promotes narrated denial markers in summary text to fatal errors", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: denial token "SYSTEM_RUN_DENIED" detected in summary',
+    );
+  });
+
+  it("promotes narrated denial markers from final assistant visible text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }],
+      finalAssistantVisibleText: "I could not run the requested script.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.outputText).toBe("I could not run the requested script.");
+    expect(result.embeddedRunError).toBe(
+      'cron classifier: denial token "could not run" detected in summary',
+    );
+  });
+
+  it("keeps structured error payload reasons ahead of denial-token reasons", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "Exec failed before SYSTEM_RUN_DENIED could be retried",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
   });
 });
