@@ -1,5 +1,5 @@
 ---
-summary: "Adds text-to-speech provider support."
+summary: "Adds realtime transcription provider support. Adds text-to-speech provider support."
 read_when:
   - You are installing, configuring, or auditing the gradium plugin
 title: "Gradium plugin"
@@ -7,7 +7,7 @@ title: "Gradium plugin"
 
 # Gradium plugin
 
-Adds text-to-speech provider support.
+Adds realtime transcription provider support. Adds text-to-speech provider support.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Adds text-to-speech provider support.
 
 ## Surface
 
-contracts: speechProviders
+contracts: realtimeTranscriptionProviders, speechProviders
 
 ## Related docs
 

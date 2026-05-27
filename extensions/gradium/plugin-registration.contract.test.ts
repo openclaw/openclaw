@@ -3,4 +3,5 @@ import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-t
 describePluginRegistrationContract({
   pluginId: "gradium",
   speechProviderIds: ["gradium"],
+  realtimeTranscriptionProviderIds: ["gradium"],
 });

@@ -96,6 +96,8 @@ export type RealtimeVoiceProviderResolveConfigContext = {
 
 export type RealtimeVoiceProviderConfiguredContext = {
   cfg?: OpenClawConfig;
+  configuredProviderId?: string;
+  providerConfigExplicit?: boolean;
   providerConfig: RealtimeVoiceProviderConfig;
 };
 

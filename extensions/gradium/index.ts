@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildGradiumRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildGradiumSpeechProvider } from "./speech-provider.js";
 
 export default definePluginEntry({
@@ -7,5 +8,6 @@ export default definePluginEntry({
   description: "Bundled Gradium speech provider",
   register(api) {
     api.registerSpeechProvider(buildGradiumSpeechProvider());
+    api.registerRealtimeTranscriptionProvider(buildGradiumRealtimeTranscriptionProvider());
   },
 });

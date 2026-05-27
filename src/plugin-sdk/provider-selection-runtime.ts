@@ -86,6 +86,8 @@ export function resolveConfiguredCapabilityProvider<
   isProviderConfigured: (params: {
     provider: TProvider;
     cfg: TFullConfig | undefined;
+    configuredProviderId?: string;
+    providerConfigExplicit: boolean;
     providerConfig: TConfig;
   }) => boolean;
 }): ResolvedConfiguredProvider<TProvider, TConfig> {
@@ -185,9 +187,16 @@ function resolveProviderCandidate<
   isProviderConfigured: (params: {
     provider: TProvider;
     cfg: TFullConfig | undefined;
+    configuredProviderId?: string;
+    providerConfigExplicit: boolean;
     providerConfig: TConfig;
   }) => boolean;
 }): ResolvedConfiguredProvider<TProvider, TConfig> {
+  const providerConfigExplicit = hasProviderConfig(params.providerConfigs, params.provider.id);
+  const selectedProviderConfigExplicit = hasProviderConfig(
+    params.providerConfigs,
+    params.configuredProviderId,
+  );
   const rawProviderConfig = resolveProviderRawConfig({
     providerId: params.provider.id,
     configuredProviderId: params.configuredProviderId,
@@ -200,7 +209,13 @@ function resolveProviderCandidate<
   });
 
   if (
-    !params.isProviderConfigured({ provider: params.provider, cfg: params.cfg, providerConfig })
+    !params.isProviderConfigured({
+      provider: params.provider,
+      cfg: params.cfg,
+      configuredProviderId: params.configuredProviderId,
+      providerConfigExplicit: providerConfigExplicit || selectedProviderConfigExplicit,
+      providerConfig,
+    })
   ) {
     return {
       ok: false,
@@ -216,4 +231,11 @@ function resolveProviderCandidate<
     provider: params.provider,
     providerConfig,
   };
+}
+
+function hasProviderConfig(
+  providerConfigs: Record<string, Record<string, unknown> | undefined> | undefined,
+  providerId: string | undefined,
+): boolean {
+  return readProviderConfig(providerConfigs, providerId) !== undefined;
 }

@@ -48,8 +48,19 @@ export function resolveConfiguredRealtimeVoiceProvider(
         rawConfigWithOverrides
       );
     },
-    isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      provider.isConfigured({ cfg, providerConfig }),
+    isProviderConfigured: ({
+      provider,
+      cfg,
+      configuredProviderId,
+      providerConfigExplicit,
+      providerConfig,
+    }) =>
+      provider.isConfigured({
+        cfg,
+        configuredProviderId,
+        providerConfigExplicit,
+        providerConfig,
+      }),
   });
 
   if (!resolution.ok && resolution.code === "missing-configured-provider") {
