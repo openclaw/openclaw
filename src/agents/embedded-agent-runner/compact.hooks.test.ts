@@ -539,11 +539,11 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
     findMockCall(
       resolveModelMock,
-      ([provider, modelId]) => provider === "openai" && modelId === "gpt-primary",
+      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-primary",
     );
     findMockCall(
       resolveModelMock,
-      ([provider, modelId]) => provider === "openai" && modelId === "gpt-fallback",
+      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-fallback",
     );
     expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
       authProfileId: "openai-codex:default",
@@ -655,7 +655,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(mockCallArg(resolveModelMock)).toBe("openai");
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
       provider: "openai",
       modelId: "gpt-5.5",

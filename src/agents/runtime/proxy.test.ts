@@ -75,9 +75,11 @@ describe("streamProxy", () => {
       usage,
     });
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      model?: { headers?: unknown };
       options?: { headers?: unknown };
     };
     expect(body.options).not.toHaveProperty("headers");
+    expect(body.model).not.toHaveProperty("headers");
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {

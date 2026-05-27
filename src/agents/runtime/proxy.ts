@@ -117,6 +117,11 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
   };
 }
 
+function sanitizeProxyModel(model: Model): Model {
+  const { headers: _headers, ...safeModel } = model;
+  return safeModel as Model;
+}
+
 export function streamProxy(
   model: Model,
   context: Context,
@@ -164,7 +169,7 @@ export function streamProxy(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model,
+          model: sanitizeProxyModel(model),
           context,
           options: buildProxyRequestOptions(options),
         }),

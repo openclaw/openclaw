@@ -501,6 +501,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const runtimeProvider = resolvedCompactionTarget.runtimeProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
@@ -541,13 +542,13 @@ async function compactEmbeddedAgentSessionDirectOnce(
     workspaceDir: resolvedWorkspace,
   });
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
-    provider,
+    runtimeProvider,
     modelId,
     agentDir,
     params.config,
   );
   if (!model) {
-    const reason = error ?? `Unknown model: ${provider}/${modelId}`;
+    const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
     return fail(reason);
   }
   let runtimeModel = model;
