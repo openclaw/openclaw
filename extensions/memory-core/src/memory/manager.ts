@@ -1049,8 +1049,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe = null;
     }
     const closeErrors = new Map<EmbeddingProvider, unknown>();
-    // A sync may swap to a fallback provider before close resumes, so retain
-    // every provider reference observed during shutdown and close them after sync settles.
+    // Sync/provider fallback may swap this.provider while close is awaiting.
+    // Keep every observed provider and drain the set after sync has settled.
     const providersToClose = new Set<EmbeddingProvider>();
     const rememberCurrentProvider = () => {
       const provider = this.provider;
@@ -1059,18 +1059,30 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       providersToClose.add(provider);
     };
-    const closeTrackedProviders = async () => {
-      rememberCurrentProvider();
-      for (const provider of providersToClose) {
+    const closeProvider = async (provider: EmbeddingProvider) => {
+      try {
+        await provider.close?.();
+        closeErrors.delete(provider);
+        if (this.provider === provider) {
+          this.provider = null;
+        }
+      } catch (err) {
+        closeErrors.set(provider, err);
+        providersToClose.add(provider);
+      } finally {
+        rememberCurrentProvider();
+      }
+    };
+    const drainTrackedProviders = async () => {
+      for (let attempt = 0; attempt < 2 && providersToClose.size > 0; attempt += 1) {
+        const providers = Array.from(providersToClose);
+        providersToClose.clear();
         try {
-          await provider.close?.();
-          closeErrors.delete(provider);
-          providersToClose.delete(provider);
-          if (this.provider === provider) {
-            this.provider = null;
+          for (const provider of providers) {
+            await closeProvider(provider);
           }
-        } catch (err) {
-          closeErrors.set(provider, err);
+        } finally {
+          rememberCurrentProvider();
         }
       }
     };
@@ -1085,8 +1097,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     rememberCurrentProvider();
     try {
       await awaitCurrentSync();
-      await closeTrackedProviders();
-      await closeTrackedProviders();
+      rememberCurrentProvider();
+      await drainTrackedProviders();
     } finally {
       closeMemoryDatabase(this.db);
       if (INDEX_CACHE.get(this.cacheKey) === this) {
