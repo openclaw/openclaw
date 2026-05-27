@@ -1,8 +1,11 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -162,6 +165,7 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
@@ -204,6 +208,8 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const MESSAGE_TOOL_ONLY_MISSING_REPLY_TEXT =
+  "⚠️ Agent wrote a private final answer instead of sending the source reply through the message tool. Please try again.";
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -255,6 +261,62 @@ async function resetNoRealConversationTokenSnapshot(params: {
         `${params.sessionKey}: ${String(err)}`,
     );
   }
+}
+
+function hasVisibleReplyPayloadContent(payload: ReplyPayload): boolean {
+  return Boolean(
+    payload.text?.trim() ||
+    payload.mediaUrl?.trim() ||
+    (payload.mediaUrls?.length ?? 0) > 0 ||
+    payload.presentation ||
+    payload.interactive ||
+    payload.channelData,
+  );
+}
+
+function buildMessageToolOnlyMissingReplyPayload(): ReplyPayload {
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: MESSAGE_TOOL_ONLY_MISSING_REPLY_TEXT,
+    isError: true,
+  });
+}
+
+function hasMessageToolOnlySourceReplyEvidence(attempt: EmbeddedRunAttemptForRunner): boolean {
+  return (attempt.messagingToolSourceReplyPayloads ?? []).some(hasVisibleReplyPayloadContent);
+}
+
+function isVisiblePrivateFinalText(text: string | undefined): boolean {
+  return Boolean(text?.trim() && !isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
+}
+
+function hasPrivateFinalReplyText(params: {
+  attempt: EmbeddedRunAttemptForRunner;
+  finalAssistantVisibleText: string | undefined;
+  finalAssistantRawText: string | undefined;
+  payloads: ReplyPayload[] | undefined;
+}): boolean {
+  if ((params.attempt.assistantTexts ?? []).some(isVisiblePrivateFinalText)) {
+    return true;
+  }
+  if (
+    isVisiblePrivateFinalText(params.finalAssistantVisibleText) ||
+    isVisiblePrivateFinalText(params.finalAssistantRawText)
+  ) {
+    return true;
+  }
+  return (params.payloads ?? []).some(
+    (payload) =>
+      payload.isError !== true &&
+      payload.isReasoning !== true &&
+      (Boolean(
+        payload.text?.trim() && !isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN),
+      ) ||
+        Boolean(payload.mediaUrl?.trim()) ||
+        (payload.mediaUrls?.length ?? 0) > 0 ||
+        Boolean(payload.presentation) ||
+        Boolean(payload.interactive) ||
+        Boolean(payload.channelData)),
+  );
 }
 
 function resolveAttemptDispatchApiKey(params: {
@@ -1200,6 +1262,7 @@ export async function runEmbeddedAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let messageToolOnlyRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
@@ -1216,9 +1279,11 @@ export async function runEmbeddedAgent(
       // for errored turns; stopReason="stop" empty zero-token turns use the
       // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
+      const MAX_MESSAGE_TOOL_ONLY_RETRIES = 1;
       let emptyErrorRetries = 0;
       const MAX_MISSING_ASSISTANT_RETRIES = 1;
       let missingAssistantRetryAttempts = 0;
+      let messageToolOnlyRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -1469,6 +1534,7 @@ export async function runEmbeddedAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            messageToolOnlyRetryInstruction,
             compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
@@ -3266,6 +3332,76 @@ export async function runEmbeddedAgent(
               acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
           }
+          const messageToolOnlyMissingSourceReply =
+            params.sourceReplyDeliveryMode === "message_tool_only" &&
+            !aborted &&
+            !timedOut &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !hasMessageToolOnlySourceReplyEvidence(attempt) &&
+            hasPrivateFinalReplyText({
+              attempt,
+              finalAssistantVisibleText,
+              finalAssistantRawText,
+              payloads: payloadsWithToolMedia,
+            });
+          if (messageToolOnlyMissingSourceReply) {
+            const replayMetadata = resolveAttemptReplayMetadata(attempt);
+            if (
+              replayMetadata.replaySafe &&
+              messageToolOnlyRetries < MAX_MESSAGE_TOOL_ONLY_RETRIES
+            ) {
+              messageToolOnlyRetries += 1;
+              messageToolOnlyRetryInstruction = MESSAGE_TOOL_ONLY_RETRY_INSTRUCTION;
+              log.warn(
+                `message-tool-only final reply was private: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ` +
+                  `${messageToolOnlyRetries}/${MAX_MESSAGE_TOOL_ONLY_RETRIES} with message-tool delivery steer`,
+              );
+              continue;
+            }
+
+            const replayInvalid = resolveReplayInvalidForAttempt(
+              MESSAGE_TOOL_ONLY_MISSING_REPLY_TEXT,
+            );
+            const livenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: MESSAGE_TOOL_ONLY_MISSING_REPLY_TEXT,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: [buildMessageToolOnlyMissingReplyPayload()],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
+          }
+          messageToolOnlyRetryInstruction = null;
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             const replayInvalid = resolveReplayInvalidForAttempt(
               "⚠️ Agent couldn't generate a response. Please try again.",

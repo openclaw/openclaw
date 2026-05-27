@@ -503,6 +503,9 @@ function buildMessagingSection(params: {
     messageToolOnly
       ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    messageToolOnly
+      ? "- Final-only answers are private in this mode. If the current user should see the answer, send it with `message(action=send)` before ending the turn."
+      : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
     completionEventGuidance,
