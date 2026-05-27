@@ -614,8 +614,15 @@ function readAgentRunTimeoutAttribution(meta: unknown) {
   };
 }
 
-function isExplicitTimeoutError(error: unknown): boolean {
-  return readErrorName(error) === "TimeoutError";
+function isGatewayAbortSignalReason(reason: unknown): boolean {
+  return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
+}
+
+function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): boolean {
+  if (!signal.aborted || !isGatewayAbortSignalReason(signal.reason)) {
+    return false;
+  }
+  return isAbortError(error) || readErrorName(error) === "TimeoutError";
 }
 
 function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
@@ -708,7 +715,7 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
-      const aborted = isAbortError(err) || isExplicitTimeoutError(err);
+      const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
       const renderedErr = formatForLog(err);
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({

@@ -2691,16 +2691,20 @@ describe("gateway agent handler", () => {
       primeMainAgentRun();
       const abortError = new Error("This operation was aborted");
       abortError.name = "AbortError";
-      mocks.agentCommand.mockRejectedValueOnce(abortError);
       const context = makeContext();
+      const runId = "task-registry-agent-run-abort-error";
+      mocks.agentCommand.mockImplementationOnce(() => {
+        context.chatAbortControllers.get(runId)?.controller.abort();
+        return Promise.reject(abortError);
+      });
 
       await invokeAgent(
         {
           message: "background cli task",
           sessionKey: "agent:main:main",
-          idempotencyKey: "task-registry-agent-run-abort-error",
+          idempotencyKey: runId,
         },
-        { context, reqId: "task-registry-agent-run-abort-error" },
+        { context, reqId: runId },
       );
 
       await waitForAssertion(() => {
@@ -2729,16 +2733,20 @@ describe("gateway agent handler", () => {
       primeMainAgentRun();
       const timeoutError = new Error("chat run timed out");
       timeoutError.name = "TimeoutError";
-      mocks.agentCommand.mockRejectedValueOnce(timeoutError);
       const context = makeContext();
+      const runId = "task-registry-agent-run-timeout-error";
+      mocks.agentCommand.mockImplementationOnce(() => {
+        context.chatAbortControllers.get(runId)?.controller.abort(timeoutError);
+        return Promise.reject(timeoutError);
+      });
 
       await invokeAgent(
         {
           message: "background cli task",
           sessionKey: "agent:main:main",
-          idempotencyKey: "task-registry-agent-run-timeout-error",
+          idempotencyKey: runId,
         },
-        { context, reqId: "task-registry-agent-run-timeout-error" },
+        { context, reqId: runId },
       );
 
       await waitForAssertion(() => {
@@ -2760,12 +2768,14 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not hide provider timeout-like async gateway agent rejections", async () => {
+  it("does not hide provider timeout async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
       primeMainAgentRun();
-      mocks.agentCommand.mockRejectedValueOnce(new Error("provider request timed out"));
+      const providerError = new Error("provider request timed out");
+      providerError.name = "TimeoutError";
+      mocks.agentCommand.mockRejectedValueOnce(providerError);
       const context = makeContext();
 
       await invokeAgent(
@@ -2782,14 +2792,14 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "Error: provider request timed out",
+          error: "TimeoutError: provider request timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.payload,
           {
             runId: "task-registry-agent-run-provider-timeout",
             status: "error",
-            summary: "Error: provider request timed out",
+            summary: "TimeoutError: provider request timed out",
           },
         );
         expect(context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.ok).toBe(
