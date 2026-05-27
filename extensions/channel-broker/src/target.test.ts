@@ -138,4 +138,18 @@ describe("parseChannelBrokerTarget", () => {
       conversationType: "direct",
     });
   });
+
+  it("keeps positive Telegram ids direct when a thread id is present", () => {
+    expect(
+      parseChannelBrokerTarget({
+        rawTarget: "telegram:12345?threadId=42",
+        account: { ...account, platforms: ["telegram"] },
+      }),
+    ).toEqual({
+      platform: "telegram",
+      conversationId: "12345",
+      conversationType: "direct",
+      threadId: "42",
+    });
+  });
 });

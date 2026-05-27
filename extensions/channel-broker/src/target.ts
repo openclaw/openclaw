@@ -98,11 +98,11 @@ function inferTelegramChatTypeFromConversation(params: {
   conversationId: string;
   threadId?: string;
 }): "direct" | "group" | "channel" | undefined {
-  if (params.threadId) {
-    return "channel";
-  }
   if (/^\d+$/.test(params.conversationId)) {
     return "direct";
+  }
+  if (params.threadId) {
+    return "channel";
   }
   if (/^-\d+$/.test(params.conversationId)) {
     return "group";
