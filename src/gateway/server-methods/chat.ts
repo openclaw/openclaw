@@ -49,7 +49,11 @@ import {
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
-import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  INTER_SESSION_PROMPT_PREFIX_BASE,
+  normalizeInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -2053,7 +2057,11 @@ function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined)
 function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
   const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
   const value = meta?.recordTimestampMs;
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const timestamp = asOptionalRecord(message)?.timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
 function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
@@ -2062,7 +2070,15 @@ function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown):
     return false;
   }
   const provenance = normalizeInputProvenance(record.provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce";
+  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+    return true;
+  }
+  const text = extractChatHistoryBlockText(record);
+  return (
+    typeof text === "string" &&
+    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
+    text.includes("sourceTool=subagent_announce")
+  );
 }
 
 function isChatHistoryAssistantMessage(message: unknown): boolean {
@@ -2137,24 +2153,22 @@ export const chatHandlers: GatewayRequestHandlers = {
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];
-    // Drop subagent_announce pairs (user inter-session announce + adjacent
-    // assistant) whose record timestamp predates the current session's
-    // sessionStartedAt — these belong to a previous /new'd session under the
-    // same sessionKey and contaminate the fresh context (#85648). Mid-session
-    // announces (timestamp >= sessionStartedAt) are left to the existing
-    // display projection so the assistant's reply still surfaces.
-    const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
-      localMessages,
-      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
-    );
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
-      localMessages: recencyFilteredMessages,
+      localMessages,
     });
+    // Drop subagent_announce pairs (user inter-session announce + adjacent
+    // assistant) whose record timestamp predates the current session's
+    // sessionStartedAt. Run after CLI history imports too, because those
+    // timestamped messages share the same chat.history response surface.
+    const recencyFilteredMessages = dropPreSessionStartAnnouncePairs(
+      rawMessages,
+      typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    );
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      projectRecentChatDisplayMessages(rawMessages, {
+      projectRecentChatDisplayMessages(recencyFilteredMessages, {
         maxChars: effectiveMaxChars,
         maxMessages: max,
       }),

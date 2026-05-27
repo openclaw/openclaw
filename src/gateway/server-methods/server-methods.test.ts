@@ -1115,6 +1115,31 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
     ]);
   });
 
+  it("drops imported CLI-shaped announce pairs using timestamp and text fallback", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+          "This content was routed by OpenClaw from another session or internal tool.",
+        ].join("\n"),
+        timestamp: cutoff - 1_000,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale imported assistant reply" }],
+        timestamp: cutoff - 500,
+      },
+      {
+        role: "user",
+        content: "fresh imported turn",
+        timestamp: cutoff + 1_000,
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[2]]);
+  });
+
   it("keeps a mid-session announce pair whose timestamp is at or after the cutoff", () => {
     const messages = [
       {
