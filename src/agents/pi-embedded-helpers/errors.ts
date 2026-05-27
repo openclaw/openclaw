@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isGenericProviderInternalError,
+  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -108,6 +109,8 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("context window") ||
     lower.includes("context length") ||
     lower.includes("maximum context length");
+  const hasContextWindowOutOfRoom =
+    hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
     lower.includes("request_too_large") ||
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
@@ -119,6 +122,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
     (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
+    hasContextWindowOutOfRoom ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
@@ -209,13 +213,33 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 
 const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
   /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
+  /prompt is too long:\s*([\d,]+)\s*,\s*model maximum context length\s*:\s*[\d,]+/i,
   /requested\s+([\d,]+)\s+tokens/i,
+  /token limit\s*:\s*[\d,]+\s*\(requested\s*:\s*([\d,]+)\)/i,
   /resulted in\s+([\d,]+)\s+tokens/i,
+];
+
+const OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS = [
+  /input length(?:\s+and\s+max_tokens)?\s+exceed\s+context(?:\s+limit|\s+window)?\s*\(i\.e\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+\)/i,
 ];
 
 export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {
   if (!errorMessage) {
     return undefined;
+  }
+
+  for (const pattern of OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS) {
+    const match = errorMessage.match(pattern);
+    const rawLeft = match?.[1]?.replaceAll(",", "");
+    const rawRight = match?.[2]?.replaceAll(",", "");
+    if (!rawLeft || !rawRight) {
+      continue;
+    }
+    const left = Number(rawLeft);
+    const right = Number(rawRight);
+    if (Number.isFinite(left) && left > 0 && Number.isFinite(right) && right >= 0) {
+      return Math.floor(left + right);
+    }
   }
 
   for (const pattern of OBSERVED_OVERFLOW_TOKEN_PATTERNS) {
@@ -652,11 +676,10 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
-    if (
-      message &&
-      (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
-      isBillingErrorMessage(message)
-    ) {
+    if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
+      return toReasonClassification("billing");
+    }
+    if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
     return toReasonClassification("rate_limit");
@@ -774,6 +797,39 @@ function isProvider(provider: string | undefined, match: string): boolean {
   return Boolean(normalized && normalized.includes(match));
 }
 
+function hasProviderBilling429Override(provider: string | undefined): boolean {
+  return (
+    isProvider(provider, "xai") || isProvider(provider, "moonshot") || isProvider(provider, "kimi")
+  );
+}
+
+function hasStructuredBilling429Signal(raw: string): boolean {
+  if (hasBillingApiErrorType(raw)) {
+    return true;
+  }
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  return Boolean(leadingStatus?.rest && hasBillingApiErrorType(leadingStatus.rest));
+}
+
+function hasBillingApiErrorType(raw: string): boolean {
+  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  if (!type) {
+    return false;
+  }
+  return isBillingErrorMessage(type) || isBillingErrorMessage(type.replaceAll("_", " "));
+}
+
+function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
+  return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
+}
+
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+  if (!isBillingErrorMessage(raw)) {
+    return false;
+  }
+  return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);
+}
+
 // pi-ai providers throw `Error("An unknown error occurred")` provider-agnostically
 // (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a
 // stream ends with stopReason === "aborted" | "error" without specific info. Treat
@@ -838,6 +894,10 @@ function classifyFailoverClassificationFromMessage(
   ) {
     return toReasonClassification("billing");
   }
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  if (leadingStatus?.code !== 429 && isBillingErrorMessage(raw)) {
+    return toReasonClassification("billing");
+  }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
@@ -865,12 +925,9 @@ function classifyFailoverClassificationFromMessage(
   if (isGenericProviderInternalError(raw)) {
     return toReasonClassification("timeout");
   }
-  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
-  // check so that provider errors like {"type":"api_error","message":"insufficient
-  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
-  if (isBillingErrorMessage(raw)) {
-    return toReasonClassification("billing");
-  }
+  // Auth classifiers run before the broad isJsonApiInternalServerError check so that
+  // provider errors like {"type":"api_error","message":"invalid api key"} are
+  // correctly classified as "auth" rather than "timeout".
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -1156,6 +1213,16 @@ export function formatAssistantErrorText(
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
+  }
+
+  if (
+    isOpenRouterKeyLimitExceededError(raw, opts?.provider) ||
+    isOpenRouterKeyBudgetLimitExceededError(raw, opts?.provider)
+  ) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+  if (isBilling429MessageForProvider(raw, opts?.provider)) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);

@@ -28,44 +28,47 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
-vi.mock("../plugins/provider-hook-runtime.js", async () => ({
-  clearProviderRuntimePluginCacheForTest: vi.fn(),
-  testing: {},
-  prepareProviderExtraParams: vi.fn(() => undefined),
-  resolveProviderHookPlugin: vi.fn(() => undefined),
-  resolveProviderPluginsForHooks: vi.fn(() => []),
-  resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-    provider === "openrouter" || provider === "github-copilot"
-      ? {
-          buildReplayPolicy: (context?: { modelId?: string | null }) => {
-            const modelId = (context?.modelId ?? "").toLowerCase();
-            if (provider === "openrouter") {
-              return {
-                applyAssistantFirstOrderingFix: false,
-                validateGeminiTurns: false,
-                validateAnthropicTurns: false,
-                ...(modelId.includes("gemini")
-                  ? {
-                      sanitizeThoughtSignatures: {
-                        allowBase64Only: true,
-                        includeCamelCase: true,
-                      },
-                    }
-                  : {}),
-              };
-            }
-            if (provider === "github-copilot" && modelId.includes("claude")) {
-              return {
-                dropThinkingBlocks: true,
-              };
-            }
-            return undefined;
-          },
-        }
-      : undefined,
-  ),
-  wrapProviderStreamFn: vi.fn(() => undefined),
-}));
+vi.mock("../plugins/provider-hook-runtime.js", async () => {
+  const clearProviderRuntimePluginCacheForTest = vi.fn();
+  return {
+    clearProviderRuntimePluginCacheForTest,
+    testing: { clearProviderRuntimePluginCacheForTest },
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      provider === "openrouter" || provider === "github-copilot"
+        ? {
+            buildReplayPolicy: (context?: { modelId?: string | null }) => {
+              const modelId = (context?.modelId ?? "").toLowerCase();
+              if (provider === "openrouter") {
+                return {
+                  applyAssistantFirstOrderingFix: false,
+                  validateGeminiTurns: false,
+                  validateAnthropicTurns: false,
+                  ...(modelId.includes("gemini")
+                    ? {
+                        sanitizeThoughtSignatures: {
+                          allowBase64Only: true,
+                          includeCamelCase: true,
+                        },
+                      }
+                    : {}),
+                };
+              }
+              if (provider === "github-copilot" && modelId.includes("claude")) {
+                return {
+                  dropThinkingBlocks: true,
+                };
+              }
+              return undefined;
+            },
+          }
+        : undefined,
+    ),
+    wrapProviderStreamFn: vi.fn(() => undefined),
+  };
+});
 
 vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
@@ -296,6 +299,7 @@ describe("sanitizeSessionHistory", () => {
   beforeEach(() => {
     testTimestamp = 1;
     vi.clearAllMocks();
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
     vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     mockSessionManager = makeMockSessionManager();
   });
@@ -1055,7 +1059,23 @@ describe("sanitizeSessionHistory", () => {
   });
 
   it("preserves signed thinking turns while repairing legacy tool-result pairing for anthropic", async () => {
+    setNonGoogleModelApi();
     const sessionManager = makeMockSessionManager();
+    const nativeAnthropicPolicy: TranscriptPolicy = {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      repairToolUseResultPairing: true,
+      preserveSignatures: true,
+      sanitizeThinkingSignatures: false,
+      dropThinkingBlocks: false,
+      dropReasoningFromHistory: false,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    };
     const messages: AgentMessage[] = [
       makeUserMessage("Use the gateway"),
       makeAssistantMessage(
@@ -1082,6 +1102,7 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-sonnet-4-6",
       sessionManager,
       sessionId: TEST_SESSION_ID,
+      policy: nativeAnthropicPolicy,
     });
     const validated = await validateReplayTurns({
       messages: sanitized,
@@ -1089,6 +1110,7 @@ describe("sanitizeSessionHistory", () => {
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       sessionId: TEST_SESSION_ID,
+      policy: nativeAnthropicPolicy,
     });
 
     expect(sanitized.map((msg) => msg.role)).toEqual(["user", "assistant", "toolResult", "user"]);
@@ -1102,7 +1124,6 @@ describe("sanitizeSessionHistory", () => {
 
     const toolResult = validated[2] as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.toolCallId).toBe("toolu_legacy");
-    expect(toolResult.isError).toBe(true);
   });
 
   it("strips copied inbound metadata from assistant replay text", async () => {

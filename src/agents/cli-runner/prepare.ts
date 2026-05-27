@@ -20,6 +20,7 @@ import type {
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -39,6 +40,7 @@ import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
@@ -64,6 +66,7 @@ import {
   hasCliSessionTranscript,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
+  resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
@@ -82,6 +85,23 @@ const prepareDeps = {
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
 };
+
+const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
+  opus: "claude-opus-4-7",
+  "opus-4.7": "claude-opus-4-7",
+  "opus-4-7": "claude-opus-4-7",
+  "opus-4.6": "claude-opus-4-6",
+  "opus-4-6": "claude-opus-4-6",
+  sonnet: "claude-sonnet-4-6",
+  "sonnet-4.6": "claude-sonnet-4-6",
+  "sonnet-4-6": "claude-sonnet-4-6",
+};
+
+function resolveClaudeCliContextModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
+}
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -169,12 +189,26 @@ export async function prepareCliRunContext(
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  const isClaudeCli = isClaudeCliProvider(params.provider);
+  const modelContextTokens = isClaudeCli
+    ? resolveContextTokensForModel({
+        cfg: params.config,
+        provider: params.provider,
+        model: resolveClaudeCliContextModelId(modelId),
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      })
+    : undefined;
   const contextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
     provider: params.provider,
     modelId,
+    modelContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
+  const autoReseedHistoryChars = isClaudeCli
+    ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
+    : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
@@ -238,6 +272,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
+          OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -284,7 +319,7 @@ export async function prepareCliRunContext(
     backend: {
       ...preparedBackend.backend,
       ...(preparedBackendClearEnv.length > 0
-        ? { clearEnv: Array.from(new Set(preparedBackendClearEnv)) }
+        ? { clearEnv: uniqueStrings(preparedBackendClearEnv) }
         : {}),
     },
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
@@ -298,6 +333,7 @@ export async function prepareCliRunContext(
           messageProvider: params.messageChannel ?? params.messageProvider,
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           senderIsOwner: params.senderIsOwner,
         }).tools
       : [];
@@ -469,6 +505,7 @@ export async function prepareCliRunContext(
           rawTranscriptReseedReason,
         }),
         prompt: preparedPrompt,
+        maxHistoryChars: autoReseedHistoryChars,
       })
     : undefined;
   systemPrompt = appendModelIdentitySystemPrompt({

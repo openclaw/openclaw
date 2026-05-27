@@ -84,17 +84,22 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
   };
 }
 
-export function createSanitizeSessionHistoryProviderHookRuntimeMock(
+export async function createSanitizeSessionHistoryProviderHookRuntimeMock(
   extra: Record<string, unknown> = {},
 ) {
+  const clearProviderRuntimePluginCacheForTest = vi.fn();
+  const actual = await vi.importActual<typeof import("../plugins/provider-hook-runtime.js")>(
+    "../plugins/provider-hook-runtime.js",
+  );
   return {
-    clearProviderRuntimePluginCacheForTest: vi.fn(),
+    ...actual,
+    clearProviderRuntimePluginCacheForTest,
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
     prepareProviderExtraParams: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
-    testing: {},
+    testing: { clearProviderRuntimePluginCacheForTest },
     ...extra,
   };
 }

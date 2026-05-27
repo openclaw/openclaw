@@ -51,6 +51,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -97,6 +98,7 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-ro
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -160,6 +162,19 @@ const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStat
 const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
   () => import("../infra/skills-remote.js"),
 );
+
+function createEmptySkillsSnapshot(params: {
+  skillFilter: string[];
+  version?: number;
+}): SkillSnapshot {
+  return {
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    skillFilter: params.skillFilter,
+    version: params.version,
+  };
+}
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   return attemptExecutionRuntimeLoader.load();
@@ -321,6 +336,30 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   return trimmed;
 }
 
+function createAgentCommandSessionWorkingCopy(params: {
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}): {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+} {
+  const result: {
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+  } = {};
+  if (params.sessionEntry) {
+    result.sessionEntry = { ...params.sessionEntry };
+  }
+  if (params.sessionStore || params.sessionKey) {
+    result.sessionStore = {};
+  }
+  if (params.sessionKey && result.sessionEntry && result.sessionStore) {
+    result.sessionStore[params.sessionKey] = result.sessionEntry;
+  }
+  return result;
+}
+
 async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
@@ -411,18 +450,16 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     sessionId: opts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
+    clone: false,
   });
 
-  const {
-    sessionId,
+  const { sessionId, sessionKey, storePath, isNewSession, persistedThinking, persistedVerbose } =
+    sessionResolution;
+  const { sessionEntry: sessionEntryRaw, sessionStore } = createAgentCommandSessionWorkingCopy({
     sessionKey,
-    sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  } = sessionResolution;
+    sessionEntry: sessionResolution.sessionEntry,
+    sessionStore: sessionResolution.sessionStore,
+  });
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({
@@ -780,7 +817,14 @@ async function agentCommandInternal(
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
+    const emptySkillsFilter = skillFilter !== undefined && skillFilter.length === 0;
     const buildSkillsSnapshot = async () => {
+      if (emptySkillsFilter) {
+        return createEmptySkillsSnapshot({
+          skillFilter,
+          version: skillsSnapshotVersion,
+        });
+      }
       const [
         { buildWorkspaceSkillSnapshot },
         { getRemoteSkillEligibility },
@@ -843,7 +887,15 @@ async function agentCommandInternal(
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
-    if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
+    const hasInitialSessionOverrides = Boolean(thinkOverride || verboseOverride);
+    const shouldPersistInitialSessionTouch =
+      opts.skipInitialSessionTouch !== true || hasInitialSessionOverrides;
+    if (
+      sessionStore &&
+      sessionKey &&
+      !suppressVisibleSessionEffects &&
+      shouldPersistInitialSessionTouch
+    ) {
       const now = Date.now();
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
@@ -908,6 +960,8 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      allowManifestNormalization: true,
+      allowPluginNormalization: true,
       ...modelManifestContext,
     });
 
@@ -919,6 +973,8 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
         ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
@@ -1102,12 +1158,14 @@ async function agentCommandInternal(
           : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
-      resolvedThinkLevel = resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog: thinkingCatalog,
-      });
+      resolvedThinkLevel =
+        normalizeThinkLevel(resolveAgentConfig(cfg, sessionAgentId)?.thinkingDefault) ??
+        resolveThinkingDefault({
+          cfg,
+          provider,
+          model,
+          catalog: thinkingCatalog,
+        });
     }
     if (
       !isThinkingLevelSupported({
@@ -1319,6 +1377,7 @@ async function agentCommandInternal(
               model,
               result,
             }),
+          abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&

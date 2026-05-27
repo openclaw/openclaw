@@ -23,7 +23,7 @@ import {
   FallbackSummaryError,
   testing,
   runWithImageModelFallback,
-  runWithModelFallback,
+  runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
@@ -166,6 +166,10 @@ vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
+const emptyManifestPlugins = [] as const;
+
+const runWithModelFallback: typeof runWithModelFallbackBase = (params) =>
+  runWithModelFallbackBase({ manifestPlugins: emptyManifestPlugins, ...params });
 
 beforeAll(() => {
   setDefaultPluginMetadataSnapshot();
@@ -940,6 +944,38 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const cleanupTakeover = new Error(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    );
+    cleanupTakeover.name = "EmbeddedAttemptSessionTakeoverError";
+    const providerFacingError = new Error("provider rejected request: rate limit", {
+      cause: cleanupTakeover,
+    });
+    providerFacingError.name = "EmbeddedAttemptSessionTakeoverError";
+    const run = vi.fn().mockRejectedValue(providerFacingError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(providerFacingError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the fallback chain on session write-lock timeout instead of trying every model (#83510)", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1053,6 +1089,42 @@ describe("runWithModelFallback", () => {
     }
     expect(attempt.reason).toBe("format");
     expect(attempt.status).toBe(400);
+  });
+
+  it("uses the candidate message instead of mismatched provider raw errors", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["google/gemini-3-pro-preview"],
+          },
+        },
+      },
+    });
+    const rawError = "You exceeded your current OpenAI quota.";
+    const run = vi.fn().mockRejectedValue(
+      new FailoverError("LLM request timed out.", {
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        reason: "timeout",
+        status: 408,
+        rawError,
+      }),
+    );
+
+    const error = requireFallbackSummaryError(
+      await captureRejection(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          run,
+        }),
+      ),
+    );
+    expect(error.attempts[0]?.error).toBe("LLM request timed out.");
+    expect(error.attempts[0]?.error).not.toBe(rawError);
   });
 
   it("carries request attribution through exhausted fallback summaries", async () => {
@@ -2176,6 +2248,63 @@ describe("runWithModelFallback", () => {
     ).rejects.toThrow("aborted");
 
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when the caller abort signal timed out", async () => {
+    const cfg = makeCfg();
+    const timeoutReason = new Error("chat run timed out");
+    timeoutReason.name = "TimeoutError";
+    const controller = new AbortController();
+    controller.abort(timeoutReason);
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
+      )
+      .mockResolvedValueOnce("fallback should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when a timed-out caller abort is classified from the result", async () => {
+    const cfg = makeProviderFallbackCfg("openai-codex");
+    const timeoutReason = new Error("chat run timed out");
+    timeoutReason.name = "TimeoutError";
+    const controller = new AbortController();
+    controller.abort(timeoutReason);
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback should not run" }] });
+    const classifyResult = vi.fn(() => ({
+      message: "This operation was aborted",
+      reason: "timeout" as const,
+      code: "terminal_abort",
+    }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai-codex",
+        model: "m1",
+        abortSignal: controller.signal,
+        run,
+        classifyResult,
+      }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(classifyResult).toHaveBeenCalledTimes(1);
   });
 
   it("appends the configured primary as a last fallback", async () => {

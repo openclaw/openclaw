@@ -452,8 +452,14 @@ export function applySessionsChangedEvent(
       mutableNext[field] = value;
     }
   }
-  if (!hasOwn(source, "hasActiveRun") && nextRow.status && nextRow.status !== "running") {
-    nextRow.hasActiveRun = false;
+  if (!hasOwn(source, "hasActiveRun") && nextRow.status) {
+    if (nextRow.status === "running") {
+      if (payload.phase === "start") {
+        nextRow.hasActiveRun = true;
+      }
+    } else {
+      nextRow.hasActiveRun = false;
+    }
   }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
@@ -849,7 +855,7 @@ export async function branchSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.branch",
-    "Create a new child session from this pre-compaction checkpoint?",
+    "Create a new child session from this compacted checkpoint?",
   );
   return result?.key ?? null;
 }
@@ -864,6 +870,6 @@ export async function restoreSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.restore",
-    "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
+    "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   );
 }

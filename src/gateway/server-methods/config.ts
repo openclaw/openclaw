@@ -25,6 +25,8 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
@@ -192,10 +194,6 @@ function formatConfigOpenError(error: unknown): string {
   return String(error);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function hasOwnRecordValue(value: unknown, key: string): boolean {
   return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
 }
@@ -320,9 +318,9 @@ function parseValidateConfigFromRawOrRespond(
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
-  const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(
+    formatConfigIssueLines(trimmed, "", { normalizeRoot: true }),
+  );
   if (lines.length === 0) {
     return "invalid config";
   }
@@ -704,12 +702,17 @@ export const configHandlers: GatewayRequestHandlers = {
       await execConfigOpenCommand(resolveConfigOpenCommand(configPath));
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
+      const errorMessage = formatConfigOpenError(error);
+      const isHeadlessError = errorMessage.includes("xdg-open") && errorMessage.includes("no method available");
+      const detailedError = isHeadlessError
+        ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
+        : `Failed to open config file: ${errorMessage}`;
       context?.logGateway?.warn(
-        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(error)}`,
+        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${errorMessage}`,
       );
       respond(
         true,
-        { ok: false, path: configPath, error: "failed to open config file" },
+        { ok: false, path: configPath, error: detailedError },
         undefined,
       );
     }

@@ -168,6 +168,8 @@ mantis/
 !.agents/skills/tag-duplicate-prs-issues/**
 !.agents/skills/autoreview/
 !.agents/skills/autoreview/**
+.agents/skills/**/__pycache__/
+.agents/skills/**/*.py[cod]
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/

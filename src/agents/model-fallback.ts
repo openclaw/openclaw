@@ -141,6 +141,20 @@ function shouldRethrowAbort(err: unknown): boolean {
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
+function isTerminalAbort(signal: AbortSignal | undefined): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  const reason = signal.reason;
+  if (!(reason instanceof Error)) {
+    return false;
+  }
+  if (reason.name === "TimeoutError") {
+    return true;
+  }
+  return reason.name === "ClientDisconnectError";
+}
+
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
   candidates: ModelCandidate[];
   addExplicitCandidate: (candidate: ModelCandidate) => void;
@@ -245,6 +259,7 @@ async function runFallbackCandidate<T>(params: {
   model: string;
   options?: ModelFallbackRunOptions;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const result = params.options
@@ -256,6 +271,12 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    if (isNonProviderRuntimeCoordinationError(err)) {
+      throw err;
+    }
+    if (isTerminalAbort(params.abortSignal)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -283,6 +304,7 @@ async function runFallbackAttempt<T>(params: {
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -290,6 +312,7 @@ async function runFallbackAttempt<T>(params: {
     model: params.model,
     options: params.options,
     attribution: params.attribution,
+    abortSignal: params.abortSignal,
   });
   if (runResult.ok) {
     const classification = await params.classifyResult?.({
@@ -305,6 +328,9 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
+      if (isTerminalAbort(params.abortSignal)) {
+        throw classifiedError;
+      }
       return { error: classifiedError };
     }
     return {
@@ -400,6 +426,21 @@ async function assertModelFallbackCandidateHarnessAvailable(
   }
 }
 
+function resolveCandidateAttemptError(
+  described: ReturnType<typeof describeFailoverError>,
+  candidate: ModelCandidate,
+): string {
+  if (
+    described.rawError &&
+    (!described.provider ||
+      (described.provider === candidate.provider &&
+        (!described.model || described.model === candidate.model)))
+  ) {
+    return described.rawError;
+  }
+  return described.message;
+}
+
 function recordFailedCandidateAttempt(params: {
   attempts: FallbackAttempt[];
   candidate: ModelCandidate;
@@ -417,10 +458,11 @@ function recordFailedCandidateAttempt(params: {
   fallbackConfigured: boolean;
 }): ModelFallbackStepFields | undefined {
   const described = describeFailoverError(params.error);
+  const error = resolveCandidateAttemptError(described, params.candidate);
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.rawError ?? described.message,
+    error,
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -438,7 +480,7 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason,
     status: described.status,
     code: described.code,
-    error: described.rawError ?? described.message,
+    error,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
@@ -455,7 +497,7 @@ function appendFailedCandidateAttempt(params: {
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.rawError ?? described.message,
+    error: resolveCandidateAttemptError(described, params.candidate),
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -690,11 +732,23 @@ function resolveFallbackCandidateCacheKey(
   }
   const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   const env = process.env;
+  const pluginMetadata = getCurrentPluginMetadataSnapshot({
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  const providerLoadMetadata = getCurrentPluginMetadataSnapshot({
+    config: params.cfg,
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
   if (
     isPluginProvidersLoadInFlight({
       config: params.cfg,
       workspaceDir,
       env,
+      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
       activate: false,
       bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
@@ -702,11 +756,6 @@ function resolveFallbackCandidateCacheKey(
   ) {
     return null;
   }
-  const pluginMetadata = getCurrentPluginMetadataSnapshot({
-    env,
-    workspaceDir,
-    allowWorkspaceScopedSnapshot: true,
-  });
   const registryState = getPluginRegistryState();
   return JSON.stringify({
     provider: params.provider,
@@ -1040,6 +1089,7 @@ export async function runWithModelFallback<T>(
     onFallbackStep?: ModelFallbackStepHandler;
     classifyResult?: ModelFallbackResultClassifier<T>;
     skipAuthProfileRuntime?: boolean;
+    abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
@@ -1282,6 +1332,7 @@ export async function runWithModelFallback<T>(
       attempt: i + 1,
       total: candidates.length,
       attribution: { sessionId: params.sessionId, lane: params.lane },
+      abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {

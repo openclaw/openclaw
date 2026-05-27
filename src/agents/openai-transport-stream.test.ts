@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
@@ -1028,6 +1028,136 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
+    const model = {
+      id: "qwen-coder-plus",
+      name: "qwen-coder-plus",
+      api: "openai-completions",
+      provider: "qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 256,
+    } satisfies Model<"openai-completions">;
+    const stream = createOpenAICompletionsTransportStreamFn()(
+      model,
+      {
+        systemPrompt: "runtime-only system prompt",
+        messages: [],
+        tools: [],
+      } as never,
+      { apiKey: "test-key" } as never,
+    );
+
+    let errorPayload: Record<string, unknown> | undefined;
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      error?: Record<string, unknown>;
+    }>) {
+      if (event.type === "error") {
+        errorPayload = event.error;
+      }
+    }
+
+    expect(errorPayload).toMatchObject({ stopReason: "error" });
+    expect(String(errorPayload?.errorMessage)).toContain(
+      "contains no non-empty user or assistant messages",
+    );
+    expect(String(errorPayload?.errorMessage)).toContain("system/tool-only request");
+  });
+
+  it("allows generic OpenAI-compatible chat streams without the ModelStudio turn guard", async () => {
+    let capturedRoles: string[] | undefined;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as { messages?: Array<{ role?: string }> };
+        capturedRoles = parsed.messages?.map((message) => message.role ?? "");
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-system-only",
+            object: "chat.completion.chunk",
+            created,
+            model: "generic-openai-compatible",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "OK" },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-system-only",
+            object: "chat.completion.chunk",
+            created,
+            model: "generic-openai-compatible",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "generic-openai-compatible",
+        name: "Generic OpenAI Compatible",
+        api: "openai-completions",
+        provider: "custom-openai-compatible",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "runtime-only system prompt",
+          messages: [],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      for await (const event of stream as AsyncIterable<{ type: string; reason?: string }>) {
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+      }
+
+      expect(capturedRoles).toEqual(["system"]);
+      expect(doneReason).toBe("stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("parses JSON chat completions returned to streaming requests", async () => {
     let capturedStreamFlag: unknown;
     const server = createServer((req, res) => {
@@ -1813,6 +1943,37 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.9);
   });
 
+  it("forwards penalty params and seed to chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        frequencyPenalty: -0.5,
+        presencePenalty: 1.25,
+        seed: 12345,
+      },
+    );
+
+    expect(params.frequency_penalty).toBe(-0.5);
+    expect(params.presence_penalty).toBe(1.25);
+    expect(params.seed).toBe(12345);
+  });
+
   it("forwards response_format to chat completions request params", () => {
     const model = {
       id: "gpt-5.4",
@@ -2089,6 +2250,54 @@ describe("openai transport stream", () => {
     expect(
       params.input?.filter((item) => item.role === "system" || item.role === "developer"),
     ).toStrictEqual([]);
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.store).toBe(false);
+    expect(params).not.toHaveProperty("metadata");
+    expect(params).not.toHaveProperty("max_output_tokens");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+    expect(params).not.toHaveProperty("service_tier");
+    expect(params).not.toHaveProperty("temperature");
+    expect(params).not.toHaveProperty("top_p");
+  });
+
+  it("keeps Codex response shaping when simple completions use the OpenClaw transport alias", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openclaw-openai-responses-transport" as Api,
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<Api>,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        cacheRetention: "long",
+        maxTokens: 1024,
+        serviceTier: "auto",
+        sessionId: "session-123",
+        temperature: 0.2,
+        topP: 0.85,
+      },
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+      },
+    ) as Record<string, unknown> & {
+      input?: Array<{ role?: string }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
     expect(params.prompt_cache_key).toBe("session-123");
     expect(params.store).toBe(false);
     expect(params).not.toHaveProperty("metadata");

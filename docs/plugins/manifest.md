@@ -649,7 +649,7 @@ Each list is optional:
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                       |
 | `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                                                     |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                  |
-| `meetingNotesSourceProviders`    | `string[]` | Meeting-notes source provider ids this plugin owns.                                                 |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                    |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                     |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                     |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                            |
@@ -864,6 +864,11 @@ Fields:
 | --------------- | ---------- | ------------------------------------------------------------------------------- |
 | `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
 | `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
+
+`modelPatterns` entries are compiled through `compileSafeRegex`, which rejects
+patterns containing nested repetition (for example `(a+)+$`). Patterns that fail
+the safety check are silently skipped, the same as syntactically invalid regex.
+Keep patterns simple and avoid nested quantifiers.
 
 ## modelCatalog reference
 

@@ -8,6 +8,7 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   clearProviderRuntimePluginCacheForTest: vi.fn(),
   testing: {
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
+    clearProviderRuntimePluginCacheForTest: vi.fn(),
   },
   prepareProviderExtraParams: () => undefined,
   resolveProviderExtraParamsForTransport: () => undefined,

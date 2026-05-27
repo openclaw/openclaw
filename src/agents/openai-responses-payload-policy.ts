@@ -1,4 +1,5 @@
 import { readStringValue } from "../shared/string-coerce.js";
+import { asBoolean } from "../utils/boolean.js";
 import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -63,6 +64,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
   "openai-codex-responses",
+  "openclaw-openai-responses-transport",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -212,8 +214,7 @@ function readCompatPayloadBoolean(
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  const value = (compat as Record<string, unknown>)[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean((compat as Record<string, unknown>)[key]);
 }
 
 function resolveOpenAIResponsesPayloadCapabilities(
@@ -243,9 +244,13 @@ function resolveOpenAIResponsesPayloadCapabilities(
 
   return {
     allowsOpenAIServiceTier:
-      (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public") ||
+      (provider === "openai" &&
+        (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+        endpointClass === "openai-public") ||
       (provider === "openai-codex" &&
-        (api === "openai-codex-responses" || api === "openai-responses") &&
+        (api === "openai-codex-responses" ||
+          api === "openai-responses" ||
+          api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-codex"),
     allowsResponsesStore:
       supportsResponsesStoreField &&

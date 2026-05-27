@@ -2115,6 +2115,53 @@ describe("CodexAppServerEventProjector", () => {
     ).toBe(false);
   });
 
+  it("carries async-started dynamic tool metadata into attempt results", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-image-1",
+      tool: "image_generate",
+      arguments: { action: "generate", prompt: "lighthouse" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-image-1",
+      tool: "image_generate",
+      asyncStarted: true,
+      success: true,
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { action: "generate", prompt: "lighthouse" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "Background task started." }],
+          success: true,
+          durationMs: 10,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMetas).toEqual([
+      {
+        toolName: "image_generate",
+        meta: "lighthouse",
+        asyncStarted: true,
+      },
+    ]);
+    expect(result.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
   it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();

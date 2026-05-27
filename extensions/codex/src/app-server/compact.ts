@@ -3,6 +3,7 @@ import {
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
@@ -10,7 +11,7 @@ import {
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { clearCodexAppServerBinding, readCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding } from "./session-binding.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
@@ -117,16 +118,33 @@ function readAgentIdFromSessionKey(sessionKey: string | undefined): string | und
   return parts[1]?.trim() || undefined;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
+  if (params.trigger !== "manual") {
+    embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      trigger: params.trigger,
+    });
+    return {
+      ok: true,
+      compacted: false,
+      reason: "codex app-server owns automatic compaction",
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: params.currentTokenCount ?? 0,
+        details: {
+          backend: "codex-app-server",
+          skipped: true,
+          reason: "non_manual_trigger",
+          trigger: params.trigger ?? "unknown",
+        },
+      },
+    };
+  }
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
@@ -170,7 +188,6 @@ async function compactCodexNativeThread(
     });
   } catch (error) {
     if (isCodexThreadNotFoundError(error)) {
-      await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
       return failedCodexThreadBindingCompactionResult(params, {
         threadId: binding.threadId,
         reason: formatCompactionError(error),

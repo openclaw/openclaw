@@ -9,6 +9,7 @@ const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
+const resolveModelAsyncMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
@@ -20,6 +21,7 @@ const resolveAgentWorkspaceDirMock = vi.fn();
 const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
+const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const diagDebugMock = vi.fn();
 
 vi.mock("@earendil-works/pi-ai", async () => {
@@ -55,6 +57,7 @@ vi.mock("./pi-model-discovery.js", () => ({
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
+  resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
@@ -81,6 +84,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("./provider-stream.js", () => ({
   registerProviderStreamForModel: (...args: unknown[]) =>
     registerProviderStreamForModelMock(...args),
+}));
+
+vi.mock("./pi-embedded-runner/stream-resolution.js", () => ({
+  resolveEmbeddedAgentStreamFn: (...args: unknown[]) => resolveEmbeddedAgentStreamFnMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -370,6 +377,7 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
+    resolveEmbeddedAgentStreamFnMock.mockReset();
     diagDebugMock.mockReset();
     clearAgentHarnesses();
 
@@ -407,6 +415,11 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReturnValue([]);
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
     registerProviderStreamForModelMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentStreamFnMock.mockImplementation(
+      (params: { currentStreamFn: unknown; providerStreamFn?: unknown }) => {
+        return params.providerStreamFn ?? params.currentStreamFn;
+      },
+    );
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -661,13 +674,58 @@ describe("runBtwSideQuestion", () => {
     expect(streamSimpleMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to streamSimple when no provider stream fn is registered", async () => {
+  it("routes MiniMax Anthropic fallback streams through the embedded resolver", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "minimax-portal",
+      id: "MiniMax-M2.7",
+      api: "anthropic-messages",
+      baseUrl: "https://api.minimax.io/anthropic",
+      maxTokens: 196_608,
+    });
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
+    const resolvedStreamFn = vi
+      .fn()
+      .mockReturnValue(makeAsyncEvents([createDoneEvent("MiniMax answer.")]));
+    resolveEmbeddedAgentStreamFnMock.mockReturnValueOnce(resolvedStreamFn);
+
+    const result = await runSideQuestion({
+      provider: "minimax-portal",
+      model: "MiniMax-M2.7",
+    });
+
+    expect(result).toEqual({ text: "MiniMax answer." });
+    const resolverParams = expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
+      sessionId: "session-1",
+      resolvedApiKey: "secret",
+      authProfileId: "profile-1",
+    });
+    expect(resolverParams.providerStreamFn).toBeUndefined();
+    expectRecordFields(resolverParams.model, {
+      provider: "minimax-portal",
+      id: "MiniMax-M2.7",
+      api: "anthropic-messages",
+      maxTokens: 196_608,
+    });
+    expect(resolvedStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the embedded resolver fallback when no provider stream fn is registered", async () => {
     registerProviderStreamForModelMock.mockReturnValue(undefined);
     mockDoneAnswer("Fallback answer.");
 
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Fallback answer." });
+    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentStreamFn: expect.any(Function),
+        providerStreamFn: undefined,
+        sessionId: "session-1",
+        resolvedApiKey: "secret",
+        authProfileId: "profile-1",
+      }),
+    );
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
