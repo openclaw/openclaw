@@ -4441,6 +4441,12 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.exec-approval-warning {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--warning, #b7791f);
+}
+
 .exec-approval-actions {
   margin-top: 16px;
   display: flex;

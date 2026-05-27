@@ -148,6 +148,15 @@ function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApp
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
+function renderUnavailableDecisionWarning(
+  active: ExecApprovalRequest,
+  decisions: readonly ExecApprovalDecision[],
+) {
+  return active.kind !== "exec" || decisions.includes("allow-always")
+    ? nothing
+    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+}
+
 export function renderExecApprovalPrompt(state: AppViewState) {
   const active = state.execApprovalQueue[0];
   if (!active) {
@@ -187,6 +196,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             : nothing}
         </div>
         ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
+        ${renderUnavailableDecisionWarning(active, decisions)}
         ${state.execApprovalError
           ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
           : nothing}

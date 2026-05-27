@@ -153,6 +153,9 @@ describe("approval and confirmation modals", () => {
         button.textContent?.trim(),
       ),
     ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
   });
 
   it("falls back to ask when exec approval decisions are omitted", async () => {
@@ -184,6 +187,32 @@ describe("approval and confirmation modals", () => {
         button.textContent?.trim(),
       ),
     ).toEqual(["Allow once", "Always allow", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")).toBeNull();
+  });
+
+  it("does not show exec policy warning for restricted plugin approvals", async () => {
+    const request: ExecApprovalRequest = {
+      id: "plugin-approval-1",
+      kind: "plugin",
+      request: {
+        command: "Plugin approval",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      pluginTitle: "Plugin approval",
+      createdAtMs: Date.now() - 1_000,
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
   it("maps Escape to exec denial when approval is idle", async () => {
