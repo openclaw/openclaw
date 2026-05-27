@@ -150,8 +150,47 @@ if (
       }
       gatewayEntryStartupTrace.mark("argv");
 
+      // Wall-clock safety net for `agent --local`: arm a hard timeout before
+      // CLI entry so hung commands don't live forever. Synchronous argv parsing
+      // only — no async, no config import (breaks subshell contexts).
+      (() => {
+        const a = process.argv;
+        let sub: string | undefined;
+        for (let i = 2; i < a.length; i++) {
+          const v = a[i];
+          if (!v) continue;
+          if (v === "--") break;
+          if (!v.startsWith("-")) { sub = v; break; }
+        }
+        if (sub !== "agent") return;
+        let hasLocal = false;
+        let s: string | undefined;
+        for (let i = 2; i < a.length; i++) {
+          const v = a[i];
+          if (!v) continue;
+          if (v === "--") break;
+          if (v === "-h" || v === "--help" || v === "--version" || v === "-V") return;
+          if (v === "--local" || v.startsWith("--local=")) hasLocal = true;
+          if (v === "--timeout") s = a[i + 1];
+          else if (v.startsWith("--timeout=")) s = v.slice(10);
+        }
+        if (!hasLocal) return;
+        let n = 600;
+        if (s !== undefined) { const p = parseInt(s, 10); if (Number.isFinite(p) && p >= 0) n = p; }
+        if (n === 0) return;
+        const t = setTimeout(() => {
+          try { process.stderr.write(`local agent command timed out after ${n}s plus 30s grace\n`); } catch {}
+          try { process.exit(124); } catch {}
+        }, (n + 30) * 1000);
+        t.unref();
+      })();
+
       if (!tryHandleRootVersionFastPath(process.argv)) {
         await runMainOrRootHelp(process.argv);
+        // Work is done — force exit. Background handles (LCM compaction, otel
+        // exporter, plugin loops) can keep the event loop alive indefinitely.
+        setTimeout(() => { try { process.kill(process.pid, "SIGKILL"); } catch {} }, 3000);
+        process.exit(process.exitCode ?? 0);
       }
     }
   }
