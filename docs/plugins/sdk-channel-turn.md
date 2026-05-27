@@ -311,6 +311,15 @@ The facts the kernel consumes from your adapter are platform-agnostic. Translate
 
 Supplemental context covers quote, forwarded, and thread-bootstrap context. The kernel applies the configured `contextVisibility` policy. The channel adapter only provides facts and `senderAllowed` flags so cross-channel policy stays consistent.
 
+For group-level prompt context, choose the field by provenance:
+
+| Field                        | Use for                                                                                                                  | Prompt handling                                                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `groupSystemPrompt`          | Trusted operator-authored instructions from plugin config, operator-set group config, or authenticated runtime config    | Enters `GroupSystemPrompt` as system prompt material. Core normalizes actual newline characters and preserves system-like markers such as `System:` or `[Assistant]`. |
+| `untrustedGroupSystemPrompt` | Prompt-like group metadata that end users can influence, such as room names, topics, labels, or dynamic channel metadata | Core sanitizes spoofed system markers and routes the text into `UntrustedStructuredContext` with type `group_prompt_context`; it does not enter `GroupSystemPrompt`.  |
+
+Never copy user-controlled text into `groupSystemPrompt`. Use `untrustedGroupSystemPrompt` when the text could be changed by channel members or other untrusted actors.
+
 ### InboundMediaFacts
 
 Media is fact-shaped. Platform download, auth, SSRF policy, CDN rules, and decryption stay channel-local. The kernel maps facts into `MediaPath`, `MediaUrl`, `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`, and `MediaTranscribedIndexes`.

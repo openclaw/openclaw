@@ -1,5 +1,9 @@
 import { vi } from "vitest";
 import {
+  normalizeInboundTextNewlines,
+  sanitizeInboundSystemTags,
+} from "../../auto-reply/reply/inbound-text.js";
+import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
@@ -23,6 +27,12 @@ type DeepPartial<T> = {
         ? DeepPartial<T[K]>
         : T[K];
 };
+
+type BuildContextParams = Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0];
+type BuildContextResult = ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>;
+type UntrustedStructuredContextEntries = NonNullable<
+  BuildContextResult["UntrustedStructuredContext"]
+>;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -67,6 +77,38 @@ function createDeprecatedRuntimeConfigError(name: "loadConfig" | "writeConfigFil
   return new Error(
     `Plugin runtime config.${name}() is deprecated in tests; pass cfg/current() or use mutateConfigFile()/replaceConfigFile().`,
   );
+}
+
+function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  return normalized.trim().length > 0 ? normalized : undefined;
+}
+
+function resolveMockUntrustedStructuredContext(
+  params: Pick<BuildContextParams, "extra" | "supplemental">,
+): UntrustedStructuredContextEntries | undefined {
+  const entries: UntrustedStructuredContextEntries = [];
+  const extraEntries = params.extra?.UntrustedStructuredContext;
+  if (Array.isArray(extraEntries)) {
+    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+  }
+  entries.push(...(params.supplemental?.untrustedContext ?? []));
+
+  const groupPrompt = normalizeUntrustedGroupPrompt(
+    params.supplemental?.untrustedGroupSystemPrompt,
+  );
+  if (groupPrompt) {
+    entries.push({
+      label: "Group prompt context",
+      type: "group_prompt_context",
+      payload: { text: groupPrompt },
+    });
+  }
+
+  return entries.length > 0 ? entries : undefined;
 }
 
 export type PluginRuntimeMediaMock = PluginRuntime["channel"]["media"];
@@ -260,45 +302,46 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       return result;
     },
   ) as unknown as PluginRuntime["channel"]["turn"]["run"];
-  const buildChannelInboundEventContextMock = vi.fn(
-    (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
-      ({
-        Body: params.message.body ?? params.message.rawBody,
-        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
-        RawBody: params.message.rawBody,
-        CommandBody: params.message.commandBody ?? params.message.rawBody,
-        BodyForCommands: params.message.commandBody ?? params.message.rawBody,
-        From: params.from,
-        To: params.reply.to,
-        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-        AccountId: params.route.accountId ?? params.accountId,
-        MessageSid: params.messageId,
-        MessageSidFull: params.messageIdFull,
-        ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
-        ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
-        MediaPath: params.media?.[0]?.path,
-        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
-        MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
-        ChatType: params.conversation.kind,
-        ConversationLabel: params.conversation.label,
-        SenderName: params.sender.name ?? params.sender.displayLabel,
-        SenderId: params.sender.id,
-        SenderUsername: params.sender.username,
-        Timestamp: params.timestamp,
-        WasMentioned: params.access?.mentions?.wasMentioned,
-        GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
-        Provider: params.provider ?? params.channel,
-        Surface: params.surface ?? params.provider ?? params.channel,
-        OriginatingChannel: params.channel,
-        OriginatingTo: params.reply.originatingTo,
-        CommandAuthorized: params.access?.commands
-          ? (params.access.commands.authorized ??
-            params.access.commands.authorizers?.some((entry) => entry.allowed) ??
-            false)
-          : false,
-        ...params.extra,
-      }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
-  ) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
+  const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
+    const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
+    return {
+      Body: params.message.body ?? params.message.rawBody,
+      BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+      RawBody: params.message.rawBody,
+      CommandBody: params.message.commandBody ?? params.message.rawBody,
+      BodyForCommands: params.message.commandBody ?? params.message.rawBody,
+      From: params.from,
+      To: params.reply.to,
+      SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+      AccountId: params.route.accountId ?? params.accountId,
+      MessageSid: params.messageId,
+      MessageSidFull: params.messageIdFull,
+      ReplyToId: params.reply.replyToId ?? params.supplemental?.quote?.id,
+      ReplyToIdFull: params.reply.replyToIdFull ?? params.supplemental?.quote?.fullId,
+      MediaPath: params.media?.[0]?.path,
+      MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+      MediaType: params.media?.[0]?.contentType ?? params.media?.[0]?.kind,
+      ChatType: params.conversation.kind,
+      ConversationLabel: params.conversation.label,
+      SenderName: params.sender.name ?? params.sender.displayLabel,
+      SenderId: params.sender.id,
+      SenderUsername: params.sender.username,
+      Timestamp: params.timestamp,
+      WasMentioned: params.access?.mentions?.wasMentioned,
+      GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
+      Provider: params.provider ?? params.channel,
+      Surface: params.surface ?? params.provider ?? params.channel,
+      OriginatingChannel: params.channel,
+      OriginatingTo: params.reply.originatingTo,
+      CommandAuthorized: params.access?.commands
+        ? (params.access.commands.authorized ??
+          params.access.commands.authorizers?.some((entry) => entry.allowed) ??
+          false)
+        : false,
+      ...params.extra,
+      UntrustedStructuredContext: untrustedStructuredContext,
+    } as BuildContextResult;
+  }) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {

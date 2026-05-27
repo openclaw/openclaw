@@ -148,6 +148,8 @@ function resolveUntrustedStructuredContext(params: {
   }
   entries.push(...(params.supplemental?.untrustedContext ?? []));
 
+  // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
+  // Keeping it with untrusted context prevents spoofed system markers from gaining prompt authority.
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
   );
