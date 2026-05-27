@@ -168,10 +168,11 @@ export async function renderTestTempCleanupReport(params) {
   };
 }
 
-export async function main(argv = process.argv.slice(2), io) {
+export async function main(argv, io) {
+  const effectiveArgv = argv ?? process.argv.slice(2);
   const result = await renderTestTempCleanupReport({
     root: repoRoot,
-    json: argv.includes("--json"),
+    json: effectiveArgv.includes("--json"),
     io,
   });
   return result.exitCode;
