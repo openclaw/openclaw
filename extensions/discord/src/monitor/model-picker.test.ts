@@ -184,6 +184,27 @@ describe("Discord model picker custom_id", () => {
     });
   });
 
+  it("does not coerce partial numeric custom_id fields", () => {
+    expect(
+      parseDiscordModelPickerData({
+        cmd: "models",
+        act: "submit",
+        view: "models",
+        u: "42",
+        p: "openai",
+        pg: "3next",
+        mi: "7model",
+      }),
+    ).toEqual({
+      command: "models",
+      action: "submit",
+      view: "models",
+      userId: "42",
+      provider: "openai",
+      page: 1,
+    });
+  });
+
   it("rejects invalid command/action/view values", () => {
     expect(
       parseDiscordModelPickerData({

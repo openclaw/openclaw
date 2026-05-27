@@ -71,8 +71,8 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   if (!raw) {
     return 15_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+  const parsed = Number(raw);
+  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
 function resolveProviderDiscoveryFilter(params: {

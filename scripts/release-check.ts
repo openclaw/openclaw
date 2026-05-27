@@ -80,6 +80,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/agents/model-provider-auth.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",

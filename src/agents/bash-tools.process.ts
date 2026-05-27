@@ -96,9 +96,9 @@ function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
   }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) {
       return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
     }
   }

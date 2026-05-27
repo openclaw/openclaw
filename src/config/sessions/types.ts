@@ -399,6 +399,12 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
 };
 
+export function isTerminalSessionStatus(
+  status: unknown,
+): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
 function isSessionPluginTraceLine(line: string): boolean {
   const trimmed = line.trim();
   return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);

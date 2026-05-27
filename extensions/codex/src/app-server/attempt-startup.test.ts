@@ -131,7 +131,7 @@ describe("startCodexAttemptThread", () => {
     vi.unstubAllEnvs();
   });
 
-  it("clears the shared app-server when root thread startup fails with an app error", async () => {
+  it("clears the shared app-server when top-level thread startup fails with an app error", async () => {
     const { harness, run } = startThreadWithHarness(5_000);
     await answerInitialize(harness);
     const threadStart = await waitForThreadStart(harness);

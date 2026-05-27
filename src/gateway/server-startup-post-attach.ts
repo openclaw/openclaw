@@ -191,7 +191,7 @@ function scheduleProviderAuthStatePrewarm(params: {
   const isStopped = () => stopped;
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
   void (async () => {
-    const { clearCurrentProviderAuthState, warmCurrentProviderAuthState } =
+    const { clearCurrentProviderAuthState, warmCurrentProviderAuthStateOffMainThread } =
       await import("../agents/model-provider-auth.js");
     const { setAuthProfileFailureHook } = await import("../agents/auth-profiles.js");
     const runRewarm = async (reason: string) => {
@@ -202,7 +202,7 @@ function scheduleProviderAuthStatePrewarm(params: {
       rewarmInFlight = true;
       try {
         const metrics = await measureProviderAuthWarm(() =>
-          warmCurrentProviderAuthState(cfg, { isCancelled: isStopped }),
+          warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
         );
         if (isStopped()) {
           return;
@@ -255,7 +255,7 @@ function scheduleProviderAuthStatePrewarm(params: {
           }
           const cfg = params.getConfig();
           const metrics = await measureProviderAuthWarm(() =>
-            warmCurrentProviderAuthState(cfg, { isCancelled: isStopped }),
+            warmCurrentProviderAuthStateOffMainThread(cfg, { isCancelled: isStopped }),
           );
           if (isStopped()) {
             return;

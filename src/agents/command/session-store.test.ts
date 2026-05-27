@@ -588,6 +588,47 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("reuses a completed run entry while the session is still fresh", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:terminal-cli-session";
+      const existingSessionId = "terminal-cli-session-old";
+      const now = Date.now();
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: existingSessionId,
+              updatedAt: now,
+              status: "done",
+              startedAt: now - 1_000,
+              endedAt: now - 100,
+              runtimeMs: 900,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const result = resolveSession({
+        cfg: {
+          session: {
+            store: storePath,
+            mainKey: "main",
+          },
+        } as OpenClawConfig,
+        sessionKey,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.status).toBe("done");
+      expect(result.sessionEntry?.endedAt).toBe(now - 100);
+    });
+  });
+
   it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;

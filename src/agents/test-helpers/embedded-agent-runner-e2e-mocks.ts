@@ -54,12 +54,18 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
   vi.doMock("../harness/selection.js", () => ({
-    selectAgentHarness: vi.fn((params: { provider?: string }) => ({
-      id: params.provider === "codex-cli" ? "codex" : "openclaw",
-      label: "Mock agent harness",
-      supports: vi.fn(() => ({ supported: false })),
-      runAttempt: vi.fn(),
-    })),
+    selectAgentHarness: vi.fn(
+      (params: {
+        provider?: string;
+        agentHarnessId?: string;
+        agentHarnessRuntimeOverride?: string;
+      }) => ({
+        id: resolveMockHarnessId(params),
+        label: "Mock agent harness",
+        supports: vi.fn(() => ({ supported: false })),
+        runAttempt: vi.fn(),
+      }),
+    ),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),
     runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
   }));
@@ -150,6 +156,18 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     shouldDeferProviderSyntheticProfileAuthWithPlugin: vi.fn(() => false),
   }));
+}
+
+function resolveMockHarnessId(params: {
+  provider?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
+}): "codex" | "openclaw" {
+  return params.provider === "codex-cli" ||
+    params.agentHarnessId === "codex" ||
+    params.agentHarnessRuntimeOverride === "codex"
+    ? "codex"
+    : "openclaw";
 }
 
 export function installEmbeddedRunnerBackoffE2eMocks(

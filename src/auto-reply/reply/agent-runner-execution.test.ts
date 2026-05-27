@@ -5270,6 +5270,22 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("points stale openai-codex missing-key failures at doctor repair with re-auth fallback", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "openai-codex".'),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai-codex` or run `openclaw configure`.",
+      );
+    }
+  });
+
   it("falls back to a generic provider message for unsafe missing-key provider ids", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error('No API key found for provider "openai`\nrm -rf /".'),

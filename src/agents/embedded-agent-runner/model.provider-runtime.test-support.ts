@@ -401,7 +401,7 @@ function buildDynamicModel(
     case "openai": {
       const templateIds =
         lower === "gpt-5.5"
-          ? ["gpt-5.5", "gpt-5.4"]
+          ? ["gpt-5.5", "gpt-5.4", "gpt-5.4-pro"]
           : lower === "gpt-5.4"
             ? ["gpt-5.4"]
             : lower === "gpt-5.4-pro"
@@ -423,7 +423,7 @@ function buildDynamicModel(
               baseUrl: OPENAI_BASE_URL,
               reasoning: true,
               input: ["text", "image"],
-              cost: OPENROUTER_FALLBACK_COST,
+              cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
               contextWindow: 1_000_000,
               contextTokens: 272_000,
               maxTokens: 128_000,

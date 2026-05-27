@@ -73,6 +73,36 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("does not coerce partial room type strings", async () => {
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: "1direct",
+            },
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-partial",
+          baseUrl: "https://nc.example.com",
+          config: {
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        } as never,
+        roomToken: "room-partial",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("reads the api password from a file and logs non-ok room info responses", async () => {
     const release = vi.fn(async () => {});
     const log = vi.fn();

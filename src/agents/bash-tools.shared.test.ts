@@ -28,6 +28,13 @@ describe("resolveSandboxWorkdir", () => {
     expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBe(500);
   });
 
+  it("ignores partial environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "250ms");
+    vi.stubEnv("PI_BASH_YIELD_MS", "500");
+
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
   it("maps container root workdir to host workspace", async () => {
     await withTempDir(async (workspaceDir) => {
       const warnings: string[] = [];

@@ -30,6 +30,7 @@ import {
   formatCodexStatus,
   formatList,
   formatModels,
+  formatSkills,
   formatThreads,
   readString,
 } from "./command-formatters.js";
@@ -380,9 +381,8 @@ export async function handleCodexSubcommand(
       return { text: "Usage: /codex skills" };
     }
     return {
-      text: formatList(
+      text: formatSkills(
         await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
-        "Codex skills",
       ),
     };
   }

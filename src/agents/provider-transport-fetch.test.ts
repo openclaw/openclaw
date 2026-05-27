@@ -954,6 +954,40 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
+    it("ignores partial retry-after numeric headers", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after-ms": "90000ms", "retry-after": "120 seconds" },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.openai.com/v1/responses",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
+    it("falls back to retry-after when retry-after-ms is blank", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after-ms": "   ", "retry-after": "120" },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.openai.com/v1/responses",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
     it("parses HTTP-date retry-after values", async () => {
       const future = new Date(Date.now() + 120_000).toUTCString();
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -988,6 +1022,24 @@ describe("buildGuardedModelFetch", () => {
       );
 
       expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
+    it("ignores partial OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS values", async () => {
+      process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10s";
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 429,
+          headers: { "retry-after": "30" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
