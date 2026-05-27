@@ -771,6 +771,11 @@ function createAnthropicTransportClient(params: {
   };
 }
 
+function resolveAnthropicModelId(model: AnthropicTransportModel): string {
+  const prefix = `${model.provider}/`;
+  return model.id.startsWith(prefix) ? model.id.slice(prefix.length) : model.id;
+}
+
 function buildAnthropicParams(
   model: AnthropicTransportModel,
   context: Context,
@@ -794,7 +799,7 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const params: Record<string, unknown> = {
-    model: model.id,
+    model: resolveAnthropicModelId(model),
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
