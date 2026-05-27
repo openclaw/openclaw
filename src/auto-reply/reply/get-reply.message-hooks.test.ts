@@ -106,6 +106,7 @@ describe("getReplyFromConfig message hooks", () => {
     vi.mocked(stageSandboxMediaMock).mockReset();
     vi.mocked(logVerbose).mockReset();
 
+    vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
     mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
       const { ctx } = args[0] as { ctx: MsgContext };
       ctx.Transcript = "voice transcript";
@@ -348,6 +349,63 @@ describe("getReplyFromConfig message hooks", () => {
         sessionKey: "agent:main:imessage:direct:user",
         workspaceDir: "/tmp/workspace",
       }),
+    );
+  });
+
+  it("stages remote inbound media before media understanding", async () => {
+    const remotePath = "/Users/kaien/Library/Messages/Attachments/IMG_0351.jpeg";
+    const stagedPath = "/home/openclaw/.openclaw/media/remote-cache/session/IMG_0351.jpeg";
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (...args: unknown[]) => {
+      const params = args[0] as { ctx: MsgContext; sessionCtx: MsgContext };
+      expect(params.ctx.MediaRemoteHost).toBe("kaien@nerv");
+      expect(params.ctx.MediaPath).toBe(remotePath);
+      params.ctx.MediaPath = stagedPath;
+      params.ctx.MediaPaths = [stagedPath];
+      params.sessionCtx.MediaPath = stagedPath;
+      params.sessionCtx.MediaPaths = [stagedPath];
+      return { staged: new Map([[remotePath, stagedPath]]) };
+    });
+    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const params = args[0] as { ctx: MsgContext };
+      expect(params.ctx.MediaPath).toBe(stagedPath);
+      expect(params.ctx.MediaPaths).toEqual([stagedPath]);
+      params.ctx.Body = "[Image]\nA staged remote image";
+      params.ctx.BodyForAgent = "[Image]\nA staged remote image";
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildCtx({
+          Provider: "imessage",
+          Surface: "imessage",
+          OriginatingChannel: "imessage",
+          OriginatingTo: "imessage:+15550100",
+          ChatType: "direct",
+          Body: "what is in this photo?",
+          BodyForAgent: "what is in this photo?",
+          RawBody: "what is in this photo?",
+          CommandBody: "what is in this photo?",
+          BodyForCommands: "what is in this photo?",
+          SessionKey: "agent:main:imessage:+15550100",
+          From: "imessage:+15550100",
+          To: "imessage:me",
+          MediaPath: remotePath,
+          MediaPaths: [remotePath],
+          MediaType: "image/jpeg",
+          MediaTypes: ["image/jpeg"],
+          MediaRemoteHost: "kaien@nerv",
+          MediaUrl: undefined,
+          MediaUrls: undefined,
+        }),
+        undefined,
+        withFastReplyConfig({}),
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(vi.mocked(stageSandboxMediaMock)).toHaveBeenCalledTimes(1);
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(stageSandboxMediaMock).mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.applyMediaUnderstanding.mock.invocationCallOrder[0] ?? 0,
     );
   });
 
