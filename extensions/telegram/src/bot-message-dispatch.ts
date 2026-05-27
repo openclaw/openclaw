@@ -2378,7 +2378,12 @@ export const dispatchTelegramMessage = async ({
                     if (!text) {
                       return;
                     }
-                    await pushStreamToolProgress(text, { startImmediately: true });
+                    const updatedDraft = await pushStreamToolProgress(text, {
+                      startImmediately: true,
+                    });
+                    if (!updatedDraft && isFastModeAutoProgressPayload(payload)) {
+                      await sendPayload(payload);
+                    }
                   },
                   onCommandOutput: async (payload) => {
                     if (payload.phase !== "end") {
