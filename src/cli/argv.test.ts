@@ -13,6 +13,7 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
   isRootVersionInvocation,
+  normalizeGeneratedHelpCommandArgv,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -66,6 +67,36 @@ describe("argv helpers", () => {
     },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "known command group help command help flag",
+      argv: ["node", "openclaw", "backup", "help", "--help"],
+      expected: ["node", "openclaw", "backup", "help"],
+    },
+    {
+      name: "known command group help command short help flag",
+      argv: ["node", "openclaw", "--profile", "work", "backup", "help", "-h"],
+      expected: ["node", "openclaw", "--profile", "work", "backup", "help"],
+    },
+    {
+      name: "leaf positional help remains untouched",
+      argv: ["node", "openclaw", "docs", "help", "--help"],
+      expected: ["node", "openclaw", "docs", "help", "--help"],
+    },
+    {
+      name: "extra help positionals remain untouched",
+      argv: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
+      expected: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
+    },
+    {
+      name: "terminator help flag remains untouched",
+      argv: ["node", "openclaw", "backup", "help", "--", "--help"],
+      expected: ["node", "openclaw", "backup", "help", "--", "--help"],
+    },
+  ])("normalizes generated help commands: $name", ({ argv, expected }) => {
+    expect(normalizeGeneratedHelpCommandArgv(argv)).toEqual(expected);
   });
 
   it.each([

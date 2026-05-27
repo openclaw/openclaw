@@ -165,6 +165,48 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
+export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
+  const positionals: Array<{ value: string; index: number }> = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (positionals.length === 0) {
+      const consumed = consumeRootOptionToken(argv, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return argv;
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  const [primary, secondary] = positionals;
+  if (
+    !primary ||
+    secondary?.value !== "help" ||
+    !ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary.value)
+  ) {
+    return argv;
+  }
+
+  if (positionals.length === 2 && helpFlagIndex === secondary.index + 1) {
+    return argv.toSpliced(helpFlagIndex, 1);
+  }
+
+  return argv;
+}
+
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
