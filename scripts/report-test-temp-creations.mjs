@@ -31,6 +31,7 @@ Description:
 Options:
   --base <ref>       Base ref for branch diffs. Default: ${DEFAULT_BASE_REF}
   --head <ref>       Head ref for branch diffs. Default: ${DEFAULT_HEAD_REF}
+  --no-merge-base    Use a two-dot base..head diff for shallow CI checkouts.
   --staged           Inspect staged changes instead of a branch diff.
   --json             Print JSON findings to stdout.
   --fail-on-findings Exit 1 when findings are present. Default is report-only.
@@ -88,6 +89,7 @@ function parseArgs(argv) {
     head: DEFAULT_HEAD_REF,
     help: false,
     json: false,
+    noMergeBase: false,
     staged: false,
   };
   return parseFlagArgs(argv, args, [
@@ -97,14 +99,16 @@ function parseArgs(argv) {
     booleanFlag("-h", "help"),
     booleanFlag("--help", "help"),
     booleanFlag("--json", "json"),
+    booleanFlag("--no-merge-base", "noMergeBase"),
     booleanFlag("--staged", "staged"),
   ]);
 }
 
 function readDiff(args, cwd = process.cwd()) {
+  const range = args.noMergeBase ? `${args.base}..${args.head}` : `${args.base}...${args.head}`;
   const diffArgs = args.staged
     ? ["diff", "--cached", "--unified=0", "--diff-filter=ACMR", "--"]
-    : ["diff", "--unified=0", "--diff-filter=ACMR", `${args.base}...${args.head}`, "--"];
+    : ["diff", "--unified=0", "--diff-filter=ACMR", range, "--"];
   return execFileSync("git", diffArgs, {
     cwd,
     encoding: "utf8",

@@ -1300,7 +1300,7 @@ jobs:
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
                 git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read

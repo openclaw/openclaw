@@ -124,6 +124,7 @@ describe("report-test-temp-creations", () => {
 
     expect(output).toContain("Usage: node scripts/report-test-temp-creations.mjs");
     expect(output).toContain("Outputs:");
+    expect(output).toContain("--no-merge-base");
     expect(output).toContain("Examples:");
   });
 
