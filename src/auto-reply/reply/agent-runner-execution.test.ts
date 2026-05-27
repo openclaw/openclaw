@@ -4508,7 +4508,7 @@ describe("runAgentTurnWithFallback", () => {
   it("keeps opted-in progress callbacks active after message-tool-only delivery completes", async () => {
     const onToolStart = vi.fn();
     const onCommandOutput = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "tool",
         data: {

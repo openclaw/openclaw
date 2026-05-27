@@ -1008,7 +1008,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("enables channel-owned tool summaries when default tool messages are suppressed", async () => {
     const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       expect(params.shouldEmitToolResult?.()).toBe(true);
       expect(params.shouldEmitToolOutput?.()).toBe(false);
       await params.onToolResult?.({ text: "🛠️ `run ruby`", mediaUrls: [] });
