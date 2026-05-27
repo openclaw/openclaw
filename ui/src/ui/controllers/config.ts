@@ -501,6 +501,8 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
   if (!state.client || !state.connected) {
     return;
   }
+  // Clear any previous error before attempting new action
+  state.lastError = undefined;
   try {
     const res = await state.client.request<{ ok: boolean; path?: string; error?: string }>("config.openFile", {});
     if (!res.ok) {
