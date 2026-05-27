@@ -496,6 +496,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       text: "nothing important",
       isError: undefined,
     });
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
@@ -719,6 +720,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.addSystem).toHaveBeenCalledWith("/status done");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
@@ -1161,6 +1163,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
