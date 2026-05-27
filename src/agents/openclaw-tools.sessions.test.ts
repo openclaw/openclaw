@@ -530,6 +530,7 @@ describe("sessions tools", () => {
           reasoningLevel: undefined,
           elevatedLevel: undefined,
           responseUsage: undefined,
+          resumable: undefined,
           systemSent: undefined,
           abortedLastRun: undefined,
           sendPolicy: undefined,
