@@ -45,6 +45,10 @@ export type DeviceAuthToken = {
   token: string;
   role: string;
   scopes: string[];
+  issuer?: {
+    kind: "shared-gateway-auth";
+    generation: string;
+  };
   createdAtMs: number;
   rotatedAtMs?: number;
   revokedAtMs?: number;
@@ -139,6 +143,9 @@ type DevicePairingStateFile = {
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
+const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
+const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"]);
+const BROWSER_DEVICE_CLIENT_MODE = "webchat";
 
 const withLock = createAsyncLock();
 
@@ -411,9 +418,29 @@ function cloneDeviceTokens(device: PairedDevice): Record<string, DeviceAuthToken
   return device.tokens ? { ...device.tokens } : {};
 }
 
+function isBrowserRelatedPairedDevice(device: Pick<PairedDevice, "clientId" | "clientMode">) {
+  const clientMode = device.clientMode?.trim().toLowerCase();
+  if (clientMode === BROWSER_DEVICE_CLIENT_MODE) {
+    return true;
+  }
+  const clientId = device.clientId?.trim().toLowerCase();
+  return clientId ? BROWSER_DEVICE_CLIENT_IDS.has(clientId) : false;
+}
+
+function deviceTokenIssuerMatches(
+  entry: DeviceAuthToken,
+  issuer: DeviceAuthToken["issuer"] | undefined,
+): boolean {
+  if (!issuer) {
+    return true;
+  }
+  return entry.issuer?.kind === issuer.kind && entry.issuer.generation === issuer.generation;
+}
+
 function buildDeviceAuthToken(params: {
   role: string;
   scopes: string[];
+  issuer?: DeviceAuthToken["issuer"];
   existing?: DeviceAuthToken;
   now: number;
   rotatedAtMs?: number;
@@ -422,6 +449,7 @@ function buildDeviceAuthToken(params: {
     token: newToken(),
     role: params.role,
     scopes: params.scopes,
+    issuer: params.issuer,
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     rotatedAtMs: params.rotatedAtMs,
     revokedAtMs: undefined,
@@ -897,6 +925,7 @@ export async function verifyDeviceToken(params: {
   token: string;
   role: string;
   scopes: string[];
+  requiredSharedGatewaySessionGeneration?: string;
   baseDir?: string;
 }): Promise<{ ok: boolean; reason?: string }> {
   return await withLock(async () => {
@@ -918,6 +947,19 @@ export async function verifyDeviceToken(params: {
     }
     if (!verifyPairingToken(params.token, entry.token)) {
       return { ok: false, reason: "token-mismatch" };
+    }
+    if (
+      entry.issuer?.kind === SHARED_GATEWAY_AUTH_ISSUER_KIND &&
+      entry.issuer.generation !== params.requiredSharedGatewaySessionGeneration
+    ) {
+      return { ok: false, reason: "issuer-generation-stale" };
+    }
+    if (
+      !entry.issuer &&
+      params.requiredSharedGatewaySessionGeneration !== undefined &&
+      isBrowserRelatedPairedDevice(device)
+    ) {
+      return { ok: false, reason: "legacy-browser-token" };
     }
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
     if (
@@ -946,6 +988,7 @@ export async function ensureDeviceToken(params: {
   deviceId: string;
   role: string;
   scopes: string[];
+  issuer?: DeviceAuthToken["issuer"];
   baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
   return await withLock(async () => {
@@ -976,8 +1019,13 @@ export async function ensureDeviceToken(params: {
         scopes: existing.scopes,
         approvedScopes,
       });
+      const issuerAllowsReuse = params.issuer
+        ? deviceTokenIssuerMatches(existing, params.issuer) ||
+          (!existing.issuer && !isBrowserRelatedPairedDevice(device))
+        : true;
       if (
         existingWithinApproved &&
+        issuerAllowsReuse &&
         roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
       ) {
         return existing;
@@ -987,6 +1035,7 @@ export async function ensureDeviceToken(params: {
     const next = buildDeviceAuthToken({
       role,
       scopes: requestedScopes,
+      issuer: params.issuer,
       existing,
       now,
       rotatedAtMs: existing ? now : undefined,
