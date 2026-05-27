@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Initialize hostname env before tslog import; must be first import.
+import "./logger-hostname-init.js";
+
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";

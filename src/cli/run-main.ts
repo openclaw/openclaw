@@ -1,3 +1,7 @@
+// Initialize hostname env before any module that might import tslog.
+// tslog captures hostname at module load via os.hostname(), which returns
+// empty string intermittently on macOS during ESM resolution.
+import "../logging/logger-hostname-init.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
