@@ -13,7 +13,7 @@ export type EmbeddedPiQueueHandle = {
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
-  abort: () => void;
+  abort: (reason?: unknown) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
