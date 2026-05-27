@@ -4,6 +4,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateSqliteStore,
+  countPluginStateLiveEntries,
   createPluginStateKeyedStore,
   PluginStateStoreError,
   probePluginStateStore,
@@ -194,7 +195,7 @@ describe("limits", () => {
     });
   });
 
-  it("enforces the per-plugin live-row cap", async () => {
+  it("preserves fresh writes when the per-plugin live-row cap is full", async () => {
     await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
       // Fill the plugin budget outside the namespace that attempts the write.
       const nsCount = 10;
@@ -215,11 +216,18 @@ describe("limits", () => {
         namespace: "overflow-ns",
         maxEntries: 10,
       });
-
-      // One more row tips over the plugin-wide limit.
-      await expectPluginStateStoreError(store.register("overflow", { boom: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      const oldestNamespaceStore = createPluginStateKeyedStore("fixture-plugin", {
+        namespace: "ns-0",
+        maxEntries: perNs,
       });
+
+      // One more row tips over the plugin-wide limit; the fresh row stays alive.
+      await expect(store.register("overflow", { boom: true })).resolves.toBeUndefined();
+      await expect(store.lookup("overflow")).resolves.toEqual({ boom: true });
+      await expect(oldestNamespaceStore.lookup("k-0")).resolves.toBeUndefined();
+      expect(countPluginStateLiveEntries("fixture-plugin")).toBe(
+        MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+      );
     });
   });
 

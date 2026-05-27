@@ -8,6 +8,7 @@ import {
 import {
   clearPluginStateStoreForTests,
   closePluginStateSqliteStore,
+  countPluginStateLiveEntries,
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
   PluginStateStoreError,
@@ -433,7 +434,7 @@ describe("plugin state keyed store", () => {
     });
   });
 
-  it("rejects plugin overflow when the current namespace cannot shed old rows", async () => {
+  it("preserves fresh writes when the current namespace cannot shed old rows", async () => {
     await withPluginStateTestState(async () => {
       seedPluginStateEntriesForTests(
         Array.from({ length: 6_000 }, (_, entryIndex) => ({
@@ -453,11 +454,10 @@ describe("plugin state keyed store", () => {
         maxEntries: 6_000,
       });
 
-      await expectPluginStateStoreError(messageStore.register("new-message", { fresh: true }), {
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
-      await expect(messageStore.lookup("new-message")).resolves.toBeUndefined();
-      await expect(topicStore.lookup("topic-0")).resolves.toEqual({ entryIndex: 0 });
+      await expect(messageStore.register("new-message", { fresh: true })).resolves.toBeUndefined();
+      await expect(messageStore.lookup("new-message")).resolves.toEqual({ fresh: true });
+      await expect(topicStore.lookup("topic-0")).resolves.toBeUndefined();
+      expect(countPluginStateLiveEntries("telegram")).toBe(6_000);
     });
   });
 
