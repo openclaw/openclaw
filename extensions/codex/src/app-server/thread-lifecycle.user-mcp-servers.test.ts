@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
@@ -87,14 +93,34 @@ function createParams(
   } as unknown as EmbeddedRunAttemptParams;
 }
 
+type CodexNativeThreadLifecycleEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "codex.native_thread.lifecycle" }
+>;
+
+function collectCodexNativeThreadLifecycleEvents(): {
+  events: CodexNativeThreadLifecycleEvent[];
+  unsubscribe: () => void;
+} {
+  const events: CodexNativeThreadLifecycleEvent[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event) => {
+    if (event.type === "codex.native_thread.lifecycle") {
+      events.push(event);
+    }
+  });
+  return { events, unsubscribe };
+}
+
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
   let tempDir = "";
 
   beforeEach(async () => {
+    resetDiagnosticEventsForTest();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
   });
 
   afterEach(async () => {
+    resetDiagnosticEventsForTest();
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -438,5 +464,65 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(resumeParams?.config?.mcp_servers).toMatchObject({
       notes: { command: "node", args: ["/opt/notes-mcp/dist/index.js"] },
     });
+  });
+
+  it("resumes threads with legacy raw user MCP comparison tokens and rewrites them hashed", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      userMcpServersFingerprint: JSON.stringify({
+        mcp_servers: {
+          outlook: {
+            command: "node",
+            args: ["/opt/outlook-mcp/dist/index.js"],
+            env: { OUTLOOK_USER: "alice@example.org" },
+          },
+        },
+      }),
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            outlook: {
+              transport: "stdio",
+              command: "node",
+              args: ["/opt/outlook-mcp/dist/index.js"],
+              env: { OUTLOOK_USER: "alice@example.org" },
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(binding.threadId).toBe("thread-existing");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(JSON.stringify(savedBinding)).not.toContain("alice@example.org");
+    expect(JSON.stringify(savedBinding)).not.toContain("/opt/outlook-mcp");
+    const lifecycleEvent = lifecycleDiagnostics.events.find(
+      (event) => event.reason === "mcp-config-mismatch",
+    );
+    expect(lifecycleEvent).toBeUndefined();
   });
 });

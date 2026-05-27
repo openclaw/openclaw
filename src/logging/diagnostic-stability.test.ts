@@ -255,6 +255,72 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
   });
 
+  it("summarizes Codex native thread lifecycle diagnostics without scoped ids", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "codex.native_thread.lifecycle",
+      action: "preserved",
+      reason: "context-engine-compaction-preserved-binding",
+      threadId: "native-thread-secret",
+      sessionFile: "current-session.jsonl",
+      previousSessionFile: "archived-session.jsonl",
+      successorSessionFile: "successor-session.jsonl",
+      compactionRolledOver: true,
+      sessionKey: "agent:main:discord:channel:secret",
+      sessionId: "session-secret",
+      previousSessionId: "previous-session-secret",
+      successorSessionId: "successor-session-secret",
+      runId: "run-secret",
+      bindingMode: "thread_bootstrap",
+      contextEngineId: "engine-secret",
+      contextEnginePolicyFingerprint: "policy-secret",
+      projectionEpoch: "epoch-secret",
+      projectionFingerprint: "projection-secret",
+      contextTokenBudget: 272_000,
+      sessionTokens: 77_000,
+      nativeTokens: 86_000,
+      nativeTranscriptBytes: 344_000,
+      maxActiveTranscriptBytes: 1_048_576,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.events[0], {
+      type: "codex.native_thread.lifecycle",
+      action: "preserved",
+      reason: "context-engine-compaction-preserved-binding",
+      mode: "thread_bootstrap",
+      count: 86_000,
+      bytes: 344_000,
+      limitBytes: 1_048_576,
+      context: {
+        limit: 272_000,
+        used: 86_000,
+      },
+    });
+    for (const key of [
+      "threadId",
+      "target",
+      "sessionFile",
+      "previousSessionFile",
+      "successorSessionFile",
+      "sessionKey",
+      "sessionId",
+      "previousSessionId",
+      "successorSessionId",
+      "runId",
+      "contextEngineId",
+      "contextEnginePolicyFingerprint",
+      "projectionEpoch",
+      "projectionFingerprint",
+    ]) {
+      expect(snapshot.events[0]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(snapshot.events[0])).not.toContain("secret");
+  });
+
   it("sanitizes tool and model diagnostic error categories", async () => {
     startDiagnosticStabilityRecorder();
 

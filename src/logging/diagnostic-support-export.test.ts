@@ -400,7 +400,7 @@ describe("diagnostic support export", () => {
       snapshot: {
         generatedAt: "2026-04-22T12:00:00.000Z",
         capacity: 1000,
-        count: 1,
+        count: 2,
         dropped: 0,
         events: [
           {
@@ -411,10 +411,26 @@ describe("diagnostic support export", () => {
             reason: "private event reason",
             error: "event-error-secret",
           },
+          {
+            seq: 2,
+            ts: 2,
+            type: "codex.native_thread.lifecycle",
+            action: "preserved",
+            reason: "context-engine-compaction-preserved-binding",
+            target: "native-thread-secret",
+            threadId: "native-thread-secret",
+            sessionFile: "current-session.jsonl",
+            sessionKey: "agent:main:discord:channel:secret",
+            sessionId: "session-secret",
+            runId: "run-secret",
+            mode: "thread_bootstrap",
+            count: 86_000,
+          },
         ],
         summary: {
           byType: {
             "webhook.error": 1,
+            "codex.native_thread.lifecycle": 1,
             "private summary type": 1,
           },
           privateSummary: "summary-secret",
@@ -462,7 +478,19 @@ describe("diagnostic support export", () => {
       type: "webhook.error",
       channel: "telegram",
     });
-    expect(stability.snapshot?.summary?.byType).toEqual({ "webhook.error": 1 });
+    expect(stability.snapshot?.events?.[1]).toEqual({
+      seq: 2,
+      ts: 2,
+      type: "codex.native_thread.lifecycle",
+      action: "preserved",
+      reason: "context-engine-compaction-preserved-binding",
+      mode: "thread_bootstrap",
+      count: 86_000,
+    });
+    expect(stability.snapshot?.summary?.byType).toEqual({
+      "webhook.error": 1,
+      "codex.native_thread.lifecycle": 1,
+    });
 
     const combined = Object.values(entries).join("\n");
     for (const secret of [
@@ -473,6 +501,11 @@ describe("diagnostic support export", () => {
       "event-error-secret",
       "private summary type",
       "summary-secret",
+      "native-thread-secret",
+      "current-session.jsonl",
+      "agent:main:discord:channel:secret",
+      "session-secret",
+      "run-secret",
     ]) {
       expect(combined).not.toContain(secret);
     }

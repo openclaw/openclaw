@@ -423,6 +423,26 @@ injected; heartbeat turns get a collaboration-mode pointer to read the file when
 it exists and is non-empty. `BOOTSTRAP.md` and `MEMORY.md` when present are
 forwarded as OpenClaw turn input reference context.
 
+These bootstrap bytes are not the same thing as the native reuse guard. The
+active-token guard is a warm-thread reuse threshold over the persisted/native
+Codex transcript and mirrored session totals; it is not simply "bootstrap size".
+When unset, OpenClaw uses Codex's reported model context window with a
+300000-token fallback recovery fuse. Operators can set `maxActiveTranscriptTokens`
+to a lower threshold when legacy native threads should rotate earlier.
+
+The token-efficient context-engine path is `thread_bootstrap`. When the saved
+Codex binding still matches the active context-engine id, policy fingerprint,
+projection epoch/fingerprint, and dynamic-tool surface, OpenClaw treats the
+large bootstrap/projection payload as already present in the native thread and
+logs `thread-bootstrap-semantic-reuse` instead of reprojecting it every turn.
+Successful context-engine-owned compaction preserves that binding when the
+projection mode remains `thread_bootstrap`: same-file compaction leaves it in
+place, and successor-transcript rollover copies it to the successor before
+clearing the archived original. If those identities change, OpenClaw starts a
+fresh Codex thread and reprojects context once for the new epoch. This keeps
+long-running agents fast without pretending a stale bootstrap or stale
+context-engine projection is still valid.
+
 ## Environment overrides
 
 Environment overrides remain available for local testing:

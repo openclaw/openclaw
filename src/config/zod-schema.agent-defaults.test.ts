@@ -284,10 +284,18 @@ describe("agent defaults schema", () => {
       compaction: {
         truncateAfterCompaction: true,
         maxActiveTranscriptBytes: "20mb",
+        maxActiveTranscriptTokens: 120_000,
       },
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+    expect(result.compaction?.maxActiveTranscriptTokens).toBe(120_000);
+    const shorthand = AgentDefaultsSchema.parse({
+      compaction: {
+        maxActiveTranscriptTokens: "120k",
+      },
+    })!;
+    expect(shorthand.compaction?.maxActiveTranscriptTokens).toBe("120k");
   });
 
   it("accepts compaction.midTurnPrecheck.enabled", () => {

@@ -6,6 +6,7 @@ import {
   buildThreadResumeParams,
   buildThreadStartParams,
   codexDynamicToolsFingerprint,
+  codexUserMcpServersConfigPatchFingerprint,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 
@@ -142,6 +143,25 @@ describe("Codex app-server native code mode config", () => {
     ]);
 
     expect(searchableFingerprint).toBe(directFingerprint);
+  });
+
+  it("hashes user MCP config fingerprints before lifecycle diagnostics can expose them", () => {
+    const fingerprint = codexUserMcpServersConfigPatchFingerprint({
+      mcp_servers: {
+        private_search: {
+          command: "node",
+          args: ["server.js"],
+          env: { PRIVATE_TOKEN: "secret-token-value" },
+          http_headers: { Authorization: "Bearer hidden-token" },
+          url: "https://mcp.example.test/private",
+        },
+      },
+    });
+
+    expect(fingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(fingerprint).not.toContain("secret-token-value");
+    expect(fingerprint).not.toContain("hidden-token");
+    expect(fingerprint).not.toContain("mcp.example.test");
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {

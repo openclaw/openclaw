@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
 import {
   embeddedAgentLog,
   type CompactEmbeddedPiSessionParams,
@@ -9,11 +11,70 @@ import {
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
-import type { JsonObject } from "./protocol.js";
+import {
+  CodexNativeThreadLifecycleReason,
+  emitCodexNativeThreadLifecycleDiagnostic,
+  resolveCodexNativeThreadBindingMode,
+  type CodexNativeThreadLifecycleDiagnostic,
+  type CodexNativeThreadLifecycleDiagnosticInput,
+} from "./native-thread-diagnostics.js";
+import type { JsonObject, JsonValue } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { readCodexAppServerBinding } from "./session-binding.js";
+import {
+  clearCodexAppServerBinding,
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+  type CodexAppServerThreadBinding,
+} from "./session-binding.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
+
+function codexNativeBindingDiagnosticFields(
+  binding: CodexAppServerThreadBinding | undefined,
+): Partial<CodexNativeThreadLifecycleDiagnostic> {
+  return {
+    threadId: binding?.threadId,
+    bindingMode: resolveCodexNativeThreadBindingMode(binding),
+    contextEngineId: binding?.contextEngine?.engineId,
+    contextEnginePolicyFingerprint: binding?.contextEngine?.policyFingerprint,
+    projectionMode: binding?.contextEngine?.projection?.mode,
+    projectionEpoch: binding?.contextEngine?.projection?.epoch,
+    projectionFingerprint: binding?.contextEngine?.projection?.fingerprint,
+    dynamicToolsFingerprint: binding?.dynamicToolsFingerprint,
+    userMcpServersFingerprint: binding?.userMcpServersFingerprint,
+    mcpServersFingerprint: binding?.mcpServersFingerprint,
+    environmentSelectionFingerprint: binding?.environmentSelectionFingerprint,
+    pluginAppsFingerprint: binding?.pluginAppsFingerprint,
+    pluginAppsInputFingerprint: binding?.pluginAppsInputFingerprint,
+  };
+}
+
+function emitCodexNativeThreadCompactionDiagnostic(
+  params: CompactEmbeddedPiSessionParams,
+  diagnostic: CodexNativeThreadLifecycleDiagnosticInput,
+): void {
+  emitCodexNativeThreadLifecycleDiagnostic({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    contextTokenBudget: params.contextTokenBudget,
+    sessionTokens: params.currentTokenCount,
+    ...diagnostic,
+  });
+}
+
+type PreservableContextEngineThreadBootstrapBinding = CodexAppServerThreadBinding & {
+  contextEngine: NonNullable<CodexAppServerThreadBinding["contextEngine"]> & {
+    projection: NonNullable<
+      NonNullable<CodexAppServerThreadBinding["contextEngine"]>["projection"]
+    >;
+  };
+};
+
+function isPreservableContextEngineThreadBootstrapBinding(
+  binding: CodexAppServerThreadBinding | undefined,
+): binding is PreservableContextEngineThreadBootstrapBinding {
+  return binding?.contextEngine?.projection?.mode === "thread_bootstrap";
+}
 
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
@@ -25,6 +86,400 @@ export async function maybeCompactCodexAppServerSession(
   // starts native Codex compaction for the bound thread and returns immediately;
   // Codex reports and applies the compaction inside its own app-server session.
   return compactCodexNativeThread(params, options);
+}
+
+export async function reconcileContextEngineCompactedCodexBinding({
+  params,
+  contextEngineId,
+  compactedSessionId,
+  compactedSessionFile,
+  originalBinding: originalBindingSnapshot,
+}: {
+  params: CompactEmbeddedPiSessionParams;
+  contextEngineId: string;
+  compactedSessionId: string;
+  compactedSessionFile: string;
+  originalBinding?: CodexAppServerThreadBinding | null;
+}): Promise<{ invalidated: boolean; preserved: boolean; successorInvalidated: boolean }> {
+  const rolledOver = compactedSessionFile !== params.sessionFile;
+  const originalBinding = sanitizePreservedCodexBinding(
+    originalBindingSnapshot === null
+      ? undefined
+      : (originalBindingSnapshot ??
+          (await readCodexAppServerBinding(params.sessionFile, {
+            config: params.config,
+          }))),
+  );
+  let preInvalidatedSuccessorBinding = false;
+  if (rolledOver) {
+    const rawSuccessorBinding = await readCodexAppServerBinding(compactedSessionFile, {
+      config: params.config,
+    });
+    const successorBinding = sanitizePreservedCodexBinding(rawSuccessorBinding);
+    if (originalBinding && isPreservableContextEngineThreadBootstrapBinding(successorBinding)) {
+      const equivalentToOriginal = areCodexBindingsEquivalentForCompactionPreservation(
+        successorBinding,
+        originalBinding,
+      );
+      if (!equivalentToOriginal) {
+        preInvalidatedSuccessorBinding = true;
+        emitCodexNativeThreadCompactionDiagnostic(params, {
+          action: "invalidated",
+          reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionInvalidatedBinding,
+          level: "info",
+          message:
+            "context-engine-owned Codex app-server compaction replaced original native thread binding with successor bootstrap binding",
+          sessionId: params.sessionId,
+          successorSessionId: compactedSessionId,
+          sessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          successorSessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          compactionRolledOver: true,
+          ...codexNativeBindingDiagnosticFields(originalBinding),
+          contextEngineId: originalBinding.contextEngine?.engineId ?? contextEngineId,
+          contextEnginePolicyFingerprint: originalBinding.contextEngine?.policyFingerprint,
+          contextEngineProjectionContributed: Boolean(originalBinding.contextEngine),
+        });
+        await clearCodexAppServerBinding(compactedSessionFile, { config: params.config });
+      } else {
+        if (bindingHasUnsanitizedPreservedComparisonFields(rawSuccessorBinding)) {
+          await writeCodexAppServerBinding(compactedSessionFile, successorBinding, {
+            config: params.config,
+          });
+        }
+        await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
+        emitCodexNativeThreadCompactionDiagnostic(params, {
+          action: "preserved",
+          reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionPreservedBinding,
+          level: "info",
+          message:
+            "context-engine-owned Codex app-server compaction preserved successor native thread-bootstrap binding",
+          sessionId: compactedSessionId,
+          previousSessionId: params.sessionId,
+          sessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          previousSessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          successorSessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          successorSessionId: compactedSessionId,
+          compactionRolledOver: true,
+          ...codexNativeBindingDiagnosticFields(successorBinding),
+          contextEngineId: successorBinding.contextEngine?.engineId ?? contextEngineId,
+          contextEnginePolicyFingerprint: successorBinding.contextEngine?.policyFingerprint,
+          contextEngineProjectionContributed: true,
+          semanticReuse: true,
+        });
+        return {
+          invalidated: false,
+          preserved: true,
+          successorInvalidated: false,
+        };
+      }
+    }
+  }
+  if (isPreservableContextEngineThreadBootstrapBinding(originalBinding)) {
+    let invalidated = false;
+    let successorInvalidated = preInvalidatedSuccessorBinding;
+    if (rolledOver) {
+      const rawSuccessorBinding = await readCodexAppServerBinding(compactedSessionFile, {
+        config: params.config,
+      });
+      const successorBinding = sanitizePreservedCodexBinding(rawSuccessorBinding);
+      successorInvalidated =
+        Boolean(successorBinding?.threadId) &&
+        !areCodexBindingsEquivalentForCompactionPreservation(successorBinding, originalBinding);
+      if (successorInvalidated && successorBinding) {
+        emitCodexNativeThreadCompactionDiagnostic(params, {
+          action: "invalidated",
+          reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionInvalidatedBinding,
+          level: "info",
+          message:
+            "context-engine-owned Codex app-server compaction replaced successor native thread binding with preserved bootstrap binding",
+          sessionId: compactedSessionId,
+          previousSessionId: params.sessionId,
+          sessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+          previousSessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          compactionRolledOver: true,
+          ...codexNativeBindingDiagnosticFields(successorBinding),
+          contextEngineId: successorBinding.contextEngine?.engineId ?? contextEngineId,
+          contextEnginePolicyFingerprint: successorBinding.contextEngine?.policyFingerprint,
+          contextEngineProjectionContributed: Boolean(successorBinding.contextEngine),
+        });
+      }
+      await writeCodexAppServerBinding(compactedSessionFile, originalBinding, {
+        config: params.config,
+      });
+      await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
+    } else {
+      const rawCurrentBinding = await readCodexAppServerBinding(params.sessionFile, {
+        config: params.config,
+      });
+      const currentBinding = sanitizePreservedCodexBinding(rawCurrentBinding);
+      const currentBindingChanged =
+        Boolean(currentBinding?.threadId) &&
+        !areCodexBindingsEquivalentForCompactionPreservation(currentBinding, originalBinding);
+      if (currentBindingChanged && currentBinding) {
+        invalidated = true;
+        emitCodexNativeThreadCompactionDiagnostic(params, {
+          action: "invalidated",
+          reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionInvalidatedBinding,
+          level: "info",
+          message:
+            "context-engine-owned Codex app-server compaction replaced changed native thread binding with preserved bootstrap binding",
+          sessionId: compactedSessionId,
+          previousSessionId: params.sessionId,
+          sessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          previousSessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+          compactionRolledOver: false,
+          ...codexNativeBindingDiagnosticFields(currentBinding),
+          contextEngineId: currentBinding.contextEngine?.engineId ?? contextEngineId,
+          contextEnginePolicyFingerprint: currentBinding.contextEngine?.policyFingerprint,
+          contextEngineProjectionContributed: Boolean(currentBinding.contextEngine),
+        });
+      }
+      if (
+        !areCodexBindingsEquivalentForCompactionPreservation(currentBinding, originalBinding) ||
+        bindingHasUnsanitizedPreservedComparisonFields(rawCurrentBinding)
+      ) {
+        await writeCodexAppServerBinding(params.sessionFile, originalBinding, {
+          config: params.config,
+        });
+      }
+    }
+    emitCodexNativeThreadCompactionDiagnostic(params, {
+      action: "preserved",
+      reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionPreservedBinding,
+      level: "info",
+      message:
+        "context-engine-owned Codex app-server compaction preserved native thread-bootstrap binding",
+      sessionId: compactedSessionId,
+      previousSessionId: params.sessionId,
+      sessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+      previousSessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+      successorSessionFile: rolledOver
+        ? describeSessionFileForDiagnostic(compactedSessionFile)
+        : undefined,
+      successorSessionId: rolledOver ? compactedSessionId : undefined,
+      compactionRolledOver: rolledOver,
+      ...codexNativeBindingDiagnosticFields(originalBinding),
+      contextEngineId: originalBinding.contextEngine?.engineId ?? contextEngineId,
+      contextEnginePolicyFingerprint: originalBinding.contextEngine?.policyFingerprint,
+      contextEngineProjectionContributed: true,
+      semanticReuse: true,
+    });
+    return {
+      invalidated: invalidated || successorInvalidated,
+      preserved: true,
+      successorInvalidated,
+    };
+  }
+
+  let invalidated = false;
+  let successorInvalidated = preInvalidatedSuccessorBinding;
+  if (originalBinding?.threadId) {
+    invalidated = true;
+    emitCodexNativeThreadCompactionDiagnostic(params, {
+      action: "invalidated",
+      reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionInvalidatedBinding,
+      level: "info",
+      message: "context-engine-owned Codex app-server compaction invalidated native thread binding",
+      sessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+      successorSessionFile: rolledOver
+        ? describeSessionFileForDiagnostic(compactedSessionFile)
+        : undefined,
+      successorSessionId: rolledOver ? compactedSessionId : undefined,
+      compactionRolledOver: rolledOver,
+      ...codexNativeBindingDiagnosticFields(originalBinding),
+      contextEngineId: originalBinding.contextEngine?.engineId ?? contextEngineId,
+      contextEnginePolicyFingerprint: originalBinding.contextEngine?.policyFingerprint,
+      contextEngineProjectionContributed: Boolean(originalBinding.contextEngine),
+    });
+  }
+  await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
+  if (rolledOver) {
+    const compactedBinding = sanitizePreservedCodexBinding(
+      await readCodexAppServerBinding(compactedSessionFile, {
+        config: params.config,
+      }),
+    );
+    if (compactedBinding?.threadId) {
+      invalidated = true;
+      successorInvalidated = true;
+      emitCodexNativeThreadCompactionDiagnostic(params, {
+        action: "invalidated",
+        reason: CodexNativeThreadLifecycleReason.ContextEngineCompactionInvalidatedBinding,
+        level: "info",
+        message:
+          "context-engine-owned Codex app-server compaction invalidated successor native thread binding",
+        sessionId: compactedSessionId,
+        previousSessionId: params.sessionId,
+        sessionFile: describeSessionFileForDiagnostic(compactedSessionFile),
+        previousSessionFile: describeSessionFileForDiagnostic(params.sessionFile),
+        compactionRolledOver: true,
+        ...codexNativeBindingDiagnosticFields(compactedBinding),
+        contextEngineId: compactedBinding.contextEngine?.engineId ?? contextEngineId,
+        contextEnginePolicyFingerprint: compactedBinding.contextEngine?.policyFingerprint,
+        contextEngineProjectionContributed: Boolean(compactedBinding.contextEngine),
+      });
+    }
+    await clearCodexAppServerBinding(compactedSessionFile, { config: params.config });
+  }
+  return { invalidated, preserved: false, successorInvalidated };
+}
+
+function areCodexBindingsEquivalentForCompactionPreservation(
+  left: CodexAppServerThreadBinding | undefined,
+  right: CodexAppServerThreadBinding,
+): boolean {
+  if (!left?.threadId) {
+    return false;
+  }
+  return (
+    left.threadId === right.threadId &&
+    left.cwd === right.cwd &&
+    left.authProfileId === right.authProfileId &&
+    left.model === right.model &&
+    left.modelProvider === right.modelProvider &&
+    left.approvalPolicy === right.approvalPolicy &&
+    left.sandbox === right.sandbox &&
+    left.serviceTier === right.serviceTier &&
+    left.dynamicToolsFingerprint === right.dynamicToolsFingerprint &&
+    left.userMcpServersFingerprint === right.userMcpServersFingerprint &&
+    left.mcpServersFingerprint === right.mcpServersFingerprint &&
+    left.pluginAppsFingerprint === right.pluginAppsFingerprint &&
+    left.pluginAppsInputFingerprint === right.pluginAppsInputFingerprint &&
+    left.environmentSelectionFingerprint === right.environmentSelectionFingerprint &&
+    stableJson(left.pluginAppPolicyContext) === stableJson(right.pluginAppPolicyContext) &&
+    stableJson(left.contextEngine) === stableJson(right.contextEngine)
+  );
+}
+
+function sanitizePreservedCodexBinding(
+  binding: CodexAppServerThreadBinding | undefined,
+): CodexAppServerThreadBinding | undefined {
+  if (!binding) {
+    return undefined;
+  }
+  return {
+    ...binding,
+    userMcpServersFingerprint: sanitizePreservedComparisonFingerprint(
+      "userMcpServersFingerprint",
+      binding.userMcpServersFingerprint,
+    ),
+    environmentSelectionFingerprint: sanitizePreservedComparisonFingerprint(
+      "environmentSelectionFingerprint",
+      binding.environmentSelectionFingerprint,
+    ),
+  };
+}
+
+function bindingHasUnsanitizedPreservedComparisonFields(
+  binding: CodexAppServerThreadBinding | undefined,
+): boolean {
+  return Boolean(
+    binding &&
+    (isUnsanitizedPreservedComparisonFingerprint(binding.userMcpServersFingerprint) ||
+      isUnsanitizedPreservedComparisonFingerprint(binding.environmentSelectionFingerprint)),
+  );
+}
+
+function sanitizePreservedComparisonFingerprint(
+  key: "userMcpServersFingerprint" | "environmentSelectionFingerprint",
+  value: string | undefined,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (!isUnsanitizedPreservedComparisonFingerprint(value)) {
+    return value;
+  }
+  const parsed = parseStoredJsonValue(value);
+  if (parsed !== undefined) {
+    return fingerprintStableJsonValue(resolvePreservedComparisonFingerprintNamespace(key), parsed);
+  }
+  return fingerprintStoredComparisonString(key, value);
+}
+
+function isUnsanitizedPreservedComparisonFingerprint(value: string | undefined): boolean {
+  return Boolean(value && !/^sha256:[a-f0-9]{64}$/iu.test(value));
+}
+
+function parseStoredJsonValue(value: string): JsonValue | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isJsonValue(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function fingerprintStableJsonValue(namespace: string, value: JsonValue): string {
+  const hash = createHash("sha256");
+  hash.update(namespace);
+  hash.update("\0");
+  hash.update(JSON.stringify(stabilizeJsonValue(value)));
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintStoredComparisonString(key: string, value: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:preserved-binding-fingerprint:v1");
+  hash.update("\0");
+  hash.update(key);
+  hash.update("\0");
+  hash.update(value);
+  return `sha256:${hash.digest("hex")}`;
+}
+
+function resolvePreservedComparisonFingerprintNamespace(
+  key: "userMcpServersFingerprint" | "environmentSelectionFingerprint",
+): string {
+  return key === "userMcpServersFingerprint"
+    ? "openclaw:codex:user-mcp-servers:v1"
+    : "openclaw:codex:environment-selection:v1";
+}
+
+function stabilizeJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map(stabilizeJsonValue);
+  }
+  if (!isJsonObject(value)) {
+    return value;
+  }
+  const stable: JsonObject = {};
+  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    stable[key] = stabilizeJsonValue(child);
+  }
+  return stable;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  return isJsonObject(value) && Object.values(value).every(isJsonValue);
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value ?? null);
+}
+
+function describeSessionFileForDiagnostic(sessionFile: string | undefined): string | undefined {
+  if (!sessionFile?.trim()) {
+    return undefined;
+  }
+  return path.basename(sessionFile);
 }
 
 function warnIfIgnoringOpenClawCompactionOverrides(params: CompactEmbeddedPiSessionParams): void {
@@ -168,6 +623,17 @@ async function compactCodexNativeThread(
     binding.authProfileId &&
     binding.authProfileId !== requestedAuthProfileId
   ) {
+    emitCodexNativeThreadCompactionDiagnostic(params, {
+      action: "failed",
+      reason: CodexNativeThreadLifecycleReason.AuthProfileMismatch,
+      level: "warn",
+      message: "codex app-server compaction rejected thread binding for auth profile mismatch",
+      ...codexNativeBindingDiagnosticFields(binding),
+      extra: {
+        requestedAuthProfileId,
+        bindingAuthProfileId: binding.authProfileId,
+      },
+    });
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
 
@@ -189,6 +655,7 @@ async function compactCodexNativeThread(
   } catch (error) {
     if (isCodexThreadNotFoundError(error)) {
       return failedCodexThreadBindingCompactionResult(params, {
+        binding,
         threadId: binding.threadId,
         reason: formatCompactionError(error),
         recovery: "stale_thread_binding",
@@ -227,17 +694,32 @@ async function compactCodexNativeThread(
 function failedCodexThreadBindingCompactionResult(
   params: CompactEmbeddedPiSessionParams,
   recovery: {
+    binding?: CodexAppServerThreadBinding;
     reason: string;
     recovery: "missing_thread_binding" | "stale_thread_binding";
     threadId?: string;
   },
 ): EmbeddedPiCompactResult {
-  embeddedAgentLog.warn("codex app-server compaction could not use thread binding", {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    threadId: recovery.threadId,
-    reason: recovery.reason,
-    recovery: recovery.recovery,
+  const bindingDiagnosticFields = codexNativeBindingDiagnosticFields(recovery.binding);
+  emitCodexNativeThreadCompactionDiagnostic(params, {
+    action: recovery.recovery === "stale_thread_binding" ? "rejected" : "failed",
+    reason:
+      recovery.recovery === "missing_thread_binding"
+        ? CodexNativeThreadLifecycleReason.MissingThreadBinding
+        : CodexNativeThreadLifecycleReason.AppServerRejectedThread,
+    level: "warn",
+    message: "codex app-server compaction could not use thread binding",
+    ...bindingDiagnosticFields,
+    threadId: recovery.threadId ?? bindingDiagnosticFields.threadId,
+    bindingMode: recovery.binding
+      ? bindingDiagnosticFields.bindingMode
+      : recovery.threadId
+        ? "legacy"
+        : "none",
+    extra: {
+      reason: recovery.reason,
+      recovery: recovery.recovery,
+    },
   });
   return {
     ok: false,

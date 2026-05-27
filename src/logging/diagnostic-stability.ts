@@ -337,6 +337,21 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "run.progress":
       assignReasonCode(record, event.reason);
       break;
+    case "codex.native_thread.lifecycle":
+      record.action = event.action;
+      assignReasonCode(record, event.reason);
+      record.mode = event.bindingMode;
+      record.count = event.nativeTokens ?? event.sessionTokens;
+      record.bytes = event.nativeTranscriptBytes;
+      record.limitBytes = event.maxActiveTranscriptBytes;
+      record.context =
+        event.contextTokenBudget !== undefined
+          ? {
+              limit: event.contextTokenBudget,
+              used: event.nativeTokens ?? event.sessionTokens,
+            }
+          : undefined;
+      break;
     case "context.assembled":
       record.channel = event.channel;
       record.provider = event.provider;

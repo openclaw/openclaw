@@ -1974,6 +1974,45 @@ export async function runEmbeddedPiAgent(
             // Attempt explicit overflow compaction only when this attempt did not
             // already auto-compact.
             if (
+              preflightRecovery?.route === "truncate_tool_results_only" &&
+              !preflightRecovery.handled &&
+              !toolResultTruncationAttempted
+            ) {
+              toolResultTruncationAttempted = true;
+              const contextWindowTokens = ctxInfo.tokens;
+              const toolResultMaxChars = resolveLiveToolResultMaxChars({
+                contextWindowTokens,
+                cfg: params.config,
+                agentId: sessionAgentId,
+              });
+              log.warn(
+                `[context-overflow-precheck] attempting early tool-result truncation for ${provider}/${modelId} ` +
+                  `(contextWindow=${contextWindowTokens} tokens)`,
+              );
+              const truncResult = await truncateOversizedToolResultsInSession({
+                sessionFile: activeSessionFile,
+                contextWindowTokens,
+                maxCharsOverride: toolResultMaxChars,
+                sessionId: activeSessionId,
+                sessionKey: params.sessionKey,
+                config: params.config,
+              });
+              if (truncResult.truncated) {
+                log.info(
+                  `[context-overflow-precheck] early tool-result truncation succeeded for ` +
+                    `${provider}/${modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
+                );
+                if (preflightRecovery.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                }
+                continue;
+              }
+              log.warn(
+                `[context-overflow-precheck] early tool-result truncation did not help for ` +
+                  `${provider}/${modelId}: ${truncResult.reason ?? "unknown"}`,
+              );
+            }
+            if (
               !isCompactionFailure &&
               !hadAttemptLevelCompaction &&
               overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS

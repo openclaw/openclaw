@@ -5,10 +5,19 @@ import {
   embeddedAgentLog,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
-import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
+import {
+  maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl,
+  reconcileContextEngineCompactedCodexBinding,
+} from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 
@@ -83,6 +92,24 @@ function startNodeExecCompaction(sessionFile: string) {
 
 type CompactResult = NonNullable<Awaited<ReturnType<typeof maybeCompactCodexAppServerSession>>>;
 
+type CodexNativeThreadLifecycleEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "codex.native_thread.lifecycle" }
+>;
+
+function collectCodexNativeThreadLifecycleEvents(): {
+  events: CodexNativeThreadLifecycleEvent[];
+  unsubscribe: () => void;
+} {
+  const events: CodexNativeThreadLifecycleEvent[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event) => {
+    if (event.type === "codex.native_thread.lifecycle") {
+      events.push(event);
+    }
+  });
+  return { events, unsubscribe };
+}
+
 function requireCompactResult(result: CompactResult | undefined): CompactResult {
   if (!result) {
     throw new Error("expected compaction result");
@@ -96,11 +123,13 @@ function compactDetails(result: CompactResult): Record<string, unknown> {
 
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(async () => {
+    resetDiagnosticEventsForTest();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-compact-"));
   });
 
   afterEach(async () => {
     resetCodexAppServerClientFactoryForTest();
+    resetDiagnosticEventsForTest();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -261,16 +290,28 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("reports missing thread bindings as failed native compaction", async () => {
     const sessionFile = path.join(tempDir, "missing-binding.jsonl");
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
 
     const result = requireCompactResult(
       await startCompaction(sessionFile, { currentTokenCount: 123 }),
     );
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
 
     expect(result.ok).toBe(false);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("no codex app-server thread binding");
     expect(result.failure?.reason).toBe("missing_thread_binding");
     expect(result.result).toBeUndefined();
+    expect(lifecycleDiagnostics.events).toContainEqual(
+      expect.objectContaining({
+        type: "codex.native_thread.lifecycle",
+        action: "failed",
+        reason: "missing-thread-binding",
+        bindingMode: "none",
+        sessionTokens: 123,
+      }),
+    );
   });
 
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {
@@ -284,10 +325,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       sandbox: "workspace-write",
       serviceTier: "priority",
     });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
 
     const result = requireCompactResult(
       await startCompaction(sessionFile, { currentTokenCount: 456 }),
     );
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
 
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
@@ -302,6 +346,177 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.reason).toBe("thread not found: thread-1");
     expect(result.failure?.reason).toBe("stale_thread_binding");
     expect(result.result).toBeUndefined();
+    expect(lifecycleDiagnostics.events).toContainEqual(
+      expect.objectContaining({
+        type: "codex.native_thread.lifecycle",
+        action: "rejected",
+        reason: "app-server-rejected-thread",
+        threadId: "thread-1",
+        bindingMode: "legacy",
+        sessionTokens: 456,
+      }),
+    );
+  });
+
+  it("reports the stale binding mode when thread-bootstrap native compaction is rejected", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(new Error("thread not found: thread-bootstrap"));
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = path.join(tempDir, "thread-bootstrap.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-bootstrap",
+      cwd: tempDir,
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-fingerprint",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "projection-fingerprint",
+        },
+      },
+    });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
+
+    const result = requireCompactResult(
+      await startCompaction(sessionFile, { currentTokenCount: 789 }),
+    );
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
+
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-bootstrap",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.failure?.reason).toBe("stale_thread_binding");
+    expect(lifecycleDiagnostics.events).toContainEqual(
+      expect.objectContaining({
+        type: "codex.native_thread.lifecycle",
+        action: "rejected",
+        reason: "app-server-rejected-thread",
+        threadId: "thread-bootstrap",
+        bindingMode: "thread_bootstrap",
+        contextEngineId: "lossless-claw",
+        contextEnginePolicyFingerprint: "policy-fingerprint",
+        projectionEpoch: "epoch-1",
+        projectionFingerprint: "projection-fingerprint",
+        sessionTokens: 789,
+      }),
+    );
+  });
+
+  it("hashes preserved thread-bootstrap comparison metadata during compaction reconciliation", async () => {
+    const sessionFile = path.join(tempDir, "thread-bootstrap-preserve.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-bootstrap",
+      cwd: tempDir,
+      userMcpServersFingerprint: JSON.stringify({
+        mcp_servers: {
+          notes: {
+            command: "node",
+            args: ["/workspace/notes-mcp/dist/index.js"],
+            env: { NOTES_USER: "alice@example.org" },
+          },
+        },
+      }),
+      environmentSelectionFingerprint: JSON.stringify([
+        { cwd: "/workspace/private-project", environmentId: "env-private" },
+      ]),
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-fingerprint",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "projection-fingerprint",
+        },
+      },
+    });
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+
+    const result = await reconcileContextEngineCompactedCodexBinding({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+      },
+      contextEngineId: "lossless-claw",
+      compactedSessionId: "session-1",
+      compactedSessionFile: sessionFile,
+      originalBinding,
+    });
+
+    expect(result).toEqual({
+      invalidated: false,
+      preserved: true,
+      successorInvalidated: false,
+    });
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    expect(preservedBinding?.environmentSelectionFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/u);
+    const serializedBinding = JSON.stringify(preservedBinding);
+    expect(serializedBinding).not.toContain("alice@example.org");
+    expect(serializedBinding).not.toContain("/workspace/notes-mcp");
+    expect(serializedBinding).not.toContain("/workspace/private-project");
+  });
+
+  it("clears rollover successor bootstrap bindings when no original binding exists", async () => {
+    const sessionFile = path.join(tempDir, "thread-bootstrap-missing-source.jsonl");
+    const successorFile = path.join(tempDir, "thread-bootstrap-successor.jsonl");
+    await writeCodexAppServerBinding(successorFile, {
+      threadId: "thread-stale-successor",
+      cwd: tempDir,
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-fingerprint",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "projection-fingerprint",
+        },
+      },
+    });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
+
+    const result = await reconcileContextEngineCompactedCodexBinding({
+      params: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+      },
+      contextEngineId: "lossless-claw",
+      compactedSessionId: "session-1-compacted",
+      compactedSessionFile: successorFile,
+      originalBinding: null,
+    });
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
+
+    expect(result).toEqual({
+      invalidated: true,
+      preserved: false,
+      successorInvalidated: true,
+    });
+    expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
+    expect(await readCodexAppServerBinding(successorFile)).toBeUndefined();
+    expect(lifecycleDiagnostics.events).toContainEqual(
+      expect.objectContaining({
+        type: "codex.native_thread.lifecycle",
+        action: "invalidated",
+        reason: "context-engine-compaction-invalidated-binding",
+        threadId: "thread-stale-successor",
+        sessionId: "session-1-compacted",
+        previousSessionId: "session-1",
+      }),
+    );
   });
 
   it("does not impose an OpenClaw timeout after Codex accepts native compaction", async () => {
@@ -570,6 +785,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       cwd: tempDir,
       authProfileId: "openai-codex:binding",
     });
+    const lifecycleDiagnostics = collectCodexNativeThreadLifecycleEvents();
 
     const result = await maybeCompactCodexAppServerSession({
       sessionId: "session-1",
@@ -579,6 +795,8 @@ describe("maybeCompactCodexAppServerSession", () => {
       trigger: "manual",
       authProfileId: "openai-codex:runtime",
     });
+    await waitForDiagnosticEventsDrained();
+    lifecycleDiagnostics.unsubscribe();
 
     expect(result).toEqual({
       ok: false,
@@ -586,6 +804,15 @@ describe("maybeCompactCodexAppServerSession", () => {
       reason: "auth profile mismatch for session binding",
     });
     expect(factory).not.toHaveBeenCalled();
+    expect(lifecycleDiagnostics.events).toContainEqual(
+      expect.objectContaining({
+        type: "codex.native_thread.lifecycle",
+        action: "failed",
+        reason: "auth-profile-mismatch",
+        threadId: "thread-1",
+        bindingMode: "legacy",
+      }),
+    );
   });
 
   it("forwards compaction to native Codex even when a context engine owns compaction", async () => {
