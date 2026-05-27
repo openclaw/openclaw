@@ -24,6 +24,7 @@ function cleanPluginManifestEnv(): Record<(typeof PLUGIN_MANIFEST_ENV_KEYS)[numb
 let listKnownProviderEnvApiKeyNames: typeof import("./model-auth-env-vars.js").listKnownProviderEnvApiKeyNames;
 let GCP_VERTEX_CREDENTIALS_MARKER: typeof import("./model-auth-markers.js").GCP_VERTEX_CREDENTIALS_MARKER;
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
+let OPENCLAW_MANAGED_AUTH_MARKER: typeof import("./model-auth-markers.js").OPENCLAW_MANAGED_AUTH_MARKER;
 let isKnownEnvApiKeyMarker: typeof import("./model-auth-markers.js").isKnownEnvApiKeyMarker;
 let isNonSecretApiKeyMarker: typeof import("./model-auth-markers.js").isNonSecretApiKeyMarker;
 let listKnownNonSecretApiKeyMarkers: typeof import("./model-auth-markers.js").listKnownNonSecretApiKeyMarkers;
@@ -41,6 +42,7 @@ async function loadMarkerModules() {
   listKnownProviderEnvApiKeyNames = envVarsModule.listKnownProviderEnvApiKeyNames;
   GCP_VERTEX_CREDENTIALS_MARKER = markersModule.GCP_VERTEX_CREDENTIALS_MARKER;
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
+  OPENCLAW_MANAGED_AUTH_MARKER = markersModule.OPENCLAW_MANAGED_AUTH_MARKER;
   isKnownEnvApiKeyMarker = markersModule.isKnownEnvApiKeyMarker;
   isNonSecretApiKeyMarker = markersModule.isNonSecretApiKeyMarker;
   listKnownNonSecretApiKeyMarkers = markersModule.listKnownNonSecretApiKeyMarkers;
@@ -71,6 +73,7 @@ describe("model auth markers", () => {
     expect(isNonSecretApiKeyMarker("lmstudio-local")).toBe(true);
     expect(isNonSecretApiKeyMarker("codex-app-server")).toBe(true);
     expect(isNonSecretApiKeyMarker(GCP_VERTEX_CREDENTIALS_MARKER)).toBe(true);
+    expect(isNonSecretApiKeyMarker(OPENCLAW_MANAGED_AUTH_MARKER)).toBe(true);
   });
 
   it("reads bundled plugin-owned non-secret markers from manifests", () => {
@@ -79,6 +82,7 @@ describe("model auth markers", () => {
     expect(markers.has("gcp-vertex-credentials")).toBe(true);
     expect(markers.has("lmstudio-local")).toBe(true);
     expect(markers.has("minimax-oauth")).toBe(true);
+    expect(markers.has("openclaw-managed")).toBe(true);
     expect(markers.has("ollama-local")).toBe(true);
   });
 
