@@ -25,6 +25,8 @@ Description:
   Reports new bare test temp-directory creation patterns in added diff lines.
   This is a low-noise migration aid, not a cleanup data-flow checker. It does
   not scan existing lines and does not decide whether cleanup is sufficient.
+  File scope intentionally reuses scripts/changed-lanes.mjs test-path
+  classification instead of maintaining a separate test-helper heuristic.
 
 Options:
   --base <ref>       Base ref for branch diffs. Default: ${DEFAULT_BASE_REF}

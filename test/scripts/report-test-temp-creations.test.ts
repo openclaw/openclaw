@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe("report-test-temp-creations", () => {
-  it("reports only added bare temp creation lines in test files", () => {
+  it("reports added bare temp creation lines using changed-lane test path scope", () => {
     const bareTempSource = [
       "const tempRoot = fs.",
       "mkdtemp",

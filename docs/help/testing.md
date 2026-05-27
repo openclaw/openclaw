@@ -67,7 +67,9 @@ already owns an array or set of paths. Avoid new bare `fs.mkdtemp*` calls in
 tests unless a case is explicitly verifying raw temp-dir behavior. For
 migration visibility, `node scripts/report-test-temp-creations.mjs` reports new
 bare temp-dir creation in added diff lines without blocking existing cleanup
-styles.
+styles. Its file scope intentionally follows the same test-path classification
+used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
+filename heuristic.
 
 When debugging real providers/models (requires real creds):
 
