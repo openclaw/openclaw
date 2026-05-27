@@ -1702,7 +1702,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).toContain("continue from there");
   });
 
-  it("passes stable workspace files as Codex developer instructions and keeps MEMORY.md as turn context", async () => {
+  it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentsGuidance = "Follow AGENTS guidance.";
@@ -1720,9 +1720,15 @@ describe("runCodexAppServerAttempt", () => {
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), heartbeatChecklist);
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
     const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => setImmediate(resolve));
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -1775,8 +1781,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain(toolGuidance);
     expect(inputText).not.toContain(userProfile);
     expect(inputText).not.toContain(heartbeatChecklist);
-    expect(inputText).toContain(memorySummary);
-    expect(inputText).toContain("Codex loads AGENTS.md natively");
+    expect(inputText).not.toContain(memorySummary);
+    expect(inputText).toContain("OpenClaw Workspace Memory");
+    expect(inputText).toContain("MEMORY.md exists in the active agent workspace");
+    expect(inputText).toContain("memory_search");
+    expect(inputText).toContain("memory_get");
+    expect(inputText).not.toContain("Codex loads AGENTS.md natively");
     expect(inputText).not.toContain(agentsGuidance);
     expect(inputText).toContain("Current user request:\nhello");
     expect(result.systemPromptReport?.systemPrompt.chars).toBe(
@@ -1809,7 +1819,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(fileStats.get("MEMORY.md")).toMatchObject({
       rawChars: memorySummary.length,
-      injectedChars: memorySummary.length,
+      injectedChars: 0,
       truncated: false,
     });
     expect(fileStats.get("HEARTBEAT.md")).toMatchObject({
@@ -1820,6 +1830,142 @@ describe("runCodexAppServerAttempt", () => {
     expect(fileStats.get("AGENTS.md")).toMatchObject({
       rawChars: agentsGuidance.length,
       injectedChars: agentsGuidance.length,
+      truncated: false,
+    });
+  });
+
+  it("injects bounded MEMORY.md when memory tools are unavailable", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const memorySummary = "Memory summary goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).not.toContain("OpenClaw Workspace Memory");
+    expect(inputText).not.toContain("memory_search");
+    expect(inputText).toContain(memorySummary);
+
+    const fileStats = new Map(
+      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
+    );
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.length,
+      injectedChars: memorySummary.length,
+      truncated: false,
+    });
+  });
+
+  it("reports MEMORY.md as truncated when no-tool fallback exceeds the bootstrap budget", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const soulGuidance = "Soul guidance ".repeat(80);
+    const memorySummary = "Memory summary goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 1000,
+          bootstrapTotalMaxChars: 1000,
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const fileStats = new Map(
+      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
+    );
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.length,
+      injectedChars: 0,
+      truncated: true,
+    });
+  });
+
+  it("keeps MEMORY.md out of the Codex workspace context budget", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const memorySummary = "Memory summary ".repeat(300);
+    const hookContext = "Hook context survives the memory budget.";
+    const hookPath = path.join(workspaceDir, "ZZZ.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as {
+        bootstrapFiles: Array<{ content: string; missing: boolean; name?: string; path: string }>;
+      };
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "ZZZ.md",
+          path: hookPath,
+          content: hookContext,
+          missing: false,
+        },
+      ];
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 1000,
+          bootstrapTotalMaxChars: 2000,
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+    };
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+    expect(inputText).toContain("OpenClaw Workspace Memory");
+    expect(inputText).not.toContain(memorySummary);
+    expect(inputText).toContain(hookContext);
+
+    const fileStats = new Map(
+      result.systemPromptReport?.injectedWorkspaceFiles.map((file) => [file.name, file]) ?? [],
+    );
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.trimEnd().length,
+      injectedChars: 0,
+      truncated: false,
+    });
+    expect(fileStats.get("ZZZ.md")).toMatchObject({
+      rawChars: hookContext.length,
+      injectedChars: hookContext.length,
       truncated: false,
     });
   });

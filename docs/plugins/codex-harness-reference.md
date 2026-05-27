@@ -420,8 +420,13 @@ files. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
 OpenClaw Codex developer instructions because they define the active agent,
 available workspace guidance, and user profile. `HEARTBEAT.md` content is not
 injected; heartbeat turns get a collaboration-mode pointer to read the file when
-it exists and is non-empty. `BOOTSTRAP.md` and `MEMORY.md` when present are
-forwarded as OpenClaw turn input reference context.
+it exists and is non-empty. `MEMORY.md` content is not pasted into native Codex
+turn input when memory tools are available; when it exists, the harness adds a
+small workspace-memory pointer and Codex should use `memory_search` or
+`memory_get` when durable memory is relevant. If tools are disabled or memory
+search is unavailable, `MEMORY.md` uses the normal bounded turn-context path.
+`BOOTSTRAP.md` when present is forwarded as OpenClaw turn input reference
+context.
 
 ## Environment overrides
 

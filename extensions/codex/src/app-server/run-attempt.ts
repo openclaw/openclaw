@@ -56,9 +56,11 @@ import {
   buildCodexOpenClawPromptContext,
   buildCodexSystemPromptReport,
   buildCodexWorkspaceBootstrapContext,
+  hasCodexWorkspaceMemoryTools,
   prependCodexOpenClawPromptContext,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
+  renderCodexWorkspaceMemoryReference,
   resolveContextEngineBootstrapProjectionDecision,
   shouldProjectMirroredHistoryForCodexStart,
 } from "./attempt-context.js";
@@ -621,6 +623,7 @@ export async function runCodexAppServerAttempt(
     effectiveWorkspace,
     sessionKey: contextSessionKey,
     sessionAgentId,
+    memoryToolsAvailable: hasCodexWorkspaceMemoryTools(toolBridge.availableSpecs),
   });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(params, {
@@ -632,6 +635,9 @@ export async function runCodexAppServerAttempt(
     params,
     skillsPrompt: params.skillsSnapshot?.prompt,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
+    workspaceMemoryReference: renderCodexWorkspaceMemoryReference({
+      files: workspaceBootstrapContext.memoryReferenceFiles ?? [],
+    }),
   });
   let promptText = params.prompt;
   let developerInstructions = baseDeveloperInstructions;
