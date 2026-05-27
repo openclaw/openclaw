@@ -105,6 +105,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
+  const hasTrackedAbortTarget = () =>
+    Boolean(state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage);
+
   const openSelector = (
     selector: {
       onSelect?: (item: SelectItem) => void;
@@ -613,7 +616,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await abortActive();
         break;
       case "stop":
-        await abortActive({ preferActive: true });
+        if (hasTrackedAbortTarget()) {
+          await abortActive({ preferActive: true });
+          break;
+        }
+        await sendMessage(raw);
         break;
       case "settings":
         openSettings();
@@ -644,7 +651,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const busy = Boolean(
       state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
     );
-    if (isSlashStopCommand(text) || (busy && isChatStopCommandText(text))) {
+    if (
+      hasTrackedAbortTarget() &&
+      (isSlashStopCommand(text) || (busy && isChatStopCommandText(text)))
+    ) {
       await abortActive({ preferActive: true });
       return;
     }
@@ -661,6 +671,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     const runId = randomUUID();
     try {
       if (!isBtw) {
+        if (
+          opts.local === true &&
+          state.activeChatRunId &&
+          !state.pendingChatRunId &&
+          !state.pendingOptimisticUserMessage
+        ) {
+          chatLog.reserveAssistantSlot(state.activeChatRunId);
+        }
         chatLog.addUser(text);
         state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");

@@ -80,6 +80,7 @@ function createHarness(params?: {
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
   const addSystem = vi.fn();
+  const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
@@ -119,7 +120,7 @@ function createHarness(params?: {
       patchSession,
       resetSession,
     } as never,
-    chatLog: { addUser, addSystem } as never,
+    chatLog: { addUser, addSystem, reserveAssistantSlot } as never,
     tui: { requestRender } as never,
     opts: params?.opts ?? {},
     state: state as never,
@@ -156,6 +157,7 @@ function createHarness(params?: {
     setSession,
     addUser,
     addSystem,
+    reserveAssistantSlot,
     requestRender,
     loadHistory,
     refreshSessionInfo,
@@ -501,7 +503,15 @@ describe("tui command handlers", () => {
   });
 
   it("sends local prompts while a run is active so queue policy can handle them", async () => {
-    const { handleCommand, sendChat, addUser, addSystem, requestRender, state } = createHarness({
+    const {
+      handleCommand,
+      sendChat,
+      addUser,
+      addSystem,
+      reserveAssistantSlot,
+      requestRender,
+      state,
+    } = createHarness({
       opts: { local: true },
       activeChatRunId: "run-active",
       activityStatus: "streaming",
@@ -514,6 +524,10 @@ describe("tui command handlers", () => {
       message: "/context detail",
       sessionKey: "agent:main:main",
     });
+    expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
+    const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
+    const addUserCallOrder = addUser.mock.invocationCallOrder[0];
+    expect(reserveCallOrder).toBeLessThan(addUserCallOrder);
     expect(addUser).toHaveBeenCalledWith("/context detail");
     expect(addSystem).not.toHaveBeenCalledWith(
       "agent is busy — press Esc to abort before sending a new message",
@@ -551,6 +565,21 @@ describe("tui command handlers", () => {
     expect(abortActive).toHaveBeenCalledWith({ preferActive: true });
     expect(sendChat).not.toHaveBeenCalled();
     expect(addUser).not.toHaveBeenCalled();
+  });
+
+  it("sends slash stop to the backend when there is no tracked run", async () => {
+    const abortActive = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, sendChat, addUser } = createHarness({ abortActive });
+
+    await handleCommand("/stop");
+
+    expect(abortActive).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expectSendChatFields(sendChat, {
+      message: "/stop",
+      sessionKey: "agent:main:main",
+    });
+    expect(addUser).toHaveBeenCalledWith("/stop");
   });
 
   it("sends broad stop-like text as a normal prompt when idle", async () => {
