@@ -733,6 +733,31 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBeUndefined();
   });
 
+  it("exposes owner status to plugin commands that opt in", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand("demo-plugin", {
+      name: "voice",
+      description: "Voice command",
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch("/voice");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBe(true);
+  });
+
   it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
     let observedOwnerStatus: boolean | undefined;
     const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {

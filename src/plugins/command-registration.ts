@@ -159,6 +159,12 @@ export function validatePluginCommandDefinition(
         : "Command requiredScopes contains unknown operator scope";
     }
   }
+  if (
+    command.exposeSenderIsOwner !== undefined &&
+    typeof command.exposeSenderIsOwner !== "boolean"
+  ) {
+    return "Command exposeSenderIsOwner must be a boolean";
+  }
   if (command.channels !== undefined) {
     if (!Array.isArray(command.channels)) {
       return "Command channels must be an array of channel ids";

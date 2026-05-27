@@ -304,6 +304,7 @@ export async function executePluginCommand(params: {
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
   const senderIsOwnerForCommand =
     requiredScopes.length > 0 ||
+    command.exposeSenderIsOwner === true ||
     (isTrustedReservedCommandOwner(command) &&
       command.ownership === "reserved" &&
       isReservedCommandName(command.name) &&

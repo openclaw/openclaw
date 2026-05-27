@@ -130,6 +130,7 @@ describe("phone-control plugin", () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");
       expect(command.requiredScopes).toBeUndefined();
+      expect(command.exposeSenderIsOwner).toBe(true);
 
       const res = await command.handler({
         ...createCommandContext("arm writes 30s"),

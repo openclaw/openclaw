@@ -364,6 +364,7 @@ export default definePluginEntry({
       name: "phone",
       description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
