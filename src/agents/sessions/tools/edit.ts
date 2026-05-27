@@ -471,7 +471,7 @@ export function createEditToolDefinition(
       if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
         component.previewPending = true;
         const requestKey = argsKey;
-        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then(
+        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, ops).then(
           (preview) => {
             if (component.previewArgsKey === requestKey) {
               setEditPreview(component, preview, requestKey);

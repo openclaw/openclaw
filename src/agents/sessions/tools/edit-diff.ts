@@ -423,6 +423,11 @@ export interface EditDiffError {
   error: string;
 }
 
+export interface EditDiffOperations {
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  access: (absolutePath: string) => Promise<void>;
+}
+
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -431,13 +436,18 @@ export async function computeEditsDiff(
   path: string,
   edits: Edit[],
   cwd: string,
+  operations?: EditDiffOperations,
 ): Promise<EditDiffResult | EditDiffError> {
   const absolutePath = resolveToCwd(path, cwd);
 
   try {
     // Check if file exists and is readable
     try {
-      await access(absolutePath, constants.R_OK);
+      if (operations) {
+        await operations.access(absolutePath);
+      } else {
+        await access(absolutePath, constants.R_OK);
+      }
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error && "code" in error
@@ -447,7 +457,11 @@ export async function computeEditsDiff(
     }
 
     // Read the file
-    const rawContent = await readFile(absolutePath, "utf-8");
+    const rawContentResult = operations
+      ? await operations.readFile(absolutePath)
+      : await readFile(absolutePath, "utf-8");
+    const rawContent =
+      typeof rawContentResult === "string" ? rawContentResult : rawContentResult.toString("utf-8");
 
     // Strip BOM before matching (LLM won't include invisible BOM in oldText)
     const { text: content } = stripBom(rawContent);

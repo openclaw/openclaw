@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { createEditTool, type EditOperations } from "./edit.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Theme } from "../../modes/interactive/theme/theme.js";
+import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+
+const testTheme = {
+  bg: (_name: string, text: string) => text,
+  bold: (text: string) => text,
+  fg: (_name: string, text: string) => text,
+} as Theme;
 
 describe("edit tool", () => {
   let tmpDir = "";
@@ -124,5 +131,41 @@ describe("edit tool", () => {
       type: "text",
       text: `Successfully replaced 2 block(s) in ${filePath}.`,
     });
+  });
+
+  it("renders previews through custom edit operations", async () => {
+    const readFile = vi.fn(async () => Buffer.from("remote original\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: "remote original", newText: "remote changed" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect(readFile).toHaveBeenCalledWith(path.join("/workspace", "remote.txt"));
+    expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
+      "remote changed",
+    );
   });
 });
