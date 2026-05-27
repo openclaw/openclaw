@@ -54,7 +54,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { formatUncaughtError } from "../../infra/errors.js";
+import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -614,6 +614,10 @@ function readAgentRunTimeoutAttribution(meta: unknown) {
   };
 }
 
+function isExplicitTimeoutError(error: unknown): boolean {
+  return readErrorName(error) === "TimeoutError";
+}
+
 function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
   return entry?.abortStopReason?.trim() || "rpc";
 }
@@ -704,7 +708,7 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err) => {
-      const aborted = isAbortError(err) || isTimeoutError(err);
+      const aborted = isAbortError(err) || isExplicitTimeoutError(err);
       const renderedErr = formatForLog(err);
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({
