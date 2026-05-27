@@ -767,8 +767,8 @@ export async function runPreflightCompactionIfNeeded(params: {
 
   if (!result?.ok || !result.compacted) {
     const reason = result?.reason ?? "not_compacted";
-    logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-    throw new Error(`Preflight compaction required but failed: ${reason}`);
+    logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
+    return entry ?? params.sessionEntry;
   }
 
   await incrementCompactionCount({
