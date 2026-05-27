@@ -88,11 +88,6 @@ function stripLeadingReasoningBlocks(text: string): string {
   }
 }
 
-function hasFinalSilentToken(text: string, token: string): boolean {
-  const escaped = escapeRegExp(token);
-  return new RegExp(`(?:^|[\\s*.])${escaped}\\s*$`, "i").test(text);
-}
-
 function stripFinalSilentToken(text: string, token: string): string | null {
   const escaped = escapeRegExp(token);
   const stripped = text.replace(new RegExp(`(?:^|[\\s*.])${escaped}\\s*$`, "i"), "").trim();
@@ -146,7 +141,11 @@ function isReasoningPrefixedSilentReplyText(
   }
 
   if (openReasoningPrefixRe.test(trimmed)) {
-    return hasFinalSilentToken(trimmed, token);
+    const withoutOpenReasoningPrefix = trimmed.replace(openReasoningPrefixRe, "");
+    return (
+      isSilentReplyText(withoutOpenReasoningPrefix, token) ||
+      hasPlainReasoningFinalSilentToken(withoutOpenReasoningPrefix, token)
+    );
   }
   if (!plainReasoningPrefixRe.test(trimmed)) {
     return false;
