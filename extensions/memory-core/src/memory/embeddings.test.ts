@@ -105,16 +105,26 @@ describe("createEmbeddingProvider", () => {
     clearMemoryEmbeddingProviders();
   });
 
-  it("returns no provider in auto mode when all candidates are skippable setup failures", async () => {
-    registerMemoryEmbeddingProvider(createMissingCredentialsAdapter());
+  it("normalizes legacy auto mode to OpenAI", async () => {
+    registerMemoryEmbeddingProvider(createMissingCredentialsAdapter({ id: "bedrock" }));
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      autoSelectPriority: 20,
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "text-embedding-3-small",
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
 
     const result = await createEmbeddingProvider(createOptions("auto"));
 
-    expect(result).toEqual({
-      provider: null,
-      requestedProvider: "auto",
-      providerUnavailableReason: missingBedrockCredentialsError.message,
-    });
+    expect(result.provider?.id).toBe("openai");
+    expect(result.requestedProvider).toBe("openai");
   });
 
   it("still throws missing credentials for an explicit provider request", async () => {
@@ -125,7 +135,7 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
-  it("continues auto-selection after a skippable setup failure", async () => {
+  it("does not run priority-based auto-selection after a skippable setup failure", async () => {
     registerMemoryEmbeddingProvider(createMissingCredentialsAdapter({ autoSelectPriority: 10 }));
     registerMemoryEmbeddingProvider({
       id: "openai",
@@ -144,7 +154,7 @@ describe("createEmbeddingProvider", () => {
     const result = await createEmbeddingProvider(createOptions("auto"));
 
     expect(result.provider?.id).toBe("openai");
-    expect(result.requestedProvider).toBe("auto");
+    expect(result.requestedProvider).toBe("openai");
   });
 
   it("uses a generic embedding provider when no memory-specific provider exists", async () => {
@@ -201,7 +211,7 @@ describe("createEmbeddingProvider", () => {
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([0]);
   });
 
-  it("keeps auto-selection on legacy memory provider policy", async () => {
+  it("does not auto-select generic providers by priority policy", async () => {
     registerMemoryEmbeddingProvider({
       id: "openai-compatible",
       transport: "remote",
@@ -227,10 +237,9 @@ describe("createEmbeddingProvider", () => {
       }),
     });
 
-    const result = await createEmbeddingProvider(createOptions("auto"));
-
-    expect(result.provider?.id).toBe("legacy");
-    expect(result.requestedProvider).toBe("auto");
+    await expect(createEmbeddingProvider(createOptions("auto"))).rejects.toThrow(
+      "Unknown memory embedding provider: openai",
+    );
   });
 
   it("uses config-scoped lookup for generic fallback model resolution", () => {

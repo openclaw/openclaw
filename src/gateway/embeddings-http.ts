@@ -11,10 +11,7 @@ import {
   type EmbeddingProvider as GenericEmbeddingProvider,
   type EmbeddingProviderAdapter as GenericEmbeddingProviderAdapter,
 } from "../plugins/embedding-provider-runtime.js";
-import {
-  getMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders,
-} from "../plugins/memory-embedding-provider-runtime.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
@@ -55,6 +52,7 @@ const DEFAULT_EMBEDDINGS_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 type EmbeddingProviderRequest = string;
 
 function coerceRequest(value: unknown): EmbeddingsRequest {
@@ -96,21 +94,6 @@ function validateInputTexts(texts: string[]): string | undefined {
   return undefined;
 }
 
-function resolveAutoExplicitProviders(cfg: OpenClawConfig): Set<string> {
-  return new Set(
-    listMemoryEmbeddingProviders(cfg)
-      .filter((adapter) => adapter.allowExplicitWhenConfiguredAuto)
-      .map((adapter) => adapter.id),
-  );
-}
-
-function shouldContinueAutoSelection(
-  adapter: MemoryEmbeddingProviderAdapter,
-  err: unknown,
-): boolean {
-  return adapter.shouldContinueAutoSelection?.(err) ?? false;
-}
-
 async function createConfiguredEmbeddingProvider(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -126,6 +109,8 @@ async function createConfiguredEmbeddingProvider(params: {
     | "documentInputType"
   >;
 }): Promise<MemoryEmbeddingProvider> {
+  const providerId =
+    params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
   const createWithAdapter = async (adapter: MemoryEmbeddingProviderAdapter) => {
     const result = await adapter.create({
       config: params.cfg,
@@ -147,7 +132,7 @@ async function createConfiguredEmbeddingProvider(params: {
     const result = await adapter.create({
       config: params.cfg,
       agentDir: params.agentDir,
-      provider: params.provider,
+      provider: providerId,
       model: params.model || adapter.defaultModel || "",
       local: params.memorySearch?.local,
       remote: params.memorySearch?.remote
@@ -165,46 +150,22 @@ async function createConfiguredEmbeddingProvider(params: {
     return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
   };
 
-  if (params.provider === "auto") {
-    const adapters = listMemoryEmbeddingProviders(params.cfg)
-      .filter((adapter) => typeof adapter.autoSelectPriority === "number")
-      .toSorted(
-        (a, b) =>
-          (a.autoSelectPriority ?? Number.MAX_SAFE_INTEGER) -
-          (b.autoSelectPriority ?? Number.MAX_SAFE_INTEGER),
-      );
-    for (const adapter of adapters) {
-      try {
-        const provider = await createWithAdapter(adapter);
-        if (provider) {
-          return provider;
-        }
-      } catch (err) {
-        if (shouldContinueAutoSelection(adapter, err)) {
-          continue;
-        }
-        throw err;
-      }
-    }
-    throw new Error("No embeddings provider available.");
-  }
-
-  const adapter = getMemoryEmbeddingProvider(params.provider, params.cfg);
+  const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
   if (adapter) {
     const provider = await createWithAdapter(adapter);
     if (!provider) {
-      throw new Error(`Memory embedding provider ${params.provider} is unavailable.`);
+      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
     }
     return provider;
   }
 
-  const genericAdapter = getGenericEmbeddingProvider(params.provider, params.cfg);
+  const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);
   if (!genericAdapter) {
-    throw new Error(`Unknown memory embedding provider: ${params.provider}`);
+    throw new Error(`Unknown memory embedding provider: ${providerId}`);
   }
   const provider = await createWithGenericAdapter(genericAdapter);
   if (!provider) {
-    throw new Error(`Embedding provider ${params.provider} is unavailable.`);
+    throw new Error(`Embedding provider ${providerId} is unavailable.`);
   }
   return provider;
 }
@@ -235,12 +196,15 @@ function adaptGenericEmbeddingProvider(
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
-  cfg: OpenClawConfig;
 }): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
+  const configuredProvider =
+    params.configuredProvider === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : params.configuredProvider;
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");
   if (slash === -1) {
-    return { provider: params.configuredProvider, model: raw };
+    return { provider: configuredProvider, model: raw };
   }
 
   const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
@@ -249,26 +213,13 @@ function resolveEmbeddingsTarget(params: {
     return { errorMessage: "Unsupported embedding model reference." };
   }
 
-  if (params.configuredProvider === "auto") {
-    const safeAutoExplicitProviders = resolveAutoExplicitProviders(params.cfg);
-    if (provider === "auto") {
-      return { provider: "auto", model };
-    }
-    if (safeAutoExplicitProviders.has(provider)) {
-      return { provider, model };
-    }
+  if (provider !== configuredProvider) {
     return {
       errorMessage: "This agent does not allow that embedding provider on `/v1/embeddings`.",
     };
   }
 
-  if (provider !== params.configuredProvider) {
-    return {
-      errorMessage: "This agent does not allow that embedding provider on `/v1/embeddings`.",
-    };
-  }
-
-  return { provider: params.configuredProvider, model };
+  return { provider: configuredProvider, model };
 }
 
 export async function handleOpenAiEmbeddingsHttpRequest(
@@ -342,7 +293,6 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const target = resolveEmbeddingsTarget({
     requestModel: overrideModel,
     configuredProvider,
-    cfg,
   });
   if ("errorMessage" in target) {
     sendJson(res, 400, {

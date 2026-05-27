@@ -6,14 +6,12 @@ import {
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
   getMemoryEmbeddingProvider as getLegacyMemoryEmbeddingProvider,
-  listMemoryEmbeddingProviders as listLegacyMemoryEmbeddingProviders,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { formatErrorMessage } from "../dreaming-shared.js";
-import { canAutoSelectLocal } from "./provider-adapters.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
@@ -35,6 +33,8 @@ type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   fallback: EmbeddingProviderFallback;
 };
 
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+
 function adaptGenericEmbeddingProvider(
   provider: GenericEmbeddingProvider,
 ): MemoryEmbeddingProvider {
@@ -51,6 +51,11 @@ function adaptGenericEmbeddingProvider(
       }),
     embedBatch: async (texts, options) =>
       await provider.embedBatch(texts, {
+        ...options,
+        inputType: "document",
+      }),
+    embedBatchInputs: async (inputs, options) =>
+      await provider.embedBatch(inputs, {
         ...options,
         inputType: "document",
       }),
@@ -104,13 +109,6 @@ function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unkno
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
 }
 
-function shouldContinueAutoSelection(
-  adapter: MemoryEmbeddingProviderAdapter,
-  err: unknown,
-): boolean {
-  return adapter.shouldContinueAutoSelection?.(err) ?? false;
-}
-
 function getAdapter(
   id: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
@@ -124,21 +122,6 @@ function getAdapter(
     return adaptGenericEmbeddingAdapter(genericAdapter);
   }
   throw new Error(`Unknown memory embedding provider: ${id}`);
-}
-
-function listAutoSelectAdapters(
-  options: CreateEmbeddingProviderOptions,
-): MemoryEmbeddingProviderAdapter[] {
-  return listLegacyMemoryEmbeddingProviders(options.config)
-    .filter((adapter) => typeof adapter.autoSelectPriority === "number")
-    .filter((adapter) =>
-      adapter.id === "local" ? canAutoSelectLocal(options.local?.modelPath) : true,
-    )
-    .toSorted(
-      (a, b) =>
-        (a.autoSelectPriority ?? Number.MAX_SAFE_INTEGER) -
-        (b.autoSelectPriority ?? Number.MAX_SAFE_INTEGER),
-    );
 }
 
 function resolveProviderModel(
@@ -181,43 +164,17 @@ async function createWithAdapter(
 export async function createEmbeddingProvider(
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  if (options.provider === "auto") {
-    const reasons: string[] = [];
-    for (const adapter of listAutoSelectAdapters(options)) {
-      try {
-        const result = await createWithAdapter(adapter, {
-          ...options,
-          provider: adapter.id,
-        });
-        return {
-          ...result,
-          requestedProvider: "auto",
-        };
-      } catch (err) {
-        const message = formatProviderError(adapter, err);
-        if (shouldContinueAutoSelection(adapter, err)) {
-          reasons.push(message);
-          continue;
-        }
-        const wrapped = new Error(message) as Error & { cause?: unknown };
-        wrapped.cause = err;
-        throw wrapped;
-      }
-    }
-    return {
-      provider: null,
-      requestedProvider: "auto",
-      providerUnavailableReason:
-        reasons.length > 0 ? reasons.join("\n\n") : "No embeddings provider available.",
-    };
-  }
-
-  const primaryAdapter = getAdapter(options.provider, options.config);
+  const provider =
+    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+  const primaryAdapter = getAdapter(provider, options.config);
   try {
-    return await createWithAdapter(primaryAdapter, options);
+    return await createWithAdapter(primaryAdapter, {
+      ...options,
+      provider,
+    });
   } catch (primaryErr) {
     const reason = formatProviderError(primaryAdapter, primaryErr);
-    if (options.fallback && options.fallback !== "none" && options.fallback !== options.provider) {
+    if (options.fallback && options.fallback !== "none" && options.fallback !== provider) {
       const fallbackAdapter = getAdapter(options.fallback, options.config);
       try {
         const fallbackResult = await createWithAdapter(fallbackAdapter, {
@@ -226,8 +183,8 @@ export async function createEmbeddingProvider(
         });
         return {
           ...fallbackResult,
-          requestedProvider: options.provider,
-          fallbackFrom: options.provider,
+          requestedProvider: provider,
+          fallbackFrom: provider,
           fallbackReason: reason,
         };
       } catch (fallbackErr) {

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
 import type { EmbeddingProviderAdapter } from "../plugins/embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
@@ -351,19 +352,19 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     });
   });
 
-  it("routes configured provider aliases through the generic embeddings provider", async () => {
-    if (!process.env.OPENCLAW_CONFIG_PATH) {
-      throw new Error("OPENCLAW_CONFIG_PATH must be set for gateway tests");
-    }
+  it("routes configured OpenAI-compatible provider ids through generic providers", async () => {
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
-      process.env.OPENCLAW_CONFIG_PATH,
+      configPath,
       `${JSON.stringify(
         {
           models: {
             providers: {
-              "ollama-local": {
-                api: "openai-completions",
+              "tenant-embeddings": {
+                api: "openai-responses",
                 baseUrl: "http://127.0.0.1:11434/v1",
+                models: [],
               },
             },
           },
@@ -375,26 +376,37 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
     testState.agentConfig = {
       memorySearch: {
-        provider: "ollama-local",
-        model: "qwen2.5:3b",
-        remote: {
-          baseUrl: "http://127.0.0.1:11434/v1",
-        },
+        provider: "tenant-embeddings",
+        model: "tenant-embeddings/nomic-embed-text",
+        inputType: "default",
+        queryInputType: "query",
+        documentInputType: "document",
+        outputDimensionality: 768,
       },
     };
     resetConfigRuntimeState();
 
-    const res = await postEmbeddings(
-      {
-        model: "openclaw/default",
-        input: "hello",
-      },
-      { "x-openclaw-model": "ollama-local/qwen2.5:3b" },
-    );
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: ["a", "b"],
+    });
     expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      data?: Array<{ embedding?: number[]; index?: number }>;
+    };
+    expect(json.data).toEqual([
+      { object: "embedding", index: 0, embedding: [9.1, 9.2] },
+      { object: "embedding", index: 1, embedding: [10.1, 9.2] },
+    ]);
     const lastCall = latestCreateGenericEmbeddingProviderOptions();
-    expect(lastCall.provider).toBe("ollama-local");
-    expect(lastCall.model).toBe("qwen2.5:3b");
+    expect(lastCall).toMatchObject({
+      provider: "tenant-embeddings",
+      model: "nomic-embed-text",
+      dimensions: 768,
+      inputType: "default",
+      queryInputType: "query",
+      documentInputType: "document",
+    });
   });
 
   it("rejects invalid agent targets", async () => {

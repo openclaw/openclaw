@@ -1,19 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   clearEmbeddingProviders,
   clearMemoryEmbeddingProviders,
   getActivePluginRegistry,
   listRegisteredEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
-  registerEmbeddingProvider,
   restoreRegisteredEmbeddingProviders,
   restoreRegisteredMemoryEmbeddingProviders,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import openAIPlugin from "../../../openai/index.js";
 import { createEmbeddingProvider } from "./embeddings.js";
 
 type CapturedRequest = {
@@ -96,20 +93,6 @@ async function startEmbeddingServer(): Promise<TestServer> {
   return testServer;
 }
 
-function registerOpenAICompatibleEmbeddingProvider(): void {
-  openAIPlugin.register(
-    createTestPluginApi({
-      id: openAIPlugin.id,
-      name: openAIPlugin.name,
-      registerEmbeddingProvider(adapter) {
-        registerEmbeddingProvider(adapter, {
-          ownerPluginId: openAIPlugin.id,
-        });
-      },
-    }),
-  );
-}
-
 function createMemoryEmbeddingOptions(overrides?: {
   provider?: string;
   model?: string;
@@ -168,14 +151,13 @@ afterEach(async () => {
 });
 
 describe("memory-core generic embedding provider bridge", () => {
-  it("uses the OpenAI-compatible plugin through the generic registry and memory bridge", async () => {
+  it("uses the core OpenAI-compatible provider through the generic registry and memory bridge", async () => {
     const server = await startEmbeddingServer();
-    registerOpenAICompatibleEmbeddingProvider();
 
     expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
     expect(listRegisteredEmbeddingProviders()).toMatchObject([
       {
-        ownerPluginId: "openai",
+        ownerPluginId: "core",
         adapter: { id: "openai-compatible" },
       },
     ]);
@@ -211,9 +193,16 @@ describe("memory-core generic embedding provider bridge", () => {
       [1, 0.5, 3],
       [4, 1.5, 3],
     ]);
-    expect(result.provider?.embedBatchInputs).toBeUndefined();
+    await expect(
+      result.provider?.embedBatchInputs?.([
+        {
+          text: "structured doc",
+          parts: [{ type: "text", text: "structured doc" }],
+        },
+      ]),
+    ).resolves.toEqual([[14, 0.5, 3]]);
 
-    expect(server.requests).toHaveLength(2);
+    expect(server.requests).toHaveLength(3);
     expect(server.requests[0]).toMatchObject({
       method: "POST",
       url: "/v1/embeddings",
@@ -234,24 +223,25 @@ describe("memory-core generic embedding provider bridge", () => {
       dimensions: 3,
       input_type: "document",
     });
+    expect(server.requests[2]?.body).toEqual({
+      model: "text-embedding-bge-m3",
+      input: ["structured doc"],
+      dimensions: 3,
+      input_type: "document",
+    });
   });
 
   it("does not make generic embedding providers memory auto-selection candidates", async () => {
     const server = await startEmbeddingServer();
-    registerOpenAICompatibleEmbeddingProvider();
 
-    const result = await createEmbeddingProvider(
-      createMemoryEmbeddingOptions({
-        provider: "auto",
-        baseUrl: server.baseUrl,
-      }),
-    );
-
-    expect(result).toEqual({
-      provider: null,
-      requestedProvider: "auto",
-      providerUnavailableReason: "No embeddings provider available.",
-    });
+    await expect(
+      createEmbeddingProvider(
+        createMemoryEmbeddingOptions({
+          provider: "auto",
+          baseUrl: server.baseUrl,
+        }),
+      ),
+    ).rejects.toThrow("Unknown memory embedding provider: openai");
     expect(server.requests).toHaveLength(0);
   });
 });

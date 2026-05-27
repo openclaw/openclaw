@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 export type EmbeddingInput =
   | string
@@ -76,6 +77,12 @@ export type RegisteredEmbeddingProvider = {
 };
 
 const EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.embeddingProviders");
+const CORE_EMBEDDING_PROVIDERS: RegisteredEmbeddingProvider[] = [
+  {
+    adapter: openAICompatibleEmbeddingProviderAdapter,
+    ownerPluginId: "core",
+  },
+];
 
 function getEmbeddingProviders(): Map<string, RegisteredEmbeddingProvider> {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
@@ -101,15 +108,24 @@ export function registerEmbeddingProvider(
 export function getRegisteredEmbeddingProvider(
   id: string,
 ): RegisteredEmbeddingProvider | undefined {
-  return getEmbeddingProviders().get(id);
+  return (
+    getEmbeddingProviders().get(id) ??
+    CORE_EMBEDDING_PROVIDERS.find((entry) => entry.adapter.id === id)
+  );
 }
 
 export function getEmbeddingProvider(id: string): EmbeddingProviderAdapter | undefined {
-  return getEmbeddingProviders().get(id)?.adapter;
+  return getRegisteredEmbeddingProvider(id)?.adapter;
 }
 
 export function listRegisteredEmbeddingProviders(): RegisteredEmbeddingProvider[] {
-  return Array.from(getEmbeddingProviders().values());
+  const merged = new Map<string, RegisteredEmbeddingProvider>(
+    CORE_EMBEDDING_PROVIDERS.map((entry) => [entry.adapter.id, entry]),
+  );
+  for (const entry of getEmbeddingProviders().values()) {
+    merged.set(entry.adapter.id, entry);
+  }
+  return Array.from(merged.values());
 }
 
 export function listEmbeddingProviders(): EmbeddingProviderAdapter[] {

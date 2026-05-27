@@ -16,7 +16,7 @@ Adds OpenAI, OpenAI Codex model provider support to OpenClaw.
 
 ## Surface
 
-providers: openai, openai-codex; contracts: embeddingProviders, imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders
+providers: openai, openai-codex; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders, realtimeVoiceProviders, speechProviders, videoGenerationProviders
 
 ## Related docs
 
