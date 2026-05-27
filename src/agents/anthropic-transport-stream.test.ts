@@ -238,6 +238,23 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("keeps slash-bearing model ids for configured Anthropic-compatible endpoints", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "anthropic/claude-sonnet-4-6",
+        baseUrl: "https://anthropic-proxy.internal",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
   it("bypasses the OpenAI SSE sanitizer for Kimi Anthropic thinking streams", async () => {
     const model = makeAnthropicTransportModel({
       id: "kimi-for-coding",

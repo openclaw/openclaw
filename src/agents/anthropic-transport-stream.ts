@@ -72,10 +72,7 @@ type AnthropicMessagesClient = {
 };
 
 function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
-  if (
-    normalizeLowercaseStringOrEmpty(model.provider) === "anthropic" &&
-    /^anthropic\//i.test(model.id)
-  ) {
+  if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
     return model.id.replace(/^anthropic\//i, "");
   }
   return model.id;
