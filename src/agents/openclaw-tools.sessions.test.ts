@@ -1324,7 +1324,11 @@ describe("sessions tools", () => {
         return { runId: "fallback-run", status: "accepted", acceptedAt: 2000 };
       }
       if (request.method === "agent.wait") {
-        return { runId: "ignored-a2a-wait", status: "timeout" };
+        const params = request.params as { runId?: string } | undefined;
+        return { runId: params?.runId ?? "fallback-run", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
       }
       return {};
     });
@@ -1386,6 +1390,23 @@ describe("sessions tools", () => {
     expect(fallbackParams?.message).toContain("[Inter-session message]");
     expect(fallbackParams?.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
     expect(fallbackParams?.inputProvenance?.sourceSessionKey).toBe(requesterKey);
+
+    await vi.waitFor(() => {
+      const waitCall = calls.find(
+        (call) =>
+          call.method === "agent.wait" &&
+          (call.params as { runId?: string } | undefined)?.runId === "fallback-run",
+      );
+      expect(waitCall).toBeDefined();
+    });
+    await vi.waitFor(() => {
+      const historyCall = calls.find(
+        (call) =>
+          call.method === "chat.history" &&
+          (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
+      );
+      expect(historyCall).toBeDefined();
+    });
   });
 
   it("sessions_send reports run-scoped fallback admission failures", async () => {

@@ -168,7 +168,13 @@ async function startAgentRun(params: {
   deliveryTimeoutMs?: number;
   allowActiveRunQueueFallback?: boolean;
 }): Promise<
-  | { ok: true; runId: string; activeRunQueue?: boolean }
+  | {
+      ok: true;
+      runId: string;
+      activeRunQueue?: boolean;
+      a2aSessionKey?: string;
+      a2aDisplayKey?: string;
+    }
   | { ok: false; result: ReturnType<typeof jsonResult> }
 > {
   try {
@@ -195,7 +201,7 @@ async function startAgentRun(params: {
         return { ok: true, runId: params.runId, activeRunQueue: true };
       }
       try {
-        await params.callGateway({
+        const response = await params.callGateway<{ runId: string }>({
           method: "agent",
           params: {
             ...params.sendParams,
@@ -204,12 +210,18 @@ async function startAgentRun(params: {
           },
           timeoutMs: 10_000,
         });
+        return {
+          ok: true,
+          runId:
+            typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
+          a2aSessionKey: fallbackSessionKey,
+          a2aDisplayKey: fallbackSessionKey,
+        };
       } catch (err) {
         const queueSummary =
           formatEmbeddedPiQueueFailureSummary(queueOutcome) ?? "active run queue rejected";
         throw new Error(`${queueSummary}; fallback_failed error=${formatErrorMessage(err)}`);
       }
-      return { ok: true, runId: params.runId, activeRunQueue: true };
     }
     const response = await params.callGateway<{ runId: string }>({
       method: "agent",
@@ -527,13 +539,18 @@ export function createSessionsSendTool(opts?: {
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
 
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+      const startA2AFlow = (
+        roundOneReply?: string,
+        waitRunId?: string,
+        flowTargetSessionKey = resolvedKey,
+        flowDisplayKey = displayKey,
+      ) => {
         if (skipA2AFlow) {
           return;
         }
         void runSessionsSendA2AFlow({
-          targetSessionKey: resolvedKey,
-          displayKey,
+          targetSessionKey: flowTargetSessionKey,
+          displayKey: flowDisplayKey,
           message,
           announceTimeoutMs,
           maxPingPongTurns,
@@ -559,7 +576,7 @@ export function createSessionsSendTool(opts?: {
         }
         runId = start.runId;
         if (!start.activeRunQueue) {
-          startA2AFlow(undefined, runId);
+          startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey);
         }
         return jsonResult({
           runId,
