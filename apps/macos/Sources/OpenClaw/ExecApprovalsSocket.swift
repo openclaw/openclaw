@@ -67,6 +67,9 @@ struct ExecApprovalPromptRequest: Codable {
     }
 
     static func allowedDecisions(forAsk ask: String?) -> [ExecApprovalDecision] {
+        // Older payloads did not carry ask/allowedDecisions. Preserve their durable
+        // approval option; explicit ask=always and allowedDecisions payloads are the
+        // policy-carrying shapes that remove it.
         ask == ExecAsk.always.rawValue
             ? [.allowOnce, .deny]
             : [.allowOnce, .allowAlways, .deny]

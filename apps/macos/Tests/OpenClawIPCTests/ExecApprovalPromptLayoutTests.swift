@@ -51,6 +51,35 @@ struct ExecApprovalPromptLayoutTests {
         #expect(decisions == [.allowOnce, .allowAlways, .deny])
     }
 
+    @Test func `legacy prompts keep durable approval when policy fields are omitted`() {
+        let decisions = ExecApprovalsPromptPresenter.allowedPromptDecisions(
+            ExecApprovalPromptRequest(
+                command: "/bin/sh -lc pwd",
+                cwd: "/Users/example/projects/openclaw",
+                host: "node",
+                security: "full",
+                agentId: "main",
+                resolvedPath: "/bin/sh",
+                sessionKey: "session-1"))
+
+        #expect(decisions == [.allowOnce, .allowAlways, .deny])
+    }
+
+    @Test func `unknown ask prompts keep legacy durable approval when decisions are omitted`() {
+        let decisions = ExecApprovalsPromptPresenter.allowedPromptDecisions(
+            ExecApprovalPromptRequest(
+                command: "/bin/sh -lc pwd",
+                cwd: "/Users/example/projects/openclaw",
+                host: "node",
+                security: "full",
+                ask: "unexpected",
+                agentId: "main",
+                resolvedPath: "/bin/sh",
+                sessionKey: "session-1"))
+
+        #expect(decisions == [.allowOnce, .allowAlways, .deny])
+    }
+
     @Test func `approval request decodes valid allowed decisions only`() throws {
         let data = """
             {
