@@ -779,11 +779,11 @@ describe("composeSystemPromptWithHookContext", () => {
         appendSystemContext: wrappedPluginSystemContext("  append  "),
       }),
     ).toBe(
-      `${wrappedPluginSystemContext("prepend")}\n\nbase system\n\n${wrappedPluginSystemContext("append")}`,
+      `${wrappedPluginSystemContext("  prepend")}\n\nbase system\n\n${wrappedPluginSystemContext("  append")}`,
     );
   });
 
-  it("normalizes hook system context line endings and trailing whitespace", () => {
+  it("normalizes hook system context block line endings and trailing whitespace", () => {
     expect(
       composeSystemPromptWithHookContext({
         baseSystemPrompt: "  base system  ",
@@ -791,7 +791,7 @@ describe("composeSystemPromptWithHookContext", () => {
         appendSystemContext: wrappedPluginSystemContext("  append  \t\r\n"),
       }),
     ).toBe(
-      `${wrappedPluginSystemContext("prepend line\nsecond line")}\n\nbase system\n\n${wrappedPluginSystemContext("append")}`,
+      `${wrappedPluginSystemContext("  prepend line\nsecond line")}\n\nbase system\n\n${wrappedPluginSystemContext("  append")}`,
     );
   });
 
@@ -801,7 +801,7 @@ describe("composeSystemPromptWithHookContext", () => {
         baseSystemPrompt: "   ",
         appendSystemContext: wrappedPluginSystemContext("  append only  "),
       }),
-    ).toBe(wrappedPluginSystemContext("append only"));
+    ).toBe(wrappedPluginSystemContext("  append only"));
   });
 
   it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {
