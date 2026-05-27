@@ -126,7 +126,7 @@ function isSenderMatchedByAllowFromEntries(params: {
   event: BrokerInboundEventV1;
   entries: string[];
 }): boolean {
-  const entries = params.entries.map((value) => String(value).trim()).filter(Boolean);
+  const entries = params.entries.map((value) => value.trim()).filter(Boolean);
   if (entries.length === 0) {
     return false;
   }
