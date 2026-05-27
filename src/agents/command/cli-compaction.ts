@@ -335,7 +335,7 @@ async function compactNativeHarnessCliTranscript(params: {
 }): Promise<NativeHarnessCliCompactionOutcome> {
   let result: EmbeddedAgentCompactResult | undefined;
   try {
-    const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey) ?? params.sessionAgentId;
+    const sessionAgentId = params.sessionAgentId || readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,

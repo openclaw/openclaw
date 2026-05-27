@@ -306,10 +306,10 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("uses explicit session agent for legacy-key native harness CLI compaction", async () => {
-    const sessionKey = "legacy-codex-thread";
-    const sessionId = "session-legacy-codex";
-    const sessionFile = path.join(tmpDir, "session-legacy-codex.jsonl");
-    const storePath = path.join(tmpDir, "sessions-legacy-codex.json");
+    const sessionKey = "legacy-native-thread";
+    const sessionId = "session-legacy-native";
+    const sessionFile = path.join(tmpDir, "session-legacy-native.jsonl");
+    const storePath = path.join(tmpDir, "sessions-legacy-native.json");
     await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
@@ -319,7 +319,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
-      agentHarnessId: "codex",
+      agentHarnessId: "external-harness",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -377,7 +377,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionAgentId: "lossless-agent",
       workspaceDir: tmpDir,
       agentDir: tmpDir,
-      provider: "openai",
+      provider: "external-harness",
       model: "gpt-5.5",
       thinkLevel: "high",
     });
@@ -386,7 +386,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect.objectContaining({
         sessionKey,
         agentId: "lossless-agent",
-        agentHarnessRuntimeOverride: "codex",
+        agentHarnessRuntimeOverride: "external-harness",
       }),
     );
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
@@ -1355,7 +1355,7 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("selects native harness CLI compaction timeout from the explicit legacy session agent", async () => {
-    const sessionKey = "legacy-codex-timeout";
+    const sessionKey = "legacy-native-timeout";
     const sessionId = "session-native-agent-timeout";
     const sessionFile = path.join(tmpDir, "session-native-agent-timeout.jsonl");
     const storePath = path.join(tmpDir, "sessions-native-agent-timeout.json");
@@ -1368,7 +1368,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
-      agentHarnessId: "codex",
+      agentHarnessId: "external-harness",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -1414,12 +1414,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionAgentId: "lossless-agent",
       workspaceDir: tmpDir,
       agentDir: tmpDir,
-      provider: "codex",
+      provider: "external-harness",
       model: "gpt-5.5",
     });
 
     const rejection = expect(pending).rejects.toThrow(
-      "CLI native harness compaction failed for codex/gpt-5.5: Compaction timed out",
+      "CLI native harness compaction failed for external-harness/gpt-5.5: Compaction timed out",
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await rejection;
