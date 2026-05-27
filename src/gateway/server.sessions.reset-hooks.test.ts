@@ -523,6 +523,8 @@ test("sessions.reset drops cli session bindings so the next turn does not --resu
   expect(nextEntry?.claudeCliSessionId).toBeUndefined();
   expect(nextEntry?.cliSessionBindings).toBeUndefined();
   expect(nextEntry?.cliSessionIds).toBeUndefined();
+  expect(nextEntry?.suppressCliHistoryImport).toBeUndefined();
+  expect(nextEntry?.suppressCliHistoryImportProviders).toBeUndefined();
 });
 
 test("sessions.reset clears cli session bindings for parent-linked non-subagent sessions (e.g. dashboard children)", async () => {
@@ -580,6 +582,8 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
   expect(nextEntry?.claudeCliSessionId).toBeUndefined();
   expect(nextEntry?.cliSessionBindings).toBeUndefined();
   expect(nextEntry?.cliSessionIds).toBeUndefined();
+  expect(nextEntry?.suppressCliHistoryImport).toBeUndefined();
+  expect(nextEntry?.suppressCliHistoryImportProviders).toBeUndefined();
 });
 
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
@@ -637,4 +641,6 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
     "claude-cli": { sessionId: "claude-cli-child-session" },
   });
   expect(nextEntry?.cliSessionIds).toEqual({ "claude-cli": "claude-cli-child-session" });
+  expect(nextEntry?.suppressCliHistoryImport).toBe(true);
+  expect(nextEntry?.suppressCliHistoryImportProviders).toEqual(["claude-cli"]);
 });

@@ -1720,6 +1720,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/chat history: import bound `codex-cli` session transcripts into `chat.history`, so refreshing a Codex-backed chat restores prior turns from the Codex session store instead of showing an empty history when only the external CLI transcript exists.
 - Agents: honor `OPENCLAW_WORKSPACE_DIR` when resolving the default agent workspace, preserving explicit config precedence while keeping env-backed deployments out of the system prompt fallback path. Fixes #66786.
 - Doctor/Codex: stop warning that the message tool is unavailable for source-reply paths where OpenClaw grants `message` at runtime, keeping update and doctor output aligned with the OpenAI happy path. Thanks @pashpashpash.
 - Channels/Weixin: bump the external Weixin catalog entry to `@tencent-weixin/openclaw-weixin@2.4.3` with the matching package integrity. (#81730) Thanks @scotthuang.
