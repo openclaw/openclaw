@@ -11,7 +11,7 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
 }
 
 export function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")));
 }
 
 export function makeMockExecutableResolution(params: {
@@ -64,7 +64,7 @@ export function makeMockCommandResolution(params: {
   });
 }
 
-export type ShellParserParityFixtureCase = {
+type ShellParserParityFixtureCase = {
   id: string;
   command: string;
   ok: boolean;
@@ -75,7 +75,7 @@ type ShellParserParityFixture = {
   cases: ShellParserParityFixtureCase[];
 };
 
-export type WrapperResolutionParityFixtureCase = {
+type WrapperResolutionParityFixtureCase = {
   id: string;
   argv: string[];
   expectedRawExecutable: string | null;

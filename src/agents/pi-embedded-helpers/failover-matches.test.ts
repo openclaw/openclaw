@@ -4,6 +4,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isServerErrorMessage,
 } from "./failover-matches.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
@@ -11,6 +12,12 @@ describe("Z.ai vendor error codes (#48988)", () => {
     it("classifies Z.ai 1311 JSON body as billing", () => {
       const raw =
         '{"code":1311,"message":"The model you requested is not available in your current plan"}';
+      expect(isBillingErrorMessage(raw)).toBe(true);
+    });
+
+    it("classifies prose-only subscription plan access denials as billing", () => {
+      const raw =
+        "FailoverError: Your current subscription plan does not yet include access to GLM-5V-Turbo";
       expect(isBillingErrorMessage(raw)).toBe(true);
     });
 
@@ -75,6 +82,14 @@ describe("Z.ai vendor error codes (#48988)", () => {
       ).toBe(true);
     });
 
+    it("OpenRouter high-load text is classified as overloaded", () => {
+      expect(
+        isOverloadedErrorMessage(
+          "The service is currently experiencing high load and cannot process your request.",
+        ),
+      ).toBe(true);
+    });
+
     it("billing still classified correctly", () => {
       expect(isBillingErrorMessage("insufficient credits")).toBe(true);
     });
@@ -82,5 +97,19 @@ describe("Z.ai vendor error codes (#48988)", () => {
     it("auth still classified correctly", () => {
       expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
     });
+  });
+});
+
+describe("server error status classification", () => {
+  it("classifies a bare internal server error status as server error", () => {
+    expect(isServerErrorMessage("status: internal server error")).toBe(true);
+  });
+
+  it("classifies provider HTTP 5xx wrapper errors as server errors", () => {
+    expect(isServerErrorMessage("provider failed (HTTP 500): upstream apiKey is empty")).toBe(true);
+  });
+
+  it("does not classify prefixed plain internal server error status prose", () => {
+    expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
   });
 });

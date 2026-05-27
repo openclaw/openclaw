@@ -10,6 +10,8 @@ export type EffectiveToolInventoryEntry = {
   source: EffectiveToolSource;
   pluginId?: string;
   channelId?: string;
+  risk?: "low" | "medium" | "high";
+  tags?: string[];
 };
 
 export type EffectiveToolInventoryGroup = {
@@ -39,7 +41,6 @@ export type ResolveEffectiveToolInventoryParams = {
   workspaceDir?: string;
   agentDir?: string;
   messageProvider?: string;
-  senderIsOwner?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

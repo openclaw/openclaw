@@ -46,6 +46,17 @@ describe("shouldAttemptTtsPayload", () => {
     expect(shouldAttemptTtsPayload({ cfg: {} as OpenClawConfig })).toBe(false);
   });
 
+  it("does not infer automatic TTS from a dashboard text turn without opt-in state", () => {
+    expect(
+      shouldAttemptTtsPayload({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        channelId: "webchat",
+        accountId: "dashboard",
+      }),
+    ).toBe(false);
+  });
+
   it("honors session auto state before prefs and config", () => {
     writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
     const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
@@ -149,16 +160,10 @@ describe("shouldAttemptTtsPayload", () => {
       accountId: "englishbot",
     });
 
-    expect(resolved).toMatchObject({
-      auto: "always",
-      mode: "all",
-      provider: "openai",
-      providers: {
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "shimmer",
-        },
-      },
-    });
+    expect(resolved.auto).toBe("always");
+    expect(resolved.mode).toBe("all");
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.providers?.openai?.model).toBe("gpt-4o-mini-tts");
+    expect(resolved.providers?.openai?.voice).toBe("shimmer");
   });
 });

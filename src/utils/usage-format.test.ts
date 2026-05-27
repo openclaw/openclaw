@@ -1,30 +1,60 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
-  __setGatewayModelPricingForTest,
+  resetGatewayModelPricingCacheForTest,
+  setGatewayModelPricingForTest,
 } from "../gateway/model-pricing-cache-state.js";
+import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import {
-  __resetUsageFormatCachesForTest,
+  resetUsageFormatCachesForTest,
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
+  resolveModelCostConfigFingerprint,
   type PricingTier,
 } from "./usage-format.js";
 
+type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
+
+function requireCostConfig(
+  cost: ReturnType<typeof resolveModelCostConfig>,
+  label: string,
+): ModelCostConfig {
+  if (!cost) {
+    throw new Error(`expected ${label} cost config`);
+  }
+  return cost;
+}
+
+function requireTieredPricing(
+  cost: ModelCostConfig,
+  label: string,
+): NonNullable<ModelCostConfig["tieredPricing"]> {
+  if (!cost.tieredPricing) {
+    throw new Error(`expected ${label} tiered pricing`);
+  }
+  return cost.tieredPricing;
+}
+
 describe("usage-format", () => {
   const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
   let agentDir: string;
+  let stateDir: string;
 
   beforeEach(async () => {
-    agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    __resetUsageFormatCachesForTest();
-    __resetGatewayModelPricingCacheForTest();
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
+    agentDir = path.join(stateDir, "agents", "main", "agent");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    await fs.mkdir(agentDir, { recursive: true });
+    resetUsageFormatCachesForTest();
+    resetGatewayModelPricingCacheForTest();
   });
 
   afterEach(async () => {
@@ -33,9 +63,14 @@ describe("usage-format", () => {
     } else {
       process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
     }
-    __resetUsageFormatCachesForTest();
-    __resetGatewayModelPricingCacheForTest();
-    await fs.rm(agentDir, { recursive: true, force: true });
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    resetUsageFormatCachesForTest();
+    resetGatewayModelPricingCacheForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("formats token counts", () => {
@@ -143,7 +178,7 @@ describe("usage-format", () => {
       "utf8",
     );
 
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-preferred",
         model: "demo-model",
@@ -181,7 +216,7 @@ describe("usage-format", () => {
       },
     } as unknown as OpenClawConfig;
 
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-config-provider",
         model: "demo-model",
@@ -204,7 +239,7 @@ describe("usage-format", () => {
   });
 
   it("falls back to cached gateway pricing when no configured cost exists", () => {
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-cached-provider",
         model: "demo-model",
@@ -254,6 +289,365 @@ describe("usage-format", () => {
       cacheRead: 0.7,
       cacheWrite: 0.8,
     });
+  });
+
+  it("skips manifest model normalization for raw cost lookup", () => {
+    const manifestSpy = vi.spyOn(
+      manifestModelIdNormalization,
+      "normalizeProviderModelIdWithManifest",
+    );
+    const config = {
+      models: {
+        providers: {
+          "demo-raw": {
+            models: [
+              {
+                id: "demo-model",
+                cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-raw",
+        model: "demo-model",
+        config,
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+    });
+    expect(manifestSpy).not.toHaveBeenCalled();
+  });
+
+  it("observes in-place config pricing changes after a cached lookup", () => {
+    const model = {
+      id: "demo-model",
+      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    };
+    const config = {
+      models: {
+        providers: {
+          "demo-mutated": {
+            models: [model],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-mutated",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(1);
+
+    model.cost.input = 9;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-mutated",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(9);
+  });
+
+  it("observes structural config pricing changes after a cached lookup", () => {
+    const models = [
+      {
+        id: "demo-model",
+        cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+      },
+    ];
+    const config = {
+      models: {
+        providers: {
+          "demo-structural": { models },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-structural",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(1);
+
+    models.push({
+      id: "new-model",
+      cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 },
+    });
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-structural",
+        model: "new-model",
+        config,
+      })?.input,
+    ).toBe(5);
+
+    models.splice(0, 1);
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-structural",
+        model: "demo-model",
+        config,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("observes replaced config cost objects after a cached lookup", () => {
+    const model = {
+      id: "demo-model",
+      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    };
+    const config = {
+      models: {
+        providers: {
+          "demo-replaced-cost": { models: [model] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-replaced-cost",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(1);
+
+    model.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-replaced-cost",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(9);
+  });
+
+  it("ignores malformed raw tier ranges while caching config pricing", () => {
+    const config = {
+      models: {
+        providers: {
+          "demo-bad-tier": {
+            models: [
+              {
+                id: "demo-model",
+                cost: {
+                  input: 1,
+                  output: 2,
+                  cacheRead: 3,
+                  cacheWrite: 4,
+                  tieredPricing: [
+                    { input: 5, output: 6, cacheRead: 7, cacheWrite: 8, range: undefined },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-bad-tier",
+        model: "demo-model",
+        config,
+      }),
+    ).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+    });
+  });
+
+  it("skips metadata-only model rows while caching configured pricing", async () => {
+    const metadataOnlyModel = { id: "metadata-only" } as {
+      id: string;
+      cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    };
+    const config = {
+      models: {
+        providers: {
+          "demo-metadata-row": {
+            models: [
+              metadataOnlyModel,
+              {
+                id: "priced-model",
+                cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-metadata-row",
+        model: "metadata-only",
+        config,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-metadata-row",
+        model: "priced-model",
+        config,
+      })?.input,
+    ).toBe(1);
+
+    metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-metadata-row",
+        model: "metadata-only",
+        config,
+      })?.input,
+    ).toBe(9);
+
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          "demo-metadata-json": {
+            models: [
+              { id: "metadata-only" },
+              {
+                id: "priced-model",
+                cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 },
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-metadata-json",
+        model: "priced-model",
+      })?.input,
+    ).toBe(5);
+  });
+
+  it("updates pricing fingerprints when metadata-only model rows gain pricing", () => {
+    const metadataOnlyModel = { id: "metadata-only" } as {
+      id: string;
+      cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    };
+    const config = {
+      models: {
+        providers: {
+          "demo-metadata-fingerprint": {
+            models: [metadataOnlyModel],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const before = resolveModelCostConfigFingerprint(config);
+    metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
+    const after = resolveModelCostConfigFingerprint(config);
+
+    expect(after).not.toBe(before);
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-metadata-fingerprint",
+        model: "metadata-only",
+        config,
+      })?.input,
+    ).toBe(9);
+  });
+
+  it("retries models.json after an initial missing read", async () => {
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-late",
+        model: "demo-model",
+      }),
+    ).toBeUndefined();
+
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          "demo-late": {
+            models: [
+              {
+                id: "demo-model",
+                cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-late",
+        model: "demo-model",
+      })?.input,
+    ).toBe(1);
+  });
+
+  it("does not poll models.json stats after the process-local cost index is loaded", async () => {
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          "demo-stat": {
+            models: [
+              {
+                id: "demo-model",
+                cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-stat",
+        model: "demo-model",
+      })?.input,
+    ).toBe(1);
+
+    const statSpy = vi.spyOn(nodeFs, "statSync");
+    try {
+      for (let i = 0; i < 20; i += 1) {
+        expect(
+          resolveModelCostConfig({
+            provider: "demo-stat",
+            model: "demo-model",
+          })?.input,
+        ).toBe(1);
+      }
+      expect(statSpy).not.toHaveBeenCalled();
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   // -----------------------------------------------------------------------
@@ -419,6 +813,19 @@ describe("usage-format", () => {
     expect(total).toBeCloseTo(0.00075, 8);
   });
 
+  it("reuses sorted tier order for repeated estimates", () => {
+    const tiers: PricingTier[] = [
+      { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, range: [100, 200] },
+      { input: 2, output: 20, cacheRead: 0, cacheWrite: 0, range: [0, 100] },
+    ];
+    const tierSortSpy = vi.spyOn(tiers, "toSorted");
+    const cost = { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, tieredPricing: tiers };
+
+    expect(estimateUsageCost({ usage: { input: 150, output: 60 }, cost })).toBeCloseTo(0.00075, 8);
+    expect(estimateUsageCost({ usage: { input: 50, output: 60 }, cost })).toBeCloseTo(0.0013, 8);
+    expect(tierSortSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("bills malformed tier gaps at a whole-request fallback tier", () => {
     const tiers: PricingTier[] = [
       { input: 1, output: 10, cacheRead: 0, cacheWrite: 0, range: [0, 50] },
@@ -483,18 +890,18 @@ describe("usage-format", () => {
       provider: "volcengine",
       model: "doubao-open-ended",
     });
-    expect(cost1).toBeDefined();
-    expect(cost1!.tieredPricing).toHaveLength(2);
-    expect(cost1!.tieredPricing![1].range).toEqual([32000, Infinity]);
+    const tiers1 = requireTieredPricing(requireCostConfig(cost1, "open-ended"), "open-ended");
+    expect(tiers1).toHaveLength(2);
+    expect(tiers1[1].range).toEqual([32000, Infinity]);
 
     // [32000, -1] should also be normalized to [32000, Infinity]
     const cost2 = resolveModelCostConfig({
       provider: "volcengine",
       model: "doubao-neg-one",
     });
-    expect(cost2).toBeDefined();
-    expect(cost2!.tieredPricing).toHaveLength(2);
-    expect(cost2!.tieredPricing![1].range).toEqual([32000, Infinity]);
+    const tiers2 = requireTieredPricing(requireCostConfig(cost2, "negative-end"), "negative-end");
+    expect(tiers2).toHaveLength(2);
+    expect(tiers2[1].range).toEqual([32000, Infinity]);
   });
 
   it("resolves tiered pricing from models.json", async () => {
@@ -538,15 +945,15 @@ describe("usage-format", () => {
       provider: "volcengine",
       model: "doubao-seed-2-0-pro",
     });
+    const tiers = requireTieredPricing(requireCostConfig(cost, "models.json"), "models.json");
 
-    expect(cost).toBeDefined();
-    expect(cost!.tieredPricing).toHaveLength(2);
-    expect(cost!.tieredPricing![0].range).toEqual([0, 32000]);
-    expect(cost!.tieredPricing![1].input).toBe(0.7);
+    expect(tiers).toHaveLength(2);
+    expect(tiers[0].range).toEqual([0, 32000]);
+    expect(tiers[1].input).toBe(0.7);
   });
 
   it("resolves tiered pricing from cached gateway (LiteLLM)", () => {
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "volcengine",
         model: "doubao-seed",
@@ -579,8 +986,8 @@ describe("usage-format", () => {
       provider: "volcengine",
       model: "doubao-seed",
     });
+    const tiers = requireTieredPricing(requireCostConfig(cost, "cached gateway"), "cached gateway");
 
-    expect(cost).toBeDefined();
-    expect(cost!.tieredPricing).toHaveLength(2);
+    expect(tiers).toHaveLength(2);
   });
 });

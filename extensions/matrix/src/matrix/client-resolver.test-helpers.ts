@@ -23,9 +23,9 @@ export const matrixClientResolverMocks: MatrixClientResolverMocks = {
   resolveMatrixAuthContextMock: vi.fn(),
 };
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
   );
   return {
     ...actual,
@@ -44,6 +44,7 @@ export function createMockMatrixClient(): MatrixClient {
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
+    stopWithoutPersist: vi.fn(() => undefined),
   } as unknown as MatrixClient;
 }
 
@@ -80,7 +81,7 @@ export function primeMatrixClientResolverMocks(params?: {
   loadConfigMock.mockReturnValue(cfg);
   getMatrixRuntimeMock.mockReturnValue({
     config: {
-      loadConfig: loadConfigMock,
+      current: loadConfigMock,
     },
   });
   getActiveMatrixClientMock.mockReturnValue(null);
@@ -114,7 +115,7 @@ export async function expectOneOffSharedMatrixClient(params?: {
   timeoutMs?: number;
   prepareForOneOffCalls?: number;
   startCalls?: number;
-  releaseMode?: "persist" | "stop";
+  releaseMode?: "persist" | "stop" | "discard";
 }) {
   const {
     getActiveMatrixClientMock,

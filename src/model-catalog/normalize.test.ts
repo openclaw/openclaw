@@ -53,6 +53,7 @@ describe("model catalog normalization", () => {
                 compat: {
                   supportsTools: true,
                   supportsStore: "yes",
+                  thinkingFormat: "together",
                   unknownFlag: true,
                 },
                 status: "preview",
@@ -84,6 +85,10 @@ describe("model catalog normalization", () => {
             provider: "Azure-OpenAI-Responses",
             model: "gpt-5.3-codex-spark",
             reason: "not available",
+            when: {
+              baseUrlHosts: ["CODING-INTL.DASHSCOPE.ALIYUNCS.COM"],
+              providerConfigApiIn: ["Qwen", "ModelStudio"],
+            },
           },
         ],
         discovery: {
@@ -91,6 +96,7 @@ describe("model catalog normalization", () => {
           anthropic: "static",
           bad: "unknown",
         },
+        runtimeAugment: true,
       },
       { ownedProviders: new Set(["OpenAI"]) },
     );
@@ -133,6 +139,7 @@ describe("model catalog normalization", () => {
               },
               compat: {
                 supportsTools: true,
+                thinkingFormat: "together",
               },
               status: "preview",
               statusReason: "rolling out",
@@ -154,11 +161,16 @@ describe("model catalog normalization", () => {
           provider: "azure-openai-responses",
           model: "gpt-5.3-codex-spark",
           reason: "not available",
+          when: {
+            baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
+            providerConfigApiIn: ["qwen", "modelstudio"],
+          },
         },
       ],
       discovery: {
         openai: "static",
       },
+      runtimeAugment: true,
     });
   });
 

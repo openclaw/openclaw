@@ -12,6 +12,18 @@ vi.mock("./shared.js", async () => {
   };
 });
 
+function requirePostTranscriptionRequest(): { pinDns?: unknown; body?: unknown } {
+  const [call] = postTranscriptionRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected postTranscriptionRequest call");
+  }
+  const [request] = call;
+  if (typeof request !== "object" || request === null || Array.isArray(request)) {
+    throw new Error("expected postTranscriptionRequest params to be an object");
+  }
+  return request;
+}
+
 import { transcribeOpenAiCompatibleAudio } from "./openai-compatible-audio.js";
 
 afterEach(() => {
@@ -37,11 +49,8 @@ describe("transcribeOpenAiCompatibleAudio pinDns", () => {
     });
 
     expect(result.text).toBe("ok");
-    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pinDns: false,
-        body: expect.any(FormData),
-      }),
-    );
+    const request = requirePostTranscriptionRequest();
+    expect(request.pinDns).toBe(false);
+    expect(request.body).toBeInstanceOf(FormData);
   });
 });

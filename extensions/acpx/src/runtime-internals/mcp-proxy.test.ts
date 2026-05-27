@@ -2,8 +2,9 @@ import { spawn } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { bundledPluginFile } from "../../../../test/helpers/bundled-plugin-paths.js";
 
 const tempDirs: string[] = [];
 const proxyPath = path.resolve(bundledPluginFile("acpx", "src/runtime-internals/mcp-proxy.mjs"));
@@ -28,6 +29,21 @@ afterEach(async () => {
 });
 
 describe("mcp-proxy", () => {
+  it("hides the target MCP process window on Windows only", async () => {
+    const moduleUrl = pathToFileURL(proxyPath).href;
+    const { createTargetSpawnOptions } = (await import(moduleUrl)) as {
+      createTargetSpawnOptions: (platform?: NodeJS.Platform) => Record<string, unknown>;
+    };
+
+    expect(createTargetSpawnOptions("win32")).toEqual({
+      env: process.env,
+      stdio: ["pipe", "pipe", "inherit"],
+      windowsHide: true,
+    });
+    expect(createTargetSpawnOptions("darwin")).not.toHaveProperty("windowsHide");
+    expect(createTargetSpawnOptions("linux")).not.toHaveProperty("windowsHide");
+  });
+
   it("injects configured MCP servers into ACP session bootstrap requests", async () => {
     const echoServerPath = await makeTempScript(
       "echo-server.cjs",

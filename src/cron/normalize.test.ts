@@ -458,6 +458,51 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("promotes implicit text payloads with agentTurn hints for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "nested text model",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        text: " summarize issue status ",
+        model: " anthropic/claude-sonnet-4-6 ",
+        thinking: " high ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "anthropic/claude-sonnet-4-6",
+      thinking: "high",
+    });
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("promotes legacy top-level text with agentTurn hints for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy text model",
+      schedule: { kind: "every", everyMs: 60_000 },
+      text: " summarize issue status ",
+      model: " openrouter/deepseek/deepseek-r1 ",
+      fallbacks: [],
+      toolsAllow: [" read "],
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "openrouter/deepseek/deepseek-r1",
+      fallbacks: [],
+      toolsAllow: ["read"],
+    });
+    expect(normalized.text).toBeUndefined();
+    expect(normalized.model).toBeUndefined();
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy no-timeout",
@@ -495,7 +540,7 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.toolsAllow).toEqual([]);
+    expect(payload.toolsAllow).toStrictEqual([]);
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
@@ -637,19 +682,31 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
 
-  it("rejects custom session ids with path separators", () => {
+  it("preserves custom session ids with channel-native separators", () => {
+    const created = normalizeCronJobCreate({
+      name: "dingtalk-group",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(created.sessionTarget).toBe(
+      "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
+    );
+
+    const patched = normalizeCronJobPatch({
+      sessionTarget: "session:..\\outside",
+    }) as unknown as Record<string, unknown>;
+    expect(patched.sessionTarget).toBe("session:..\\outside");
+  });
+
+  it("rejects null bytes in custom session ids", () => {
     expect(() =>
       normalizeCronJobCreate({
-        name: "bad-custom-session",
+        name: "null-byte-session",
         schedule: { kind: "cron", expr: "* * * * *" },
-        sessionTarget: "session:../../outside",
+        sessionTarget: "session:bad\0id",
         payload: { kind: "agentTurn", message: "hello" },
-      }),
-    ).toThrow("invalid cron sessionTarget session id");
-
-    expect(() =>
-      normalizeCronJobPatch({
-        sessionTarget: "session:..\\outside",
       }),
     ).toThrow("invalid cron sessionTarget session id");
   });
@@ -676,6 +733,40 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("promotes implicit text payloads with agentTurn hints for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        text: " summarize issue status ",
+        model: "anthropic/claude-sonnet-4-6",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("promotes legacy top-level text with agentTurn hints for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      text: " summarize issue status ",
+      model: "openrouter/deepseek/deepseek-r1",
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize issue status",
+      model: "openrouter/deepseek/deepseek-r1",
+    });
+    expect(normalized.text).toBeUndefined();
+    expect(normalized.model).toBeUndefined();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
   it("infers agentTurn kind for lightContext-only payload patches", () => {
@@ -720,7 +811,7 @@ describe("normalizeCronJobPatch", () => {
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
-    expect(payload.fallbacks).toEqual([]);
+    expect(payload.fallbacks).toStrictEqual([]);
   });
 
   it("preserves empty toolsAllow lists so patches can disable all tools", () => {
@@ -732,7 +823,7 @@ describe("normalizeCronJobPatch", () => {
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
-    expect(payload.toolsAllow).toEqual([]);
+    expect(payload.toolsAllow).toStrictEqual([]);
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

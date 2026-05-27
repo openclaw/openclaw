@@ -64,6 +64,19 @@ async function seedTelegramSession(storePath: string, cfg: OpenClawConfig) {
   });
 }
 
+function expectTypingCall(
+  mock: ReturnType<typeof vi.fn>,
+  expected: { cfg: OpenClawConfig; to: string },
+) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("missing typing call");
+  }
+  const [params] = call as [{ cfg?: unknown; to?: unknown }];
+  expect(params.cfg).toBe(expected.cfg);
+  expect(params.to).toBe(expected.to);
+}
+
 describe("runHeartbeatOnce heartbeat typing", () => {
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry());
@@ -87,18 +100,10 @@ describe("runHeartbeatOnce heartbeat typing", () => {
         },
       });
 
-      expect(sendTyping).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg,
-          to: TELEGRAM_TARGET,
-        }),
-      );
-      expect(clearTyping).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg,
-          to: TELEGRAM_TARGET,
-        }),
-      );
+      expect(sendTyping).toHaveBeenCalledOnce();
+      expect(clearTyping).toHaveBeenCalledOnce();
+      expectTypingCall(sendTyping, { cfg, to: TELEGRAM_TARGET });
+      expectTypingCall(clearTyping, { cfg, to: TELEGRAM_TARGET });
       expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
         replySpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );

@@ -1,17 +1,17 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyToFanout, type ReplyToResolution } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-send-deps";
-import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 
 type DiscordSendRuntime = typeof import("./send.js");
 
 export type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
 export type DiscordVoiceSendFn = DiscordSendRuntime["sendVoiceMessageDiscord"];
-export type DiscordFormattingOptions = {
+type DiscordFormattingOptions = {
   textLimit?: number;
   maxLinesPerMessage?: number;
   tableMode?: NonNullable<Parameters<DiscordSendFn>[2]>["tableMode"];

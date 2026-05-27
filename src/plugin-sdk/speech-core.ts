@@ -16,6 +16,8 @@ export type {
   SpeechProviderResolveTalkOverridesContext,
   SpeechProviderOverrides,
   SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
+  SpeechSynthesisStreamResult,
   SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,
@@ -35,6 +37,7 @@ export { parseTtsDirectives } from "../tts/directives.js";
 export {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
+  listLoadedSpeechProviders,
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";

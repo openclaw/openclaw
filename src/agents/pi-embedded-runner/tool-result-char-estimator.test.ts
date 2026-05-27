@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   createMessageCharEstimateCache,
@@ -15,7 +15,7 @@ import {
  * estimator with: TypeError: Cannot read properties of undefined (reading 'length')
  */
 describe("tool-result-char-estimator", () => {
-  it("does not crash on toolResult with malformed text block (missing text string)", () => {
+  it("uses the unknown-block fallback for malformed text blocks", () => {
     const malformed = {
       role: "toolResult",
       toolName: "sentinel_control",
@@ -25,12 +25,11 @@ describe("tool-result-char-estimator", () => {
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
-    expect(() => estimateMessageCharsCached(malformed, cache)).not.toThrow();
-    // Malformed block should be estimated via the unknown-block fallback, not zero
-    expect(estimateMessageCharsCached(malformed, cache)).toBeGreaterThan(0);
+    const chars = estimateMessageCharsCached(malformed, cache);
+    expect(chars).toBe(30);
   });
 
-  it("does not crash on toolResult with null content entries", () => {
+  it("estimates text content when toolResult content includes null entries", () => {
     const malformed = {
       role: "toolResult",
       toolName: "read",
@@ -39,10 +38,11 @@ describe("tool-result-char-estimator", () => {
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
-    expect(() => estimateMessageCharsCached(malformed, cache)).not.toThrow();
+    const chars = estimateMessageCharsCached(malformed, cache);
+    expect(chars).toBe(12);
   });
 
-  it("getToolResultText skips malformed text blocks without crashing", () => {
+  it("getToolResultText skips malformed text blocks", () => {
     const malformed = {
       role: "toolResult",
       toolName: "sentinel_control",
@@ -50,7 +50,6 @@ describe("tool-result-char-estimator", () => {
       timestamp: Date.now(),
     } as unknown as AgentMessage;
 
-    expect(() => getToolResultText(malformed)).not.toThrow();
     expect(getToolResultText(malformed)).toBe("valid");
   });
 
@@ -64,6 +63,6 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBeGreaterThanOrEqual(11); // "hello world".length
+    expect(chars).toBe(22);
   });
 });

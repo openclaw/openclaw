@@ -6,6 +6,7 @@ import {
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   collectSecretInputAssignment,
   type ResolverContext,
@@ -40,14 +41,18 @@ export function collectPluginConfigAssignments(params: {
     params.config,
     resolveDefaultAgentId(params.config),
   );
+  const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
+    .filter(([, origin]) => origin === "bundled")
+    .map(([pluginId]) => pluginId);
   const pluginSecretInputs = new Map(
     [
       ...resolvePluginConfigContractsById({
         config: params.config,
         workspaceDir,
         env: params.context.env,
-        cache: true,
-        fallbackToBundledMetadata: false,
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: true,
+        fallbackBundledPluginIds: bundledLoadablePluginIds,
         pluginIds: Object.keys(entries),
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {
@@ -157,11 +162,7 @@ function createPluginConfigAssignmentApply(
   relativePath: string,
 ): (value: unknown) => void {
   return (value) => {
-    const segments = relativePath
-      .replace(/\[(\d+)\]/g, ".$1")
-      .split(".")
-      .map((segment) => segment.trim())
-      .filter(Boolean);
+    const segments = normalizeStringEntries(relativePath.replace(/\[(\d+)\]/g, ".$1").split("."));
     if (segments.length === 0) {
       return;
     }

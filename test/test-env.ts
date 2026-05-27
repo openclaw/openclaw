@@ -18,8 +18,7 @@ const LIVE_EXTERNAL_AUTH_FILES = [
 ] as const;
 const requireFromHere = createRequire(import.meta.url);
 
-type LegacyConfigCompatApi =
-  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
+type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
 type ConfigValidationApi = typeof import("../src/config/validation.js");
 
 let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
@@ -53,7 +52,7 @@ function restoreEnv(entries: RestoreEntry[]): void {
 
 function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
   cachedLegacyConfigCompatApi ??= requireFromHere(
-    "../src/commands/doctor/shared/legacy-config-migrate.js",
+    "../src/commands/doctor/shared/legacy-config-compat.js",
   ) as LegacyConfigCompatApi;
   return cachedLegacyConfigCompatApi;
 }
@@ -306,6 +305,7 @@ function sanitizeLiveConfig(raw: string): string {
         defaults?: Record<string, unknown>;
         list?: Array<Record<string, unknown>>;
       };
+      diagnostics?: Record<string, unknown>;
     } = JSON5.parse(raw);
 
     if (!parsed || typeof parsed !== "object") {
@@ -327,6 +327,10 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
+    }
+
+    if (parsed.diagnostics && typeof parsed.diagnostics === "object") {
+      delete parsed.diagnostics.memoryPressureSnapshot;
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {

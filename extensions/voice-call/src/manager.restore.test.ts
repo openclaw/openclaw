@@ -19,9 +19,22 @@ function requireSingleActiveCall(manager: CallManager) {
   return activeCall;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireSingleHangupCall(provider: FakeProvider) {
+  expect(provider.hangupCalls).toHaveLength(1);
+  return requireRecord(provider.hangupCalls[0], "hangup call");
+}
+
 describe("CallManager verification on restore", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   async function initializeManager(params?: {
@@ -89,11 +102,8 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
-    expect(provider.hangupCalls).toEqual([
-      expect.objectContaining({
-        reason: "timeout",
-      }),
-    ]);
+    const hangupCall = requireSingleHangupCall(provider);
+    expect(hangupCall.reason).toBe("timeout");
 
     await flushPendingCallRecordWritesForTest();
     expect(loadActiveCallsFromStore(storePath).activeCalls.size).toBe(0);
@@ -121,6 +131,126 @@ describe("CallManager verification on restore", () => {
     expect(activeCall.state).toBe(call.state);
   });
 
+  it("summarizes repeated restored-call verification outcomes", async () => {
+    const now = Date.now();
+    const storePath = createTestStorePath();
+    const calls = [
+      makePersistedCall({
+        callId: "missing-provider-a",
+        providerCallId: undefined,
+        state: "initiated",
+        startedAt: now - 10_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "missing-provider-b",
+        providerCallId: undefined,
+        state: "initiated",
+        startedAt: now - 10_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "expired-a",
+        providerCallId: "expired-provider-a",
+        state: "initiated",
+        startedAt: now - 600_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "terminal-a",
+        providerCallId: "terminal-provider-a",
+        state: "initiated",
+        startedAt: now - 20_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "terminal-b",
+        providerCallId: "terminal-provider-b",
+        state: "initiated",
+        startedAt: now - 20_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "unknown-a",
+        providerCallId: "unknown-provider-a",
+        state: "initiated",
+        startedAt: now - 20_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "active-a",
+        providerCallId: "active-provider-a",
+        state: "initiated",
+        startedAt: now - 20_000,
+        answeredAt: undefined,
+      }),
+      makePersistedCall({
+        callId: "failure-a",
+        providerCallId: "failure-provider-a",
+        state: "initiated",
+        startedAt: now - 20_000,
+        answeredAt: undefined,
+      }),
+    ];
+    writeCallsToStore(storePath, calls);
+
+    const provider = new FakeProvider();
+    provider.getCallStatus = async ({ providerCallId }) => {
+      if (providerCallId.startsWith("terminal-provider")) {
+        return { status: "completed", isTerminal: true };
+      }
+      if (providerCallId.startsWith("unknown-provider")) {
+        return { status: "unknown", isTerminal: false, isUnknown: true };
+      }
+      if (providerCallId.startsWith("active-provider")) {
+        return { status: "in-progress", isTerminal: false };
+      }
+      throw new Error("network failure");
+    };
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+      maxDurationSeconds: 300,
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const manager = new CallManager(config, storePath);
+
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    expect(
+      manager
+        .getActiveCalls()
+        .map((call) => call.callId)
+        .toSorted(),
+    ).toEqual(["active-a", "failure-a", "unknown-a"]);
+    const hangupCall = requireSingleHangupCall(provider);
+    expect(hangupCall.callId).toBe("expired-a");
+    expect(hangupCall.providerCallId).toBe("expired-provider-a");
+    expect(hangupCall.reason).toBe("timeout");
+    expect(logSpy).toHaveBeenCalledWith(
+      "[voice-call] Skipped 2 restored call(s) with no providerCallId",
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[voice-call] Skipped 1 restored call(s) older than maxDurationSeconds",
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[voice-call] Skipped 2 restored call(s) with provider status: completed",
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[voice-call] Kept 1 restored call(s) confirmed active by provider",
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[voice-call] Kept 1 restored call(s) with unknown provider status (relying on timer)",
+    );
+    expect(logSpy).toHaveBeenCalledWith(
+      "[voice-call] Kept 1 restored call(s) after verification failure (relying on timer)",
+    );
+    expect(logSpy.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain("terminal-a");
+
+    logSpy.mockRestore();
+  });
+
   it("uses only remaining max duration for restored answered calls", async () => {
     vi.useFakeTimers();
     const now = new Date("2026-03-17T03:07:00Z");
@@ -141,11 +271,8 @@ describe("CallManager verification on restore", () => {
 
     await vi.advanceTimersByTimeAsync(1_100);
     expect(manager.getActiveCalls()).toHaveLength(0);
-    expect(provider.hangupCalls).toEqual([
-      expect.objectContaining({
-        reason: "timeout",
-      }),
-    ]);
+    const hangupCall = requireSingleHangupCall(provider);
+    expect(hangupCall.reason).toBe("timeout");
   });
 
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {

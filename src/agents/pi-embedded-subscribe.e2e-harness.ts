@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { expect } from "vitest";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
@@ -45,6 +45,8 @@ export function createSubscribedSessionHarness(
   const mergedSession = Object.assign(session, sessionExtras ?? {});
   const subscription = subscribeEmbeddedPiSession({
     ...subscribeParams,
+    trustedLocalMediaToolNames:
+      subscribeParams.trustedLocalMediaToolNames ?? subscribeParams.builtinToolNames,
     session: mergedSession,
   });
   return { emit, session: mergedSession, subscription };

@@ -1,4 +1,5 @@
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
+import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -18,12 +19,32 @@ export type CronDeliveryPlan = {
   requested: boolean;
 };
 
+export function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
+  return Boolean(
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+  );
+}
+
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
   return trimmed as CronMessageChannel;
+}
+
+function resolveAnnounceChannel(params: {
+  channel?: CronMessageChannel;
+  to?: string;
+}): CronMessageChannel {
+  if (params.channel && params.channel !== "last") {
+    return params.channel;
+  }
+  return (
+    (resolveTargetPrefixedChannel(params.to) as CronMessageChannel | undefined) ??
+    params.channel ??
+    "last"
+  );
 }
 
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
@@ -56,7 +77,10 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
-    const channel = resolvedMode === "announce" ? (deliveryChannel ?? "last") : deliveryChannel;
+    const channel =
+      resolvedMode === "announce"
+        ? resolveAnnounceChannel({ channel: deliveryChannel, to })
+        : deliveryChannel;
     return {
       mode: resolvedMode,
       channel: resolvedMode === "webhook" ? undefined : channel,
@@ -168,7 +192,7 @@ export function resolveFailureDestination(
 
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
-    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
+    channel: resolvedMode === "announce" ? resolveAnnounceChannel({ channel, to }) : undefined,
     to,
     accountId,
   };
@@ -189,15 +213,17 @@ function isSameDeliveryTarget(
     return false;
   }
 
-  const primaryChannel = delivery.channel;
-  const primaryTo = delivery.to;
-  const primaryAccountId = delivery.accountId;
+  const primaryTo = normalizeOptionalString(delivery.to);
+  const primaryAccountId = normalizeOptionalString(delivery.accountId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
   }
 
-  const primaryChannelNormalized = primaryChannel ?? "last";
+  const primaryChannelNormalized = resolveAnnounceChannel({
+    channel: normalizeChannel(delivery.channel),
+    to: primaryTo,
+  });
   const failureChannelNormalized = failurePlan.channel ?? "last";
 
   return (

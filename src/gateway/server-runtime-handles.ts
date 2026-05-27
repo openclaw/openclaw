@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
-export type GatewayConfigReloaderHandle = {
+type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
 };
 
@@ -15,6 +16,8 @@ export type GatewayServerMutableState = {
   heartbeatRunner: HeartbeatRunner;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
+  postReadySidecars: GatewayPostReadySidecarHandle[];
+  gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[];
   skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
   skillsRefreshDelayMs: number;
   skillsChangeUnsub: () => void;
@@ -46,6 +49,8 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     } satisfies HeartbeatRunner,
     stopGatewayUpdateCheck: () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,
+    postReadySidecars: [],
+    gatewayLifetimeSidecars: [],
     skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: () => {},

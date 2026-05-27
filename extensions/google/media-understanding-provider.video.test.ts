@@ -1,9 +1,9 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.js";
+  withFetchPreconnect,
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
@@ -86,10 +86,10 @@ describe("describeGeminiVideo", () => {
     });
     const { url: seenUrl, init: seenInit } = getRequest();
 
-    expect(result.model).toBe("gemini-3-pro-preview");
+    expect(result.model).toBe("gemini-3.1-pro-preview");
     expect(result.text).toBe("first\nsecond");
     expect(seenUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent",
     );
     expect(seenInit?.method).toBe("POST");
     expect(seenInit?.signal).toBeInstanceOf(AbortSignal);

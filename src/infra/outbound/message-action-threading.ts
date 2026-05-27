@@ -13,6 +13,10 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 type ResolveAutoThreadId = NonNullable<ChannelThreadingAdapter["resolveAutoThreadId"]>;
 
+function suppressesImplicitThreading(actionParams: Record<string, unknown>): boolean {
+  return actionParams.topLevel === true || actionParams.threadId === null;
+}
+
 export function resolveAndApplyOutboundThreadId(
   actionParams: Record<string, unknown>,
   context: {
@@ -24,6 +28,9 @@ export function resolveAndApplyOutboundThreadId(
   },
 ): string | undefined {
   const threadId = readStringParam(actionParams, "threadId");
+  if (!threadId && suppressesImplicitThreading(actionParams)) {
+    return undefined;
+  }
   const resolved =
     threadId ??
     context.resolveAutoThreadId?.({
@@ -78,6 +85,9 @@ export function resolveAndApplyOutboundReplyToId(
       }
     }
     return explicitReplyToId;
+  }
+  if (suppressesImplicitThreading(actionParams)) {
+    return undefined;
   }
   if (!isSameConversationTarget(actionParams, context.channel, context.toolContext)) {
     return undefined;
@@ -168,10 +178,10 @@ export async function prepareOutboundMirrorRoute(params: {
     });
   }
   if (outboundRoute && !params.dryRun) {
-    params.actionParams.__sessionKey = outboundRoute.sessionKey;
+    params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
   }
   if (params.agentId) {
-    params.actionParams.__agentId = params.agentId;
+    params.actionParams["__agentId"] = params.agentId;
   }
   return {
     resolvedThreadId,

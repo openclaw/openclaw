@@ -1,3 +1,4 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -32,8 +33,6 @@ export type CompactEmbeddedPiSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
-  /** Whether the sender is an owner (required for owner-only tools). */
-  senderIsOwner?: boolean;
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
@@ -41,8 +40,11 @@ export type CompactEmbeddedPiSessionParams = {
   agentDir?: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  senderIsOwner?: boolean;
   provider?: string;
   model?: string;
+  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
+  modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
   contextEngine?: ContextEngine;
   /** Optional caller-resolved token budget for harness-owned compaction. */
@@ -60,14 +62,26 @@ export type CompactEmbeddedPiSessionParams = {
   tokenBudget?: number;
   force?: boolean;
   trigger?: "budget" | "overflow" | "manual";
+  /**
+   * Preflight callers can allow native/current-session harness compaction but
+   * move plugin-owned budget compaction onto background turn maintenance.
+   */
+  deferOwningContextEngineCompaction?: boolean;
   diagId?: string;
   attempt?: number;
   maxAttempts?: number;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  onCompactionHookMessages?: (payload: {
+    phase: "before" | "after";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 };

@@ -63,6 +63,7 @@ describe("exec approvals node host allowlist check", () => {
       resolution: {
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
+        resolvedRealPath: "/usr/bin/python3",
         executableName: "python3",
       },
       entries: [{ pattern: "/usr/bin/python3" }],
@@ -196,11 +197,9 @@ describe("exec approvals invalid explicit policy fallback", () => {
       },
     });
 
-    expect(resolved.agent).toMatchObject({
-      security: "deny",
-      ask: "on-miss",
-      askFallback: "deny",
-    });
+    expect(resolved.agent.security).toBe("deny");
+    expect(resolved.agent.ask).toBe("on-miss");
+    expect(resolved.agent.askFallback).toBe("deny");
     expect(resolved.agentSources).toEqual({
       security: "defaults.security",
       ask: "defaults.ask",
@@ -238,11 +237,9 @@ describe("exec approvals invalid explicit policy fallback", () => {
       },
     });
 
-    expect(resolved.agent).toMatchObject({
-      security: "deny",
-      ask: "always",
-      askFallback: "deny",
-    });
+    expect(resolved.agent.security).toBe("deny");
+    expect(resolved.agent.ask).toBe("always");
+    expect(resolved.agent.askFallback).toBe("deny");
     expect(resolved.agentSources).toEqual({
       security: "agents.*.security",
       ask: "agents.*.ask",

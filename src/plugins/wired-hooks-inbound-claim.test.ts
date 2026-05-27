@@ -33,6 +33,18 @@ function createInboundClaimForumCtx() {
   };
 }
 
+function expectFirstErrorLog(
+  logger: { error: ReturnType<typeof vi.fn> },
+  expected: readonly unknown[],
+): void {
+  expect(logger.error).toHaveBeenCalledTimes(1);
+  const call = logger.error.mock.calls[0];
+  if (!call) {
+    throw new Error("expected logger.error call");
+  }
+  expect(call).toEqual(expected);
+}
+
 describe("inbound_claim hook runner", () => {
   it("stops at the first handler that claims the event", async () => {
     const first = vi.fn().mockResolvedValue({ handled: true });
@@ -81,9 +93,7 @@ describe("inbound_claim hook runner", () => {
     );
 
     expect(result).toEqual({ handled: true });
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("inbound_claim handler from test-plugin failed: boom"),
-    );
+    expectFirstErrorLog(logger, ["[hooks] inbound_claim handler from test-plugin failed: boom"]);
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
@@ -169,5 +179,35 @@ describe("inbound_claim hook runner", () => {
     );
 
     expect(result).toEqual({ status: "error", error: "boom" });
+  });
+
+  it("reports targeted per-hook registration timeouts as handler errors", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = {
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const slow = vi.fn(() => new Promise(() => {}));
+      const { registry, runner } = createHookRunnerWithRegistry(
+        [{ hookName: "inbound_claim", handler: slow }],
+        { logger },
+      );
+      registry.typedHooks[0].timeoutMs = 5;
+
+      const run = runner.runInboundClaimForPluginOutcome(
+        "test-plugin",
+        inboundClaimEvent,
+        inboundClaimCtx,
+      );
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(run).resolves.toEqual({ status: "error", error: "timed out after 5ms" });
+      expectFirstErrorLog(logger, [
+        "[hooks] inbound_claim handler from test-plugin failed: timed out after 5ms",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

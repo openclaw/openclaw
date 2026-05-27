@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -8,15 +8,12 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-const {
-  listFeishuDirectoryGroups,
-  listFeishuDirectoryGroupsLive,
-  listFeishuDirectoryPeers,
-  listFeishuDirectoryPeersLive,
-} = await importFreshModule<typeof import("./directory.js")>(
-  import.meta.url,
-  "./directory.js?directory-test",
-);
+const { listFeishuDirectoryGroupsLive, listFeishuDirectoryPeersLive } = await importFreshModule<
+  typeof import("./directory.js")
+>(import.meta.url, "./directory.js?directory-test");
+const { listFeishuDirectoryGroups, listFeishuDirectoryPeers } = await importFreshModule<
+  typeof import("./directory.static.js")
+>(import.meta.url, "./directory.static.js?directory-test");
 
 function makeStaticCfg(): ClawdbotConfig {
   return {
@@ -48,6 +45,11 @@ function makeConfiguredCfg(): ClawdbotConfig {
 }
 
 describe("feishu directory (config-backed)", () => {
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     createFeishuClientMock.mockReset();
   });

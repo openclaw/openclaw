@@ -1,15 +1,15 @@
 import http from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fetch as undiciFetch } from "undici";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createDiscordRestClient } from "./client.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
   );
   makeProxyFetchMock.mockImplementation((proxyUrl: string) => {
     if (proxyUrl === "bad-proxy") {
@@ -44,7 +44,8 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(requestClient.options?.fetch).toEqual(expect.any(Function));
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://127.0.0.1:8080");
+    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
     expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
   });
 
@@ -119,7 +120,7 @@ describe("createDiscordRestClient proxy support", () => {
     };
 
     expect(makeProxyFetchMock).toHaveBeenCalledWith("http://[::1]:8080");
-    expect(requestClient.options?.fetch).toEqual(expect.any(Function));
+    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
   it("serializes multipart media with undici-compatible FormData for proxy fetches", async () => {

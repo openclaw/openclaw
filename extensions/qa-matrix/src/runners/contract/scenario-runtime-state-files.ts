@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 async function readJsonFile(pathname: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(pathname, "utf8")) as unknown;
@@ -98,18 +95,22 @@ export async function rewriteMatrixSyncStoreCursor(params: { cursor: string; pat
 }
 
 async function scoreMatrixStateFile(params: {
+  accountId?: string;
   context: MatrixQaScenarioContext;
   pathname: string;
+  userId?: string;
 }) {
   let score = params.pathname.includes(`${path.sep}matrix${path.sep}`) ? 4 : 0;
+  const expectedUserId = params.userId ?? params.context.sutUserId;
+  const expectedAccountId = params.accountId ?? params.context.sutAccountId;
   try {
     const metadata = await readJsonFile(
       path.join(path.dirname(params.pathname), "storage-meta.json"),
     );
-    if (isRecord(metadata) && metadata.userId === params.context.sutUserId) {
+    if (isRecord(metadata) && metadata.userId === expectedUserId) {
       score += 16;
     }
-    if (isRecord(metadata) && metadata.accountId === params.context.sutAccountId) {
+    if (isRecord(metadata) && metadata.accountId === expectedAccountId) {
       score += 8;
     }
   } catch {
@@ -119,9 +120,11 @@ async function scoreMatrixStateFile(params: {
 }
 
 async function resolveBestMatrixStateFile(params: {
+  accountId?: string;
   context: MatrixQaScenarioContext;
   filename: string;
   stateDir: string;
+  userId?: string;
 }) {
   const candidates = await findFilesByName({
     filename: params.filename,
@@ -136,6 +139,8 @@ async function resolveBestMatrixStateFile(params: {
       score: await scoreMatrixStateFile({
         context: params.context,
         pathname,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+        ...(params.userId ? { userId: params.userId } : {}),
       }),
     })),
   );
@@ -144,9 +149,11 @@ async function resolveBestMatrixStateFile(params: {
 }
 
 export async function waitForMatrixSyncStoreWithCursor(params: {
+  accountId?: string;
   context: MatrixQaScenarioContext;
   stateDir: string;
   timeoutMs: number;
+  userId?: string;
 }) {
   const startedAt = Date.now();
   let lastPath: string | null = null;
@@ -155,6 +162,8 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
       context: params.context,
       filename: MATRIX_SYNC_STORE_FILENAME,
       stateDir: params.stateDir,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      ...(params.userId ? { userId: params.userId } : {}),
     });
     lastPath = pathname;
     if (pathname) {

@@ -3,12 +3,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { describe, expect, it } from "vitest";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.ts";
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import { transcribeSenseAudioAudio } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
@@ -78,12 +78,12 @@ describe("transcribeSenseAudioAudio", () => {
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
     const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    expect(file).not.toBeNull();
-    if (file) {
-      expect(file.type).toBe("audio/wav");
-      if ("name" in file && typeof file.name === "string") {
-        expect(file.name).toBe("voice.wav");
-      }
+    if (!file) {
+      throw new Error("expected SenseAudio audio file");
+    }
+    expect(file.type).toBe("audio/wav");
+    if (file && "name" in file && typeof file.name === "string") {
+      expect(file.name).toBe("voice.wav");
     }
   });
 

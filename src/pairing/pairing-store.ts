@@ -6,6 +6,7 @@ import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -30,6 +31,7 @@ export type { PairingChannel } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const PAIRING_CODE_MAX_ATTEMPTS = 500;
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
 const PAIRING_STORE_LOCK_OPTIONS = {
@@ -85,7 +87,13 @@ async function readPairingRequests(filePath: string): Promise<PairingRequest[]> 
     version: 1,
     requests: [],
   });
-  return Array.isArray(value.requests) ? value.requests : [];
+  if (!Array.isArray(value.requests)) {
+    return [];
+  }
+  return value.requests.flatMap((request) => {
+    const normalized = normalizePersistedPairingRequest(request);
+    return normalized ? [normalized] : [];
+  });
 }
 
 async function readPrunedPairingRequests(filePath: string): Promise<{
@@ -123,6 +131,48 @@ function parseTimestamp(value: string | undefined): number | null {
     return null;
   }
   return parsed;
+}
+
+function normalizePersistedPairingMeta(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const normalized = normalizeOptionalString(entry);
+    if (normalized) {
+      out[key] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizePersistedPairingRequest(value: unknown): PairingRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(value.id);
+  const code = normalizeOptionalString(value.code);
+  const createdAt = normalizeOptionalString(value.createdAt);
+  const lastSeenAt = normalizeOptionalString(value.lastSeenAt) ?? createdAt;
+  if (
+    !id ||
+    !code ||
+    !createdAt ||
+    !lastSeenAt ||
+    parseTimestamp(createdAt) === null ||
+    parseTimestamp(lastSeenAt) === null
+  ) {
+    return undefined;
+  }
+  const meta = normalizePersistedPairingMeta(value.meta);
+  return {
+    id,
+    code,
+    createdAt,
+    lastSeenAt,
+    ...(meta ? { meta } : {}),
+  };
 }
 
 function isExpired(entry: PairingRequest, nowMs: number): boolean {
@@ -201,13 +251,15 @@ function randomCode(): string {
 }
 
 function generateUniqueCode(existing: Set<string>): string {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+  for (let attempt = 0; attempt < PAIRING_CODE_MAX_ATTEMPTS; attempt += 1) {
     const code = randomCode();
     if (!existing.has(code)) {
       return code;
     }
   }
-  throw new Error("failed to generate unique pairing code");
+  throw new Error(
+    `failed to generate unique pairing code after ${PAIRING_CODE_MAX_ATTEMPTS} attempts; existing code count: ${existing.size}`,
+  );
 }
 
 function normalizePairingAccountId(accountId?: string): string {
@@ -302,7 +354,12 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
   let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
   try {
     stat = await fs.promises.stat(filePath);
-  } catch {}
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
   setAllowFromFileReadCache({
     cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
     filePath,

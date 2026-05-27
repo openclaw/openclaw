@@ -3,7 +3,7 @@ import {
   listChannelPlugins,
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -15,6 +15,8 @@ export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string; accountId?: string }
   | { kind: "disabled"; channel: string; channelLabel: string; accountId?: string }
   | { kind: "unsupported"; channel: string; channelLabel: string; accountId?: string };
+
+type ApprovalKind = "exec" | "plugin";
 
 function labelForChannel(channel?: string): string {
   if (channel === "tui") {
@@ -42,6 +44,15 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   accountId?: string | null;
   cfg?: OpenClawConfig;
 }): ExecApprovalInitiatingSurfaceState {
+  return resolveApprovalInitiatingSurfaceState({ ...params, approvalKind: "exec" });
+}
+
+export function resolveApprovalInitiatingSurfaceState(params: {
+  channel?: string | null;
+  accountId?: string | null;
+  cfg?: OpenClawConfig;
+  approvalKind: ApprovalKind;
+}): ExecApprovalInitiatingSurfaceState {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);
   const accountId = normalizeOptionalString(params.accountId);
@@ -49,19 +60,21 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
     return { kind: "enabled", channel, channelLabel, accountId };
   }
 
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
   const state =
-    capability?.getExecInitiatingSurfaceState?.({
-      cfg,
-      accountId: params.accountId,
-      action: "approve",
-    }) ??
+    (params.approvalKind === "exec"
+      ? capability?.getExecInitiatingSurfaceState?.({
+          cfg,
+          accountId: params.accountId,
+          action: "approve",
+        })
+      : undefined) ??
     capability?.getActionAvailabilityState?.({
       cfg,
       accountId: params.accountId,
       action: "approve",
-      approvalKind: "exec",
+      approvalKind: params.approvalKind,
     });
   if (state) {
     return { ...state, channel, channelLabel, accountId };

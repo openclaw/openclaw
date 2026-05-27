@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -10,7 +10,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
   return mockNodeBuiltinModule(
@@ -20,7 +20,7 @@ vi.mock("node:fs", async () => {
   );
 });
 vi.mock("node:os", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const homedir = vi.fn();
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:os")>("node:os"),
@@ -68,7 +68,7 @@ describe("browser default executable detection", () => {
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
   });
 
-  it("prefers default Chromium browser on macOS", async () => {
+  it("prefers default Chromium browser on macOS", () => {
     mockMacDefaultBrowser("com.google.Chrome", "/Applications/Google Chrome.app");
     mockChromeExecutableExists();
 
@@ -81,7 +81,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("chrome");
   });
 
-  it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", async () => {
+  it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", () => {
     const edgeExecutablePath = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
     // macOS LaunchServices registers Edge as "com.microsoft.edgemac", which
     // differs from the CFBundleIdentifier "com.microsoft.Edge" in the app's
@@ -127,7 +127,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("edge");
   });
 
-  it("falls back to Chrome when Edge LaunchServices lookup has no app path", async () => {
+  it("falls back to Chrome when Edge LaunchServices lookup has no app path", () => {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       const argsStr = Array.isArray(args) ? args.join(" ") : "";
       if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
@@ -150,7 +150,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("chrome");
   });
 
-  it("falls back when default browser is non-Chromium on macOS", async () => {
+  it("falls back when default browser is non-Chromium on macOS", () => {
     mockMacDefaultBrowser("com.apple.Safari");
     mockChromeExecutableExists();
 

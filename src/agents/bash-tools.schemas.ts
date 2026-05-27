@@ -1,4 +1,7 @@
 import { Type } from "typebox";
+import { optionalStringEnum } from "./schema/typebox.js";
+
+const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
@@ -26,14 +29,13 @@ export const execSchema = Type.Object({
       description: "Run on the host with elevated permissions (if allowed)",
     }),
   ),
-  host: Type.Optional(
-    Type.String({
-      description: "Exec host/target (auto|sandbox|gateway|node).",
-    }),
-  ),
+  host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
+    description: "Exec host/target (auto|sandbox|gateway|node).",
+  }),
   security: Type.Optional(
     Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
+      description:
+        "Ignored for normal calls; exec security is set by tools.exec.security and host approvals.",
     }),
   ),
   ask: Type.Optional(
@@ -49,7 +51,9 @@ export const execSchema = Type.Object({
 });
 
 export const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
+  action: Type.String({
+    description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
+  }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   keys: Type.Optional(
@@ -64,7 +68,8 @@ export const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
   timeout: Type.Optional(
     Type.Number({
-      description: "For poll: wait up to this many milliseconds before returning",
+      description:
+        "For poll: wait up to this many milliseconds before returning; max 30000 ms, higher values are clamped to 30000",
       minimum: 0,
     }),
   ),

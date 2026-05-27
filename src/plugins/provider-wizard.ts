@@ -15,7 +15,7 @@ import type {
   ProviderPluginWizardSetup,
 } from "./types.js";
 
-export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
 export type ProviderWizardOption = {
   value: string;
@@ -24,9 +24,10 @@ export type ProviderWizardOption = {
   groupId: string;
   groupLabel: string;
   groupHint?: string;
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
 };
 
 export type ProviderModelPickerEntry = {
@@ -34,6 +35,24 @@ export type ProviderModelPickerEntry = {
   label: string;
   hint?: string;
 };
+
+type ProviderWizardProvidersResolver = (params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) => ProviderPlugin[];
+
+let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
+
+export function setProviderWizardProvidersResolverForTest(
+  resolver: ProviderWizardProvidersResolver | undefined,
+): () => void {
+  const previous = providerWizardProvidersResolverForTest;
+  providerWizardProvidersResolverForTest = resolver;
+  return () => {
+    providerWizardProvidersResolverForTest = previous;
+  };
+}
 
 function resolveWizardSetupChoiceId(
   provider: ProviderPlugin,
@@ -101,6 +120,7 @@ function buildSetupOptionForMethod(params: {
     ...(params.wizard.assistantVisibility
       ? { assistantVisibility: params.wizard.assistantVisibility }
       : {}),
+    ...(params.wizard.onboardingFeatured ? { onboardingFeatured: true } : {}),
   };
 }
 
@@ -113,6 +133,9 @@ function resolveProviderWizardProviders(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
+  if (providerWizardProvidersResolverForTest) {
+    return providerWizardProvidersResolverForTest(params);
+  }
   return resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,

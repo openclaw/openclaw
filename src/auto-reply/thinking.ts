@@ -8,6 +8,7 @@ import {
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
   formatXHighModelHint,
+  isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeNoticeLevel,
@@ -68,7 +69,21 @@ function resolveThinkingPolicyContext(params: {
   const candidate = params.catalog?.find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
   );
-  return { normalizedProvider, modelId, modelKey, reasoning: candidate?.reasoning };
+  return {
+    normalizedProvider,
+    modelId,
+    modelKey,
+    reasoning: candidate?.reasoning,
+    compat: candidate?.compat,
+  };
+}
+
+function catalogSupportsXHigh(compat: ThinkingCatalogEntry["compat"]): boolean {
+  const efforts = compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return false;
+  }
+  return efforts.some((effort) => normalizeThinkLevel(effort) === "xhigh");
 }
 
 function normalizeProfileLevel(
@@ -112,6 +127,13 @@ function buildBaseThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThi
   };
 }
 
+function buildOffOnlyThinkingProfile(): ResolvedThinkingProfile {
+  return {
+    levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
+    defaultLevel: "off",
+  };
+}
+
 function buildBinaryThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
   return {
     levels: [
@@ -150,9 +172,15 @@ export function resolveThinkingProfile(params: {
   });
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
-    if (normalized.levels.length > 0) {
+    if (
+      normalized.levels.length > 0 &&
+      (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
+    ) {
       return normalized;
     }
+  }
+  if (context.reasoning === false) {
+    return buildOffOnlyThinkingProfile();
   }
 
   const defaultLevel = resolveProviderDefaultThinkingLevel({
@@ -170,11 +198,15 @@ export function resolveThinkingProfile(params: {
     binaryDecision === true
       ? buildBinaryThinkingProfile(defaultLevel)
       : buildBaseThinkingProfile(defaultLevel);
+  if (binaryDecision !== true && catalogSupportsXHigh(context.compat)) {
+    appendProfileLevel(profile, "xhigh");
+  }
   const policyContext = {
     provider: context.normalizedProvider,
     modelId: context.modelKey || context.modelId,
   };
   if (
+    binaryDecision !== true &&
     resolveProviderXHighThinking({
       provider: context.normalizedProvider,
       context: policyContext,
@@ -205,21 +237,30 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return supportsThinkingLevel(provider, model, "xhigh");
 }
 
-export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
-  const profile = resolveThinkingProfile({ provider, model });
+export function listThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
+): ThinkLevel[] {
+  const profile = resolveThinkingProfile({ provider, model, catalog });
   return profile.levels.map((level) => level.id);
 }
 
 export function listThinkingLevelOptions(
   provider?: string | null,
   model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
 ): ThinkingLevelOption[] {
-  const profile = resolveThinkingProfile({ provider, model });
+  const profile = resolveThinkingProfile({ provider, model, catalog });
   return profile.levels.map(({ id, label }) => ({ id, label }));
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  return listThinkingLevelOptions(provider, model).map((level) => level.label);
+export function listThinkingLevelLabels(
+  provider?: string | null,
+  model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
+): string[] {
+  return listThinkingLevelOptions(provider, model, catalog).map((level) => level.label);
 }
 
 export function formatThinkingLevels(
@@ -257,10 +298,16 @@ export function resolveLargestSupportedThinkingLevel(
   model?: string | null,
 ): ThinkLevel {
   const profile = resolveThinkingProfile({ provider, model });
-  return (
-    profile.levels.filter((level) => level.id !== "off").toSorted((a, b) => b.rank - a.rank)[0]
-      ?.id ?? "off"
-  );
+  let bestLevel: ResolvedThinkingProfile["levels"][number] | undefined;
+  for (const level of profile.levels) {
+    if (level.id === "off") {
+      continue;
+    }
+    if (!bestLevel || level.rank > bestLevel.rank) {
+      bestLevel = level;
+    }
+  }
+  return bestLevel?.id ?? "off";
 }
 
 export function isThinkingLevelSupported(params: {

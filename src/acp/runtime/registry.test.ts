@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AcpRuntimeError } from "./errors.js";
 import {
-  __testing,
+  testing,
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
   requireAcpRuntimeBackend,
@@ -11,22 +11,28 @@ import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {
-    ensureSession: vi.fn(async (input) => ({
-      sessionKey: input.sessionKey,
-      backend: "stub",
-      runtimeSessionName: `${input.sessionKey}:runtime`,
-    })),
-    runTurn: vi.fn(async function* () {
+    async ensureSession(input) {
+      return {
+        sessionKey: input.sessionKey,
+        backend: "stub",
+        runtimeSessionName: `${input.sessionKey}:runtime`,
+      };
+    },
+    async *runTurn() {
       // no-op stream
-    }),
-    cancel: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
+    },
+    async cancel() {},
+    async close() {},
   };
 }
 
 describe("acp runtime registry", () => {
   beforeEach(() => {
-    __testing.resetAcpRuntimeBackendsForTests();
+    testing.resetAcpRuntimeBackendsForTests();
+  });
+
+  afterEach(() => {
+    testing.resetAcpRuntimeBackendsForTests();
   });
 
   it("registers and resolves backends by id", () => {
@@ -106,7 +112,7 @@ describe("acp runtime registry", () => {
 
   it("keeps backend state on a global registry for cross-loader access", () => {
     const runtime = createRuntimeStub();
-    const sharedState = __testing.getAcpRuntimeRegistryGlobalStateForTests();
+    const sharedState = testing.getAcpRuntimeRegistryGlobalStateForTests();
 
     sharedState.backendsById.set("acpx", {
       id: "acpx",

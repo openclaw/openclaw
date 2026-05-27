@@ -1,6 +1,12 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ResolvedSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
+import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import {
   createActionGate,
   imageResultFromFile,
@@ -11,7 +17,6 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 const messagingActions = new Set([
@@ -25,6 +30,19 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+
+function sameSlackChannelTarget(targetChannel: string, currentChannelId: string): boolean {
+  const parsedTarget = parseSlackTarget(targetChannel, {
+    defaultKind: "channel",
+  });
+  if (!parsedTarget || parsedTarget.kind !== "channel") {
+    return false;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(parsedTarget.id) ===
+    normalizeLowercaseStringOrEmpty(currentChannelId)
+  );
+}
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
@@ -64,7 +82,6 @@ export const slackActionRuntime = {
   pinSlackMessage: createLazySlackAction("pinSlackMessage"),
   reactSlackMessage: createLazySlackAction("reactSlackMessage"),
   readSlackMessages: createLazySlackAction("readSlackMessages"),
-  recordSlackThreadParticipation,
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
   searchSlackMessages: createLazySlackAction("searchSlackMessages"),
@@ -81,6 +98,8 @@ export type SlackActionContext = {
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent for single-use reply modes. */
   hasRepliedRef?: { value: boolean };
+  /** True when same-channel root posting would leak a thread-originated reply. */
+  sameChannelThreadRequired?: boolean;
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -96,26 +115,29 @@ function resolveThreadTsFromContext(
   explicitThreadTs: string | undefined,
   targetChannel: string,
   context: SlackActionContext | undefined,
+  opts?: { suppressImplicitThread?: boolean },
 ): string | undefined {
   // Agent explicitly provided threadTs - use it
   if (explicitThreadTs) {
     return explicitThreadTs;
   }
-  // No context or missing required fields
-  if (!context?.currentThreadTs || !context?.currentChannelId) {
+  if (opts?.suppressImplicitThread) {
     return undefined;
   }
-
-  const parsedTarget = parseSlackTarget(targetChannel, {
-    defaultKind: "channel",
-  });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
+  if (!context?.currentChannelId) {
     return undefined;
   }
-  const normalizedTarget = parsedTarget.id;
 
   // Different channel - don't inject
-  if (normalizedTarget !== context.currentChannelId) {
+  if (!sameSlackChannelTarget(targetChannel, context.currentChannelId)) {
+    return undefined;
+  }
+  if (!context.currentThreadTs) {
+    if (context.sameChannelThreadRequired) {
+      throw new Error(
+        "Slack thread context is required for same-channel replies from a threaded Slack turn. Set topLevel=true or threadId=null to post at the channel root.",
+      );
+    }
     return undefined;
   }
 
@@ -140,6 +162,42 @@ function readSlackBlocksParam(params: Record<string, unknown>) {
 
 function isImageContentType(value: string | undefined): boolean {
   return value?.trim().toLowerCase().startsWith("image/") === true;
+}
+
+function assertSlackReadTargetAllowed(params: {
+  account: ResolvedSlackAccount;
+  cfg: OpenClawConfig;
+  channelId: string;
+}) {
+  const channels = params.account.config.channels;
+  const channelKeys = Object.keys(channels ?? {});
+  const channelConfig = resolveSlackChannelConfig({
+    channelId: params.channelId,
+    channels,
+    channelKeys,
+    allowNameMatching: params.account.config.dangerouslyAllowNameMatching,
+    defaultRequireMention: params.account.config.requireMention,
+  });
+  const channelAllowed = channelConfig?.allowed !== false;
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.slack !== undefined,
+    groupPolicy: params.account.config.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
+  if (
+    groupPolicy === "disabled" ||
+    (groupPolicy === "allowlist" &&
+      !isSlackChannelAllowedByPolicy({
+        groupPolicy,
+        channelAllowlistConfigured: channelKeys.length > 0,
+        channelAllowed,
+      }))
+  ) {
+    throw new Error("Slack read target channel is not allowed.");
+  }
+  if (!channelAllowed && (groupPolicy !== "open" || channelConfig?.matchSource)) {
+    throw new Error("Slack read target channel is not allowed.");
+  }
 }
 
 export async function handleSlackAction(
@@ -232,6 +290,7 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true, added: emoji });
     }
+    assertSlackReadTargetAllowed({ account, cfg, channelId });
     const reactions = readOpts
       ? await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts)
       : await slackActionRuntime.listSlackReactions(channelId, messageId);
@@ -250,40 +309,53 @@ export async function handleSlackAction(
         });
         const mediaUrl = readStringParam(params, "mediaUrl");
         const blocks = readSlackBlocksParam(params);
+        const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
-        if (mediaUrl && blocks) {
-          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
+        if (replyBroadcast && mediaUrl) {
+          throw new Error(
+            "Slack replyBroadcast is only supported for text or block thread replies.",
+          );
         }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
+          {
+            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
+          },
         );
-        const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+        const sendOpts = {
           ...writeOpts,
-          mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
-          blocks,
-        });
-
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
+          ...(replyBroadcast ? { replyBroadcast } : {}),
+        };
+        const result =
+          mediaUrl && blocks
+            ? await (async () => {
+                await slackActionRuntime.sendSlackMessage(to, "", {
+                  ...sendOpts,
+                  mediaUrl,
+                });
+                return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                  ...sendOpts,
+                  blocks,
+                });
+              })()
+            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                ...sendOpts,
+                mediaUrl: mediaUrl ?? undefined,
+                blocks,
+              });
 
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (sameSlackChannelTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -301,10 +373,19 @@ export async function handleSlackAction(
         });
         const filename = readStringParam(params, "filename");
         const title = readStringParam(params, "title");
+        const replyBroadcast = readBooleanParam(params, "replyBroadcast");
+        if (replyBroadcast) {
+          throw new Error(
+            "Slack replyBroadcast is only supported for text or block thread replies.",
+          );
+        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
+          {
+            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
+          },
         );
         const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
           ...writeOpts,
@@ -316,17 +397,8 @@ export async function handleSlackAction(
           ...(title ? { uploadTitle: title } : {}),
         });
 
-        if (threadTs && result.channelId && account.accountId) {
-          slackActionRuntime.recordSlackThreadParticipation(
-            account.accountId,
-            result.channelId,
-            threadTs,
-          );
-        }
-
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (sameSlackChannelTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -371,18 +443,21 @@ export async function handleSlackAction(
       }
       case "readMessages": {
         const channelId = resolveChannelId();
+        assertSlackReadTargetAllowed({ account, cfg, channelId });
         const limitRaw = params.limit;
         const limit =
           typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
+        const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
           threadId: threadId ?? undefined,
+          messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(
@@ -394,8 +469,17 @@ export async function handleSlackAction(
       }
       case "downloadFile": {
         const fileId = readStringParam(params, "fileId", { required: true });
-        const channelTarget = readStringParam(params, "channelId") ?? readStringParam(params, "to");
-        const channelId = channelTarget ? resolveSlackChannelId(channelTarget) : undefined;
+        const channelTarget =
+          readStringParam(params, "channelId") ??
+          readStringParam(params, "to") ??
+          context?.currentChannelId;
+        if (!channelTarget) {
+          throw new Error(
+            "Slack file download requires channelId or to so the read target can be authorized.",
+          );
+        }
+        const channelId = resolveSlackChannelId(channelTarget);
+        assertSlackReadTargetAllowed({ account, cfg, channelId });
         const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
@@ -423,6 +507,7 @@ export async function handleSlackAction(
             placeholder: downloaded.placeholder,
             media: {
               mediaUrl: downloaded.path,
+              outbound: false,
               ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
             },
           });
@@ -435,6 +520,7 @@ export async function handleSlackAction(
             fileId,
             path: downloaded.path,
             ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+            media: { outbound: false },
           },
         });
       }
@@ -470,6 +556,7 @@ export async function handleSlackAction(
       }
       return jsonResult({ ok: true });
     }
+    assertSlackReadTargetAllowed({ account, cfg, channelId });
     const pins = writeOpts
       ? await slackActionRuntime.listSlackPins(channelId, readOpts)
       : await slackActionRuntime.listSlackPins(channelId);

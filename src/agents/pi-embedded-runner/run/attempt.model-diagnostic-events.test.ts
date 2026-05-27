@@ -1,11 +1,19 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
+  waitForDiagnosticEventsDrained,
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../../logging/diagnostic-run-activity.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -29,20 +37,85 @@ async function collectModelCallEvents(run: () => Promise<void>): Promise<Diagnos
   }
 }
 
+async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
+  Array<{
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  }>
+> {
+  const events: Array<{
+    event: DiagnosticEventPayload;
+    privateData: DiagnosticEventPrivateData;
+  }> = [];
+  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type.startsWith("model.call.")) {
+      events.push({ event, privateData });
+    }
+  });
+  try {
+    await run();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return events;
+  } finally {
+    stop();
+  }
+}
+
 async function drain(stream: AsyncIterable<unknown>): Promise<void> {
   for await (const _ of stream) {
     // drain
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function readRecordField(record: Record<string, unknown>, key: string, label: string) {
+  const value = record[key];
+  if (!isRecord(value)) {
+    throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function expectNumberField(record: Record<string, unknown>, key: string) {
+  expect(typeof record[key]).toBe("number");
+}
+
+function getEvent(events: readonly DiagnosticEventPayload[], index: number) {
+  return requireRecord(events[index], `event ${index}`);
+}
+
+function requireMockRecordArg(
+  mock: ReturnType<typeof vi.fn>,
+  callIndex: number,
+  argIndex: number,
+  label: string,
+) {
+  return requireRecord(mock.mock.calls[callIndex]?.[argIndex], label);
+}
+
 describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticRunActivityForTest();
     resetGlobalHookRunner();
   });
 
   afterEach(() => {
+    resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
+    resetDiagnosticRunActivityForTest();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("emits started and completed events for async streams", async () => {
@@ -97,27 +170,138 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       "model.call.started",
       "model.call.completed",
     ]);
-    expect(events[0]).toMatchObject({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      sessionKey: "session-key",
-      sessionId: "session-id",
-      provider: "openai",
-      model: "gpt-5.4",
-      api: "openai-responses",
-      transport: "http",
-    });
+    const startedEvent = getEvent(events, 0);
+    expect(startedEvent.type).toBe("model.call.started");
+    expect(startedEvent.runId).toBe("run-1");
+    expect(startedEvent.callId).toBe("call-1");
+    expect(startedEvent.sessionKey).toBe("session-key");
+    expect(startedEvent.sessionId).toBe("session-id");
+    expect(startedEvent.provider).toBe("openai");
+    expect(startedEvent.model).toBe("gpt-5.4");
+    expect(startedEvent.api).toBe("openai-responses");
+    expect(startedEvent.transport).toBe("http");
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
-    expect(events[1]).toMatchObject({
-      type: "model.call.completed",
-      callId: "call-1",
-      durationMs: expect.any(Number),
-      requestPayloadBytes: Buffer.byteLength(JSON.stringify(requestPayload), "utf8"),
-      responseStreamBytes: expect.any(Number),
-      timeToFirstByteMs: expect.any(Number),
-    });
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.callId).toBe("call-1");
+    expectNumberField(completedEvent, "durationMs");
+    expect(completedEvent.requestPayloadBytes).toBe(
+      Buffer.byteLength(JSON.stringify(requestPayload), "utf8"),
+    );
+    expectNumberField(completedEvent, "responseStreamBytes");
+    expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("updates diagnostic run activity from throttled stream chunks", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    async function* stream() {
+      yield { type: "text_delta", delta: "first" };
+      yield { type: "text_delta", delta: "second" };
+      yield { type: "text_delta", delta: "third" };
+    }
+    const runProgressEvents: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress") {
+        runProgressEvents.push(event);
+      }
+    });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-stream",
+      },
+    );
+
+    const returned = wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>;
+    const iterator = returned[Symbol.asyncIterator]();
+
+    try {
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+      let snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      });
+      expect(snapshot.activeWorkKind).toBe("model_call");
+      expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
+      expect(snapshot.lastProgressAgeMs).toBe(0);
+      expect(runProgressEvents).toHaveLength(1);
+
+      now += 10_000;
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+      snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      });
+      expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
+      expect(snapshot.lastProgressAgeMs).toBe(0);
+      expect(runProgressEvents).toHaveLength(1);
+
+      now += 30_000;
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+      snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      });
+      expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
+      expect(snapshot.lastProgressAgeMs).toBe(0);
+      expect(runProgressEvents).toHaveLength(2);
+    } finally {
+      await iterator.return?.();
+      await waitForDiagnosticEventsDrained();
+      stop();
+    }
+  });
+
+  it("does not retain stream progress activity when diagnostics are disabled", async () => {
+    setDiagnosticsEnabledForProcess(false);
+    const runProgressEvents: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress") {
+        runProgressEvents.push(event);
+      }
+    });
+    async function* stream() {
+      yield { type: "text_delta", delta: "first" };
+      yield { type: "text_delta", delta: "second" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-disabled-diagnostics",
+      },
+    );
+
+    try {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      stop();
+    }
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      }),
+    ).toEqual({});
+    expect(runProgressEvents).toEqual([]);
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {
@@ -151,14 +335,85 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       await drain(streamResult as unknown as AsyncIterable<unknown>);
     });
 
-    expect(events[1]).toMatchObject({
-      type: "model.call.completed",
-      callId: "call-payload",
-      requestPayloadBytes: Buffer.byteLength(JSON.stringify(replacementPayload), "utf8"),
-      responseStreamBytes: expect.any(Number),
-      timeToFirstByteMs: expect.any(Number),
-    });
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.callId).toBe("call-payload");
+    expect(completedEvent.requestPayloadBytes).toBe(
+      Buffer.byteLength(JSON.stringify(replacementPayload), "utf8"),
+    );
+    expectNumberField(completedEvent, "responseStreamBytes");
+    expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-original-secret");
+  });
+
+  it("captures model input, tools, and output only when content capture is enabled", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "trace reply" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 },
+      stopReason: "stop",
+      timestamp: 1,
+    };
+    async function* stream() {
+      yield { type: "done", reason: "stop", message: assistant };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        contentCapture: {
+          inputMessages: true,
+          outputMessages: true,
+          toolInputs: false,
+          toolOutputs: false,
+          systemPrompt: true,
+          toolDefinitions: true,
+          anyModelContent: true,
+        },
+        nextCallId: () => "call-content",
+      },
+    );
+
+    const inputMessages = [{ role: "user", content: "trace prompt", timestamp: 1 }];
+    const tools = [{ name: "lookup", description: "Lookup data", parameters: { type: "object" } }];
+    const events = await collectTrustedModelCallEvents(async () => {
+      const streamResult = wrapped(
+        {} as never,
+        {
+          systemPrompt: "trace system",
+          messages: inputMessages,
+          tools,
+        } as never,
+        {},
+      );
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const startedEvent = getEvent(
+      events.map((entry) => entry.event),
+      0,
+    );
+    expect(startedEvent.type).toBe("model.call.started");
+    expect(startedEvent.inputMessages).toBeUndefined();
+    expect(startedEvent.systemPrompt).toBeUndefined();
+    expect(startedEvent.toolDefinitions).toBeUndefined();
+    expect(events[0]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
+    expect(events[0]?.privateData.modelContent?.systemPrompt).toBe("trace system");
+    expect(events[0]?.privateData.modelContent?.toolDefinitions).toEqual(tools);
+    const completedEvent = getEvent(
+      events.map((entry) => entry.event),
+      1,
+    );
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.outputMessages).toBeUndefined();
+    expect(events[1]?.privateData.modelContent?.inputMessages).toEqual(inputMessages);
+    expect(events[1]?.privateData.modelContent?.outputMessages).toEqual([assistant]);
   });
 
   it("propagates the trusted model-call traceparent without mutating caller headers", async () => {
@@ -201,13 +456,12 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
 
     expect(capturedOptions).toHaveLength(1);
     expect(capturedOptions[0]).not.toBe(callerOptions);
-    expect(capturedOptions[0]).toMatchObject({
-      sessionId: "provider-session",
-      headers: {
-        "X-Custom": "kept",
-        traceparent: expect.stringMatching(/^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/),
-      },
-    });
+    const capturedOption = requireRecord(capturedOptions[0], "captured stream options");
+    expect(capturedOption.sessionId).toBe("provider-session");
+    const headers = readRecordField(capturedOption, "headers", "captured stream headers");
+    expect(headers["X-Custom"]).toBe("kept");
+    expect(typeof headers.traceparent).toBe("string");
+    expect(headers.traceparent).toMatch(/^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/);
     expect(capturedOptions[0]?.headers).not.toHaveProperty("TraceParent");
     expect(callerOptions.headers).toEqual({
       "X-Custom": "kept",
@@ -244,14 +498,55 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
-    expect(events[1]).toMatchObject({
-      type: "model.call.error",
-      callId: "call-err",
-      errorCategory: "TypeError",
-      upstreamRequestIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/),
-      durationMs: expect.any(Number),
-    });
+    const errorEvent = getEvent(events, 1);
+    expect(errorEvent.type).toBe("model.call.error");
+    expect(errorEvent.callId).toBe("call-err");
+    expect(errorEvent.errorCategory).toBe("TypeError");
+    expect(typeof errorEvent.upstreamRequestIdHash).toBe("string");
+    expect(errorEvent.upstreamRequestIdHash).toMatch(/^sha256:[a-f0-9]{12}$/);
+    expectNumberField(errorEvent, "durationMs");
     expect(JSON.stringify(events[1])).not.toContain(requestId);
+  });
+
+  it("adds failure kind and memory diagnostics for terminated model calls", async () => {
+    const stream = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<unknown>> {
+            throw new Error("terminated");
+          },
+        };
+      },
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "lmstudio",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-terminated",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await expect(
+        drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>),
+      ).rejects.toThrow("terminated");
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+    const errorEvent = getEvent(events, 1);
+    expect(errorEvent.type).toBe("model.call.error");
+    expect(errorEvent.callId).toBe("call-terminated");
+    expect(errorEvent.errorCategory).toBe("Error");
+    expect(errorEvent.failureKind).toBe("terminated");
+    const memory = readRecordField(errorEvent, "memory", "error event memory");
+    expectNumberField(memory, "rssBytes");
+    expectNumberField(memory, "heapTotalBytes");
+    expectNumberField(memory, "heapUsedBytes");
+    expectNumberField(memory, "externalBytes");
+    expectNumberField(memory, "arrayBuffersBytes");
   });
 
   it("does not mutate non-configurable provider streams", async () => {
@@ -313,6 +608,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         model: "gpt-5.4",
         api: "openai-responses",
         transport: "http",
+        contextTokenBudget: 150_000,
+        contextWindowSource: "agentContextTokens",
+        contextWindowReferenceTokens: 200_000,
         trace: createDiagnosticTraceContext(),
         nextCallId: () => "call-hook",
       },
@@ -327,41 +625,42 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       "model.call.started",
       "model.call.completed",
     ]);
-    expect(started).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        callId: "call-hook",
-        sessionKey: "session-key",
-        sessionId: "session-id",
-        provider: "openai",
-        model: "gpt-5.4",
-        api: "openai-responses",
-        transport: "http",
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionKey: "session-key",
-        sessionId: "session-id",
-        modelProviderId: "openai",
-        modelId: "gpt-5.4",
-      }),
-    );
-    expect(ended).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        callId: "call-hook",
-        outcome: "completed",
-        durationMs: expect.any(Number),
-        responseStreamBytes: expect.any(Number),
-        timeToFirstByteMs: expect.any(Number),
-      }),
-      expect.objectContaining({ runId: "run-1" }),
-    );
-    const startedEvent = started.mock.calls[0]?.[0];
-    const startedCtx = started.mock.calls[0]?.[1];
+    const startedEvent = requireMockRecordArg(started, 0, 0, "started hook event");
+    expect(startedEvent.runId).toBe("run-1");
+    expect(startedEvent.callId).toBe("call-hook");
+    expect(startedEvent.sessionKey).toBe("session-key");
+    expect(startedEvent.sessionId).toBe("session-id");
+    expect(startedEvent.provider).toBe("openai");
+    expect(startedEvent.model).toBe("gpt-5.4");
+    expect(startedEvent.api).toBe("openai-responses");
+    expect(startedEvent.transport).toBe("http");
+    expect(startedEvent.contextTokenBudget).toBe(150_000);
+    expect(startedEvent.contextWindowSource).toBe("agentContextTokens");
+    expect(startedEvent.contextWindowReferenceTokens).toBe(200_000);
+    const startedCtx = requireMockRecordArg(started, 0, 1, "started hook context");
+    expect(startedCtx.runId).toBe("run-1");
+    expect(startedCtx.sessionKey).toBe("session-key");
+    expect(startedCtx.sessionId).toBe("session-id");
+    expect(startedCtx.modelProviderId).toBe("openai");
+    expect(startedCtx.modelId).toBe("gpt-5.4");
+    expect(startedCtx.contextTokenBudget).toBe(150_000);
+    expect(startedCtx.contextWindowSource).toBe("agentContextTokens");
+    expect(startedCtx.contextWindowReferenceTokens).toBe(200_000);
+    const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
+    expect(endedEvent.runId).toBe("run-1");
+    expect(endedEvent.callId).toBe("call-hook");
+    expect(endedEvent.outcome).toBe("completed");
+    expect(endedEvent.contextTokenBudget).toBe(150_000);
+    expect(endedEvent.contextWindowSource).toBe("agentContextTokens");
+    expect(endedEvent.contextWindowReferenceTokens).toBe(200_000);
+    expectNumberField(endedEvent, "durationMs");
+    expectNumberField(endedEvent, "responseStreamBytes");
+    expectNumberField(endedEvent, "timeToFirstByteMs");
+    const endedCtx = requireMockRecordArg(ended, 0, 1, "ended hook context");
+    expect(endedCtx.runId).toBe("run-1");
     expect(Object.isFrozen(startedEvent)).toBe(true);
     expect(Object.isFrozen(startedCtx)).toBe(true);
-    expect(Object.isFrozen((startedCtx as { trace?: unknown } | undefined)?.trace)).toBe(true);
+    expect(Object.isFrozen(startedCtx.trace)).toBe(true);
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
   });
 
@@ -395,11 +694,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       "model.call.started",
       "model.call.completed",
     ]);
-    expect(events[1]).toMatchObject({
-      type: "model.call.completed",
-      callId: "call-abandoned",
-      durationMs: expect.any(Number),
-    });
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.callId).toBe("call-abandoned");
+    expectNumberField(completedEvent, "durationMs");
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
 });

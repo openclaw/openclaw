@@ -1,5 +1,5 @@
-import type { Message } from "@grammyjs/types";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+import type { Message } from "grammy/types";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { TelegramContext } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
@@ -11,6 +11,7 @@ export type MediaGroupEntry = {
     msg: Message;
     ctx: TelegramContext;
   }>;
+  promptContextMinTimestampMs?: number;
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -25,6 +26,7 @@ export type TelegramUpdateKeyContext = {
   update_id?: number;
   message?: Message;
   channelPost?: Message;
+  editedMessage?: Message;
   editedChannelPost?: Message;
   callbackQuery?: { id?: string; message?: Message };
 };
@@ -41,14 +43,21 @@ export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   if (callbackId) {
     return `callback:${callbackId}`;
   }
+  const editedMsg =
+    ctx.editedMessage ??
+    ctx.editedChannelPost ??
+    ctx.update?.edited_message ??
+    ctx.update?.edited_channel_post;
+  const editedChatId = editedMsg?.chat?.id;
+  const editedMessageId = editedMsg?.message_id;
+  if (editedChatId !== undefined && typeof editedMessageId === "number") {
+    return `edited-message:${editedChatId}:${editedMessageId}`;
+  }
   const msg =
     ctx.message ??
     ctx.channelPost ??
-    ctx.editedChannelPost ??
     ctx.update?.message ??
-    ctx.update?.edited_message ??
     ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post ??
     ctx.callbackQuery?.message;
   const chatId = msg?.chat?.id;
   const messageId = msg?.message_id;

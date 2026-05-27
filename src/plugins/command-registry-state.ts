@@ -1,9 +1,10 @@
-import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
-import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+import type {
+  AgentPromptGuidance,
+  AgentPromptSurfaceKind,
+  OpenClawPluginCommandDefinition,
+} from "./types.js";
 
 export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
@@ -53,8 +54,54 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
+export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
+  return command.ownership === "reserved";
+}
+
 export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
+}
+
+export function listRegisteredPluginAgentPromptGuidance(params?: {
+  surface?: AgentPromptSurfaceKind;
+  includeLegacyGlobalGuidance?: boolean;
+}): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const command of pluginCommands.values()) {
+    for (const entry of command.agentPromptGuidance ?? []) {
+      const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
+        surface: params?.surface,
+        includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
+      });
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      lines.push(trimmed);
+    }
+  }
+  return lines;
+}
+
+function resolveAgentPromptGuidanceTextForSurface(
+  entry: AgentPromptGuidance,
+  params: {
+    surface?: AgentPromptSurfaceKind;
+    includeLegacyGlobalGuidance: boolean;
+  },
+): string | undefined {
+  if (typeof entry === "string") {
+    return params.includeLegacyGlobalGuidance ? entry.trim() : undefined;
+  }
+  const text = entry.text.trim();
+  if (!params.surface) {
+    return text;
+  }
+  if (!entry.surfaces || entry.surfaces.length === 0) {
+    return params.includeLegacyGlobalGuidance ? text : undefined;
+  }
+  return entry.surfaces.includes(params.surface) ? text : undefined;
 }
 
 export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
@@ -66,64 +113,4 @@ export function restorePluginCommands(commands: readonly RegisteredPluginCommand
     }
     pluginCommands.set(`/${name}`, command);
   }
-}
-
-function resolvePluginNativeName(
-  command: OpenClawPluginCommandDefinition,
-  provider?: string,
-): string {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
-  if (typeof providerOverride === "string" && providerOverride.trim()) {
-    return providerOverride.trim();
-  }
-  const defaultOverride = command.nativeNames?.default;
-  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
-    return defaultOverride.trim();
-  }
-  return command.name;
-}
-
-export function getPluginCommandSpecs(
-  provider?: string,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    stateDir?: string;
-    workspaceDir?: string;
-    config?: OpenClawConfig;
-  } = {},
-): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  const commandDefaults =
-    providerName && options.config
-      ? resolveReadOnlyChannelCommandDefaults(providerName, {
-          ...options,
-          config: options.config,
-        })
-      : undefined;
-  if (
-    providerName &&
-    (getLoadedChannelPlugin(providerName)?.commands ?? commandDefaults)
-      ?.nativeCommandsAutoEnabled !== true
-  ) {
-    return [];
-  }
-  return listProviderPluginCommandSpecs(provider);
-}
-
-/** Resolve plugin command specs for a provider's native naming surface without support gating. */
-export function listProviderPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
 }

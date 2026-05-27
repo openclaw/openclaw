@@ -3,9 +3,11 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
+  isPrereleaseTag,
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
+  resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
   type UpdateChannel,
   type UpdateChannelSource,
@@ -16,12 +18,33 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24-beta.1", beta: true },
     { tag: "v2026.2.24.beta.1", beta: true },
     { tag: "v2026.2.24-BETA-1", beta: true },
+    { tag: "v2026.2.24-alpha.1", beta: false },
+    { tag: "v2026.2.24-next.1", beta: false },
     { tag: "v2026.2.24-1", beta: false },
     { tag: "v2026.2.24-alphabeta.1", beta: false },
     { tag: "v2026.2.24", beta: false },
   ])("classifies $tag", ({ tag, beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
-    expect(isStableTag(tag)).toBe(!beta);
+  });
+
+  it.each([
+    { tag: "v2026.2.24-alpha.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-beta.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-rc.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-preview.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-dev.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-next.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-canary.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-nightly.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-experimental.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-custom.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-1", prerelease: false, stable: true },
+    { tag: "v1.0.1-1", prerelease: false, stable: true },
+    { tag: "v2026.2.24-alphabeta.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24", prerelease: false, stable: true },
+  ])("stable/prerelease classification for $tag", ({ tag, prerelease, stable }) => {
+    expect(isPrereleaseTag(tag)).toBe(prerelease);
+    expect(isStableTag(tag)).toBe(stable);
   });
 });
 
@@ -67,6 +90,15 @@ describe("resolveEffectiveUpdateChannel", () => {
       expected: { channel: "beta", source: "config" },
     },
     {
+      name: "uses installed beta version over stale stable config",
+      params: {
+        configChannel: "stable",
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package" as const,
+      },
+      expected: { channel: "beta", source: "installed-version" },
+    },
+    {
       name: "uses beta git tag",
       params: {
         installKind: "git" as const,
@@ -78,7 +110,23 @@ describe("resolveEffectiveUpdateChannel", () => {
       name: "treats non-beta git tag as stable",
       params: {
         installKind: "git" as const,
-        git: { tag: "v2026.2.24-1" },
+        git: { tag: "v2026.2.24" },
+      },
+      expected: { channel: "stable", source: "git-tag" },
+    },
+    {
+      name: "treats non-beta prerelease git tag as dev",
+      params: {
+        installKind: "git" as const,
+        git: { tag: "v2026.5.25-alpha.1" },
+      },
+      expected: { channel: "dev", source: "git-tag" },
+    },
+    {
+      name: "preserves legacy numeric stable git tags",
+      params: {
+        installKind: "git" as const,
+        git: { tag: "v1.0.1-1" },
       },
       expected: { channel: "stable", source: "git-tag" },
     },
@@ -153,6 +201,11 @@ describe("formatUpdateChannelLabel", () => {
       expected: "dev (branch)",
     },
     {
+      name: "formats installed-version labels",
+      params: { channel: "beta", source: "installed-version" as const },
+      expected: "beta (installed version)",
+    },
+    {
       name: "formats default labels",
       params: { channel: "stable", source: "default" as const },
       expected: "stable (default)",
@@ -167,6 +220,20 @@ describe("formatUpdateChannelLabel", () => {
 });
 
 describe("resolveUpdateChannelDisplay", () => {
+  it("labels stale stable config on a beta install from the installed version", () => {
+    expect(
+      resolveUpdateChannelDisplay({
+        configChannel: "stable",
+        currentVersion: "2026.5.2-beta.1",
+        installKind: "package",
+      }),
+    ).toEqual({
+      channel: "beta",
+      source: "installed-version",
+      label: "beta (installed version)",
+    });
+  });
+
   it("includes the derived label for git branches", () => {
     expect(
       resolveUpdateChannelDisplay({
@@ -204,5 +271,16 @@ describe("resolveUpdateChannelDisplay", () => {
       source: "default",
       label: "stable (default)",
     });
+  });
+});
+
+describe("resolveRegistryUpdateChannel", () => {
+  it("queries beta when the installed version is beta even if config is stale stable", () => {
+    expect(
+      resolveRegistryUpdateChannel({
+        configChannel: "stable",
+        currentVersion: "2026.5.2-beta.1",
+      }),
+    ).toBe("beta");
   });
 });

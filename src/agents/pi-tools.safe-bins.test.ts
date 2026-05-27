@@ -109,6 +109,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 
 vi.mock("./channel-tools.js", () => ({
   copyChannelAgentToolMeta: vi.fn((_from, to) => to),
+  getChannelAgentToolMeta: () => undefined,
   listChannelAgentTools: () => [],
 }));
 
@@ -137,7 +138,7 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   AuthStorage: vi.fn(),
   CURRENT_SESSION_VERSION: 1,
   ModelRegistry: vi.fn(),

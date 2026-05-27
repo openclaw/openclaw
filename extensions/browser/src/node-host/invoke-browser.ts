@@ -1,8 +1,7 @@
 import fsPromises from "node:fs/promises";
-import { loadConfig } from "openclaw/plugin-sdk/browser-config-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/browser-node-runtime";
-import { detectMime } from "openclaw/plugin-sdk/browser-setup-tools";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
+import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
   isPersistentBrowserProfileMutation,
@@ -14,6 +13,8 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
+import { withTimeout } from "../sdk-node-runtime.js";
+import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;
@@ -40,11 +41,11 @@ const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
+  return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
 }
 
 function resolveBrowserProxyConfig() {
-  const cfg = loadConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const proxy = cfg.nodeHost?.browserProxy;
   const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
   const enabled = proxy?.enabled !== false;
@@ -64,7 +65,7 @@ async function ensureBrowserControlService(): Promise<void> {
     return browserControlReady;
   }
   browserControlReady = (async () => {
-    const cfg = loadConfig();
+    const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
       throw new Error("browser control disabled");
@@ -231,7 +232,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   await ensureBrowserControlService();
-  const cfg = loadConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = normalizeBrowserRequestPath(pathValue);

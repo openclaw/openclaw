@@ -1,0 +1,53 @@
+profile: openclaw-check
+provider: aws
+class: standard
+capacity:
+  market: spot
+  strategy: most-available
+  fallback: on-demand-after-120s
+  hints: true
+  availabilityZones:
+    - eu-west-1a
+    - eu-west-1b
+    - eu-west-1c
+  regions:
+    - eu-west-1
+    - eu-west-2
+    - eu-central-1
+    - us-east-1
+    - us-west-2
+actions:
+  workflow: .github/workflows/crabbox-hydrate.yml
+  # Default AWS hydration uses local Actions replay. Use
+  # `crabbox actions hydrate --github-runner --job hydrate-github` when the
+  # hydrate job needs GitHub secrets.
+  job: hydrate
+  ref: main
+  runnerLabels:
+    - crabbox
+    - openclaw
+  runnerVersion: latest
+  ephemeral: true
+aws:
+  region: eu-west-1
+  rootGB: 400
+sync:
+  delete: true
+  checksum: false
+  gitSeed: true
+  fingerprint: true
+  baseRef: main
+  exclude:
+    - .artifacts
+    - .codex
+    - .DS_Store
+    - playwright-report
+    - test-results
+env:
+  allow:
+    - CI
+    - NODE_OPTIONS
+    - OPENCLAW_*
+ssh:
+  user: crabbox
+  port: "2222"

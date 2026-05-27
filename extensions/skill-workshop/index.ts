@@ -1,4 +1,5 @@
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, resolveDefaultAgentId } from "./api.js";
 import { resolveConfig } from "./src/config.js";
 import { buildWorkshopGuidance } from "./src/prompt.js";
@@ -15,7 +16,9 @@ export default definePluginEntry({
   register(api) {
     const resolveCurrentConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.loadConfig,
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
         "skill-workshop",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -34,6 +37,30 @@ export default definePluginEntry({
         name: "skill_workshop",
       },
     );
+
+    api.registerTrustedToolPolicy({
+      id: "skill-workshop-apply-approval",
+      description: "Require operator approval before applying queued workspace skill proposals.",
+      evaluate(event) {
+        const config = resolveCurrentConfig();
+        if (
+          !config.enabled ||
+          config.approvalPolicy === "auto" ||
+          event.toolName !== "skill_workshop" ||
+          event.params.action !== "apply"
+        ) {
+          return undefined;
+        }
+        return {
+          requireApproval: {
+            title: "Apply workspace skill proposal",
+            description: "Apply a queued workspace skill proposal.",
+            severity: "warning",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        };
+      },
+    });
 
     api.on("before_prompt_build", async () => {
       const config = resolveCurrentConfig();
@@ -138,6 +165,6 @@ export default definePluginEntry({
 
 export { createProposalFromMessages } from "./src/signals.js";
 export { SkillWorkshopStore } from "./src/store.js";
-export { applyProposalToWorkspace, normalizeSkillName } from "./src/skills.js";
-export { countToolCalls, reviewTranscriptForProposal } from "./src/reviewer.js";
+export { applyProposalToWorkspace } from "./src/skills.js";
+export { reviewTranscriptForProposal } from "./src/reviewer.js";
 export { scanSkillContent } from "./src/scanner.js";

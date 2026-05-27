@@ -1,7 +1,7 @@
 import os from "node:os";
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import {
@@ -24,7 +24,7 @@ function normalizeOrigin(value: string): string | null {
   }
 }
 
-export type NextcloudTalkMonitorOptions = {
+type NextcloudTalkMonitorOptions = {
   accountId?: string;
   config?: CoreConfig;
   runtime?: RuntimeEnv;
@@ -37,7 +37,7 @@ export async function monitorNextcloudTalkProvider(
   opts: NextcloudTalkMonitorOptions,
 ): Promise<{ stop: () => void }> {
   const core = getNextcloudTalkRuntime();
-  const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
+  const cfg = opts.config ?? (core.config.current() as CoreConfig);
   const account = resolveNextcloudTalkAccount({
     cfg,
     accountId: opts.accountId,

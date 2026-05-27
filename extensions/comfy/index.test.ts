@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import {
+  registerSingleProviderPlugin,
+  resolveProviderPluginChoice,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 
 type ComfyManifest = {
@@ -28,14 +30,22 @@ describe("comfy provider plugin", () => {
     });
     expect(choice?.provider.id).toBe("comfy");
     expect(choice?.method.id).toBe("cloud-api-key");
-    expect(readManifest().providerAuthChoices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "comfy",
-          method: "cloud-api-key",
-          choiceId: "comfy-cloud-api-key",
-        }),
-      ]),
-    );
+    expect(readManifest().providerAuthChoices).toEqual([
+      {
+        provider: "comfy",
+        method: "cloud-api-key",
+        choiceId: "comfy-cloud-api-key",
+        choiceLabel: "Comfy Cloud API key",
+        choiceHint: "Required for cloud workflows",
+        cliOption: "--comfy-api-key <key>",
+        cliFlag: "--comfy-api-key",
+        cliDescription: "Comfy Cloud API key",
+        optionKey: "comfyApiKey",
+        groupId: "comfy",
+        groupLabel: "ComfyUI",
+        groupHint: "Local or cloud workflows",
+        onboardingScopes: ["image-generation"],
+      },
+    ]);
   });
 });

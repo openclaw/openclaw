@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const INWORLD_API_KEY = process.env.INWORLD_API_KEY?.trim() ?? "";
@@ -27,7 +27,7 @@ describeLive("inworld plugin live", () => {
     });
 
     expect(voices?.length).toBeGreaterThan(0);
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "Sarah" })]));
+    expect(voices?.some((voice) => voice.id === "Sarah")).toBe(true);
   }, 120_000);
 
   it("synthesizes MP3, native voice-note Ogg/Opus, and telephony PCM", async () => {

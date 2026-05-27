@@ -27,6 +27,45 @@ import {
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 import type { StatusSummary } from "./status.types.js";
 
+function readModelPricingHealth(params: {
+  health?: HealthSummary;
+  surface: StatusOverviewSurface;
+}): HealthSummary["modelPricing"] | undefined {
+  if (params.health?.modelPricing) {
+    return params.health.modelPricing;
+  }
+  const probeHealth = params.surface.gatewayProbe?.health;
+  if (!probeHealth || typeof probeHealth !== "object") {
+    return undefined;
+  }
+  const modelPricing = (probeHealth as { modelPricing?: unknown }).modelPricing;
+  if (!modelPricing || typeof modelPricing !== "object") {
+    return undefined;
+  }
+  const state = (modelPricing as { state?: unknown }).state;
+  if (state !== "ok" && state !== "degraded" && state !== "disabled") {
+    return undefined;
+  }
+  return modelPricing as HealthSummary["modelPricing"];
+}
+
+function buildModelPricingOverviewValue(params: {
+  health?: HealthSummary["modelPricing"];
+  ok: (value: string) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}): string | null {
+  const health = params.health;
+  if (!health) {
+    return null;
+  }
+  if (health.state !== "degraded") {
+    return null;
+  }
+  const detail = health.detail ? ` · ${health.detail}` : "";
+  return params.warn(`warning · optional pricing refresh degraded${detail}`);
+}
+
 export function buildStatusCommandOverviewRows(
   params: {
     opts: {
@@ -52,6 +91,7 @@ export function buildStatusCommandOverviewRows(
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
   } & StatusMemoryStateResolvers,
 ) {
   const agentsValue = buildStatusAgentsValue({
@@ -89,11 +129,21 @@ export function buildStatusCommandOverviewRows(
     resolveMemoryVectorState: params.resolveMemoryVectorState,
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
+    memoryUnavailableLabel: "not checked",
   });
   const pluginCompatibilityValue = buildStatusPluginCompatibilityValue({
     notices: params.pluginCompatibility,
     ok: params.ok,
     warn: params.warn,
+  });
+  const modelPricingValue = buildModelPricingOverviewValue({
+    health: readModelPricingHealth({
+      health: params.health,
+      surface: params.surface,
+    }),
+    ok: params.ok,
+    warn: params.warn,
+    muted: params.muted,
   });
 
   return buildStatusOverviewRowsFromSurface({
@@ -106,6 +156,10 @@ export function buildStatusCommandOverviewRows(
     updateValue: params.updateValue,
     agentsValue,
     suffixRows: [
+      ...(modelPricingValue ? [{ Item: "Model pricing", Value: modelPricingValue }] : []),
+      ...(params.updateRestartValue
+        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
+        : []),
       { Item: "Memory", Value: memoryValue },
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
@@ -132,6 +186,7 @@ export function buildStatusAllOverviewRows(params: {
   osLabel: string;
   configPath: string;
   secretDiagnosticsCount: number;
+  updateRestartValue?: string | null;
   agentStatus: {
     bootstrapPendingCount: number;
     totalSessions: number;
@@ -155,6 +210,9 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Config", Value: params.configPath },
     ],
     middleRows: [
+      ...(params.updateRestartValue
+        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
+        : []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
     ],
     agentsValue: buildStatusAllAgentsValue({

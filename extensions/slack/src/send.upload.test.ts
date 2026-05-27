@@ -1,6 +1,10 @@
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
@@ -21,14 +25,23 @@ const fetchWithSsrFGuard = vi.fn(
     }) as const,
 );
 
-vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) =>
     fetchWithSsrFGuard(...(args as [params: { url: string; init?: RequestInit }])),
-  withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  }),
 }));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
+  );
+  return {
+    ...actual,
+    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    }),
+  };
+});
 
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
@@ -56,6 +69,71 @@ type UploadTestClient = WebClient & {
     completeUploadExternal: ReturnType<typeof vi.fn>;
   };
 };
+
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  const isObjectRecord = typeof value === "object" && value !== null && !Array.isArray(value);
+  expect(isObjectRecord, `${label} should be an object`).toBe(true);
+  if (!isObjectRecord) {
+    throw new Error(`${label} should be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  const values = Array.isArray(value) ? value : null;
+  expect(values, `${label} should be an array`).not.toBeNull();
+  if (!values) {
+    throw new Error(`${label} should be an array`);
+  }
+  return values;
+}
+
+function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
+  expect(record).toMatchObject(expected);
+}
+
+function expectCallFirstArg(
+  mock: MockCalls,
+  callNumber: number,
+  expected: Record<string, unknown>,
+  label = "mock first argument",
+): Record<string, unknown> {
+  expect(mock.mock.calls.length).toBeGreaterThanOrEqual(callNumber);
+  const [firstArg] = mock.mock.calls[callNumber - 1] ?? [];
+  const record = requireRecord(firstArg, label);
+  expectFields(record, expected);
+  return record;
+}
+
+function expectOnlyCallFirstArg(
+  mock: MockCalls,
+  expected: Record<string, unknown>,
+  label?: string,
+): Record<string, unknown> {
+  expect(mock.mock.calls).toHaveLength(1);
+  return expectCallFirstArg(mock, 1, expected, label);
+}
+
+function expectCompletedUpload(params: {
+  client: UploadTestClient;
+  expected: Record<string, unknown>;
+  file?: Record<string, unknown>;
+}) {
+  const payload = expectOnlyCallFirstArg(
+    params.client.files.completeUploadExternal,
+    params.expected,
+    "complete upload payload",
+  );
+  if (params.file) {
+    const [file] = requireArray(payload.files, "complete upload files");
+    expectFields(requireRecord(file, "complete upload file"), params.file);
+  }
+  return payload;
+}
 
 function createUploadTestClient(): UploadTestClient {
   return {
@@ -87,6 +165,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
     clearSlackSendQueuesForTest();
+    clearSlackThreadParticipationCache();
   });
 
   afterEach(() => {
@@ -110,12 +189,11 @@ describe("sendMessageSlack file upload with user IDs", () => {
       users: "U2ZH3MFSR",
     });
 
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel_id: "D99RESOLVED",
-        files: [expect.objectContaining({ id: "F001", title: "screenshot.png" })],
-      }),
-    );
+    expectCompletedUpload({
+      client,
+      expected: { channel_id: "D99RESOLVED" },
+      file: { id: "F001", title: "screenshot.png" },
+    });
   });
 
   it("resolves prefixed user ID to DM channel before completing upload", async () => {
@@ -131,13 +209,12 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(client.conversations.open).toHaveBeenCalledWith({
       users: "UABC123",
     });
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({ channel_id: "D99RESOLVED" }),
-    );
+    expectCompletedUpload({ client, expected: { channel_id: "D99RESOLVED" } });
   });
 
-  it("caches DM channel resolution per account", async () => {
+  it("posts text-only user-target DMs directly without conversations.open", async () => {
     const client = createUploadTestClient();
+    client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
 
     await sendMessageSlack("user:UABC123", "first", {
       token: "xoxb-test",
@@ -150,20 +227,17 @@ describe("sendMessageSlack file upload with user IDs", () => {
       client,
     });
 
-    expect(client.conversations.open).toHaveBeenCalledTimes(1);
+    expect(client.conversations.open).not.toHaveBeenCalled();
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(client.chat.postMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        channel: "D99RESOLVED",
-        text: "second",
-      }),
-    );
+    expectCallFirstArg(client.chat.postMessage, 2, {
+      channel: "UABC123",
+      text: "second",
+    });
   });
 
   it("serializes concurrent sends to the same Slack target", async () => {
     const client = createUploadTestClient();
-    let resolveFirst!: () => void;
+    let resolveFirst: (() => void) | undefined;
     client.chat.postMessage.mockImplementation(async (payload: { text?: string }) => {
       if (payload.text === "first") {
         await new Promise<void>((resolve) => {
@@ -189,14 +263,30 @@ describe("sendMessageSlack file upload with user IDs", () => {
     await Promise.resolve();
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+    if (!resolveFirst) {
+      throw new Error("Expected first Slack send release callback to be initialized");
+    }
     resolveFirst();
 
-    await expect(first).resolves.toEqual({ channelId: "C123CHAN", messageId: "1.000" });
-    await expect(second).resolves.toEqual({ channelId: "C123CHAN", messageId: "2.000" });
-    expect(client.chat.postMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ text: "second" }),
-    );
+    const firstResult = await first;
+    expectFields(requireRecord(firstResult, "first send result"), {
+      channelId: "C123CHAN",
+      messageId: "1.000",
+    });
+    expectFields(requireRecord(firstResult.receipt, "first receipt"), {
+      primaryPlatformMessageId: "1.000",
+      platformMessageIds: ["1.000"],
+    });
+    const secondResult = await second;
+    expectFields(requireRecord(secondResult, "second send result"), {
+      channelId: "C123CHAN",
+      messageId: "2.000",
+    });
+    expectFields(requireRecord(secondResult.receipt, "second receipt"), {
+      primaryPlatformMessageId: "2.000",
+      platformMessageIds: ["2.000"],
+    });
+    expectCallFirstArg(client.chat.postMessage, 2, { text: "second" });
   });
 
   it("scopes DM channel resolution cache by token identity", async () => {
@@ -206,11 +296,13 @@ describe("sendMessageSlack file upload with user IDs", () => {
       token: "xoxb-test-a",
       cfg: SLACK_TEST_CFG,
       client,
+      mediaUrl: "/tmp/first.png",
     });
     await sendMessageSlack("user:UABC123", "second", {
       token: "xoxb-test-b",
       cfg: SLACK_TEST_CFG,
       client,
+      mediaUrl: "/tmp/second.png",
     });
 
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
@@ -219,7 +311,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
   it("sends file directly to channel without conversations.open", async () => {
     const client = createUploadTestClient();
 
-    await sendMessageSlack("channel:C123CHAN", "chart", {
+    const result = await sendMessageSlack("channel:C123CHAN", "chart", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
@@ -227,9 +319,21 @@ describe("sendMessageSlack file upload with user IDs", () => {
     });
 
     expect(client.conversations.open).not.toHaveBeenCalled();
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({ channel_id: "C123CHAN" }),
-    );
+    expectCompletedUpload({ client, expected: { channel_id: "C123CHAN" } });
+    expectFields(requireRecord(result.receipt, "receipt"), {
+      primaryPlatformMessageId: "F001",
+      platformMessageIds: ["F001"],
+    });
+    const [part] = requireArray(result.receipt.parts, "receipt parts");
+    const partRecord = requireRecord(part, "receipt part");
+    expectFields(partRecord, {
+      platformMessageId: "F001",
+      kind: "media",
+    });
+    expectFields(requireRecord(partRecord.raw, "receipt raw"), {
+      channel: "slack",
+      channelId: "C123CHAN",
+    });
   });
 
   it("resolves mention-style user ID before file upload", async () => {
@@ -245,15 +349,13 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(client.conversations.open).toHaveBeenCalledWith({
       users: "U777TEST",
     });
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({ channel_id: "D99RESOLVED" }),
-    );
+    expectCompletedUpload({ client, expected: { channel_id: "D99RESOLVED" } });
   });
 
   it("uploads bytes to the presigned URL and completes with thread+caption", async () => {
     const client = createUploadTestClient();
 
-    await sendMessageSlack("channel:C123CHAN", "caption", {
+    const result = await sendMessageSlack("channel:C123CHAN", "caption", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
@@ -265,26 +367,26 @@ describe("sendMessageSlack file upload with user IDs", () => {
       filename: "screenshot.png",
       length: Buffer.from("fake-image").length,
     });
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://uploads.slack.test/upload",
-      expect.objectContaining({
-        method: "POST",
-      }),
-    );
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://uploads.slack.test/upload",
-        mode: "trusted_env_proxy",
-        auditContext: "slack-upload-file",
-      }),
-    );
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const fetchCalls = (globalThis.fetch as unknown as MockCalls).mock.calls;
+    expect(fetchCalls).toHaveLength(1);
+    const [fetchUrl, fetchInit] = fetchCalls[0] ?? [];
+    expect(fetchUrl).toBe("https://uploads.slack.test/upload");
+    expectFields(requireRecord(fetchInit, "fetch init"), { method: "POST" });
+    expectOnlyCallFirstArg(fetchWithSsrFGuard, {
+      url: "https://uploads.slack.test/upload",
+      mode: "trusted_env_proxy",
+      auditContext: "slack-upload-file",
+    });
+    expectCompletedUpload({
+      client,
+      expected: {
         channel_id: "C123CHAN",
         initial_comment: "caption",
         thread_ts: "171.222",
-      }),
-    );
+      },
+    });
+    expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
+    expect(result.receipt.threadId).toBe("171.222");
   });
 
   it("uses explicit upload filename and title overrides when provided", async () => {
@@ -303,11 +405,11 @@ describe("sendMessageSlack file upload with user IDs", () => {
       filename: "custom-name.bin",
       length: Buffer.from("fake-image").length,
     });
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        files: [expect.objectContaining({ id: "F001", title: "Custom Title" })],
-      }),
-    );
+    expectCompletedUpload({
+      client,
+      expected: {},
+      file: { id: "F001", title: "Custom Title" },
+    });
   });
 
   it("uses uploadFileName as the title fallback when uploadTitle is omitted", async () => {
@@ -325,10 +427,10 @@ describe("sendMessageSlack file upload with user IDs", () => {
       filename: "custom-name.bin",
       length: Buffer.from("fake-image").length,
     });
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        files: [expect.objectContaining({ id: "F001", title: "custom-name.bin" })],
-      }),
-    );
+    expectCompletedUpload({
+      client,
+      expected: {},
+      file: { id: "F001", title: "custom-name.bin" },
+    });
   });
 });

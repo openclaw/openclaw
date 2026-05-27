@@ -13,10 +13,12 @@ export { parseProviderModelMap, redactLiveApiKey };
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
   byteplus: "byteplus/seedance-1-0-lite-t2v-250428",
+  deepinfra: "deepinfra/Pixverse/Pixverse-T2V",
   fal: "fal/fal-ai/minimax/video-01-live",
   google: "google/veo-3.1-fast-generate-preview",
   minimax: "minimax/MiniMax-Hailuo-2.3",
   openai: "openai/sora-2",
+  openrouter: "openrouter/google/veo-3.1-fast",
   qwen: "qwen/wan2.6-t2v",
   runway: "runway/gen4.5",
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
@@ -30,10 +32,13 @@ const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
 export function resolveLiveVideoResolution(params: {
   providerId: string;
   modelRef: string;
-}): "480P" | "768P" | "1080P" {
+}): "480P" | "720P" | "768P" | "1080P" {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
   if (providerId === "minimax") {
     return "768P";
+  }
+  if (providerId === "openrouter") {
+    return "720P";
   }
   return "480P";
 }

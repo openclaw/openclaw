@@ -5,7 +5,7 @@ import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 
 const mocks = vi.hoisted(() => ({
   readLocalFileSafely: vi.fn(),
-  isSafeOpenError: vi.fn(
+  isFsSafeError: vi.fn(
     (error: unknown) => typeof error === "object" && error !== null && "code" in error,
   ),
 }));
@@ -13,18 +13,32 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./store.runtime.js", () => {
   return {
     readLocalFileSafely: mocks.readLocalFileSafely,
-    isSafeOpenError: mocks.isSafeOpenError,
+    isFsSafeError: mocks.isFsSafeError,
   };
 });
 
 type StoreModule = typeof import("./store.js");
 
+let SaveMediaSourceError: StoreModule["SaveMediaSourceError"];
 let saveMediaSource: StoreModule["saveMediaSource"];
 
 async function expectOutsideWorkspaceStoreFailure(sourcePath: string) {
-  await expect(saveMediaSource(sourcePath)).rejects.toMatchObject({
-    code: "invalid-path",
-    message: "Media path is outside workspace root",
+  let storeError: unknown;
+  try {
+    await saveMediaSource(sourcePath);
+  } catch (error) {
+    storeError = error;
+  }
+  expect(storeError).toBeInstanceOf(SaveMediaSourceError);
+  if (!(storeError instanceof SaveMediaSourceError)) {
+    throw new Error("expected SaveMediaSourceError");
+  }
+  expect(storeError.name).toBe("SaveMediaSourceError");
+  expect(storeError.code).toBe("invalid-path");
+  expect(storeError.message).toBe("Media path is outside workspace root");
+  expect(storeError.cause).toStrictEqual({
+    code: "outside-workspace",
+    message: "file is outside workspace root",
   });
 }
 
@@ -33,7 +47,7 @@ describe("media store outside-workspace mapping", () => {
   let home = "";
 
   beforeAll(async () => {
-    ({ saveMediaSource } = await import("./store.js"));
+    ({ SaveMediaSourceError, saveMediaSource } = await import("./store.js"));
     tempHome = await createTempHomeEnv("openclaw-media-store-test-home-");
     home = tempHome.home;
   });

@@ -5,6 +5,17 @@ import {
   resolveCliContainerTarget,
 } from "./container-target.js";
 
+function requireSpawnCall(
+  spawnSync: ReturnType<typeof vi.fn>,
+  index: number,
+): [string, string[], unknown?] {
+  const call = spawnSync.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected spawnSync call ${index}`);
+  }
+  return call as [string, string[], unknown?];
+}
+
 describe("parseCliContainerArgs", () => {
   it("extracts a root --container flag before the command", () => {
     expect(
@@ -211,6 +222,157 @@ describe("maybeRunCliInContainer", () => {
         },
       },
     );
+  });
+
+  it("passes the proxy URL env fallback into the child container CLI", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "true\n",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "",
+      });
+
+    maybeRunCliInContainer(["node", "openclaw", "status"], {
+      env: {
+        OPENCLAW_CONTAINER: "demo",
+        OPENCLAW_PROXY_URL: " http://proxy.internal:3128 ",
+      } as NodeJS.ProcessEnv,
+      spawnSync,
+    });
+
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      3,
+      "podman",
+      [
+        "exec",
+        "-i",
+        "--env",
+        "OPENCLAW_CONTAINER_HINT=demo",
+        "--env",
+        "OPENCLAW_CLI_CONTAINER_BYPASS=1",
+        "--env",
+        "OPENCLAW_PROXY_URL=http://proxy.internal:3128",
+        "demo",
+        "openclaw",
+        "status",
+      ],
+      {
+        stdio: "inherit",
+        env: {
+          OPENCLAW_CONTAINER: "",
+          OPENCLAW_PROXY_URL: " http://proxy.internal:3128 ",
+        },
+      },
+    );
+  });
+
+  it.each([
+    "http://127.0.0.1:3128",
+    "http://127.1:3128",
+    "http://127.0.0.01:3128",
+    "http://localhost.:3128",
+    "http://[::1]:3128",
+    "http://[::ffff:127.0.0.1]:3128",
+  ])("fails before forwarding loopback proxy URL %s into a child container CLI", (proxyUrl) => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "true\n",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      });
+
+    expect(() =>
+      maybeRunCliInContainer(["node", "openclaw", "status"], {
+        env: {
+          OPENCLAW_CONTAINER: "demo",
+          OPENCLAW_PROXY_URL: ` ${proxyUrl} `,
+        } as NodeJS.ProcessEnv,
+        spawnSync,
+      }),
+    ).toThrow("127.0.0.1 inside a container points at the container");
+
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("redacts proxy URL credentials and URL suffixes before rejecting loopback container proxy forwarding", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "true\n",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      });
+
+    let message = "";
+    try {
+      maybeRunCliInContainer(["node", "openclaw", "status"], {
+        env: {
+          OPENCLAW_CONTAINER: "demo",
+          OPENCLAW_PROXY_URL:
+            "http://proxy-user:proxy-secret@127.1:3128?token=proxy-query-secret#proxy-fragment-secret",
+        } as NodeJS.ProcessEnv,
+        spawnSync,
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("OPENCLAW_PROXY_URL=http://redacted:redacted@127.0.0.1:3128/");
+    expect(message).not.toContain("proxy-user");
+    expect(message).not.toContain("proxy-secret");
+    expect(message).not.toContain("proxy-query-secret");
+    expect(message).not.toContain("proxy-fragment-secret");
+    expect(message).not.toContain("?token=");
+    expect(message).not.toContain("#");
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows explicitly overridden loopback proxy URL forwarding into a child container CLI", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "true\n",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      })
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "",
+      });
+
+    maybeRunCliInContainer(["node", "openclaw", "status"], {
+      env: {
+        OPENCLAW_CONTAINER: "demo",
+        OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+        OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL: "1",
+      } as NodeJS.ProcessEnv,
+      spawnSync,
+    });
+
+    const podmanCall = requireSpawnCall(spawnSync, 2);
+    expect(podmanCall[0]).toBe("podman");
+    expect(podmanCall[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
+    if (podmanCall[2] === undefined) {
+      throw new Error("Expected podman spawn options");
+    }
   });
 
   it("executes through podman when the named container is running", () => {

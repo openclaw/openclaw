@@ -9,10 +9,12 @@ const formatAriaSnapshot = vi.fn();
 
 vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
+  closeBlockedNavigationTarget: vi.fn(),
   ensurePageState,
   forceDisconnectPlaywrightForTarget: vi.fn(),
   getPageForTargetId,
   gotoPageWithNavigationGuard: vi.fn(),
+  isPolicyDenyNavigationError: vi.fn(() => false),
   storeRoleRefsForTarget,
 }));
 
@@ -24,6 +26,25 @@ vi.mock("./pw-session.page-cdp.js", () => ({
 vi.mock("./cdp.js", () => ({
   formatAriaSnapshot,
 }));
+
+type ScopedCdpClientOptions = {
+  cdpUrl?: unknown;
+  fn?: unknown;
+  page?: unknown;
+  targetId?: unknown;
+};
+
+function requireScopedCdpClientOptions(): ScopedCdpClientOptions {
+  const [call] = withPageScopedCdpClient.mock.calls;
+  if (!call) {
+    throw new Error("expected scoped CDP client call");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
+    throw new Error("expected scoped CDP client options");
+  }
+  return options as ScopedCdpClientOptions;
+}
 
 describe("pw-tools-core aria snapshot storage", () => {
   beforeEach(() => {
@@ -50,12 +71,12 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(result).toEqual({ nodes: formattedNodes });
     expect(getPageForTargetId).toHaveBeenCalledTimes(1);
     expect(ensurePageState).toHaveBeenCalledWith(page);
-    expect(withPageScopedCdpClient).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:9222",
-      page,
-      targetId: "tab-1",
-      fn: expect.any(Function),
-    });
+    expect(withPageScopedCdpClient).toHaveBeenCalledTimes(1);
+    const scopedClientOptions = requireScopedCdpClientOptions();
+    expect(scopedClientOptions.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(scopedClientOptions.page).toBe(page);
+    expect(scopedClientOptions.targetId).toBe("tab-1");
+    expect(typeof scopedClientOptions.fn).toBe("function");
     expect(markBackendDomRefsOnPage).toHaveBeenCalledWith({
       page,
       refs: [{ ref: "ax1", backendDOMNodeId: 42 }],
@@ -69,6 +90,45 @@ describe("pw-tools-core aria snapshot storage", () => {
       },
       mode: "role",
     });
+  });
+
+  it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = { id: "page-1" };
+      getPageForTargetId.mockResolvedValue(page);
+      withPageScopedCdpClient.mockImplementation(() => new Promise(() => {}));
+
+      const mod = await import("./pw-tools-core.snapshot.js");
+      const promise = mod.snapshotAriaViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        timeoutMs: 750,
+      });
+      void promise.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(750);
+
+      await expect(promise).rejects.toThrow(/Aria snapshot via Playwright timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards an explicit timeoutMs into the role-aria Playwright ariaSnapshot call", async () => {
+    const ariaSnapshotMock = vi.fn().mockResolvedValue("");
+    const page = { ariaSnapshot: ariaSnapshotMock };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refsMode: "aria",
+      timeoutMs: 8888,
+    });
+
+    expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 8888 });
   });
 
   it("stores role fallback metadata when backend markers are unavailable", async () => {

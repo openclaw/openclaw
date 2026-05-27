@@ -53,6 +53,16 @@ function installPreCommitFixture(dir: string): string {
   return fakeBinDir;
 }
 
+function splitNonEmptyLines(output: string): string[] {
+  const lines: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
@@ -76,7 +86,7 @@ describe("git-hooks/pre-commit (integration)", () => {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
     });
 
-    const staged = run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean);
+    const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
     expect(staged).toEqual(["--all"]);
   });
 
@@ -101,6 +111,30 @@ describe("git-hooks/pre-commit (integration)", () => {
     });
 
     expect(run(dir, "git", ["diff", "--cached", "--name-only"])).toBe("tracked.txt");
+  });
+
+  it("does not re-add staged paths that are ignored by the current .gitignore", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-ignored-staged-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    const fakeBinDir = installPreCommitFixture(dir);
+    mkdirSync(path.join(dir, ".agents", "skills", "discord-clawd"), { recursive: true });
+    writeFileSync(path.join(dir, ".gitignore"), ".agents/skills/discord-clawd/\n", "utf8");
+    writeFileSync(
+      path.join(dir, ".agents", "skills", "discord-clawd", "SKILL.md"),
+      "# Discord Clawd\n",
+      "utf8",
+    );
+
+    run(dir, "git", ["add", "--", ".gitignore"]);
+    run(dir, "git", ["add", "-f", "--", ".agents/skills/discord-clawd/SKILL.md"]);
+
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    const staged = splitNonEmptyLines(run(dir, "git", ["diff", "--cached", "--name-only"]));
+    expect(staged).toEqual([".agents/skills/discord-clawd/SKILL.md", ".gitignore"]);
   });
 
   it("ignores FAST_COMMIT because the hook is already formatting-only", () => {

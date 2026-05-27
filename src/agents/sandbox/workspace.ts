@@ -1,7 +1,8 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import type { OptionalBootstrapFileName } from "../../config/types.agent-defaults.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -18,6 +19,7 @@ export async function ensureSandboxWorkspace(
   workspaceDir: string,
   seedFrom?: string,
   skipBootstrap?: boolean,
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[],
 ) {
   await fs.mkdir(workspaceDir, { recursive: true });
   if (seedFrom) {
@@ -38,7 +40,7 @@ export async function ensureSandboxWorkspace(
         await fs.access(dest);
       } catch {
         try {
-          const opened = await openBoundaryFile({
+          const opened = await openRootFile({
             absolutePath: src,
             rootPath: seed,
             boundaryLabel: "sandbox seed workspace",
@@ -61,5 +63,6 @@ export async function ensureSandboxWorkspace(
   await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !skipBootstrap,
+    skipOptionalBootstrapFiles,
   });
 }

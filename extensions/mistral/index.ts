@@ -1,5 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyMistralModelCompat, MISTRAL_SMALL_LATEST_ID } from "./api.js";
+import { applyMistralModelCompat, MISTRAL_SMALL_LATEST_ID, MISTRAL_MEDIUM_3_5_ID } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -8,7 +8,7 @@ import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
-export function buildMistralReplayPolicy() {
+function buildMistralReplayPolicy() {
   return {
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict9" as const,
@@ -48,7 +48,7 @@ export default defineSingleProviderPluginEntry({
     contributeResolvedModelCompat: ({ modelId, model }) =>
       contributeMistralResolvedModelCompat({ modelId, model }),
     resolveThinkingProfile: ({ modelId }) =>
-      modelId === MISTRAL_SMALL_LATEST_ID
+      modelId === MISTRAL_SMALL_LATEST_ID || modelId === MISTRAL_MEDIUM_3_5_ID
         ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }
         : undefined,
     buildReplayPolicy: () => buildMistralReplayPolicy(),

@@ -162,6 +162,145 @@ describe("conversation resolution", () => {
     });
   });
 
+  it("strips provider prefixes from normalized fallback conversation targets", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        normalizeTarget: () => "telegram:-1001234567890:topic:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "-1001234567890:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("strips kind-prefixed normalized topic routes before fallback resolution", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "group:-1001234567890:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("normalizes alias-prefixed topic routes before fallback resolution", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        targetPrefixes: ["tg"],
+        normalizeTarget: () => "telegram:group:-1001234567890:topic:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "tg:group:-1001234567890:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("strips Telegram numeric topic shorthand in fallback resolution", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+      messaging: {
+        normalizeTarget: () => "telegram:-1001234567890:77",
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "telegram",
+        accountId: "default",
+        originatingTo: "-1001234567890:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+  });
+
+  it("keeps parser-only fallback conversation targets during the migration window", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "legacychat", label: "Legacy chat" }),
+      messaging: {
+        parseExplicitTarget: ({ raw }) =>
+          raw === "room-a:topic:77"
+            ? { to: "room-a", threadId: 77, chatType: "group" as const }
+            : null,
+      },
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "legacychat",
+        accountId: "default",
+        originatingTo: "room-a:topic:77",
+      })?.canonical,
+    ).toEqual({
+      channel: "legacychat",
+      accountId: "default",
+      conversationId: "room-a",
+    });
+  });
+
+  it("normalizes numeric command thread ids through the shared route contract", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
+    });
+
+    expect(
+      resolveCommandConversationResolution({
+        cfg: testConfig,
+        channel: "test-chat",
+        accountId: "default",
+        originatingTo: "test-chat:channel:parent-room",
+        threadId: 42.9,
+      }),
+    ).toEqual({
+      canonical: {
+        channel: "test-chat",
+        accountId: "default",
+        conversationId: "42",
+        parentConversationId: "parent-room",
+      },
+      threadId: "42",
+      source: "command-fallback",
+    });
+  });
+
   it("uses the runtime inbound resolver and preserves provider canonical ids", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
@@ -266,6 +405,31 @@ describe("conversation resolution", () => {
         parentConversationId: "parent-room",
       },
       threadId: "child-thread",
+      source: "inbound-fallback",
+    });
+  });
+
+  it("normalizes numeric inbound thread ids through the shared route contract", () => {
+    registerChannelPlugin({
+      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
+    });
+
+    expect(
+      resolveInboundConversationResolution({
+        cfg: testConfig,
+        channel: "test-chat",
+        accountId: "default",
+        to: "test-chat:channel:parent-room",
+        threadId: 42.9,
+      }),
+    ).toEqual({
+      canonical: {
+        channel: "test-chat",
+        accountId: "default",
+        conversationId: "42",
+        parentConversationId: "parent-room",
+      },
+      threadId: "42",
       source: "inbound-fallback",
     });
   });

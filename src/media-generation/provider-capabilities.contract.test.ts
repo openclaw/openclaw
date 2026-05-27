@@ -5,10 +5,12 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "alibaba",
   "byteplus",
   "comfy",
+  "deepinfra",
   "fal",
   "google",
   "minimax",
   "openai",
+  "openrouter",
   "qwen",
   "runway",
   "together",
@@ -16,7 +18,13 @@ const EXPECTED_BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
   "xai",
 ] as const;
 
-const EXPECTED_BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS = ["comfy", "google", "minimax"] as const;
+const EXPECTED_BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS = [
+  "comfy",
+  "fal",
+  "google",
+  "minimax",
+  "openrouter",
+] as const;
 
 const EXPECTED_BUNDLED_VIDEO_PROVIDER_IDS_BY_PLUGIN: Record<string, readonly string[]> = {
   minimax: ["minimax", "minimax-portal"],

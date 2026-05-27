@@ -34,10 +34,12 @@ export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 export type MockSock = {
   ev: EventEmitter;
+  end: AnyMockFn;
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
+  groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
   updateMediaMessage: AnyMockFn;
   logger: Record<string, unknown>;
@@ -51,6 +53,92 @@ export type MockSock = {
 
 const sessionState = vi.hoisted(() => ({
   sock: undefined as MockSock | undefined,
+}));
+
+const channelActivityMocks = vi.hoisted(() => ({
+  recordChannelActivity: vi.fn(),
+}));
+
+const pluginRuntimeMocks = vi.hoisted(() => {
+  type StoreEntry = { key: string; value: unknown; createdAt: number };
+  const stores = new Map<string, Map<string, StoreEntry>>();
+  let nextRegisterIfAbsentError: Error | undefined;
+
+  const openKeyedStore = vi.fn((options: { namespace: string }) => {
+    let store = stores.get(options.namespace);
+    if (!store) {
+      store = new Map();
+      stores.set(options.namespace, store);
+    }
+    return {
+      register: async (key: string, value: unknown) => {
+        store.set(key, { key, value, createdAt: Date.now() });
+      },
+      registerIfAbsent: async (key: string, value: unknown) => {
+        if (nextRegisterIfAbsentError) {
+          const error = nextRegisterIfAbsentError;
+          nextRegisterIfAbsentError = undefined;
+          throw error;
+        }
+        if (store.has(key)) {
+          return false;
+        }
+        store.set(key, { key, value, createdAt: Date.now() });
+        return true;
+      },
+      lookup: async (key: string) => store.get(key)?.value,
+      consume: async (key: string) => {
+        const value = store.get(key)?.value;
+        store.delete(key);
+        return value;
+      },
+      delete: async (key: string) => store.delete(key),
+      entries: async () => Array.from(store.values()),
+      clear: async () => {
+        store.clear();
+      },
+    };
+  });
+
+  return {
+    openKeyedStore,
+    failNextRegisterIfAbsent: (error: Error) => {
+      nextRegisterIfAbsentError = error;
+    },
+    reset: () => {
+      stores.clear();
+      nextRegisterIfAbsentError = undefined;
+      openKeyedStore.mockClear();
+    },
+  };
+});
+
+export function getRecordChannelActivityMock(): AnyMockFn {
+  return channelActivityMocks.recordChannelActivity;
+}
+
+export function failNextWhatsAppPluginStateRegisterIfAbsent(error: Error) {
+  pluginRuntimeMocks.failNextRegisterIfAbsent(error);
+}
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) =>
+      channelActivityMocks.recordChannelActivity(...args),
+  };
+});
+
+vi.mock("./runtime.js", () => ({
+  getWhatsAppRuntime: () => ({
+    state: {
+      openKeyedStore: pluginRuntimeMocks.openKeyedStore,
+    },
+  }),
+  setWhatsAppRuntime: vi.fn(),
 }));
 
 const inboundRuntimeMocks = vi.hoisted(() => {
@@ -106,10 +194,17 @@ function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
     ev,
+    end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
     readMessages: createResolvedMock(),
+    groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
+      id: jid,
+      subject: "Test Group",
+      owner: undefined,
+      participants: [],
+    })),
     groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
     updateMediaMessage: vi.fn(),
     logger: {},
@@ -188,6 +283,13 @@ export async function settleInboundWork() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+export function resetWebInboundDedupeForTests() {
+  if (!resetWebInboundDedupe) {
+    throw new Error("resetWebInboundDedupe not initialized");
+  }
+  resetWebInboundDedupe();
+}
+
 export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
   await vi.waitFor(
     () => {
@@ -244,7 +346,7 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  const sendCall = sock.sendMessage.mock.calls[0];
+  const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
   expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
     channel: "whatsapp",
@@ -268,6 +370,8 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    channelActivityMocks.recordChannelActivity.mockClear();
+    pluginRuntimeMocks.reset();
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {

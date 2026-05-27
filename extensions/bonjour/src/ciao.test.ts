@@ -21,6 +21,17 @@ describe("bonjour-ciao", () => {
     });
   });
 
+  it("classifies ciao interface assertions using changed wording", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new Error("Reached illegal state! IPv4 address changed from undefined to defined!"),
+      ),
+    ).toEqual({
+      kind: "interface-assertion",
+      formatted: "Reached illegal state! IPv4 address changed from undefined to defined!",
+    });
+  });
+
   it("classifies ciao netmask assertions separately from side effects", () => {
     expect(
       classifyCiaoUnhandledRejection(
@@ -35,6 +46,20 @@ describe("bonjour-ciao", () => {
       kind: "netmask-assertion",
       formatted:
         "AssertionError: IP address version must match. Netmask cannot have a version different from the address!",
+    });
+  });
+
+  it("classifies ciao self-probe races separately from side effects", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new Error(
+          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
+        ),
+      ),
+    ).toEqual({
+      kind: "self-probe",
+      formatted:
+        "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
     });
   });
 
@@ -98,6 +123,27 @@ describe("bonjour-ciao", () => {
     );
 
     expect(ignoreCiaoUnhandledRejection(error)).toBe(true);
+  });
+
+  it("classifies networkInterfaces SystemError failures (restricted sandboxes)", () => {
+    const err = Object.assign(
+      new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
+      { name: "SystemError" },
+    );
+    expect(classifyCiaoUnhandledRejection(err)).toEqual({
+      kind: "interface-enumeration-failure",
+      formatted:
+        "SystemError: A system error occurred: uv_interface_addresses returned Unknown system error 1",
+    });
+  });
+
+  it("suppresses networkInterfaces failures wrapped in cause chains", () => {
+    const inner = Object.assign(
+      new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
+      { name: "SystemError" },
+    );
+    const wrapper = new Error("ciao NetworkManager init failed", { cause: inner });
+    expect(ignoreCiaoUnhandledRejection(wrapper)).toBe(true);
   });
 
   it("keeps unrelated rejections visible", () => {

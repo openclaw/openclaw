@@ -1,12 +1,19 @@
 import fs from "node:fs";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   acquireDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
+import {
+  closeQaHttpServer,
+  handleQaBusRequest,
+  readQaJsonBody,
+  writeError,
+  writeJson,
+  writeQaRequestBodyLimitError,
+} from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import {
@@ -57,6 +64,13 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
+export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+  if (writeQaRequestBodyLimitError(res, error)) {
+    return;
+  }
+  writeError(res, 500, error);
+}
+
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
     total: scenarios.length,
@@ -94,15 +108,6 @@ function injectKickoffMessage(params: {
   });
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
-  return text ? (JSON.parse(text) as unknown) : {};
-}
-
 function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefaults {
   if (autoKickoffTarget === "channel") {
     return {
@@ -120,6 +125,44 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
   };
 }
 
+const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
+  "access_token",
+  "auth",
+  "devicetoken",
+  "password",
+  "refresh_token",
+  "token",
+]);
+
+function stripSensitiveQueryParams(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    return rawUrl
+      .replace(
+        /([?&])(?:access_token|auth|deviceToken|password|refresh_token|token)=[^&#\s]*&?/gi,
+        (match: string, separator: string) => (match.endsWith("&") ? separator : ""),
+      )
+      .replace(/[?&]$/, "")
+      .replace("?&", "?");
+  }
+}
+
+function sanitizeControlUiPublicUrl(url: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+  const fragmentIndex = url.indexOf("#");
+  const withoutFragment = fragmentIndex === -1 ? url : url.slice(0, fragmentIndex);
+  return stripSensitiveQueryParams(withoutFragment);
+}
+
 function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
@@ -130,30 +173,33 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   const cfg = createQaLabConfig(params.baseUrl);
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
-  const task = qaChannelPlugin.gateway?.startAccount?.({
-    accountId: account.accountId,
-    account,
-    cfg,
-    runtime: {
-      log: () => undefined,
-      error: () => undefined,
-      exit: () => undefined,
-    },
-    abortSignal: abort.signal,
-    log: {
-      info: () => undefined,
-      warn: () => undefined,
-      error: () => undefined,
-      debug: () => undefined,
-    },
-    getStatus: () => ({
-      accountId: account.accountId,
-      configured: true,
-      enabled: true,
-      running: true,
-    }),
-    setStatus: () => undefined,
-  });
+  const task = Promise.resolve().then(
+    async () =>
+      await qaChannelPlugin.gateway?.startAccount?.({
+        accountId: account.accountId,
+        account,
+        cfg,
+        runtime: {
+          log: () => undefined,
+          error: () => undefined,
+          exit: () => undefined,
+        },
+        abortSignal: abort.signal,
+        log: {
+          info: () => undefined,
+          warn: () => undefined,
+          error: () => undefined,
+          debug: () => undefined,
+        },
+        getStatus: () => ({
+          accountId: account.accountId,
+          configured: true,
+          enabled: true,
+          running: true,
+        }),
+        setStatus: () => undefined,
+      }),
+  );
   return {
     cfg,
     async stop() {
@@ -185,8 +231,8 @@ export async function startQaLabServer(
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
     : null;
-  let controlUiUrl = params?.controlUiUrl?.trim() || null;
-  let controlUiToken = params?.controlUiToken?.trim() || null;
+  let controlUiProxyToken = params?.controlUiProxyToken?.trim() || null;
+  let controlUiUrl = sanitizeControlUiPublicUrl(params?.controlUiUrl?.trim() || null);
   let gateway:
     | {
         cfg: OpenClawConfig;
@@ -241,6 +287,7 @@ export async function startQaLabServer(
       transportId: "qa-channel",
       outputPath: params?.outputPath,
       repoRoot,
+      waitTimeoutMs: params?.selfCheckWaitTimeoutMs,
     });
     latestScenarioRun = withQaLabRunCounts({
       kind: "self-check",
@@ -280,6 +327,7 @@ export async function startQaLabServer(
           target: controlUiProxyTarget,
           pathname: url.pathname,
           search: url.search,
+          authorizationToken: controlUiProxyToken,
         });
         return;
       }
@@ -289,15 +337,12 @@ export async function startQaLabServer(
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
-        const controlUiEmbeddedUrl =
-          resolvedControlUiUrl && controlUiToken
-            ? `${resolvedControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiToken)}`
-            : resolvedControlUiUrl;
+        const safeControlUiUrl = sanitizeControlUiPublicUrl(resolvedControlUiUrl);
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
-          controlUiUrl: resolvedControlUiUrl,
-          controlUiEmbeddedUrl,
+          controlUiUrl: safeControlUiUrl,
+          controlUiEmbeddedUrl: safeControlUiUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
           defaults: bootstrapDefaults,
@@ -416,7 +461,7 @@ export async function startQaLabServer(
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
-        const body = (await readJson(req)) as { sessionIds?: unknown };
+        const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
         const sessionIds = Array.isArray(body.sessionIds)
           ? body.sessionIds.filter((value): value is string => typeof value === "string")
           : [];
@@ -451,7 +496,7 @@ export async function startQaLabServer(
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/inbound/message") {
-        const body = await readJson(req);
+        const body = await readQaJsonBody(req);
         writeJson(res, 200, {
           message: state.addInboundMessage(body as Parameters<QaBusState["addInboundMessage"]>[0]),
         });
@@ -481,7 +526,10 @@ export async function startQaLabServer(
           writeError(res, 409, "QA suite run already in progress");
           return;
         }
-        const selection = normalizeQaRunSelection(await readJson(req), scenarioCatalog.scenarios);
+        const selection = normalizeQaRunSelection(
+          await readQaJsonBody(req),
+          scenarioCatalog.scenarios,
+        );
         state.reset();
         latestReport = null;
         latestScenarioRun = null;
@@ -499,6 +547,7 @@ export async function startQaLabServer(
             const { runQaSuite } = await import("./suite.js");
             const result = await runQaSuite({
               lab: labHandle ?? undefined,
+              startLab: startQaLabServer,
               outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,
               primaryModel: selection.primaryModel,
@@ -569,7 +618,7 @@ export async function startQaLabServer(
       }
       res.end(body);
     } catch (error) {
-      writeError(res, 500, error);
+      writeQaLabServerError(res, error);
     }
   });
 
@@ -613,6 +662,7 @@ export async function startQaLabServer(
       socket,
       head,
       target: controlUiProxyTarget,
+      authorizationToken: controlUiProxyToken,
     });
   });
 
@@ -622,11 +672,11 @@ export async function startQaLabServer(
     state,
     setControlUi(next: {
       controlUiUrl?: string | null;
-      controlUiToken?: string | null;
+      controlUiProxyToken?: string | null;
       controlUiProxyTarget?: string | null;
     }) {
-      controlUiUrl = next.controlUiUrl?.trim() || null;
-      controlUiToken = next.controlUiToken?.trim() || null;
+      controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
+      controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)
         : null;

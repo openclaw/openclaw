@@ -38,6 +38,9 @@ export function resetCliAuthEpochTestDeps(): void {
 }
 
 function hashCliAuthEpochPart(value: string): string {
+  // Epoch hashes detect local auth-state changes; they are not password
+  // storage or credential verification.
+  // codeql[js/insufficient-password-hash]
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
@@ -114,6 +117,25 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
   throw new Error("Unsupported auth profile credential type");
 }
 
+function hasOAuthAccountIdentity(credential: AuthProfileCredential): boolean {
+  return (
+    credential.type === "oauth" &&
+    (normalizeOptionalString(credential.accountId) !== undefined ||
+      normalizeOptionalString(credential.email) !== undefined)
+  );
+}
+
+function encodeAuthProfileEpochPart(
+  authProfileId: string,
+  credential: AuthProfileCredential,
+): string {
+  const credentialHash = hashCliAuthEpochPart(encodeAuthProfileCredential(credential));
+  if (hasOAuthAccountIdentity(credential)) {
+    return `profile:oauth-identity:${credentialHash}`;
+  }
+  return `profile:${authProfileId}:${credentialHash}`;
+}
+
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
   switch (provider) {
     case "claude-cli": {
@@ -126,6 +148,7 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
         ttlMs: 5000,
+        allowKeychainPrompt: false,
       });
       return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
     }
@@ -173,9 +196,7 @@ export async function resolveCliAuthEpoch(params: {
     });
     const credential = getAuthProfileCredential(store, authProfileId);
     if (credential) {
-      parts.push(
-        `profile:${authProfileId}:${hashCliAuthEpochPart(encodeAuthProfileCredential(credential))}`,
-      );
+      parts.push(encodeAuthProfileEpochPart(authProfileId, credential));
     }
   }
 

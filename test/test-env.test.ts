@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "./helpers/import-fresh.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
@@ -32,6 +32,32 @@ function writeFile(targetPath: string, content: string): void {
 
 function createTempHome(): string {
   return makeTempDir(tempDirs, "openclaw-test-env-real-home-");
+}
+
+function requireRecord(
+  value: Record<string, unknown> | undefined,
+  label: string,
+): Record<string, unknown> {
+  if (!value) {
+    throw new Error(`expected copied ${label} config`);
+  }
+  return value;
+}
+
+function requireTelegramStreaming(
+  value:
+    | {
+        mode?: string;
+        chunkMode?: string;
+        block?: { enabled?: boolean };
+        preview?: { chunk?: { minChars?: number } };
+      }
+    | undefined,
+) {
+  if (!value) {
+    throw new Error("expected copied telegram streaming config");
+  }
+  return value;
 }
 
 afterEach(() => {
@@ -140,12 +166,19 @@ describe("installTestEnv", () => {
         };
       };
     };
-    expect(copiedConfig.models?.providers?.custom).toEqual({ baseUrl: "https://example.test/v1" });
-    expect(copiedConfig.agents?.defaults?.workspace).toBeUndefined();
-    expect(copiedConfig.agents?.defaults?.agentDir).toBeUndefined();
-    expect(copiedConfig.agents?.list?.[0]?.workspace).toBeUndefined();
-    expect(copiedConfig.agents?.list?.[0]?.agentDir).toBeUndefined();
-    expect(copiedConfig.channels?.telegram?.streaming).toEqual({
+    const providers = copiedConfig.models?.providers;
+    requireRecord(providers, "model providers");
+    expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
+
+    const agentDefaults = requireRecord(copiedConfig.agents?.defaults, "agent defaults");
+    const agentConfig = requireRecord(copiedConfig.agents?.list?.[0], "agent");
+    expect(agentDefaults.workspace).toBeUndefined();
+    expect(agentDefaults.agentDir).toBeUndefined();
+    expect(agentConfig.workspace).toBeUndefined();
+    expect(agentConfig.agentDir).toBeUndefined();
+
+    const telegramStreaming = requireTelegramStreaming(copiedConfig.channels?.telegram?.streaming);
+    expect(telegramStreaming).toEqual({
       mode: "block",
       chunkMode: "newline",
       block: { enabled: true },

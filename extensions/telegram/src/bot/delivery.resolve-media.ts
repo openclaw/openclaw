@@ -1,16 +1,16 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
-import { readFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import {
-  fetchRemoteMedia,
   formatErrorMessage,
   logVerbose,
   MediaFetchError,
   resolveTelegramApiBase,
   retryAsync,
   saveMediaBuffer,
+  saveRemoteMedia,
   shouldRetryTelegramTransportFallback,
   warn,
 } from "./delivery.resolve-media.runtime.js";
@@ -177,7 +177,12 @@ function resolveTrustedLocalTelegramRoot(
   }
   for (const rootDir of trustedLocalFileRoots ?? []) {
     const relativePath = path.relative(rootDir, filePath);
-    if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    if (
+      relativePath === "" ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
       continue;
     }
     return { rootDir, relativePath };
@@ -203,9 +208,8 @@ async function downloadAndSaveTelegramFile(params: {
   if (trustedLocalFile) {
     let localFile;
     try {
-      localFile = await readFileWithinRoot({
-        rootDir: trustedLocalFile.rootDir,
-        relativePath: trustedLocalFile.relativePath,
+      const root = await fsRoot(trustedLocalFile.rootDir);
+      localFile = await root.read(trustedLocalFile.relativePath, {
         maxBytes: params.maxBytes,
       });
     } catch (err) {
@@ -232,25 +236,28 @@ async function downloadAndSaveTelegramFile(params: {
   const transport = resolveRequiredTelegramTransport(params.transport);
   const apiBase = resolveTelegramApiBase(params.apiRoot);
   const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
-  const fetched = await fetchRemoteMedia({
+  return await saveRemoteMedia({
     url,
     fetchImpl: transport.sourceFetch,
     dispatcherAttempts: transport.dispatcherAttempts,
     trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
+    retry: {
+      attempts: 3,
+      minDelayMs: 1000,
+      maxDelayMs: 4000,
+      jitter: 0.2,
+      label: "telegram:media-download",
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(`telegram: media download retry ${attempt}/${maxAttempts}`),
+    },
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
     ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
+    fallbackContentType: params.mimeType,
+    originalFilename: params.telegramFileName,
   });
-  const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
-  return saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    params.maxBytes,
-    originalName,
-  );
 }
 
 async function resolveStickerMedia(params: {

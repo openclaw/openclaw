@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
@@ -33,7 +34,7 @@ export type QaCharacterModelOptions = {
   fastMode?: boolean;
 };
 
-export type QaCharacterEvalRun = {
+type QaCharacterEvalRun = {
   model: string;
   status: QaCharacterRunStatus;
   durationMs: number;
@@ -61,7 +62,7 @@ export type QaCharacterEvalJudgment = {
   weaknesses: string[];
 };
 
-export type QaCharacterEvalResult = {
+type QaCharacterEvalResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -69,7 +70,7 @@ export type QaCharacterEvalResult = {
   judgments: QaCharacterEvalJudgeResult[];
 };
 
-export type QaCharacterEvalJudgeResult = {
+type QaCharacterEvalJudgeResult = {
   model: string;
   thinkingDefault: QaThinkingLevel;
   fastMode: boolean;
@@ -125,7 +126,7 @@ export type QaCharacterEvalParams = {
 };
 
 function normalizeModelRefs(models: readonly string[]) {
-  return [...new Set(models.map((model) => model.trim()).filter((model) => model.length > 0))];
+  return uniqueStrings(normalizeStringEntries(models));
 }
 
 function resolveCandidateThinkingDefault(params: {

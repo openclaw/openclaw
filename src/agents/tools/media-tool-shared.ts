@@ -1,13 +1,19 @@
-import { type Api, type Model } from "@mariozechner/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { getDefaultLocalRoots } from "../../media/web-media.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
+import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
@@ -18,9 +24,13 @@ import {
 } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
+  getCurrentCapabilityMetadataSnapshot,
+  hasSnapshotCapabilityAvailability,
+} from "./manifest-capability-availability.js";
+import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
-  hasAuthForProvider,
+  hasProviderAuthForTool,
   hasToolModelConfig,
   resolveDefaultModelRef,
   type ToolModelConfig,
@@ -128,10 +138,18 @@ type CapabilityProvider = {
   id: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
-export function findCapabilityProviderById<T extends CapabilityProvider>(params: {
+type CapabilityProviderSource = CapabilityProvider[] | (() => CapabilityProvider[]);
+
+type GenerationCapabilityProviderKey =
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
+
+function findCapabilityProviderById<T extends CapabilityProvider>(params: {
   providers: T[];
   providerId?: string;
 }): T | undefined {
@@ -143,12 +161,43 @@ export function findCapabilityProviderById<T extends CapabilityProvider>(params:
   );
 }
 
+function parseCapabilityModelRefForProviders(params: {
+  providers: CapabilityProvider[];
+  raw?: string;
+  parseModelRef: ParseGenerationModelRef;
+}): GenerationModelRef | null {
+  const raw = normalizeOptionalString(params.raw);
+  if (!raw) {
+    return null;
+  }
+  const parsed = params.parseModelRef(raw);
+  if (
+    parsed &&
+    findCapabilityProviderById({
+      providers: params.providers,
+      providerId: parsed.provider,
+    })
+  ) {
+    return parsed;
+  }
+  const provider = params.providers.find((candidate) => {
+    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
+    return models.some((model) => normalizeOptionalString(model) === raw);
+  });
+  if (provider) {
+    return { provider: provider.id, model: raw };
+  }
+  return parsed;
+}
+
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: T[];
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): boolean {
   const provider =
     params.provider ??
@@ -158,7 +207,13 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({ provider: params.providerId, agentDir: params.agentDir })
+      ? hasProviderAuthForTool({
+          provider: params.providerId,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+        })
       : false;
   }
   if (provider.isConfigured) {
@@ -167,7 +222,13 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({ provider: provider.id, agentDir: params.agentDir });
+  return hasProviderAuthForTool({
+    provider: provider.id,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+  });
 }
 
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
@@ -177,7 +238,16 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
-    params.parseModelRef(params.modelOverride) ?? params.parseModelRef(params.modelConfig.primary);
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelOverride,
+      parseModelRef: params.parseModelRef,
+    }) ??
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelConfig.primary,
+      parseModelRef: params.parseModelRef,
+    });
   if (!selectedRef) {
     return undefined;
   }
@@ -187,12 +257,14 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   });
 }
 
-export function resolveCapabilityModelCandidatesForTool(params: {
+function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   providers: CapabilityProvider[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.providers) {
     const providerId = provider.id.trim();
     const modelId = provider.defaultModel?.trim();
@@ -204,60 +276,150 @@ export function resolveCapabilityModelCandidatesForTool(params: {
         providers: params.providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       })
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeProviderId(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
+  const normalizedPrimaryProvider = normalizeProviderId(primaryProvider);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesPrimaryProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return (
+      normalizeProviderId(providerId) === normalizedPrimaryProvider ||
+      (entry?.aliases ?? []).includes(normalizedPrimaryProvider)
+    );
+  };
   const orderedProviders = [
-    primaryProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== primaryProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesPrimaryProvider),
+    ...providerIds.filter((providerId) => !matchesPrimaryProvider(providerId)),
   ];
   const orderedRefs: string[] = [];
   const seen = new Set<string>();
   for (const providerId of orderedProviders) {
-    const ref = providerDefaults.get(providerId);
-    if (!ref || seen.has(ref)) {
+    const entry = providerDefaults.get(providerId);
+    if (!entry || seen.has(entry.ref)) {
       continue;
     }
-    seen.add(ref);
-    orderedRefs.push(ref);
+    seen.add(entry.ref);
+    orderedRefs.push(entry.ref);
   }
   return orderedRefs;
 }
 
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
-  providers: CapabilityProvider[];
+  providers: CapabilityProviderSource;
 }): ToolModelConfig | null {
   const explicit = coerceToolModelConfig(params.modelConfig);
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
+  let resolvedProviders: CapabilityProvider[] | undefined;
+  const getProviders = (): CapabilityProvider[] => {
+    resolvedProviders ??=
+      typeof params.providers === "function" ? params.providers() : params.providers;
+    return resolvedProviders;
+  };
   return buildToolModelConfigFromCandidates({
     explicit,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
-      providers: params.providers,
+      authStore: params.authStore,
+      providers: getProviders(),
     }),
     isProviderConfigured: (providerId) =>
       isCapabilityProviderConfigured({
-        providers: params.providers,
+        providers: getProviders(),
         providerId,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       }),
   });
+}
+
+export function hasGenerationToolAvailability(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  authStore?: AuthProfileStore;
+  modelConfig?: AgentModelConfig;
+  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
+  providerKey: GenerationCapabilityProviderKey;
+}): boolean {
+  if (params.cfg?.plugins?.enabled === false) {
+    return false;
+  }
+  if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
+    return true;
+  }
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
+  if (providers) {
+    return providers.some((provider) =>
+      isCapabilityProviderConfigured({
+        providers,
+        provider,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        authStore: params.authStore,
+      }),
+    );
+  }
+  const snapshot =
+    getCurrentCapabilityMetadataSnapshot({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) ??
+    loadCapabilityManifestSnapshot({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+    });
+  if (
+    hasSnapshotCapabilityAvailability({
+      snapshot,
+      key: params.providerKey,
+      config: params.cfg,
+      authStore: params.authStore,
+    })
+  ) {
+    return true;
+  }
+  return listAvailableManifestContractValues({
+    snapshot,
+    contract: params.providerKey,
+    config: params.cfg,
+  }).some((providerId) =>
+    hasProviderAuthForTool({
+      provider: providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    }),
+  );
 }
 
 function formatQuotedList(values: readonly string[]): string {
@@ -382,7 +544,12 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
+  options?: {
+    workspaceOnly?: boolean;
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  },
   _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
@@ -390,7 +557,25 @@ export function resolveMediaToolLocalRoots(
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  return uniqueStrings([...roots, ...(workspaceDir ? [workspaceDir] : [])]);
+}
+
+export function resolveMediaToolInboundRoots(options?: {
+  workspaceOnly?: boolean;
+  cfg?: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): string[] {
+  if (options?.workspaceOnly || !options?.cfg || !options.channelId) {
+    return [];
+  }
+  return normalizeInboundPathRoots(
+    resolveChannelInboundAttachmentRootsForChannel({
+      cfg: options.cfg,
+      channelId: options.channelId,
+      accountId: options.accountId,
+    }),
+  );
 }
 
 export function resolvePromptAndModelOverride(

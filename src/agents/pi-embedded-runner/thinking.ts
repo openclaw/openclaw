@@ -1,5 +1,5 @@
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { log } from "./logger.js";
 
@@ -8,7 +8,8 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = { id: string; recoveredAnthropicThinking?: boolean };
 
-const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
+const THINKING_BLOCK_ERROR_PATTERN =
+  /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
 export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
@@ -26,6 +27,26 @@ function isThinkingBlock(block: AssistantContentBlock): boolean {
     typeof block === "object" &&
     ((block as { type?: unknown }).type === "thinking" ||
       (block as { type?: unknown }).type === "redacted_thinking")
+  );
+}
+
+function isToolCallBlock(block: AssistantContentBlock): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "toolCall" || type === "tool_use" || type === "function_call";
+}
+
+function hasAssistantToolCall(message: AssistantMessage): boolean {
+  return message.content.some((block) => isToolCallBlock(block));
+}
+
+function isToolResultMessage(message: AgentMessage): boolean {
+  return (
+    !!message &&
+    typeof message === "object" &&
+    (message as { role?: unknown }).role === "toolResult"
   );
 }
 
@@ -86,13 +107,38 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
  * Anthropic and Bedrock reject persisted thinking blocks when the signature is
  * absent, empty, or blank. They are also the authority for opaque signature
  * validity, so this intentionally avoids local length or shape heuristics.
+ *
+ * By default, the latest assistant turn is exempt: providers reject modified
+ * latest thinking blocks, so corrupted latest turns must flow through recovery
+ * rather than being rewritten before the request. Callers that append a new
+ * user turn before provider replay can disable that exemption because the
+ * stored assistant turn is no longer latest in the outbound request.
  */
-export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+export function stripInvalidThinkingSignatures(
+  messages: AgentMessage[],
+  options: { preserveLatestAssistant?: boolean } = {},
+): AgentMessage[] {
+  const preserveLatestAssistant = options.preserveLatestAssistant ?? true;
+  let latestAssistantIndex = -1;
+  if (preserveLatestAssistant) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (isAssistantMessageWithContent(messages[i])) {
+        latestAssistantIndex = i;
+        break;
+      }
+    }
+  }
+
   let touched = false;
   const out: AgentMessage[] = [];
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
     if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    if (i === latestAssistantIndex) {
       out.push(message);
       continue;
     }
@@ -177,11 +223,86 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   return touched ? out : messages;
 }
 
+function shouldPreserveCurrentToolTurnReasoning(
+  messages: AgentMessage[],
+  index: number,
+  latestUserIndex: number,
+): boolean {
+  const message = messages[index];
+  if (
+    index < latestUserIndex ||
+    !isAssistantMessageWithContent(message) ||
+    !hasAssistantToolCall(message)
+  ) {
+    return false;
+  }
+
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const role = (messages[i] as { role?: unknown })?.role;
+    if (role === "user") {
+      break;
+    }
+    if (role === "assistant") {
+      return false;
+    }
+  }
+
+  for (let i = index + 1; i < messages.length; i += 1) {
+    const next = messages[i];
+    const role = (next as { role?: unknown })?.role;
+    if (isToolResultMessage(next)) {
+      return true;
+    }
+    if (role === "user") {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const message of messages) {
     if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent = message.content.filter((block) => !isThinkingBlock(block));
+    if (nextContent.length === message.content.length) {
+      out.push(message);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...message,
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
+    });
+  }
+  return touched ? out : messages;
+}
+
+export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index] as { role?: unknown })?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    if (shouldPreserveCurrentToolTurnReasoning(messages, index, latestUserIndex)) {
       out.push(message);
       continue;
     }
@@ -338,6 +459,7 @@ export function wrapAnthropicStreamWithRecovery(
   sessionMeta: RecoverySessionMeta,
 ): StreamFn {
   return (model, context, options) => {
+    const requestMeta: RecoverySessionMeta = { id: sessionMeta.id };
     const contextRecord = context as unknown as { messages?: unknown };
     const originalMessages = Array.isArray(contextRecord.messages)
       ? (contextRecord.messages as AgentMessage[])
@@ -354,18 +476,18 @@ export function wrapAnthropicStreamWithRecovery(
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
       return stream.catch((error: unknown) => {
-        if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
+        if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
           throw error;
         }
-        sessionMeta.recoveredAnthropicThinking = true;
+        requestMeta.recoveredAnthropicThinking = true;
         log.warn(
-          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
         );
         return retry();
       }) as ReturnType<StreamFn>;
     }
     const outer = createAssistantMessageEventStream();
-    const finalResultPromise = pumpStreamWithRecovery(outer, stream, sessionMeta, retry).finally(
+    const finalResultPromise = pumpStreamWithRecovery(outer, stream, requestMeta, retry).finally(
       () => {
         outer.end();
       },
