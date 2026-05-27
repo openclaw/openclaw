@@ -195,7 +195,18 @@ export function resolveEmbeddedAgentStreamFn(params: {
     }
   }
 
-  return currentStreamFn;
+  const promptCacheKey = params.promptCacheKey?.trim();
+  if (!promptCacheKey) {
+    return currentStreamFn;
+  }
+  return wrapEmbeddedAgentStreamFn(currentStreamFn, {
+    runSignal: params.signal,
+    resolvedApiKey: undefined,
+    authProfileId: undefined,
+    authStorage: undefined,
+    providerId: params.model.provider,
+    promptCacheKey,
+  });
 }
 
 export const testing = {
