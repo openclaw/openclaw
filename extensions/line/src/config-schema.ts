@@ -1,5 +1,6 @@
 import {
   buildChannelConfigSchema,
+  MentionPatternsPolicySchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
@@ -30,6 +31,7 @@ const LineCommonConfigSchemaBase = z.object({
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  mentionPatterns: MentionPatternsPolicySchema.optional(),
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),

@@ -33,6 +33,9 @@ async function resolve(params: {
   cfg?: OpenClawConfig;
   message: IMessagePayload;
   storeAllowFrom?: string[];
+  providerMentionPatterns?: Parameters<
+    typeof resolveIMessageInboundDecision
+  >[0]["providerMentionPatterns"];
 }) {
   const cfg = params.cfg ?? baseCfg();
   const groupHistories = new Map();
@@ -48,6 +51,7 @@ async function resolve(params: {
     groupPolicy: cfg.channels?.imessage?.groupPolicy ?? "open",
     dmPolicy: cfg.channels?.imessage?.dmPolicy ?? "pairing",
     storeAllowFrom: params.storeAllowFrom ?? [],
+    providerMentionPatterns: params.providerMentionPatterns,
     historyLimit: 0,
     groupHistories,
   });
@@ -192,6 +196,26 @@ describe("imessage monitor gating + envelope builders", () => {
 
     expect(ctxPayload.MessageSid).toBe("1");
     expect(ctxPayload.MessageSidFull).toBe("full-message-guid");
+  });
+
+  it("honors account-scoped mention-pattern policy", async () => {
+    const decision = await resolve({
+      message: {
+        id: 4,
+        chat_id: 42,
+        sender: "+15550002222",
+        is_from_me: false,
+        text: "@openclaw ping",
+        is_group: true,
+      },
+      providerMentionPatterns: { mode: "deny" },
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      throw new Error("expected dispatch decision");
+    }
+    expect(decision.effectiveWasMentioned).toBe(false);
   });
 
   it("includes reply-to context fields + suffix", async () => {

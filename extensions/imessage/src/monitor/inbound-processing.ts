@@ -7,6 +7,7 @@ import {
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelIngressResolver,
@@ -351,6 +352,7 @@ export async function resolveIMessageInboundDecision(params: {
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
   isKnownFromMeMessageId?: typeof isKnownFromMeIMessageMessageId;
+  providerMentionPatterns?: Parameters<typeof resolveMentionPatternsEnabled>[0]["providerPolicy"];
   logVerbose?: (msg: string) => void;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
@@ -611,7 +613,15 @@ export async function resolveIMessageInboundDecision(params: {
       contextKey: reactionKey,
     };
   }
-  const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
+  const mentionRegexes = resolveMentionPatternsEnabled({
+    cfg: params.cfg,
+    provider: "imessage",
+    conversationId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    agentId: route.agentId,
+    providerPolicy: params.providerMentionPatterns,
+  })
+    ? buildMentionRegexes(params.cfg, route.agentId)
+    : [];
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };
   }

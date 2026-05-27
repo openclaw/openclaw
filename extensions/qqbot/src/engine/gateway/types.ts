@@ -45,6 +45,15 @@ export interface GatewayPluginRuntime {
     text: {
       chunkMarkdownText: (text: string, limit: number) => string[];
     };
+    mentions?: {
+      resolveMentionPatternsEnabled: (params: {
+        cfg?: unknown;
+        provider?: string;
+        conversationId?: string | null;
+        providerPolicy?: unknown;
+        agentId?: string;
+      }) => boolean;
+    };
   };
   tts: {
     textToSpeech: (params: {

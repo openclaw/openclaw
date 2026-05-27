@@ -13,6 +13,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ReplyToModeSchema,
 } from "./zod-schema.core.js";
 
@@ -88,6 +89,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: WhatsAppGroupsSchema,
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     direct: WhatsAppDirectSchema,
     ackReaction: WhatsAppAckReactionSchema,
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),

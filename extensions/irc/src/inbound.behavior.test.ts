@@ -25,24 +25,31 @@ const {
 });
 
 function installIrcRuntime() {
+  const runtime = createPluginRuntimeMock();
   setIrcRuntime({
+    ...runtime,
     channel: {
+      ...runtime.channel,
       pairing: {
+        ...runtime.channel.pairing,
         readAllowFromStore: readAllowFromStoreMock,
         upsertPairingRequest: upsertPairingRequestMock,
       },
       commands: {
+        ...runtime.channel.commands,
         shouldHandleTextCommands: shouldHandleTextCommandsMock,
       },
       text: {
+        ...runtime.channel.text,
         hasControlCommand: hasControlCommandMock,
       },
       mentions: {
+        ...runtime.channel.mentions,
         buildMentionRegexes: buildMentionRegexesMock,
         matchesMentionPatterns: matchesMentionPatternsMock,
       },
     },
-  } as never);
+  });
 }
 
 function createRuntimeEnv() {

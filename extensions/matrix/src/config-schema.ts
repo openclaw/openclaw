@@ -5,6 +5,7 @@ import {
   ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
@@ -122,6 +123,7 @@ export const MatrixConfigSchema = z.object({
   botLoopProtection: botLoopProtectionSchema,
   groupPolicy: GroupPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
+  mentionPatterns: MentionPatternsPolicySchema.optional(),
   blockStreaming: z.boolean().optional(),
   streaming: z
     .union([z.enum(["partial", "quiet", "progress", "off"]), z.boolean(), matrixStreamingSchema])

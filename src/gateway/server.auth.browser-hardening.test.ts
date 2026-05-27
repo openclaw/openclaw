@@ -460,6 +460,7 @@ describe("gateway auth browser hardening", () => {
 
   test("rejects forged loopback origin for control-ui when proxy headers make client non-local", async () => {
     const { writeConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
     await writeConfigFile({
       gateway: {
         trustedProxies: ["127.0.0.1"],
@@ -468,7 +469,6 @@ describe("gateway auth browser hardening", () => {
         },
       },
     });
-    testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, {
         origin: "http://localhost:5173",

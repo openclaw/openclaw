@@ -220,6 +220,7 @@ export function createMatrixHandlerTestHarness(
         },
         mentions: {
           buildMentionRegexes: () => options.mentionRegexes ?? [],
+          resolveMentionPatternsEnabled: () => true,
         },
         session: {
           resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),

@@ -163,6 +163,11 @@ describe("runMessageAction core send routing", () => {
                 raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
               targetResolver: {
                 looksLikeId: (raw) => raw === "-1001234567890:topic:42",
+                resolveTarget: async ({ normalized }) => ({
+                  to: normalized,
+                  kind: "channel",
+                  source: "normalized",
+                }),
               },
             },
           }),

@@ -147,14 +147,14 @@ export async function discoverHuggingfaceModels(
     const { response, release } = await fetchWithSsrFGuard({
       url: `${HUGGINGFACE_BASE_URL}/models`,
       init: {
-        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           Authorization: `Bearer ${trimmedKey}`,
           "Content-Type": "application/json",
         },
       },
+      timeoutMs,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
-      auditContext: "huggingface-model-discovery",
+      auditContext: "huggingface.model_discovery",
     });
     try {
       if (!response.ok) {

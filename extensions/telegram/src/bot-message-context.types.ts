@@ -1,5 +1,6 @@
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   DmPolicy,
   TelegramDirectConfig,
@@ -83,7 +84,7 @@ export type BuildTelegramMessageContextParams = {
   options?: TelegramMessageContextOptions;
   bot: Bot;
   cfg: OpenClawConfig;
-  account: { accountId: string };
+  account: { accountId: string; config?: { mentionPatterns?: MentionPatternsPolicyConfig } };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;

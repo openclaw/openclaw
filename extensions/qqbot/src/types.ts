@@ -1,3 +1,4 @@
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { QQBotDmPolicy, QQBotGroupPolicy } from "./engine/access/index.js";
 
@@ -74,6 +75,8 @@ export interface QQBotAccountConfig {
    * is `"allowlist"`, otherwise `"open"`.
    */
   groupPolicy?: QQBotGroupPolicy;
+  /** Provider/account scoped policy for configured regex mention patterns. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Optional system prompt prepended to user messages. */
   systemPrompt?: string;
   /** Whether markdown output is enabled. Defaults to true. */

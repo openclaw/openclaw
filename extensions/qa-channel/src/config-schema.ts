@@ -1,4 +1,5 @@
 import {
+  MentionPatternsPolicySchema,
   ToolPolicySchema,
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -32,6 +33,7 @@ const QaChannelAccountConfigSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: z.enum(["open", "allowlist", "disabled"]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     groups: z.record(z.string(), QaChannelGroupConfigSchema).optional(),
     defaultTo: z.string().optional(),
     actions: QaChannelActionConfigSchema.optional(),

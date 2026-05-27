@@ -229,9 +229,11 @@ describe("backup commands", () => {
     const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     const configPath = path.join(tempHome.home, "custom-config.json");
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
-    let capturedManifest: CapturedBackupManifest | null = null;
+    const capturedManifest: { current: CapturedBackupManifest | null } = { current: null };
     let capturedEntryPaths: string[] = [];
-    let capturedOnWriteEntry: ((entry: { path: string }) => void) | null = null;
+    const capturedOnWriteEntry: {
+      current: ((entry: { path: string }) => void) | null;
+    } = { current: null };
     try {
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       await fs.writeFile(
@@ -268,11 +270,11 @@ describe("backup commands", () => {
           options: { file: string; onWriteEntry?: (entry: { path: string }) => void },
           entryPaths: string[],
         ) => {
-          capturedManifest = JSON.parse(
+          capturedManifest.current = JSON.parse(
             await fs.readFile(entryPaths[0], "utf8"),
           ) as CapturedBackupManifest;
           capturedEntryPaths = entryPaths;
-          capturedOnWriteEntry = options.onWriteEntry ?? null;
+          capturedOnWriteEntry.current = options.onWriteEntry ?? null;
           await fs.writeFile(options.file, "archive-bytes", "utf8");
         },
       );
@@ -285,12 +287,15 @@ describe("backup commands", () => {
       expect(result.archivePath).toBe(
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
-      expect(typeof capturedOnWriteEntry).toBe("function");
-      if (capturedManifest === null || capturedOnWriteEntry === null) {
+      expect(capturedManifest.current).toEqual(
+        expect.objectContaining({ assets: expect.any(Array) }),
+      );
+      expect(capturedOnWriteEntry.current).toEqual(expect.any(Function));
+      if (capturedManifest.current === null || capturedOnWriteEntry.current === null) {
         throw new Error("Expected backup manifest and archive entry callback");
       }
-      const manifest = capturedManifest as CapturedBackupManifest;
-      const onWriteEntry = capturedOnWriteEntry as unknown as (entry: { path: string }) => void;
+      const manifest = capturedManifest.current;
+      const onWriteEntry = capturedOnWriteEntry.current;
       expect(manifest.schemaVersion).toBe(1);
       expect(manifest.createdAt).toBe(result.createdAt);
       expect(manifest.archiveRoot).toBe(result.archiveRoot);
@@ -302,6 +307,7 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [externalWorkspace],
       });
+
       expect(manifest.assets).toEqual(
         result.assets.map((asset) => ({
           kind: asset.kind,

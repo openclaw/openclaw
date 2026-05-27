@@ -418,10 +418,9 @@ describe("logs cli", () => {
       readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
       execFileUtf8Tail
         .mockResolvedValueOnce({
-          stdout: [
-            "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz",
-            "-- cursor: s=abc",
-          ].join("\n"),
+          stdout: ["Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz", "-- cursor: s=abc"].join(
+            "\n",
+          ),
           stderr: "",
           code: 0,
           truncated: false,

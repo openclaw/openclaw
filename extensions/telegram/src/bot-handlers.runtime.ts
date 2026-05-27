@@ -6,6 +6,7 @@ import {
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -741,7 +742,16 @@ export const registerTelegramHandlers = ({
     }
 
     const botUsername = ctx.me?.username?.trim().toLowerCase();
-    const mentionRegexes = buildMentionRegexes(runtimeCfg, sessionState.agentId);
+    const mentionConversationId = buildTelegramGroupPeerId(chatId, resolvedThreadId);
+    const mentionRegexes = resolveMentionPatternsEnabled({
+      cfg: runtimeCfg,
+      provider: "telegram",
+      conversationId: mentionConversationId,
+      agentId: sessionState.agentId,
+      providerPolicy: telegramCfg.mentionPatterns,
+    })
+      ? buildMentionRegexes(runtimeCfg, sessionState.agentId)
+      : [];
     const messageTextParts = getTelegramTextParts(msg);
     const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
     const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;

@@ -29,18 +29,40 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.9.2
+
       - name: Install opengrep
         env:
-          # Pin both the install script (by commit SHA) and the binary version.
-          # The script SHA must match the v1.19.0 release tag in opengrep/opengrep
-          # so a compromised or force-pushed `main` cannot RCE in our CI runner.
-          # Bump both together when upgrading.
+          # Pin the binary version and fetch release assets directly. Avoid the
+          # upstream install script's GitHub API release-list lookup so CI does
+          # not fail when api.github.com is transiently unavailable/rate-limited.
           OPENGREP_VERSION: v1.19.0
-          OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
-            | bash -s -- -v "$OPENGREP_VERSION"
-          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
+          install_dir="$HOME/.opengrep/cli/${OPENGREP_VERSION}"
+          latest_dir="$HOME/.opengrep/cli/latest"
+          mkdir -p "$install_dir"
+          curl -fsSL "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86" \
+            -o "$install_dir/opengrep"
+          chmod a+x "$install_dir/opengrep"
+          if command -v cosign >/dev/null 2>&1; then
+            curl -fsSL "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86.cert" \
+              -o "$install_dir/opengrep.cert"
+            curl -fsSL "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86.sig" \
+              -o "$install_dir/opengrep.sig"
+            cosign verify-blob \
+              --cert "$install_dir/opengrep.cert" \
+              --signature "$install_dir/opengrep.sig" \
+              --certificate-identity-regexp "https://github.com/opengrep/opengrep.+" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$install_dir/opengrep"
+          else
+            echo "::error::cosign is required to verify the downloaded opengrep binary."
+            exit 1
+          fi
+          rm -f "$latest_dir"
+          ln -s "$install_dir" "$latest_dir"
+          echo "$latest_dir" >> "$GITHUB_PATH"
 
       - name: Verify opengrep
         run: opengrep --version

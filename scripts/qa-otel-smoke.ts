@@ -92,9 +92,7 @@ const REQUIRED_SPAN_NAMES = [
   "openclaw.context.assembled",
   "openclaw.message.delivery",
 ] as const;
-const REQUIRED_METRIC_NAMES = [
-  "openclaw.harness.duration_ms",
-] as const;
+const REQUIRED_METRIC_NAMES = ["openclaw.harness.duration_ms"] as const;
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
   "openclaw.chatId",
@@ -111,10 +109,7 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.call_id",
   "openclaw.tool_call_id",
 ]);
-const DISALLOWED_BODY_NEEDLES = [
-  "OTEL-QA-SECRET",
-  "OTEL-QA-OK",
-];
+const DISALLOWED_BODY_NEEDLES = ["OTEL-QA-SECRET", "OTEL-QA-OK"];
 const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
 
 function usage(): string {
@@ -774,21 +769,13 @@ service:
     containerName,
     ...(useHostNetwork
       ? ["--network", "host"]
-      : [
-          "--add-host=host.docker.internal:host-gateway",
-          "-p",
-          `127.0.0.1:${collectorPort}:4318`,
-        ]),
+      : ["--add-host=host.docker.internal:host-gateway", "-p", `127.0.0.1:${collectorPort}:4318`]),
     "-v",
     `${configPath}:/etc/otelcol/config.yaml:ro`,
     DEFAULT_DOCKER_COLLECTOR_IMAGE,
     "--config=/etc/otelcol/config.yaml",
   ];
-  const child = spawn(
-    "docker",
-    dockerArgs,
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const child = spawn("docker", dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
   child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
   child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
   child.on("error", (err) => {
@@ -936,7 +923,7 @@ function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpRecei
     REQUIRED_METRIC_NAMES.every((name) => metricNames.has(name)) &&
     receiver.capturedLogRecords.length > 0 &&
     ["traces", "metrics", "logs"].every((signal) =>
-      receiver.capturedRequests.some((request) => request.signal === signal)
+      receiver.capturedRequests.some((request) => request.signal === signal),
     )
   );
 }
@@ -1021,9 +1008,7 @@ function assertSmoke(params: {
     .map((record) => record.body)
     .filter((body) => body !== "log");
   if (rawLogBodies.length > 0) {
-    failures.push(
-      `OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`,
-    );
+    failures.push(`OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`);
   }
 
   const attributeKeys = collectAttributeKeys(params.spans);

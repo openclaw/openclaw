@@ -578,13 +578,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   }
 
   const { child, teardown } = spawnWatchedVitestProcess({
-    pnpmArgs: [
-      "exec",
-      "node",
-      ...resolveVitestNodeArgs(env),
-      vitestCliEntry,
-      ...vitestArgs,
-    ],
+    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), vitestCliEntry, ...vitestArgs],
     spawnParams: resolveVitestSpawnParams(spawnEnv),
     env: spawnEnv,
     label: vitestArgs.join(" "),

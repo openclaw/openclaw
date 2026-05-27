@@ -585,23 +585,21 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
-    let releaseUpdate: (() => void) | null = null;
+    const releaseUpdate: { current: (() => void) | null } = { current: null };
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "update") {
         const child = createMockChild({ autoClose: false });
-        releaseUpdate = () => child.closeWith(0);
+        releaseUpdate.current = () => child.closeWith(0);
         return child;
       }
       return createMockChild();
     });
 
     const { manager } = await createManager({ mode: "full" });
-    (
-      releaseUpdate ??
-      (() => {
-        throw new Error("Expected qmd update release callback");
-      })
-    )();
+    if (releaseUpdate.current === null) {
+      throw new Error("Expected qmd update release callback");
+    }
+    releaseUpdate.current();
     await manager?.close();
   });
 

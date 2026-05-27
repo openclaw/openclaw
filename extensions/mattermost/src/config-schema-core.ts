@@ -3,6 +3,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  MentionPatternsPolicySchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-primitives";
 import { z } from "zod";
@@ -130,6 +131,7 @@ const MattermostAccountSchemaBase = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: MattermostStreamingSchema.optional(),

@@ -313,10 +313,7 @@ function parseJournalctlOutput(output: string): { lines: string[]; cursor?: stri
   return { lines, cursor };
 }
 
-function resolveLogsSystemdUnitName(
-  runtime: LogsCliRuntimeModule,
-  env: NodeJS.ProcessEnv,
-): string {
+function resolveLogsSystemdUnitName(runtime: LogsCliRuntimeModule, env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
     return override.endsWith(".service") ? override : `${override}.service`;

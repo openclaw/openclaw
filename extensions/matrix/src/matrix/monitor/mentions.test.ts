@@ -34,6 +34,21 @@ describe("resolveMentions", () => {
       expect(result.hasExplicitMention).toBe(true);
     });
 
+    it("detects native m.mentions user mentions even when configured mention patterns are disabled", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "hello @bot",
+          "m.mentions": { user_ids: ["@bot:matrix.org"] },
+        },
+        userId,
+        text: "hello @bot",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+      expect(result.hasExplicitMention).toBe(true);
+    });
+
     it("does not trust m.mentions.user_ids without a visible text or formatted mention", () => {
       const result = resolveMentions({
         content: {

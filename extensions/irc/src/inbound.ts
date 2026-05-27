@@ -5,6 +5,7 @@ import {
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import { resolveEffectiveAllowFromLists } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
@@ -140,6 +141,35 @@ function routeDescriptorsForIrcGroup(params: {
   );
 }
 
+function resolveIrcConversationId(message: IrcInboundMessage): string {
+  if (!message.isGroup) {
+    return message.senderNick;
+  }
+  return message.target.startsWith("#") || message.target.startsWith("&")
+    ? message.target
+    : `#${message.target}`;
+}
+
+function resolveIrcEffectiveAllowlists(params: {
+  configAllowFrom: string[];
+  configGroupAllowFrom: string[];
+  storeAllowList: string[];
+  dmPolicy: string;
+}): {
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+} {
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: params.configAllowFrom,
+    groupAllowFrom: params.configGroupAllowFrom,
+    storeAllowFrom: params.storeAllowList,
+    dmPolicy: params.dmPolicy,
+    // IRC intentionally requires explicit groupAllowFrom; do not fallback to allowFrom.
+    groupAllowFromFallbackToAllowFrom: false,
+  });
+  return { effectiveAllowFrom, effectiveGroupAllowFrom };
+}
+
 async function deliverIrcReply(params: {
   payload: OutboundReplyPayload;
   cfg: CoreConfig;
@@ -220,7 +250,28 @@ export async function handleIrcInbound(params: {
     surface: CHANNEL_ID,
   });
   const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const peerId = resolveIrcConversationId(message);
+  const channelTarget = message.isGroup ? peerId : message.senderNick;
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+    },
+    runtime: core.channel,
+    sessionStore: config.session?.store,
+  });
+  const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+    cfg: config as OpenClawConfig,
+    provider: CHANNEL_ID,
+    conversationId: peerId,
+    agentId: route.agentId,
+    providerPolicy: account.config.mentionPatternPolicy,
+  })
+    ? core.channel.mentions.buildMentionRegexes(config as OpenClawConfig, route.agentId)
+    : [];
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
     ? new RegExp(`\\b${escapeIrcRegexLiteral(mentionNick)}\\b[:,]?`, "i")
@@ -345,23 +396,6 @@ export async function handleIrcInbound(params: {
     return;
   }
 
-  const channelTarget =
-    message.target.startsWith("#") || message.target.startsWith("&")
-      ? message.target
-      : `#${message.target}`;
-  const peerId = message.isGroup ? channelTarget : message.senderNick;
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
-    cfg: config as OpenClawConfig,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    peer: {
-      kind: message.isGroup ? "group" : "direct",
-      id: peerId,
-    },
-    runtime: core.channel,
-    sessionStore: config.session?.store,
-  });
-
   const fromLabel = message.isGroup ? message.target : senderDisplay;
   const { storePath, body } = buildEnvelope({
     channel: "IRC",
@@ -437,3 +471,10 @@ export async function handleIrcInbound(params: {
     },
   });
 }
+
+export const testing = {
+  resolveIrcConversationId,
+  resolveIrcEffectiveAllowlists,
+};
+
+export { testing as __testing };

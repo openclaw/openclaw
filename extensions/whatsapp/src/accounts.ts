@@ -34,6 +34,7 @@ export type ResolvedWhatsAppAccount = {
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
+  mentionPatterns?: WhatsAppAccountConfig["mentionPatterns"];
   historyLimit?: number;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
@@ -141,6 +142,7 @@ export function resolveWhatsAppAccount(params: {
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,
     groupPolicy: merged.groupPolicy,
+    mentionPatterns: merged.mentionPatterns,
     historyLimit: merged.historyLimit,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,

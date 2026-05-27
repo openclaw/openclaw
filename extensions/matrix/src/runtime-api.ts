@@ -41,7 +41,10 @@ export type {
   DmPolicy,
   GroupPolicy,
 } from "openclaw/plugin-sdk/config-contracts";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
+export type {
+  GroupToolPolicyConfig,
+  MentionPatternsPolicyConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 export {

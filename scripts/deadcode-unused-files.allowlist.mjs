@@ -41,5 +41,6 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "src/tasks/task-registry-control.runtime.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
+  "extensions/whatsapp/src/auto-reply/session-snapshot.ts",
   "src/gateway/test/server-sessions-helpers.ts",
 ];

@@ -79,8 +79,8 @@ describe("package-mac-app plist stamping", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "printf '%s|%s\\n' \"$PWD\" \"$*\" >> \"$OPENCLAW_TEST_LOG\"",
-        "if [[ \"${1:-}\" == \"pnpm\" && \"${2:-}\" == \"--version\" ]]; then",
+        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
         "  echo '11.2.2'",
         "fi",
         "",
@@ -156,11 +156,15 @@ describe("package-mac-app plist stamping", () => {
   it("fails closed when required bundled resources are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
     const modelCatalogBlock = script.slice(
-      script.indexOf('MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"'),
+      script.indexOf(
+        'MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"',
+      ),
       script.indexOf('echo "📦 Copying Control UI assets"'),
     );
     const openClawKitBlock = script.slice(
-      script.indexOf('OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"'),
+      script.indexOf(
+        'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
+      ),
       script.indexOf('echo "📦 Copying Textual resources"'),
     );
 

@@ -1,4 +1,5 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+import type { MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IrcAccountConfig = CommonChannelMessagingConfig & {
@@ -51,6 +52,8 @@ export type IrcAccountConfig = CommonChannelMessagingConfig & {
   >;
   /** Optional mention patterns specific to IRC channel messages. */
   mentionPatterns?: string[];
+  /** Per-provider mention-pattern allow/deny policy for IRC channel conversations. */
+  mentionPatternPolicy?: MentionPatternsPolicyConfig;
 };
 
 export type IrcConfig = {

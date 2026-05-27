@@ -97,8 +97,16 @@ export function installMatrixMonitorTestRuntime(
           options.matchesMentionPatterns ??
           ((text: string, patterns: RegExp[]) => patterns.some((pattern) => pattern.test(text))),
         matchesMentionWithExplicit: () => false,
+        resolveMentionPatternsEnabled: () => true,
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
+        resolveMentionPatternPolicy: () => ({
+          globalMode: "allow",
+          effectiveMode: "allow",
+          allowMatched: false,
+          denyMatched: false,
+          enabled: true,
+        }),
       },
       media: createMatrixRuntimeMediaMock({
         saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),

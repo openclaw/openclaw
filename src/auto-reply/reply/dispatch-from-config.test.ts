@@ -980,7 +980,13 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     const pluginLoadOptions = firstMockArg(
       runtimePluginMocks.ensureRuntimePluginsLoaded,
@@ -1260,7 +1266,13 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(mocks.routeReply).not.toHaveBeenCalled();
@@ -3410,6 +3422,7 @@ describe("dispatchReplyFromConfig", () => {
         dispatch: { enabled: true },
         stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
       },
+      messages: { visibleReplies: "automatic" },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -3420,7 +3433,13 @@ describe("dispatchReplyFromConfig", () => {
     });
     const replyResolver = vi.fn(async () => ({ text: "fallback" }) as ReplyPayload);
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     expect(replyResolver).not.toHaveBeenCalled();
     const ensureSessionOptions = firstMockArg(runtime.ensureSession, "ensure session") as
@@ -3832,6 +3851,7 @@ describe("dispatchReplyFromConfig", () => {
         dispatch: { enabled: true },
         stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
       },
+      messages: { visibleReplies: "automatic" },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "fallback reply" }) satisfies ReplyPayload);
@@ -3846,7 +3866,13 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "continue",
     });
 
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     expect(result.queuedFinal).toBe(true);
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
@@ -3910,6 +3936,7 @@ describe("dispatchReplyFromConfig", () => {
         dispatch: { enabled: true },
         stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
       },
+      messages: { visibleReplies: "automatic" },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -3919,7 +3946,12 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "test spacing",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     const blockTexts: string[] = [];
     for (const call of (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock.calls) {
@@ -3966,6 +3998,7 @@ describe("dispatchReplyFromConfig", () => {
         dispatch: { enabled: true },
         stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
       },
+      messages: { visibleReplies: "automatic" },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -3975,7 +4008,12 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "stream this",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     const finalPayload = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as ReplyPayload | undefined;
@@ -4057,7 +4095,12 @@ describe("dispatchReplyFromConfig", () => {
       BodyForAgent: "run once",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+    });
 
     const closeOptions = firstMockArg(runtime.close, "runtime close") as
       | { reason?: unknown }

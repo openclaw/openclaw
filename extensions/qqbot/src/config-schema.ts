@@ -1,5 +1,6 @@
 import {
   AllowFromListSchema,
+  MentionPatternsPolicySchema,
   buildChannelConfigSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
@@ -64,6 +65,7 @@ const QQBotAccountSchema = z
     groupAllowFrom: AllowFromListSchema,
     dmPolicy: QQBotDmPolicySchema,
     groupPolicy: QQBotGroupPolicySchema,
+    mentionPatterns: MentionPatternsPolicySchema.optional(),
     systemPrompt: z.string().optional(),
     markdownSupport: z.boolean().optional(),
     voiceDirectUploadFormats: z.array(z.string()).optional(),

@@ -45,6 +45,10 @@ import {
   resolveInboundMentionDecision,
 } from "../../channels/mention-gating.js";
 import {
+  resolveMentionPatternPolicy,
+  resolveMentionPatternsEnabled,
+} from "../../channels/mention-pattern-policy.js";
+import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
 } from "../../channels/plugins/conversation-bindings.js";
@@ -156,6 +160,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       matchesMentionWithExplicit,
       implicitMentionKindWhen,
       resolveInboundMentionDecision,
+      resolveMentionPatternPolicy,
+      resolveMentionPatternsEnabled,
     },
     reactions: {
       createAckReactionHandle,

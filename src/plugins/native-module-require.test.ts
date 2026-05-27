@@ -64,6 +64,44 @@ describe("tryNativeRequireJavaScriptModule", () => {
     );
   });
 
+  it("propagates ESM missing dependency errors from existing modules", () => {
+    const dir = makeTempDir();
+    const modulePath = path.join(dir, "plugin.cjs");
+    fs.writeFileSync(
+      modulePath,
+      [
+        "const error = new Error(\"Cannot find package 'missing-esm-dependency' imported from plugin.cjs\");",
+        'error.code = "ERR_MODULE_NOT_FOUND";',
+        "throw error;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    expect(() => tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toThrow(
+      "missing-esm-dependency",
+    );
+  });
+
+  it("declines plugin-sdk alias ESM misses for source-transform fallback", () => {
+    const dir = makeTempDir();
+    const modulePath = path.join(dir, "plugin.cjs");
+    fs.writeFileSync(
+      modulePath,
+      [
+        "const error = new Error(\"Cannot find package 'openclaw/plugin-sdk/channel-message' imported from plugin.cjs\");",
+        'error.code = "ERR_MODULE_NOT_FOUND";',
+        "throw error;",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
+      ok: false,
+    });
+  });
+
   it("declines missing dependency errors when source-transform fallback is available", () => {
     const dir = makeTempDir();
     const modulePath = path.join(dir, "plugin.cjs");

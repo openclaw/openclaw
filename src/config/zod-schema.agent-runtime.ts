@@ -13,7 +13,7 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
-  GroupChatSchema,
+  AgentGroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
   SecretInputSchema,
@@ -1047,7 +1047,7 @@ export const AgentEntrySchema = z
     contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
-    groupChat: GroupChatSchema,
+    groupChat: AgentGroupChatSchema,
     subagents: z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),

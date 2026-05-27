@@ -214,9 +214,8 @@ async function resolveAutocompleteAuthorized(params: {
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
     ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth"));
-    ({ createDiscordNativeCommand, testing: nativeCommandTesting } = await import(
-      "./native-command.js"
-    ));
+    ({ createDiscordNativeCommand, testing: nativeCommandTesting } =
+      await import("./native-command.js"));
     ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
   });
@@ -375,7 +374,10 @@ describe("createDiscordNativeCommand option wiring", () => {
         threadBindings: createNoopThreadBindingManager("default"),
       });
       const mode = requireOption(command, "mode");
-      const autocomplete = requireAutocomplete(mode, "plugin mode option did not wire autocomplete");
+      const autocomplete = requireAutocomplete(
+        mode,
+        "plugin mode option did not wire autocomplete",
+      );
       const respond = await runAutocomplete(autocomplete, {
         userId: "blocked-user",
         username: "blocked",

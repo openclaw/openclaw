@@ -1,3 +1,5 @@
+import type { MentionPatternsPolicyConfig } from "openclaw/plugin-sdk/config-contracts";
+
 type QaChannelActionConfig = {
   messages?: boolean;
   reactions?: boolean;
@@ -15,6 +17,7 @@ export type QaChannelAccountConfig = {
   allowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom?: Array<string | number>;
+  mentionPatterns?: MentionPatternsPolicyConfig;
   groups?: Record<
     string,
     {

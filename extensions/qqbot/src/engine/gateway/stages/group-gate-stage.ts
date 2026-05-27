@@ -44,11 +44,20 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
   const behaviorPrompt = settings.config.prompt ?? DEFAULT_GROUP_PROMPT;
   const groupName = settings.name;
 
+  // ---- 2. Mention detection (QQ-specific) ----
+  const mentionPatternsEnabled =
+    deps.runtime.channel.mentions?.resolveMentionPatternsEnabled({
+      cfg,
+      provider: "qqbot",
+      conversationId: `qqbot:group:${groupOpenid}`,
+      providerPolicy: deps.account.config.mentionPatterns,
+      agentId,
+    }) ?? true;
   const explicitWasMentioned = detectWasMentioned({
     eventType: event.eventType,
     mentions: event.mentions as never,
     content: event.content,
-    mentionPatterns: settings.mentionPatterns,
+    mentionPatterns: mentionPatternsEnabled ? settings.mentionPatterns : [],
   });
   const anyMention = hasAnyMention({
     mentions: event.mentions as never,

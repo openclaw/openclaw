@@ -137,7 +137,7 @@ async function selectModel(options: SelectModelOptions = {}) {
   return resolveCronModelSelection({
     cfg: cfg as never,
     cfgWithAgentDefaults: cfg as never,
-    agentConfigOverride: options.agentConfigOverride,
+    agentConfigOverride: options.agentConfigOverride as never,
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
     isGmailHook: options.isGmailHook ?? false,

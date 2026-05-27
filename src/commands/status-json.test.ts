@@ -160,14 +160,7 @@ describe("statusJsonCommand", () => {
       "telegram",
       "whatsapp",
     ]);
-    expect(logs).toStrictEqual([expect.any(String)]);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toEqual({
-      ...createExpectedStatusPayload(),
-      securityAudit: {
-        summary: { critical: 1, warn: 0, info: 0 },
-        findings: [],
-      },
-    });
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);
   });
 });

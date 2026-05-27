@@ -1655,7 +1655,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       const stderrText = stderrChunks.join("");
-      expect(stderrText).toContain("Building local CLI artifacts");
+      expect(stderrText).toContain("Building TypeScript");
       expect(stderrText).toContain("\x1b[2K");
     });
   });

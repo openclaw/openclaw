@@ -199,4 +199,84 @@ describe("handleQaInbound", () => {
 
     expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
   });
+
+  it("passes account mention-pattern policy into group mention detection", async () => {
+    const runtime = createPluginRuntimeMock();
+    vi.mocked(runtime.channel.mentions.buildMentionRegexes).mockReturnValue([/\b@?openclaw\b/i]);
+    setQaChannelRuntime(runtime);
+
+    const mentionPatterns = {
+      allowIn: ["group:qa-room"],
+      denyIn: ["group:other-room"],
+    };
+
+    await handleQaInbound(
+      createQaInboundParams({
+        accountConfig: {
+          mentionPatterns,
+          groups: {
+            "qa-room": {
+              requireMention: true,
+            },
+          },
+        },
+        message: {
+          conversation: {
+            kind: "group",
+            id: "qa-room",
+            title: "QA Room",
+          },
+          text: "@openclaw ping",
+        },
+      }),
+    );
+
+    expect(runtime.channel.mentions.resolveMentionPatternsEnabled).toHaveBeenCalledWith({
+      cfg: {},
+      provider: "qa-channel",
+      conversationId: "group:qa-room",
+      agentId: "main",
+      providerPolicy: mentionPatterns,
+    });
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(firstRunAssembledParams(runtime).ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("falls back when mention pattern policy disables group mention detection", async () => {
+    const runtime = createPluginRuntimeMock();
+    vi.mocked(runtime.channel.mentions.resolveMentionPatternsEnabled).mockReturnValue(false);
+    vi.mocked(runtime.channel.mentions.buildMentionRegexes).mockReturnValue([/\b@?openclaw\b/i]);
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        accountConfig: {
+          groups: {
+            "qa-room": {
+              requireMention: true,
+            },
+          },
+        },
+        message: {
+          conversation: {
+            kind: "group",
+            id: "qa-room",
+            title: "QA Room",
+          },
+          text: "@openclaw ping",
+        },
+      }),
+    );
+
+    expect(runtime.channel.mentions.resolveMentionPatternsEnabled).toHaveBeenCalledWith({
+      cfg: {},
+      provider: "qa-channel",
+      conversationId: "group:qa-room",
+      agentId: "main",
+      providerPolicy: undefined,
+    });
+    expect(runtime.channel.mentions.buildMentionRegexes).not.toHaveBeenCalled();
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(firstRunAssembledParams(runtime).ctxPayload.WasMentioned).toBeUndefined();
+  });
 });

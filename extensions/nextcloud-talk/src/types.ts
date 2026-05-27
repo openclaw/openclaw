@@ -4,8 +4,9 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-  SecretInput,
-} from "../runtime-api.js";
+  MentionPatternsPolicyConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -59,6 +60,8 @@ export type NextcloudTalkAccountConfig = {
   groupAllowFrom?: string[];
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Per-provider mention-pattern allow/deny policy for group/channel conversations. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Per-room configuration (key is room token). */
   rooms?: Record<string, NextcloudTalkRoomConfig>;
   /** Max group messages to keep as history context (0 disables). */

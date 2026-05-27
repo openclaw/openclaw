@@ -166,6 +166,28 @@ function hasVisibleRoomMention(value?: string): boolean {
   return /(^|[^a-z0-9_])@room\b/i.test(cleaned);
 }
 
+function hasVisibleUserMentionText(params: {
+  text?: string;
+  userId: string;
+  displayName?: string | null;
+}): boolean {
+  const cleaned = extractVisibleMentionText(params.text);
+  if (!cleaned) {
+    return false;
+  }
+  return resolveMatrixMentionPrefixCandidates(params).some((candidate) => {
+    const visibleCandidate = extractVisibleMentionText(candidate);
+    if (!visibleCandidate) {
+      return false;
+    }
+    const pattern = new RegExp(
+      `(^|[^\\p{L}\\p{N}_])${escapeRegExp(visibleCandidate)}(?=$|[^\\p{L}\\p{N}_])`,
+      "iu",
+    );
+    return pattern.test(cleaned);
+  });
+}
+
 /**
  * Check if formatted_body contains a matrix.to link whose visible label still
  * looks like a real mention for the given user. Do not trust href alone, since
@@ -227,6 +249,13 @@ export function resolveMentions(params: {
     params.text ?? "",
     params.mentionRegexes,
   );
+  const nativeTextMentioned = params.userId
+    ? hasVisibleUserMentionText({
+        text: params.text,
+        userId: params.userId,
+        displayName: params.displayName,
+      })
+    : false;
   const visibleRoomMention =
     hasVisibleRoomMention(params.text) || hasVisibleRoomMention(params.content.formatted_body);
 
@@ -245,7 +274,7 @@ export function resolveMentions(params: {
   const metadataBackedUserMention = Boolean(
     params.userId &&
     mentionedUsers.has(params.userId) &&
-    (mentionedInFormattedBody || textMentioned),
+    (mentionedInFormattedBody || textMentioned || nativeTextMentioned),
   );
   const metadataBackedRoomMention = Boolean(mentions?.room) && visibleRoomMention;
   const explicitMention =
