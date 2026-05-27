@@ -354,7 +354,9 @@ OpenClaw also enforces a safety floor for embedded runs:
   string such as `"20mb"` to run local compaction before a turn when the active
   transcript gets large. This guard is active only when
   `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
-  disable.
+  disable. For Codex harness sessions, this preflight starts native Codex
+  compaction with `thread/compact/start` rather than replacing Codex compaction
+  with an OpenClaw summarizer.
 - When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
   OpenClaw rotates the active transcript to a compacted successor JSONL after
   compaction. Branch/restore checkpoint actions use that compacted successor;

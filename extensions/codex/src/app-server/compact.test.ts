@@ -126,7 +126,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.pending).toBe(true);
   });
 
-  it("skips native app-server compaction for automatic budget triggers", async () => {
+  it("starts native app-server compaction for automatic budget triggers", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
@@ -142,16 +142,45 @@ describe("maybeCompactCodexAppServerSession", () => {
       }),
     );
 
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBeUndefined();
+    expect(result.result?.tokensBefore).toBe(456);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      threadId: "thread-1",
+      signal: "thread/compact/start",
+      pending: true,
+    });
+  });
+
+  it("skips native app-server compaction for overflow triggers", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "overflow",
+        currentTokenCount: 654,
+      }),
+    );
+
     expect(fake.request).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("codex app-server owns automatic compaction");
-    expect(result.result?.tokensBefore).toBe(456);
+    expect(result.result?.tokensBefore).toBe(654);
     expect(compactDetails(result)).toMatchObject({
       backend: "codex-app-server",
       skipped: true,
       reason: "non_manual_trigger",
-      trigger: "budget",
+      trigger: "overflow",
     });
   });
 

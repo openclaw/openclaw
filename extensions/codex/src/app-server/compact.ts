@@ -122,7 +122,10 @@ async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
-  if (params.trigger !== "manual") {
+  // The transcript-byte budget preflight is an explicit OpenClaw request to
+  // shrink a large channel mirror; skipping it leaves long-lived Codex sessions
+  // above the configured local transcript guard.
+  if (params.trigger !== "manual" && params.trigger !== "budget") {
     embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -185,6 +188,7 @@ async function compactCodexNativeThread(
     embeddedAgentLog.info("started codex app-server compaction", {
       sessionId: params.sessionId,
       threadId: binding.threadId,
+      trigger: params.trigger ?? "manual",
     });
   } catch (error) {
     if (isCodexThreadNotFoundError(error)) {
@@ -198,6 +202,7 @@ async function compactCodexNativeThread(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       threadId: binding.threadId,
+      trigger: params.trigger ?? "manual",
       reason: formatCompactionError(error),
     });
     return {

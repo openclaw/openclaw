@@ -214,9 +214,17 @@ history, search, `/new`, `/reset`, and future model or harness switching.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
+OpenClaw also starts native Codex compaction for the `budget` preflight trigger
+used by `agents.defaults.compaction.maxActiveTranscriptBytes`, because that
+trigger protects the local channel transcript mirror from growing without a
+native cleanup request. Other automatic triggers remain Codex-owned and are not
+started by OpenClaw.
+
 OpenClaw returns after starting that native operation. It does not wait for
 completion, impose a separate OpenClaw timeout, restart the shared Codex
 app-server, or record the operation as an OpenClaw-completed compaction.
+Operators debugging oversized transcript behavior can search gateway logs for
+`started codex app-server compaction` with `trigger: "budget"`.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
 projects tool-call names and ids, input shapes, and redacted tool-result content
