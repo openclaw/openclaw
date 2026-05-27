@@ -230,12 +230,7 @@ export function resolveOpenAICompactionRuntimeProvider(params: {
   if (!isOpenAIProvider(params.provider)) {
     return params.provider;
   }
-  if (
-    runtime === "codex" &&
-    (hasOpenAICodexAuthProfileOverride(params.authProfileId) ||
-      configuredOpenAIAuthOrderStartsWithCodexProfile(params.config) ||
-      configuredOpenAICodexAuthProfileExists(params.config))
-  ) {
+  if (runtime === "codex") {
     return OPENAI_CODEX_PROVIDER_ID;
   }
   return runtime === "pi" &&

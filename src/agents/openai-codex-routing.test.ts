@@ -214,13 +214,13 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("keeps OpenAI compaction on OpenAI when only direct API-key auth is implied", () => {
+  it("routes OpenAI compaction through Codex OAuth when Codex runtime is active", () => {
     expect(
       resolveOpenAICompactionRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
       }),
-    ).toBe("openai");
+    ).toBe("openai-codex");
   });
 
   it("does not route non-OpenAI providers when runtime is codex", () => {
