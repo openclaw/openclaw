@@ -1102,6 +1102,38 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await connecting;
   });
 
+  it("preserves Azure deployment startup auth failures", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "sk-test", // pragma: allowlist secret
+        azureEndpoint: "https://example.openai.azure.com/",
+        azureDeployment: "realtime-prod",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.emit("error", new Error("Unexpected server response: 401"));
+
+    try {
+      await connecting;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("Unexpected server response: 401");
+      expect(message).not.toContain(
+        "Talk Realtime provider 'openai' requires a direct OpenAI API key",
+      );
+      return;
+    }
+    throw new Error("Expected Azure realtime startup auth failure");
+  });
+
   it("rejects connection when session configuration fails before readiness", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

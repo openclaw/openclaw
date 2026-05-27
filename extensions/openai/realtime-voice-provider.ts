@@ -393,6 +393,18 @@ function isOpenAIRealtimeAuthFailure(error: unknown): boolean {
   );
 }
 
+function isDirectOpenAIRealtimeWebSocketUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === "api.openai.com";
+  } catch {
+    return value.startsWith("wss://api.openai.com/");
+  }
+}
+
+function isDirectOpenAIRealtimeStartupAuthFailure(url: string, error: unknown): boolean {
+  return isDirectOpenAIRealtimeWebSocketUrl(url) && isOpenAIRealtimeAuthFailure(error);
+}
+
 async function createOpenAIRealtimeClientSecretWithAuthHint(params: {
   authToken: string;
   auditContext: string;
@@ -709,7 +721,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             if (event.type === "error" && !this.sessionConfigured) {
               const startupError = new Error(readRealtimeErrorDetail(event.error));
               rejectStartup(
-                isOpenAIRealtimeAuthFailure(startupError)
+                isDirectOpenAIRealtimeStartupAuthFailure(url, startupError)
                   ? openAIRealtimeDirectAuthError(startupError)
                   : startupError,
               );
@@ -739,7 +751,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           if (!this.sessionConfigured) {
             const startupError = error instanceof Error ? error : new Error(String(error));
             rejectStartup(
-              isOpenAIRealtimeAuthFailure(startupError)
+              isDirectOpenAIRealtimeStartupAuthFailure(url, startupError)
                 ? openAIRealtimeDirectAuthError(startupError)
                 : startupError,
             );
