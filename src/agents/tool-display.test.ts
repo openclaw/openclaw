@@ -357,6 +357,38 @@ describe("tool display details", () => {
     expect(detail).toMatch(/^run cargo build → run tests/);
   });
 
+  it("falls back to raw command when most stages of a multi-stage script are generic", () => {
+    // Simulates the multi-line shell scripts that produced garbled cron
+    // notifications (e.g. `create folder X → run then set → run [ → run jq →
+    // run fi`): the first stage paraphrases cleanly but later stages are just
+    // shell keywords. Prefer the compact raw command in that case.
+    const command =
+      "mkdir -p /tmp/x && set -u && if [ -f /tmp/x/y ]; then jq empty /tmp/x/y && true; fi && cat /tmp/x/y";
+    const detail = formatToolDetail(resolveToolDisplay({ name: "exec", args: { command } }));
+
+    // The detail should not be the gibberish stage list — instead the compact
+    // raw command (possibly with a recognized leading summary as context).
+    expect(detail).not.toMatch(/run then/);
+    expect(detail).not.toMatch(/run \[/);
+    expect(detail).not.toMatch(/run fi/);
+    expect(detail).toContain("mkdir -p /tmp/x");
+  });
+
+  it("keeps the paraphrase for short multi-stage commands with one generic stage", () => {
+    // Regression guard: a 3-stage command where only one stage is generic
+    // should still get the joined paraphrase, not the raw command fallback.
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "git fetch && cargo build && npm test" },
+      }),
+    );
+
+    // 1/3 generic — below the mostly-generic threshold — keep joined summary.
+    expect(detail).toMatch(/fetch git/);
+    expect(detail).toMatch(/run tests/);
+  });
+
   it("handles standalone cd as raw command", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/tool display: fall back to the compact raw command when a multi-stage shell script is mostly unrecognized "run X" stages, instead of paraphrasing shell keywords (`then`, `fi`, `[`, `jq`, …) into a misleading step list. Prevents garbled cron-delivery summaries like `create folder X → run then set → run [ → run jq → run fi (agent) failed` from landing in Discord/etc. (#87426)
 - Security/CLI/runtime: harden hostname normalization for repeated trailing dots, block side-effecting command wrappers, reject unsafe Node runtime env overrides, reject loose numeric CLI and gateway options, require admin approval for node device-role pairing, and reject no-auth Tailscale exposure. (#87305, #87292, #87308, #87146) Thanks @pgondhi987.
 - Telegram: route `sendMessage` action replies through durable outbound delivery so completed agent responses remain retryable when the gateway send path times out. (#87261) Thanks @mbelinky.
 - Matrix/auto-reply: keep draft previews mention-inert, preserve final mention delivery, send mention finals normally, await shared DM notices, ignore filename-embedded MXIDs, and suppress reasoning-prefixed `NO_REPLY` responses.

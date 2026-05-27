@@ -295,6 +295,7 @@ type ExecSummary = {
   text: string;
   chdirPath?: string;
   allGeneric?: boolean;
+  mostlyGeneric?: boolean;
 };
 
 function normalizePathForDisplay(path: string): string {
@@ -361,9 +362,15 @@ function summarizeExecCommand(command: string): ExecSummary | undefined {
 
   const summaries = stages.map((stage) => summarizePipeline(stage));
   const text = summaries.length === 1 ? summaries[0] : summaries.join(" → ");
-  const allGeneric = summaries.every((summary) => isGenericSummary(summary));
+  const genericCount = summaries.filter((summary) => isGenericSummary(summary)).length;
+  const allGeneric = genericCount === summaries.length;
+  // If a multi-stage script is mostly unrecognized "run X" steps, the joined
+  // paraphrase reads as gibberish (e.g. `create folder X → run then set →
+  // run [ → run jq → run fi`). Prefer the compact raw command in that case.
+  const mostlyGeneric =
+    !allGeneric && summaries.length >= 3 && genericCount * 2 >= summaries.length;
 
-  return { text, chdirPath, allGeneric };
+  return { text, chdirPath, allGeneric, mostlyGeneric };
 }
 
 const KNOWN_SUMMARY_PREFIXES = [
@@ -466,7 +473,10 @@ export function resolveExecDetail(
 
   const compact = compactRawCommand(unwrapped);
   const cwdSuffix = cwd ? formatCwdSuffix(cwd) : undefined;
-  if (result?.allGeneric !== false && isGenericSummary(summary)) {
+  if (
+    result?.mostlyGeneric === true ||
+    (result?.allGeneric !== false && isGenericSummary(summary))
+  ) {
     return cwdSuffix ? `${compact} ${cwdSuffix}` : compact;
   }
 
