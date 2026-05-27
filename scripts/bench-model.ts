@@ -1,4 +1,5 @@
-import { completeSimple, getModel, type Api, type Model } from "openclaw/plugin-sdk/llm";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { getModel } from "../src/llm/models.js";
 
 type Usage = {
   input?: number;
@@ -106,6 +107,9 @@ async function main(): Promise<void> {
     maxTokens: 8192,
   };
   const opusModel = getModel("anthropic", "claude-opus-4-6");
+  if (!opusModel) {
+    throw new Error("Missing anthropic/claude-opus-4-6 in the model registry.");
+  }
 
   console.log(`Prompt: ${prompt}`);
   console.log(`Runs: ${runs}`);
