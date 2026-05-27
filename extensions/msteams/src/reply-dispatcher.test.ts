@@ -6,6 +6,7 @@ const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
 const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
+const emitMSTeamsMessageSentHooksMock = vi.hoisted(() => vi.fn());
 const streamInstances = vi.hoisted(
   () =>
     [] as Array<{
@@ -39,6 +40,10 @@ vi.mock("./errors.js", () => ({
   classifyMSTeamsSendError: vi.fn(() => ({})),
   formatMSTeamsSendErrorHint: vi.fn(() => undefined),
   formatUnknownError: vi.fn((err) => String(err)),
+}));
+
+vi.mock("./delivery-hooks.js", () => ({
+  emitMSTeamsMessageSentHooks: emitMSTeamsMessageSentHooksMock,
 }));
 
 vi.mock("./revoked-context.js", () => ({
@@ -524,6 +529,171 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.markDispatchIdle();
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("emits message:sent hook with channelId=msteams and recipient AAD on successful personal-DM delivery", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { text: "hello world" } as never,
+    ] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["bf-msg-id-1"] as never);
+
+    // Override the default conversationRef to include user.aadObjectId.
+    const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
+    const dispatcher = createMSTeamsReplyDispatcher({
+      cfg: { channels: { msteams: { blockStreaming: true } } } as never,
+      agentId: "agent",
+      sessionKey: "agent:eva:msteams:direct:abc123",
+      accountId: "acct-1",
+      runtime: { error: vi.fn() } as never,
+      log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
+      adapter: {
+        continueConversation: vi.fn(),
+        process: vi.fn(),
+        updateActivity: vi.fn(),
+        deleteActivity: vi.fn(),
+      } as never,
+      appId: "app",
+      conversationRef: {
+        conversation: { id: "19:user-conv", conversationType: "personal" },
+        user: { id: "user-id", aadObjectId: "aad-recipient-123" },
+        agent: { id: "bot" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      } as never,
+      context: { sendActivity: contextSendActivity } as never,
+      replyStyle: "thread",
+      textLimit: 4000,
+    });
+    const [call] = createReplyDispatcherWithTypingMock.mock.calls;
+    const options = call?.[0] as { deliver: (payload: { text: string }) => Promise<void> };
+
+    await options.deliver({ text: "hello world" });
+    await dispatcher.markDispatchIdle();
+
+    expect(emitMSTeamsMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    const hookCall = emitMSTeamsMessageSentHooksMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(hookCall).toMatchObject({
+      sessionKeyForInternalHooks: "agent:eva:msteams:direct:abc123",
+      to: "aad-recipient-123",
+      conversationId: "19:user-conv",
+      accountId: "acct-1",
+      content: "hello world",
+      success: true,
+      messageId: "bf-msg-id-1",
+      isGroup: false,
+    });
+    expect(hookCall.error).toBeUndefined();
+    expect(hookCall.groupId).toBeUndefined();
+  });
+
+  it("emits message:sent hook with isGroup=true + groupId set on groupChat delivery", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { text: "group reply" } as never,
+    ] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["bf-msg-id-2"] as never);
+
+    const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
+    const dispatcher = createMSTeamsReplyDispatcher({
+      cfg: { channels: { msteams: { blockStreaming: true } } } as never,
+      agentId: "agent",
+      sessionKey: "agent:eva:msteams:group:grp-99",
+      runtime: { error: vi.fn() } as never,
+      log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
+      adapter: {
+        continueConversation: vi.fn(),
+        process: vi.fn(),
+        updateActivity: vi.fn(),
+        deleteActivity: vi.fn(),
+      } as never,
+      appId: "app",
+      conversationRef: {
+        conversation: { id: "19:group-conv", conversationType: "groupChat" },
+        user: { id: "user-id", aadObjectId: "aad-sender" },
+        agent: { id: "bot" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      } as never,
+      context: { sendActivity: contextSendActivity } as never,
+      replyStyle: "thread",
+      textLimit: 4000,
+    });
+    const [call] = createReplyDispatcherWithTypingMock.mock.calls;
+    const options = call?.[0] as { deliver: (payload: { text: string }) => Promise<void> };
+
+    await options.deliver({ text: "group reply" });
+    await dispatcher.markDispatchIdle();
+
+    expect(emitMSTeamsMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    const hookCall = emitMSTeamsMessageSentHooksMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(hookCall).toMatchObject({
+      to: "19:group-conv",
+      isGroup: true,
+      groupId: "19:group-conv",
+      success: true,
+    });
+  });
+
+  it("emits message:sent hook with success=false + error on full delivery failure", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { text: "failing" } as never,
+    ] as never);
+    sendMSTeamsMessagesMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("gateway timeout"), { statusCode: 502 }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("gateway timeout"), { statusCode: 502 }),
+      );
+
+    const contextSendActivity = vi.fn(async () => ({ id: "activity-1" }));
+    const dispatcher = createMSTeamsReplyDispatcher({
+      cfg: { channels: { msteams: { blockStreaming: true } } } as never,
+      agentId: "agent",
+      sessionKey: "agent:eva:msteams:direct:def456",
+      runtime: { error: vi.fn() } as never,
+      log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
+      adapter: {
+        continueConversation: vi.fn(),
+        process: vi.fn(),
+        updateActivity: vi.fn(),
+        deleteActivity: vi.fn(),
+      } as never,
+      appId: "app",
+      conversationRef: {
+        conversation: { id: "19:user-conv", conversationType: "personal" },
+        user: { id: "user-id", aadObjectId: "aad-recipient-789" },
+        agent: { id: "bot" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+      } as never,
+      context: { sendActivity: contextSendActivity } as never,
+      replyStyle: "thread",
+      textLimit: 4000,
+    });
+    const [call] = createReplyDispatcherWithTypingMock.mock.calls;
+    const options = call?.[0] as { deliver: (payload: { text: string }) => Promise<void> };
+
+    await options.deliver({ text: "failing" });
+    await dispatcher.markDispatchIdle();
+
+    expect(emitMSTeamsMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    const hookCall = emitMSTeamsMessageSentHooksMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(hookCall).toMatchObject({
+      to: "aad-recipient-789",
+      success: false,
+      isGroup: false,
+    });
+    expect(hookCall.error).toBeTruthy();
+    expect(hookCall.messageId).toBeUndefined();
   });
 });
 

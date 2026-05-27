@@ -15,6 +15,7 @@ import {
 } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
+import { emitMSTeamsMessageSentHooks } from "./delivery-hooks.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -223,37 +224,70 @@ export function createMSTeamsReplyDispatcher(params: {
     const toSend = pendingMessages.splice(0);
     const total = toSend.length;
     let ids: string[];
+    let failureCount = 0;
+    let lastError: unknown;
     try {
       ids = await sendMessages(toSend);
     } catch (batchError) {
       ids = [];
-      let failed = 0;
-      let lastFailedError: unknown = batchError;
+      lastError = batchError;
       for (const msg of toSend) {
         try {
           const msgIds = await sendMessages([msg]);
           ids.push(...msgIds);
         } catch (msgError) {
-          failed += 1;
-          lastFailedError = msgError;
+          failureCount += 1;
+          lastError = msgError;
           params.log.debug?.("individual message send failed, continuing with remaining blocks");
         }
       }
-      if (failed > 0) {
-        params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
-          failed,
+      if (failureCount > 0) {
+        params.log.warn?.(`failed to deliver ${failureCount} of ${total} message blocks`, {
+          failed: failureCount,
           total,
         });
         queueDeliveryFailureSystemEvent({
-          failed,
+          failed: failureCount,
           total,
-          error: lastFailedError,
+          error: lastError,
         });
       }
     }
     if (ids.length > 0) {
       params.onSentMessageIds?.(ids);
     }
+    // Emit `message:sent` to the internal + plugin-SDK hook buses so
+    // downstream listeners (per-user memory loggers, audit substrates) can
+    // observe the agent's reply. Mirrors the telegram pattern in
+    // `extensions/telegram/src/bot/delivery.replies.ts:emitTelegramMessageSentHooks`.
+    // The msteams provider was historically silent on outbound — closing that
+    // gap here.
+    const isGroup =
+      conversationType === "groupchat" || conversationType === "channel";
+    // For personal DMs, the recipient AAD is the canonical "to" — matches
+    // telegram's `chatId` semantics. For groups, fall back to conversation id.
+    const recipientAad =
+      params.conversationRef.user?.aadObjectId ??
+      params.conversationRef.aadObjectId;
+    const conversationId = params.conversationRef.conversation?.id;
+    const to =
+      !isGroup && recipientAad ? recipientAad : (conversationId ?? "unknown");
+    const content = toSend
+      .map((m) => (typeof m.text === "string" ? m.text : ""))
+      .filter(Boolean)
+      .join("\n\n");
+    emitMSTeamsMessageSentHooks({
+      sessionKeyForInternalHooks: params.sessionKey,
+      to,
+      conversationId,
+      accountId: params.accountId,
+      content,
+      success: ids.length > 0,
+      error: failureCount > 0 ? formatUnknownError(lastError) : undefined,
+      messageId: ids[0],
+      isGroup,
+      groupId: isGroup ? conversationId : undefined,
+    });
   };
 
   const {
