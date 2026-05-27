@@ -2768,6 +2768,56 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("classifies wrapped rejections after gateway timeout as timed out", async () => {
+    await withTempDir(
+      { prefix: "openclaw-gateway-agent-task-wrapped-timeout-error-" },
+      async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        primeMainAgentRun();
+        const timeoutReason = new Error("chat run timed out");
+        timeoutReason.name = "TimeoutError";
+        const wrappedError = new Error("fallback result classified terminal abort");
+        wrappedError.name = "FailoverError";
+        const context = makeContext();
+        const runId = "task-registry-agent-run-wrapped-timeout-error";
+        mocks.agentCommand.mockImplementationOnce(() => {
+          context.chatAbortControllers.get(runId)?.controller.abort(timeoutReason);
+          return Promise.reject(wrappedError);
+        });
+
+        await invokeAgent(
+          {
+            message: "background cli task",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+
+        await waitForAssertion(() => {
+          expectRecordFields(findTaskByRunId("task-registry-agent-run-wrapped-timeout-error"), {
+            runtime: "cli",
+            childSessionKey: "agent:main:main",
+            status: "timed_out",
+            error: "FailoverError: fallback result classified terminal abort",
+          });
+          expectRecordFields(
+            context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.payload,
+            {
+              runId: "task-registry-agent-run-wrapped-timeout-error",
+              status: "timeout",
+              summary: "aborted",
+            },
+          );
+          expect(
+            context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.ok,
+          ).toBe(true);
+        });
+      },
+    );
+  });
+
   it("does not hide provider timeout async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

@@ -619,7 +619,13 @@ function isGatewayAbortSignalReason(reason: unknown): boolean {
 }
 
 function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): boolean {
-  if (!signal.aborted || !isGatewayAbortSignalReason(signal.reason)) {
+  if (!signal.aborted) {
+    return false;
+  }
+  if (readErrorName(signal.reason) === "TimeoutError") {
+    return true;
+  }
+  if (!isGatewayAbortSignalReason(signal.reason)) {
     return false;
   }
   return isAbortError(error) || readErrorName(error) === "TimeoutError";
@@ -720,7 +726,7 @@ function dispatchAgentRunFromGateway(params: {
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: resolveFailedTrackedAgentTaskStatus(err),
+          status: aborted ? "timed_out" : resolveFailedTrackedAgentTaskStatus(err),
           error: renderedErr,
           terminalSummary: renderedErr,
         });
