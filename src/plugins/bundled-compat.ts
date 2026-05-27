@@ -10,8 +10,9 @@ export function withBundledPluginEnablementCompat(params: {
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
   const allow = params.config?.plugins?.allow;
+  const bypassAllowlist = params.config?.plugins?.bundledDiscovery === "compat";
   const allowSet =
-    Array.isArray(allow) && allow.length > 0
+    !bypassAllowlist && Array.isArray(allow) && allow.length > 0
       ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
       : undefined;
   let hasEligiblePlugin = false;
