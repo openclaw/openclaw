@@ -134,6 +134,14 @@ const ProviderCompatSchema = Type.Union([
   AnthropicMessagesCompatSchema,
 ]);
 
+const ProviderAuthModeSchema = Type.Union([
+  Type.Literal("api-key"),
+  Type.Literal("aws-sdk"),
+  Type.Literal("oauth"),
+  Type.Literal("token"),
+]);
+type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
+
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
 const ModelDefinitionSchema = Type.Object({
@@ -162,6 +170,7 @@ const ProviderConfigSchema = Type.Object({
   name: Type.Optional(Type.String({ minLength: 1 })),
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   apiKey: Type.Optional(Type.String({ minLength: 1 })),
+  auth: Type.Optional(ProviderAuthModeSchema),
   api: Type.Optional(Type.String({ minLength: 1 })),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   compat: Type.Optional(ProviderCompatSchema),
@@ -191,6 +200,10 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
+function allowsMissingProviderApiKey(auth: ProviderAuthMode | undefined): boolean {
+  return auth === "aws-sdk" || auth === "oauth";
+}
+
 /** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
 function stripJsonComments(input: string): string {
   return input
@@ -200,6 +213,7 @@ function stripJsonComments(input: string): string {
 
 interface ProviderRequestConfig {
   apiKey?: string;
+  auth?: ProviderAuthMode;
   headers?: Record<string, string>;
   authHeader?: boolean;
 }
@@ -402,7 +416,7 @@ export class ModelRegistry {
           `Provider ${providerName}: "baseUrl" is required when defining custom models.`,
         );
       }
-      if (!providerConfig.apiKey) {
+      if (!providerConfig.apiKey && !allowsMissingProviderApiKey(providerConfig.auth)) {
         throw new Error(
           `Provider ${providerName}: "apiKey" is required when defining custom models.`,
         );
@@ -504,6 +518,7 @@ export class ModelRegistry {
   hasConfiguredAuth(model: Model): boolean {
     return (
       this.authStorage.hasAuth(model.provider) ||
+      this.providerRequestConfigs.get(model.provider)?.auth === "aws-sdk" ||
       this.providerRequestConfigs.get(model.provider)?.apiKey !== undefined
     );
   }
@@ -516,16 +531,18 @@ export class ModelRegistry {
     providerName: string,
     config: {
       apiKey?: string;
+      auth?: ProviderAuthMode;
       headers?: Record<string, string>;
       authHeader?: boolean;
     },
   ): void {
-    if (!config.apiKey && !config.headers && !config.authHeader) {
+    if (!config.apiKey && !config.auth && !config.headers && !config.authHeader) {
       return;
     }
 
     this.providerRequestConfigs.set(providerName, {
       apiKey: config.apiKey,
+      auth: config.auth,
       headers: config.headers,
       authHeader: config.authHeader,
     });
@@ -550,12 +567,15 @@ export class ModelRegistry {
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
     try {
       const providerConfig = this.providerRequestConfigs.get(model.provider);
-      const apiKeyFromAuthStorage = await this.authStorage.getApiKey(model.provider, {
-        includeFallback: false,
-      });
+      const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
+      const apiKeyFromAuthStorage = usesAwsSdkAuth
+        ? undefined
+        : await this.authStorage.getApiKey(model.provider, {
+            includeFallback: false,
+          });
       const apiKey =
         apiKeyFromAuthStorage ??
-        (providerConfig?.apiKey
+        (!usesAwsSdkAuth && providerConfig?.apiKey
           ? resolveConfigValueOrThrow(
               providerConfig.apiKey,
               `API key for provider "${model.provider}"`,
@@ -601,12 +621,17 @@ export class ModelRegistry {
    * This intentionally does not execute command-backed config values.
    */
   getProviderAuthStatus(provider: string): AuthStatus {
+    const providerRequestConfig = this.providerRequestConfigs.get(provider);
+    if (providerRequestConfig?.auth === "aws-sdk") {
+      return { configured: true, source: "models_json_key", label: providerRequestConfig.auth };
+    }
+
     const authStatus = this.authStorage.getAuthStatus(provider);
     if (authStatus.source) {
       return authStatus;
     }
 
-    const providerApiKey = this.providerRequestConfigs.get(provider)?.apiKey;
+    const providerApiKey = providerRequestConfig?.apiKey;
     if (!providerApiKey) {
       return authStatus;
     }
@@ -720,7 +745,7 @@ export class ModelRegistry {
     if (!config.baseUrl) {
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
     }
-    if (!config.apiKey && !config.oauth) {
+    if (!config.apiKey && !config.oauth && !allowsMissingProviderApiKey(config.auth)) {
       throw new Error(
         `Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`,
       );
@@ -804,6 +829,7 @@ export interface ProviderConfigInput {
   name?: string;
   baseUrl?: string;
   apiKey?: string;
+  auth?: ProviderAuthMode;
   api?: Api;
   streamSimple?: (
     model: Model,
