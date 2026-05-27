@@ -1671,7 +1671,10 @@ function renderJob(job: CronJob, props: CronProps) {
               event.stopPropagation();
               props.onLoadRuns(job.id);
               requestAnimationFrame(() => {
-                document.querySelector("[data-run-history]")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                const el = document.querySelector("[data-run-history]");
+                if (el instanceof HTMLElement && typeof el.scrollIntoView === "function") {
+                  el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
               });
             }}
           >
