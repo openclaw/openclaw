@@ -727,12 +727,13 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
+  const isAnthropicMessagesTransport = isAnthropicApi(params.modelApi);
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
   // request.
   const validatedThinkingSignatures =
-    signedThinkingProvider || policy.preserveSignatures
+    signedThinkingProvider || policy.preserveSignatures || isAnthropicMessagesTransport
       ? stripInvalidThinkingSignatures(sanitizedImages, {
           preserveLatestAssistant: params.preserveLatestAssistantThinking ?? true,
         })
