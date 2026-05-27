@@ -31,6 +31,7 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { trySafeFileURLToPath } from "../../infra/local-file-access.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
@@ -39,6 +40,7 @@ import {
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   deleteMediaBuffer,
@@ -278,6 +280,7 @@ export {
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
+const WINDOWS_DRIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 let chatHistoryPlaceholderEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -616,6 +619,26 @@ function hasAssistantDisplayMediaContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
   return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+function hasReplaySafeManagedImageReplacementContent(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): boolean {
+  let hasManagedImage = false;
+  for (const block of content ?? []) {
+    if (block?.type === "text") {
+      continue;
+    }
+    if (
+      block?.type === "image" &&
+      (isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl))
+    ) {
+      hasManagedImage = true;
+      continue;
+    }
+    return false;
+  }
+  return hasManagedImage;
 }
 
 function hasManagedOutgoingAssistantContent(
@@ -1409,6 +1432,205 @@ async function transcriptHasIdempotencyKey(
     return false;
   } catch {
     return false;
+  }
+}
+
+function extractAssistantMessageTextForMediaDirective(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as Record<string, unknown>;
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  if (!Array.isArray(record.content)) {
+    return undefined;
+  }
+  const parts = record.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" ? text : undefined;
+    })
+    .filter((text): text is string => typeof text === "string");
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function payloadMediaUrlSet(payload: ReplyPayload): Set<string> {
+  return new Set(
+    [
+      ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+      ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+    ]
+      .map((url) => url.trim())
+      .filter(Boolean),
+  );
+}
+
+function normalizeMediaSourceForEquivalence(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("file://")) {
+    const filePath = trySafeFileURLToPath(trimmed);
+    return filePath ? `local:${path.resolve(filePath)}` : `literal:${trimmed}`;
+  }
+  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_PATH_RE.test(trimmed)) {
+    return `local:${path.resolve(trimmed)}`;
+  }
+  return `literal:${trimmed}`;
+}
+
+function areMediaSourcesEquivalent(left: string, right: string): boolean {
+  if (left === right) {
+    return true;
+  }
+  const normalizedLeft = normalizeMediaSourceForEquivalence(left);
+  const normalizedRight = normalizeMediaSourceForEquivalence(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function rawMediaDirectiveCandidates(text: string): string[] {
+  const candidates = splitMediaFromOutput(text).mediaUrls ?? [];
+  for (const match of text.matchAll(/\bMEDIA:\s*`?([^\n`]+)`?/gi)) {
+    const candidate = (match[1] ?? "").trim();
+    if (candidate.startsWith("data:")) {
+      candidates.push(candidate);
+    }
+  }
+  return Array.from(new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean)));
+}
+
+function payloadHasMediaDirectiveText(text: string, payloadMediaUrls: Set<string>): boolean {
+  return rawMediaDirectiveCandidates(text).some((candidate) =>
+    [...payloadMediaUrls].some((payloadUrl) => areMediaSourcesEquivalent(candidate, payloadUrl)),
+  );
+}
+
+function stripMediaDirectiveTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
+  if (!isMediaBearingPayload(payload) || typeof payload.text !== "string") {
+    return payload;
+  }
+  const payloadMediaUrls = payloadMediaUrlSet(payload);
+  if (
+    payloadMediaUrls.size === 0 ||
+    !payloadHasMediaDirectiveText(payload.text, payloadMediaUrls)
+  ) {
+    return payload;
+  }
+  const lines = payload.text.split("\n").filter((line) => {
+    const trimmed = line.trimStart();
+    return !trimmed.toUpperCase().startsWith("MEDIA:");
+  });
+  return { ...payload, text: lines.join("\n").trimEnd() || undefined };
+}
+
+function isAssistantMediaDirectiveMessage(message: unknown, payload: ReplyPayload): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  const text = extractAssistantMessageTextForMediaDirective(message);
+  if (!text) {
+    return false;
+  }
+  const parsed = splitMediaFromOutput(text);
+  const parsedMediaUrls = (parsed.mediaUrls ?? []).map((url) => url.trim()).filter(Boolean);
+  if (parsedMediaUrls.length === 0) {
+    const payloadMediaUrls = payloadMediaUrlSet(payload);
+    return payloadHasMediaDirectiveText(text, payloadMediaUrls);
+  }
+  const payloadMediaUrls = payloadMediaUrlSet(payload);
+  if (
+    parsedMediaUrls.some((parsedUrl) =>
+      [...payloadMediaUrls].some((payloadUrl) => areMediaSourcesEquivalent(parsedUrl, payloadUrl)),
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
+  transcriptPath: string;
+  sessionKey: string;
+  payload: ReplyPayload;
+  matchPayload?: ReplyPayload;
+  message: string;
+  content?: Array<Record<string, unknown>>;
+  idempotencyKey?: string;
+  cfg?: OpenClawConfig;
+}): Promise<{
+  replaced: boolean;
+  messageId?: string;
+  message?: Record<string, unknown>;
+  error?: string;
+}> {
+  try {
+    const index = await readSessionTranscriptIndex(params.transcriptPath);
+    const matchPayload = params.matchPayload ?? params.payload;
+    const latest = index?.entries
+      .toReversed()
+      .find(
+        (entry) => (entry.record.message as { role?: unknown } | undefined)?.role === "assistant",
+      );
+    if (!latest?.id) {
+      return { replaced: false };
+    }
+    if (!isAssistantMediaDirectiveMessage(latest.record.message, matchPayload)) {
+      return { replaced: false };
+    }
+    const latestMessage = latest.record.message as Record<string, unknown>;
+    if (!latestMessage) {
+      return { replaced: false };
+    }
+    const replacement: Record<string, unknown> = {
+      ...latestMessage,
+      content:
+        params.content && params.content.length > 0
+          ? params.content
+          : [{ type: "text", text: params.message }],
+      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    };
+    delete replacement.text;
+
+    const result = await rewriteTranscriptEntriesInSessionFile({
+      sessionFile: params.transcriptPath,
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+      request: {
+        replacements: [
+          {
+            entryId: latest.id,
+            message: replacement as unknown as AgentMessage,
+          },
+        ],
+      },
+    });
+    if (!result.changed) {
+      return { replaced: false, error: result.reason };
+    }
+    const updatedIndex = await readSessionTranscriptIndex(params.transcriptPath);
+    const messageId = [...(updatedIndex?.entries ?? [])].toReversed().find((entry) => {
+      const message = entry.record.message as Record<string, unknown> | undefined;
+      return (
+        message?.role === "assistant" &&
+        (params.idempotencyKey
+          ? message.idempotencyKey === params.idempotencyKey
+          : entry.id === latest.id)
+      );
+    })?.id;
+    return { replaced: true, ...(messageId ? { messageId } : {}), message: replacement };
+  } catch (err) {
+    return { replaced: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -2864,12 +3086,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
+        const transcriptSourcePayload = stripMediaDirectiveTextFromMediaSupplement(
+          stripVisibleTextFromTtsSupplement(payload),
+        );
         const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
           cfg,
           sessionKey,
           agentId,
           accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
+          payloads: [transcriptSourcePayload],
         });
         if (!transcriptPayload) {
           return;
@@ -2911,14 +3136,51 @@ export const chatHandlers: GatewayRequestHandlers = {
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
           : undefined;
-        if (!persistedContentForAppend?.length) {
-          return;
-        }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
           buildTranscriptReplyText([transcriptPayload]);
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
+          return;
+        }
+        const textOnlyReplacementContent = transcriptReply
+          ? [{ type: "text", text: transcriptReply }]
+          : undefined;
+        const replacementContentForReplay = hasReplaySafeManagedImageReplacementContent(
+          persistedContentForAppend,
+        )
+          ? persistedContentForAppend
+          : !persistedContentForAppend?.length
+            ? textOnlyReplacementContent
+            : undefined;
+        if (resolvedTranscriptPath && replacementContentForReplay) {
+          const replaced = await replaceLatestAssistantMediaDirectiveTranscriptMessage({
+            transcriptPath: resolvedTranscriptPath,
+            sessionKey,
+            payload: transcriptPayload,
+            matchPayload: payload,
+            message: transcriptReply,
+            content: replacementContentForReplay,
+            idempotencyKey: `${clientRunId}:assistant-media`,
+            cfg,
+          });
+          if (replaced.error) {
+            context.logGateway.warn(
+              `webchat media reply transcript replacement failed: ${replaced.error}`,
+            );
+          }
+          if (replaced.replaced) {
+            if (replaced.messageId && assistantContent?.length) {
+              await attachManagedOutgoingImagesToMessage({
+                messageId: replaced.messageId,
+                blocks: assistantContent,
+              });
+            }
+            appendedWebchatAgentMedia = true;
+            return;
+          }
+        }
+        if (!persistedContentForAppend?.length) {
           return;
         }
         const appended = await appendAssistantTranscriptMessage({
@@ -3480,22 +3742,34 @@ export const chatHandlers: GatewayRequestHandlers = {
                             (entry) =>
                               typeof entry.id === "string" && rewriteTargetIds.has(entry.id),
                           ) ?? -1;
+                        const allowedRewriteSuffixEntryIds = new Set(allowedSourceReplyMirrorIds);
                         const canRewriteSourceReplyMirrors =
                           firstRewriteEntryIndex >= 0 &&
                           rewriteIndex?.entries
                             .slice(firstRewriteEntryIndex)
-                            .every(
-                              (entry) =>
-                                typeof entry.id !== "string" ||
-                                allowedSourceReplyMirrorIds.has(entry.id),
-                            ) === true;
+                            .every((entry) => {
+                              if (typeof entry.id !== "string") {
+                                return true;
+                              }
+                              if (allowedSourceReplyMirrorIds.has(entry.id)) {
+                                return true;
+                              }
+                              const message = entry.record.message as
+                                | { role?: unknown }
+                                | undefined;
+                              if (message?.role !== "assistant") {
+                                allowedRewriteSuffixEntryIds.add(entry.id);
+                                return true;
+                              }
+                              return false;
+                            }) === true;
                         if (canRewriteSourceReplyMirrors) {
                           const result = await rewriteTranscriptEntriesInSessionFile({
                             sessionFile: resolvedTranscriptPath,
                             sessionKey,
                             config: cfg,
                             request: {
-                              allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
+                              allowedRewriteSuffixEntryIds: [...allowedRewriteSuffixEntryIds],
                               replacements: rewriteTargets.map((target) => ({
                                 entryId: target.messageId,
                                 message: {

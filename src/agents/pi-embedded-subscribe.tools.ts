@@ -337,6 +337,18 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
+function hasStructuredTrustedLocalMediaMarker(result: unknown): boolean {
+  if (isExternalToolResult(result)) {
+    return false;
+  }
+  const details = readToolResultDetails(result);
+  const media =
+    details?.media && typeof details.media === "object" && !Array.isArray(details.media)
+      ? (details.media as Record<string, unknown>)
+      : undefined;
+  return media?.trustedLocalMedia === true;
+}
+
 export function isToolResultMediaTrusted(
   toolName?: string,
   result?: unknown,
@@ -380,12 +392,17 @@ export function filterToolResultMediaUrls(
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
+  const trustedRegisteredTool = isToolResultMediaTrusted(
+    toolName,
+    result,
+    trustedLocalMediaToolNames,
+  );
   const trustedOwnedTtsLocalMedia = isTrustedOwnedTtsLocalMedia(
     toolName,
     result,
     trustedLocalMediaToolNames,
   );
-  if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
+  if (trustedRegisteredTool || hasStructuredTrustedLocalMediaMarker(result)) {
     // When the current run provides its exact trusted local-media tool names,
     // require the raw emitted tool name to match one of them before allowing
     // local MEDIA: paths.
@@ -394,12 +411,17 @@ export function filterToolResultMediaUrls(
     // registered tool's media trust. TTS-generated local files carry a
     // separate trusted-media flag from the owned tool result, so they can
     // survive runs whose exact trusted set omitted the raw tts name.
-    if (trustedLocalMediaToolNames !== undefined) {
-      if (!trustedOwnedTtsLocalMedia) {
-        const registeredName = toolName?.trim();
-        if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
-          return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
-        }
+    // Structured trustedLocalMedia markers are still accepted because the
+    // downstream managed-media pipeline gates local file access against its
+    // allowed roots before serving anything.
+    if (
+      trustedRegisteredTool &&
+      trustedLocalMediaToolNames !== undefined &&
+      !trustedOwnedTtsLocalMedia
+    ) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !trustedLocalMediaToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
       }
     }
     return mediaUrls;
