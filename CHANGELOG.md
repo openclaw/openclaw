@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Harden hostname normalization for repeated trailing dots [AI]. (#87305) Thanks @pgondhi987.
 - fix: block side-effecting command wrappers [AI]. (#87292) Thanks @pgondhi987.
 - Block unsafe Node runtime env overrides [AI]. (#87308) Thanks @pgondhi987.
 - Telegram: route `sendMessage` action replies through durable outbound delivery so completed agent responses remain retryable when the gateway send path times out. (#87261) Thanks @mbelinky.
