@@ -132,6 +132,15 @@ jobs:
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
           fi
 
+      - name: Fetch main ref
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+          fi
+
       - name: Setup pnpm and dependencies (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -195,12 +204,10 @@ jobs:
 
           $installArgs = @(
             "install",
-            "--filter",
-            "openclaw",
             "--prefer-offline",
-            "--ignore-scripts=false",
+            "--ignore-scripts=true",
             "--config.engine-strict=false",
-            "--config.enable-pre-post-scripts=true",
+            "--config.enable-pre-post-scripts=false",
             "--config.side-effects-cache=false",
             "--frozen-lockfile",
             "--child-concurrency=$env:PNPM_CONFIG_CHILD_CONCURRENCY",
@@ -224,10 +231,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
-          fi
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
           sudo ln -sf "$node_bin/node" /usr/local/bin/node

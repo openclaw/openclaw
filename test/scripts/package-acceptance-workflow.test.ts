@@ -141,13 +141,16 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"');
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
-    expect(hydrateWindowsPnpm.run).toContain('"--filter",');
-    expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
+    expect(hydrateWindowsPnpm.run).toContain("--ignore-scripts=true");
+    expect(hydrateWindowsPnpm.run).not.toContain('"--filter",');
     expect(hydrateWindowsPnpm.run).toContain(
       "Remove-Item -Recurse -Force $env:PNPM_CONFIG_MODULES_DIR",
     );
     expect(hydrateWindowsPnpm.run).toContain("corepack enable --install-directory $env:PNPM_HOME");
     expect(hydrateWindowsPnpm.run).toContain("pnpm @installArgs");
+    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBe("runner.os != 'Windows'");
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBe("runner.os != 'Windows'");
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBe("runner.os != 'Windows'");
