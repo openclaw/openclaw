@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const killProcessTreeMock = vi.hoisted(() => vi.fn());
+const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => ({
   ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
@@ -12,6 +13,7 @@ vi.mock("node:child_process", async () => ({
 
 vi.mock("../process/kill-tree.js", () => ({
   killProcessTree: killProcessTreeMock,
+  signalProcessTree: signalProcessTreeMock,
 }));
 
 class MockChildProcess extends EventEmitter {
@@ -27,6 +29,7 @@ describe("OpenClawStdioClientTransport", () => {
     vi.useRealTimers();
     spawnMock.mockReset();
     killProcessTreeMock.mockReset();
+    signalProcessTreeMock.mockReset();
   });
 
   it("starts stdio MCP servers in a disposable process group on POSIX", async () => {
@@ -96,6 +99,31 @@ describe("OpenClawStdioClientTransport", () => {
     await closing;
   });
 
+  it("force-SIGKILLs synchronously when killProcessTree's grace expires (#86412)", async () => {
+    vi.useFakeTimers();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const { OpenClawStdioClientTransport } = await import("./mcp-stdio-transport.js");
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    const closing = transport.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
+
+    // killProcessTree's SIGKILL is .unref()'d (#86412); close() force-SIGKILLs synchronously instead.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL");
+
+    child.exitCode = 0;
+    child.emit("close", 0);
+    await closing;
+  });
+
   it("does not kill the process tree when graceful stdio close exits", async () => {
     vi.useFakeTimers();
     const child = new MockChildProcess();
@@ -159,9 +187,9 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 2, method: "ping" }),
-    ).rejects.toThrow("EPIPE");
+    await expect(transport.send({ jsonrpc: "2.0", id: 2, method: "ping" })).rejects.toThrow(
+      "EPIPE",
+    );
   });
 
   it("rejects send() when stdin.write throws synchronously (#75438)", async () => {
@@ -179,8 +207,8 @@ describe("OpenClawStdioClientTransport", () => {
     child.emit("spawn");
     await started;
 
-    await expect(
-      transport.send({ jsonrpc: "2.0", id: 3, method: "ping" }),
-    ).rejects.toThrow("write after end");
+    await expect(transport.send({ jsonrpc: "2.0", id: 3, method: "ping" })).rejects.toThrow(
+      "write after end",
+    );
   });
 });

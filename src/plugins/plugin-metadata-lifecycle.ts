@@ -1,17 +1,19 @@
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 
-let clearPluginMetadataProcessMemo: (() => void) | undefined;
+const pluginMetadataProcessMemoClears = new Set<() => void>();
 
-export function registerPluginMetadataProcessMemoLifecycleClear(clearer: () => void): () => void {
-  clearPluginMetadataProcessMemo = clearer;
+export function registerPluginMetadataProcessMemoLifecycleClear(
+  clearProcessMemo: () => void,
+): () => void {
+  pluginMetadataProcessMemoClears.add(clearProcessMemo);
   return () => {
-    if (clearPluginMetadataProcessMemo === clearer) {
-      clearPluginMetadataProcessMemo = undefined;
-    }
+    pluginMetadataProcessMemoClears.delete(clearProcessMemo);
   };
 }
 
 export function clearPluginMetadataLifecycleCaches(): void {
   clearCurrentPluginMetadataSnapshotState();
-  clearPluginMetadataProcessMemo?.();
+  for (const clearProcessMemo of pluginMetadataProcessMemoClears) {
+    clearProcessMemo();
+  }
 }

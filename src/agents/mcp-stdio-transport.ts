@@ -6,7 +6,7 @@ import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/s
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { buildOwnedChildEnv } from "../infra/owned-child-env.js";
-import { killProcessTree } from "../process/kill-tree.js";
+import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
 export type OpenClawStdioServerParameters = {
@@ -18,6 +18,7 @@ export type OpenClawStdioServerParameters = {
 };
 
 const CLOSE_TIMEOUT_MS = 2000;
+const SIGKILL_REAP_TIMEOUT_MS = 500;
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => {
@@ -126,6 +127,11 @@ export class OpenClawStdioClientTransport implements Transport {
       if (processToClose.exitCode === null && processToClose.pid) {
         killProcessTree(processToClose.pid);
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
+        if (processToClose.exitCode === null && processToClose.pid) {
+          // SIGKILL synchronously: killProcessTree's setTimeout is .unref()'d and races shutdown (#86412).
+          signalProcessTree(processToClose.pid, "SIGKILL");
+          await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
+        }
       }
     }
     this.readBuffer.clear();

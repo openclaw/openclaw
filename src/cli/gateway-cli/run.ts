@@ -811,6 +811,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const healthHost =
     hostOverride ?? (await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost));
   const openaiChatCompletionsOverride = opts.openaiChatCompletions ? true : undefined;
+  const deferStartupSidecars =
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
@@ -827,6 +830,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           tailscale: tailscaleOverride,
           startupStartedAt,
           ...(startupConfigSnapshotRead ? { startupConfigSnapshotRead } : {}),
+          ...(deferStartupSidecars ? { deferStartupSidecars: true } : {}),
         }),
     });
 

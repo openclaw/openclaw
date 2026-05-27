@@ -414,10 +414,12 @@ async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
 type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
 
 function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
-  rateLimiter?: AuthRateLimiter;
+  rateLimiter: AuthRateLimiter;
   browserRateLimiter: AuthRateLimiter;
 } {
-  const rateLimiter = rateLimitConfig ? createAuthRateLimiter(rateLimitConfig) : undefined;
+  // Keep remote non-browser and HTTP auth attempts throttled by default while
+  // preserving the normal loopback exemption unless operators configure otherwise.
+  const rateLimiter = createAuthRateLimiter(rateLimitConfig ?? {});
   // Browser-origin WS auth attempts always use loopback-non-exempt throttling.
   const browserRateLimiter = createAuthRateLimiter({
     ...rateLimitConfig,
@@ -805,10 +807,12 @@ export async function startGatewayServer(
     resolveStartupChannelRuntime: getStartupChannelRuntime,
     startupTrace,
   });
+  const deferStartupSidecars = opts.deferStartupSidecars === true;
+  const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
-    getStartupPending: () => !startupSidecarsReady,
+    getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupPendingReason,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
@@ -925,7 +929,7 @@ export async function startGatewayServer(
         runtimeState.skillsRefreshTimer = null;
       },
       skillsChangeUnsub: runtimeState.skillsChangeUnsub,
-      ...(authRateLimiter ? { disposeAuthRateLimiter: () => authRateLimiter.dispose() } : {}),
+      disposeAuthRateLimiter: () => authRateLimiter.dispose(),
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
@@ -1350,7 +1354,7 @@ export async function startGatewayServer(
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       preauthHandshakeTimeoutMs,
-      isStartupPending: () => !startupSidecarsReady,
+      isStartupPending: isGatewayStartupPending,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,
@@ -1456,7 +1460,7 @@ export async function startGatewayServer(
             activateScheduledServicesWhenReady();
           },
           startupTrace,
-          deferSidecars: opts.deferStartupSidecars === true,
+          deferSidecars: deferStartupSidecars,
         }),
       ),
     ));
