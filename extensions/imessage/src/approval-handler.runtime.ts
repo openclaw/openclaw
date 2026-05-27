@@ -5,7 +5,10 @@ import {
   type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  buildApprovalReactionHint,
+  buildApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   buildApprovalResolvedReplyPayload,
@@ -60,6 +63,19 @@ function buildPendingPayload(params: {
     view: params.view as never,
     nowMs: params.nowMs,
   });
+  if (params.approvalKind === "plugin") {
+    return {
+      text: [
+        pendingContent.manualFallbackPayload.text,
+        buildApprovalReactionHint({
+          allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
+        }),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
+    };
+  }
   return {
     text: pendingContent.reactionPayload.text ?? "",
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
