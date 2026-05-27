@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
+import { wrapPluginSystemContextSection } from "../../system-prompt-hook-context.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
@@ -62,6 +63,10 @@ function createFakeStream(params: {
       })();
     },
   };
+}
+
+function wrappedPluginSystemContext(text: string): string {
+  return wrapPluginSystemContextSection(text) ?? "";
 }
 
 async function invokeWrappedTestStream(
@@ -715,8 +720,16 @@ describe("resolvePromptBuildHookResult", () => {
 
     expect(result.prependContext).toBe("prompt context\n\nagent start context");
     expect(result.appendContext).toBe("prompt append context\n\nagent start append context");
-    expect(result.prependSystemContext).toBe("prompt prepend\n\nagent start prepend");
-    expect(result.appendSystemContext).toBe("prompt append\n\nagent start append");
+    expect(result.prependSystemContext).toBe(
+      `${wrappedPluginSystemContext("prompt prepend")}\n\n${wrappedPluginSystemContext(
+        "agent start prepend",
+      )}`,
+    );
+    expect(result.appendSystemContext).toBe(
+      `${wrappedPluginSystemContext("prompt append")}\n\n${wrappedPluginSystemContext(
+        "agent start append",
+      )}`,
+    );
   });
 
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
@@ -758,6 +771,10 @@ describe("resolvePromptBuildHookResult", () => {
 });
 
 describe("composeSystemPromptWithHookContext", () => {
+  const pluginContextHeading = "# OpenClaw Plugin System Context";
+  const pluginContextNote =
+    "The following instructions were supplied by OpenClaw plugins. They are not part of any workspace file or project document.";
+
   it("returns undefined when no hook system context is provided", () => {
     expect(composeSystemPromptWithHookContext({ baseSystemPrompt: "base" })).toBeUndefined();
   });
@@ -782,13 +799,35 @@ describe("composeSystemPromptWithHookContext", () => {
     ).toBe("prepend line\nsecond line\n\nbase system\n\nappend");
   });
 
+  it("preserves wrapped plugin system context as separate from workspace files", () => {
+    const composed = composeSystemPromptWithHookContext({
+      baseSystemPrompt: "## TOOLS.md\n\n## Workspace Heading\n\nWorkspace guidance.",
+      appendSystemContext: wrappedPluginSystemContext("## My Custom Rules\n\nFoo bar baz."),
+    });
+
+    expect(composed).toContain(pluginContextHeading);
+    expect(composed).toContain(pluginContextNote);
+    expect(composed?.startsWith("## TOOLS.md")).toBe(true);
+    expect(composed).toContain("Workspace guidance.\n\n---\n# OpenClaw Plugin System Context");
+    expect(composed).toContain("## My Custom Rules\n\nFoo bar baz.");
+  });
+
   it("avoids blank separators when base system prompt is empty", () => {
+    const composed = composeSystemPromptWithHookContext({
+      baseSystemPrompt: "   ",
+      appendSystemContext: "  append only  ",
+    });
+
+    expect(composed).toBe("append only");
+  });
+
+  it("ignores blank hook system context", () => {
     expect(
       composeSystemPromptWithHookContext({
-        baseSystemPrompt: "   ",
-        appendSystemContext: "  append only  ",
+        baseSystemPrompt: "  base system  ",
+        appendSystemContext: " \t\r\n",
       }),
-    ).toBe("append only");
+    ).toBeUndefined();
   });
 
   it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {

@@ -20,6 +20,7 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
+import { wrapPluginSystemContextSection } from "../../system-prompt-hook-context.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
@@ -197,12 +198,12 @@ export async function resolvePromptBuildHookResult(params: {
       beforeAgentStartResult?.appendContext,
     ]),
     prependSystemContext: joinPresentTextSegments([
-      promptBuildResult?.prependSystemContext,
-      beforeAgentStartResult?.prependSystemContext,
+      wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
+      wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
     ]),
     appendSystemContext: joinPresentTextSegments([
-      promptBuildResult?.appendSystemContext,
-      beforeAgentStartResult?.appendSystemContext,
+      wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
+      wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
     ]),
   };
 }

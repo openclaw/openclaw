@@ -72,6 +72,19 @@ function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
 }
 
+function expectedPluginSystemContext(text: string): string {
+  return [
+    "---",
+    "# OpenClaw Plugin System Context",
+    "",
+    "The following instructions were supplied by OpenClaw plugins. They are not part of any workspace file or project document.",
+    "",
+    text,
+    "",
+    "---",
+  ].join("\n");
+}
+
 function openSocket(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -1566,7 +1579,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
-    expect(threadStartParams?.developerInstructions).toContain("pre system\n\ncustom codex system");
+    expect(threadStartParams?.developerInstructions).toContain(
+      [
+        expectedPluginSystemContext("pre system"),
+        "custom codex system",
+        expectedPluginSystemContext("post system"),
+      ].join("\n\n"),
+    );
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }

@@ -17,6 +17,7 @@ import { hashCliSessionText } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
+import { wrapPluginSystemContextSection } from "../system-prompt-hook-context.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
@@ -81,6 +82,10 @@ const mockBuildActiveImageGenerationTaskPromptContextForSession = vi.mocked(
 const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
+
+function wrappedPluginSystemContext(text: string): string {
+  return wrapPluginSystemContextSection(text) ?? "";
+}
 
 function createTestMcpLoopbackServerConfig(port: number) {
   return {
@@ -326,7 +331,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.params.prompt).toBe("history:2\n\nlatest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(context.systemPrompt).toBe(
-        "prepend system\n\nhook system\n\nappend system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        [
+          wrappedPluginSystemContext("prepend system"),
+          "hook system",
+          wrappedPluginSystemContext("append system"),
+          "Current model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        ].join("\n\n"),
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
       const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
@@ -561,7 +571,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
       expect(context.systemPrompt).toBe(
-        "prompt prepend system\n\nlegacy prepend system\n\nprompt system\n\nprompt append system\n\nlegacy append system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        [
+          wrappedPluginSystemContext("prompt prepend system"),
+          wrappedPluginSystemContext("legacy prepend system"),
+          "prompt system",
+          wrappedPluginSystemContext("prompt append system"),
+          wrappedPluginSystemContext("legacy append system"),
+          "Current model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        ].join("\n\n"),
       );
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledOnce();
@@ -992,7 +1009,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.systemPrompt).toBe(
-        "active image task\n\nactive video task\n\nhook prepend system\n\nhook system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        [
+          "active image task",
+          "active video task",
+          wrappedPluginSystemContext("hook prepend system"),
+          "hook system",
+          "Current model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+        ].join("\n\n"),
       );
       expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
         "agent:main:test",
