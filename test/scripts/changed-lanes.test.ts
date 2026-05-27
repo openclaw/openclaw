@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
+  isChangedLaneTestPath,
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
   listChangedPathsFromGit,
@@ -456,6 +457,13 @@ describe("scripts/changed-lanes", () => {
     expect(result.paths).toEqual(["scripts/test-live-acp-bind-docker.sh"]);
     expect(result.lanes.liveDockerTooling).toBe(true);
     expect(result.lanes.all).toBe(false);
+  });
+
+  it("exposes the shared changed-lane test path classifier", () => {
+    expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
+    expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
+    expect(isChangedLaneTestPath("src/example.ts")).toBe(false);
+    expect(isChangedLaneTestPath("src/latest.ts")).toBe(false);
   });
 
   it("routes core production changes to core prod and core test lanes", () => {

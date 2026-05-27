@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { isChangedLaneTestPath } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const DEFAULT_BASE_REF = "origin/main";
 const DEFAULT_HEAD_REF = "HEAD";
-const CODE_FILE_PATTERN = /\.[cm]?[jt]sx?$/u;
-const TEST_PATH_PATTERN =
-  /(?:^|\/)(?:test|tests|__tests__|test-utils|test-helpers)\/|(?:^|\/)[^/]*(?:test|spec|e2e)[^/]*\.[cm]?[jt]sx?$/u;
 const FINDING_PATTERNS = [
   {
     pattern: /\bmkdtemp(?:Sync)?\s*\(/u,
@@ -53,8 +51,7 @@ function normalizePath(filePath) {
 }
 
 function isTestFile(filePath) {
-  const normalizedPath = normalizePath(filePath);
-  return CODE_FILE_PATTERN.test(normalizedPath) && TEST_PATH_PATTERN.test(normalizedPath);
+  return isChangedLaneTestPath(filePath);
 }
 
 function parseArgs(argv) {
