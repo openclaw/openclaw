@@ -14,6 +14,7 @@ import {
   isRootHelpInvocation,
   isRootVersionInvocation,
   normalizeGeneratedHelpCommandArgv,
+  normalizeRootHelpTargetArgv,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -122,6 +123,36 @@ describe("argv helpers", () => {
     },
   ])("normalizes generated help commands: $name", ({ argv, expected }) => {
     expect(normalizeGeneratedHelpCommandArgv(argv)).toEqual(expected);
+  });
+
+  it.each([
+    {
+      name: "root help target",
+      argv: ["node", "openclaw", "help", "plugins"],
+      expected: ["node", "openclaw", "plugins", "--help"],
+    },
+    {
+      name: "root help target with help flag",
+      argv: ["node", "openclaw", "help", "plugins", "--help"],
+      expected: ["node", "openclaw", "plugins", "--help"],
+    },
+    {
+      name: "root option before help target",
+      argv: ["node", "openclaw", "--profile", "work", "help", "memory"],
+      expected: ["node", "openclaw", "--profile", "work", "memory", "--help"],
+    },
+    {
+      name: "bare root help remains untouched",
+      argv: ["node", "openclaw", "help"],
+      expected: ["node", "openclaw", "help"],
+    },
+    {
+      name: "root help self-help remains untouched",
+      argv: ["node", "openclaw", "help", "--help"],
+      expected: ["node", "openclaw", "help", "--help"],
+    },
+  ])("normalizes root help targets: $name", ({ argv, expected }) => {
+    expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
   });
 
   it.each([

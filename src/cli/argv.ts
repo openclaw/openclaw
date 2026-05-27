@@ -215,6 +215,45 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
 }
 
+export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
+  const positionals: Array<{ value: string; index: number }> = [];
+  const rootOptions: string[] = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return argv;
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  const [help, target] = positionals;
+  if (
+    help?.value !== "help" ||
+    !target ||
+    positionals.length !== 2 ||
+    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+  ) {
+    return argv;
+  }
+
+  return [argv[0], argv[1], ...rootOptions, target.value, "--help"];
+}
+
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
