@@ -71,9 +71,10 @@ matching client IPs can be approved before they appear in this list. That policy
 is disabled by default and never applies to operator/browser clients or upgrade
 requests.
 
-Approving a non-operator device role, such as `role: node`, requires
-`operator.admin`. `operator.pairing` is enough for operator-device approvals
-only when the requested operator scopes stay within the caller's own scopes.
+Approving node or other non-operator device roles requires `operator.admin`.
+`operator.pairing` is enough for operator-device approvals only when the
+requested operator scopes stay within the caller's own scopes. See
+[Operator scopes](/gateway/operator-scopes) for the approval-time checks.
 
 ```
 openclaw devices approve
