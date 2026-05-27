@@ -123,18 +123,30 @@ describe("package acceptance workflow", () => {
     const workflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
     const workflowText = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
     const hydrate = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate");
+    const hydrateWindows = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-windows");
     const hydrateGithub = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-github");
 
     expect(crabboxConfig.actions?.job).toBe("hydrate");
-    expect(hydrate.if).toBe("${{ inputs.crabbox_job != 'hydrate-github' }}");
+    expect(hydrate.if).toBe("${{ inputs.crabbox_job == 'hydrate' }}");
     expect(workflowStep(hydrate, "Setup Node.js").uses).toBe("actions/setup-node@v6");
     expect(workflowStep(hydrate, "Setup Node.js").with?.["node-version"]).toBe("24");
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
-    const hydrateWindowsPnpm = workflowStep(hydrate, "Setup pnpm and dependencies (Windows)");
-    expect(hydratePnpm.if).toBe("runner.os != 'Windows'");
+    expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
-    expect(hydrateWindowsPnpm.if).toBe("runner.os == 'Windows'");
+    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
+    expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
+    expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
+    expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
+    expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
+    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
+    expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
+
+    expect(hydrateWindows.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows' }}");
+    expect(workflowStep(hydrateWindows, "Setup Node.js").uses).toBe("actions/setup-node@v6");
+    const hydrateWindowsPnpm = workflowStep(hydrateWindows, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
       '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
@@ -151,17 +163,13 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsPnpm.run).toContain(
       '$corepackShimDir = Join-Path $nodeBin "node_modules\\corepack\\shims"',
     );
-    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+    expect(workflowStep(hydrateWindows, "Fetch main ref").run).toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
     );
-    expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBe("runner.os != 'Windows'");
-    expect(workflowStep(hydrate, "Ensure Docker is running").if).toBe("runner.os != 'Windows'");
-    expect(workflowStep(hydrate, "Ensure SSH is available").if).toBe("runner.os != 'Windows'");
-    expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBe("runner.os != 'Windows'");
-    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
-    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("NODE_BIN PNPM_HOME");
-    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("VIRTUAL_STORE_DIR PATH");
-    expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
+    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").shell).toBe("powershell");
+    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
+    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
+    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").run).toContain('"PATH"');
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3");
     expect(workflowText).toContain("--retry-all-errors");
