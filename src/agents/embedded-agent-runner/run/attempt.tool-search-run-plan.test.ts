@@ -129,4 +129,26 @@ describe("buildToolSearchRunPlan", () => {
     expect([...plan.replayAllowedToolNames]).toEqual(["fake_plugin_tool", "exec", "wait"]);
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0"]);
   });
+
+  it("does not let unrelated client tools mask a bad explicit allowlist", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search_code" }] as never,
+      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      clientTools: [
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+      catalogRegistered: true,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect(plan.emptyAllowlistCallableNames).toEqual([]);
+  });
 });

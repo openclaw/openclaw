@@ -6,7 +6,9 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
-  const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
+  const normalized = stripUnsafeBlockedRunMetadata(
+    stripToolResultDetails(normalizeAssistantReplayContent(messages)),
+  );
   const withoutHistoricalInboundMetadata =
     stripHistoricalInboundMetadataFromUserMessages(normalized);
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
@@ -141,6 +143,39 @@ function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]
     }
     changed = true;
     return { ...message, content: nextContent } as AgentMessage;
+  });
+  return changed ? nextMessages : messages;
+}
+
+function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    const openclaw = (message as { __openclaw?: unknown }).__openclaw;
+    if (!openclaw || typeof openclaw !== "object") {
+      return message;
+    }
+    const beforeAgentRunBlocked = (openclaw as { beforeAgentRunBlocked?: unknown })
+      .beforeAgentRunBlocked;
+    if (!beforeAgentRunBlocked || typeof beforeAgentRunBlocked !== "object") {
+      return message;
+    }
+    const blocked = beforeAgentRunBlocked as Record<string, unknown>;
+    const safeBlocked: Record<string, unknown> = {};
+    if (typeof blocked.blockedBy === "string") {
+      safeBlocked.blockedBy = blocked.blockedBy;
+    }
+    if (typeof blocked.blockedAt === "number") {
+      safeBlocked.blockedAt = blocked.blockedAt;
+    }
+    const nextOpenClaw = {
+      ...(openclaw as Record<string, unknown>),
+      beforeAgentRunBlocked: safeBlocked,
+    };
+    changed = true;
+    return {
+      ...(message as unknown as Record<string, unknown>),
+      __openclaw: nextOpenClaw,
+    } as unknown as AgentMessage;
   });
   return changed ? nextMessages : messages;
 }
