@@ -362,7 +362,7 @@ export const ko: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "유효한 승인 정책이 매번 승인을 요구하므로, 항상 허용을 사용할 수 없습니다.",
     deny: "Deny",
     labels: {
       host: "Host",

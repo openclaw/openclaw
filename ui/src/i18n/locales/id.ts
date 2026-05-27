@@ -363,7 +363,7 @@ export const id: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "Kebijakan persetujuan yang berlaku mengharuskan persetujuan setiap kali, sehingga Izinkan Selalu tidak tersedia.",
     deny: "Deny",
     labels: {
       host: "Host",

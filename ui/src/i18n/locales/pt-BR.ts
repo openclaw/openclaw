@@ -363,7 +363,7 @@ export const pt_BR: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "A política de aprovação efetiva exige aprovação todas as vezes, portanto Permitir sempre não está disponível.",
     deny: "Deny",
     labels: {
       host: "Host",

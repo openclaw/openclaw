@@ -365,7 +365,7 @@ export const nl: TranslationMap = {
     allowOnce: "Eenmalig toestaan",
     alwaysAllow: "Altijd toestaan",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "Het effectieve goedkeuringsbeleid vereist elke keer goedkeuring, dus Altijd toestaan is niet beschikbaar.",
     deny: "Weigeren",
     labels: {
       host: "Host",

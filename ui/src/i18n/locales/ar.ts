@@ -362,7 +362,7 @@ export const ar: TranslationMap = {
     allowOnce: "السماح مرة واحدة",
     alwaysAllow: "السماح دائمًا",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "تتطلب سياسة الموافقة السارية الحصول على الموافقة في كل مرة، لذا فإن خيار السماح دائمًا غير متاح.",
     deny: "رفض",
     labels: {
       host: "المضيف",

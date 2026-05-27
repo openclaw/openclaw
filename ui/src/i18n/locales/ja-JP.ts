@@ -366,7 +366,7 @@ export const ja_JP: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "有効な承認ポリシーでは毎回承認が必要なため、Allow Always は利用できません。",
     deny: "Deny",
     labels: {
       host: "Host",

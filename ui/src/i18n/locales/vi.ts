@@ -363,7 +363,7 @@ export const vi: TranslationMap = {
     allowOnce: "Cho phép một lần",
     alwaysAllow: "Luôn cho phép",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "Chính sách phê duyệt có hiệu lực yêu cầu phê duyệt mọi lần, vì vậy Không cho phép Luôn cho phép.",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",

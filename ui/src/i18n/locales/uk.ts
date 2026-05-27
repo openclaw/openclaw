@@ -364,7 +364,7 @@ export const uk: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+      "Чинна політика схвалення вимагає схвалення щоразу, тому «Дозволяти завжди» недоступно.",
     deny: "Deny",
     labels: {
       host: "Host",
