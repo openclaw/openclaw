@@ -36,6 +36,21 @@ import UIKit
         _ = Self.host(root)
     }
 
+    @Test @MainActor func settingsProTabBuildsInLightAndDarkMode() {
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            let appModel = NodeAppModel()
+            let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let root = SettingsProTab()
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .preferredColorScheme(scheme)
+
+            _ = Self.host(root)
+        }
+    }
+
     @Test @MainActor func rootTabsBuildAViewHierarchy() {
         let appModel = NodeAppModel()
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)

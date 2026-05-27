@@ -16,19 +16,39 @@ enum SettingsLayout {
     static let rowHeight: CGFloat = 58
 }
 
+enum SettingsDiagnosticIssue: String, Equatable, CaseIterable {
+    case gatewayOffline
+    case discoveryUnavailable
+    case talkConfigMissing
+    case notificationsUnavailable
+}
+
 enum SettingsDiagnostics {
+    static func issues(
+        gatewayConnected: Bool,
+        discoveredGatewayCount: Int,
+        talkConfigLoaded: Bool,
+        notificationStatusText: String) -> [SettingsDiagnosticIssue]
+    {
+        var issues: [SettingsDiagnosticIssue] = []
+        if !gatewayConnected { issues.append(.gatewayOffline) }
+        if discoveredGatewayCount == 0 { issues.append(.discoveryUnavailable) }
+        if gatewayConnected, !talkConfigLoaded { issues.append(.talkConfigMissing) }
+        if notificationStatusText != "Allowed" { issues.append(.notificationsUnavailable) }
+        return issues
+    }
+
     static func issueCount(
         gatewayConnected: Bool,
         discoveredGatewayCount: Int,
         talkConfigLoaded: Bool,
         notificationStatusText: String) -> Int
     {
-        var issues = 0
-        if !gatewayConnected { issues += 1 }
-        if discoveredGatewayCount == 0 { issues += 1 }
-        if gatewayConnected, !talkConfigLoaded { issues += 1 }
-        if notificationStatusText != "Allowed" { issues += 1 }
-        return issues
+        self.issues(
+            gatewayConnected: gatewayConnected,
+            discoveredGatewayCount: discoveredGatewayCount,
+            talkConfigLoaded: talkConfigLoaded,
+            notificationStatusText: notificationStatusText).count
     }
 
     static func timestamp(_ date: Date) -> String {
