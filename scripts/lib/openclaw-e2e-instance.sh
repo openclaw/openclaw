@@ -107,7 +107,7 @@ const forwardSignal = (signal) => {
 };
 process.once("SIGINT", forwardSignal);
 process.once("SIGTERM", forwardSignal);
-child.on("exit", (code, signal) => {
+child.on("close", (code, signal) => {
   clearTimeout(timer);
   if (timedOut) {
     process.exit(124);

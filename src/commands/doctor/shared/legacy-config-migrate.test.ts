@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { normalizeCompatibilityConfigValues } from "./legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
 function migrateLegacyConfigForTest(raw: unknown): {
@@ -26,6 +27,40 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   );
   expect(unmatchedFragments).toStrictEqual([]);
 }
+
+describe("compatibility binding repair migrate", () => {
+  it("prunes bindings for missing agents when agents.list is valid", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "alpha", match: { channel: "discord" } },
+        { agentId: "ghost", match: { channel: "discord" } },
+      ],
+    } as OpenClawConfig);
+
+    expect(res.config.bindings).toEqual([{ agentId: "alpha", match: { channel: "discord" } }]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("leaves bindings untouched when agents.list has malformed entries", () => {
+    const cfg = {
+      agents: {
+        list: [null, { id: 1 }, { id: "alpha" }],
+      },
+      bindings: [
+        { agentId: "ghost", match: { channel: "discord" } },
+        { agentId: "alpha", match: { channel: "discord" } },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(cfg);
+
+    expect(res.config.bindings).toEqual(cfg.bindings);
+    expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+});
 
 describe("legacy silent reply config migrate", () => {
   it("removes silent reply rewrite and direct-chat silent reply config", () => {

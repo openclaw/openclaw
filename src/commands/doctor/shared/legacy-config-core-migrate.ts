@@ -16,7 +16,14 @@ function pruneBindingsForMissingAgents(cfg: OpenClawConfig, changes: string[]): 
     return cfg;
   }
 
-  const agentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+  const validAgents = agents.filter((agent): agent is { id: string } => {
+    return agent !== null && typeof agent === "object" && typeof agent.id === "string";
+  });
+  if (validAgents.length !== agents.length) {
+    return cfg;
+  }
+
+  const agentIds = new Set(validAgents.map((agent) => normalizeAgentId(agent.id)));
   const nextBindings = bindings.filter((binding) => {
     const agentId = binding && typeof binding === "object" ? binding.agentId : undefined;
     return typeof agentId !== "string" || agentIds.has(normalizeAgentId(agentId));
