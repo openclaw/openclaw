@@ -297,9 +297,9 @@ jobs:
             sleep 15
           done
 
-  hydrate-windows:
-    name: hydrate-windows
-    if: ${{ inputs.crabbox_job == 'hydrate-windows' }}
+  hydrate-windows-daemon:
+    name: hydrate-windows-daemon
+    if: ${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}
     runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
     timeout-minutes: 120
     steps:
@@ -383,6 +383,8 @@ jobs:
 
           $installArgs = @(
             "install",
+            "--filter",
+            "openclaw",
             "--prefer-offline",
             "--ignore-scripts=true",
             "--config.engine-strict=false",
@@ -397,10 +399,6 @@ jobs:
             "--virtual-store-dir=$env:PNPM_CONFIG_VIRTUAL_STORE_DIR"
           )
           pnpm @installArgs
-          if ($LASTEXITCODE -ne 0) {
-            Remove-Item -Recurse -Force $env:PNPM_CONFIG_MODULES_DIR -ErrorAction SilentlyContinue
-            pnpm @installArgs
-          }
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -418,7 +416,7 @@ jobs:
           CRABBOX_JOB: ${{ inputs.crabbox_job }}
         run: |
           $ErrorActionPreference = "Stop"
-          $job = if ($env:CRABBOX_JOB) { $env:CRABBOX_JOB } else { "hydrate-windows" }
+          $job = if ($env:CRABBOX_JOB) { $env:CRABBOX_JOB } else { "hydrate-windows-daemon" }
           if (-not $env:CRABBOX_ID -or $env:CRABBOX_ID -notmatch '^[A-Za-z0-9._-]+$') {
             Write-Error "Invalid crabbox_id"
           }

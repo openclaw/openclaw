@@ -123,7 +123,7 @@ describe("package acceptance workflow", () => {
     const workflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
     const workflowText = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
     const hydrate = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate");
-    const hydrateWindows = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-windows");
+    const hydrateWindowsDaemon = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-windows-daemon");
     const hydrateGithub = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-github");
 
     expect(crabboxConfig.actions?.job).toBe("hydrate");
@@ -144,9 +144,9 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
-    expect(hydrateWindows.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows' }}");
-    expect(workflowStep(hydrateWindows, "Setup Node.js").uses).toBe("actions/setup-node@v6");
-    const hydrateWindowsPnpm = workflowStep(hydrateWindows, "Setup pnpm and dependencies");
+    expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
+    expect(workflowStep(hydrateWindowsDaemon, "Setup Node.js").uses).toBe("actions/setup-node@v6");
+    const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
       '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $workspace "node_modules"',
@@ -154,22 +154,21 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_PACKAGE_IMPORT_METHOD = "copy"');
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
     expect(hydrateWindowsPnpm.run).toContain("--ignore-scripts=true");
-    expect(hydrateWindowsPnpm.run).not.toContain('"--filter",');
-    expect(hydrateWindowsPnpm.run).toContain(
-      "Remove-Item -Recurse -Force $env:PNPM_CONFIG_MODULES_DIR",
-    );
+    expect(hydrateWindowsPnpm.run).toContain('"--filter",');
+    expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
+    expect(hydrateWindowsPnpm.run).not.toContain("Remove-Item -Recurse -Force");
     expect(hydrateWindowsPnpm.run).toContain("corepack enable --install-directory $env:PNPM_HOME");
     expect(hydrateWindowsPnpm.run).toContain("pnpm @installArgs");
     expect(hydrateWindowsPnpm.run).toContain(
       '$corepackShimDir = Join-Path $nodeBin "node_modules\\corepack\\shims"',
     );
-    expect(workflowStep(hydrateWindows, "Fetch main ref").run).toContain(
+    expect(workflowStep(hydrateWindowsDaemon, "Fetch main ref").run).toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
     );
-    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").shell).toBe("powershell");
-    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
-    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
-    expect(workflowStep(hydrateWindows, "Mark Crabbox ready").run).toContain('"PATH"');
+    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
+    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
+    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
+    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PATH"');
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3");
     expect(workflowText).toContain("--retry-all-errors");
