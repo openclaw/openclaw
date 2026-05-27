@@ -4,8 +4,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  ALL_STATE_DIRNAMES,
   CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isExplicitOpenClawHomeStateDir,
   isNixMode,
   normalizeStateDirEnv,
   pinRuntimePaths,
@@ -271,6 +273,65 @@ describe("state + config path candidates", () => {
       const env = { OPENCLAW_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
+    });
+  });
+
+  describe("OPENCLAW_HOME nesting guard (#45765)", () => {
+    it("exposes the closed set of state-dir basenames", () => {
+      // Closed set; the guard must stay in sync with `LEGACY_STATE_DIRNAMES` /
+      // `NEW_STATE_DIRNAME` so any new legacy state name is covered automatically.
+      expect(ALL_STATE_DIRNAMES.has(".openclaw")).toBe(true);
+      expect(ALL_STATE_DIRNAMES.has(".clawdbot")).toBe(true);
+      expect(ALL_STATE_DIRNAMES.has(".moltbot")).toBe(false);
+    });
+
+    it("isExplicitOpenClawHomeStateDir matches state-dir basenames only when OPENCLAW_HOME is explicit", () => {
+      const openclawHome = "/home/user/.openclaw";
+      const explicitEnv = { OPENCLAW_HOME: openclawHome } as NodeJS.ProcessEnv;
+      const implicitEnv = {} as NodeJS.ProcessEnv;
+      expect(isExplicitOpenClawHomeStateDir(explicitEnv, openclawHome)).toBe(true);
+      expect(
+        isExplicitOpenClawHomeStateDir({ OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv, "/srv/openclaw-home"),
+      ).toBe(false);
+      // Implicit `$HOME` ending in `.openclaw` keeps the documented
+      // parent-home convention.
+      expect(isExplicitOpenClawHomeStateDir(implicitEnv, openclawHome)).toBe(false);
+    });
+
+    it("returns OPENCLAW_HOME directly when it already names .openclaw", () => {
+      const explicitHome = path.resolve("/home/user/.openclaw");
+      const env = { OPENCLAW_HOME: explicitHome } as NodeJS.ProcessEnv;
+      expect(resolveStateDir(env)).toBe(explicitHome);
+      const candidates = resolveDefaultConfigCandidates(env);
+      expect(candidates[0]).toBe(path.join(explicitHome, "openclaw.json"));
+      // No nested `.openclaw` segment appears in any candidate.
+      for (const candidate of candidates) {
+        expect(candidate.includes(path.join(".openclaw", ".openclaw"))).toBe(false);
+      }
+    });
+
+    it("returns OPENCLAW_HOME directly when it names a legacy .clawdbot dir", () => {
+      const explicitHome = path.resolve("/home/user/.clawdbot");
+      const env = { OPENCLAW_HOME: explicitHome } as NodeJS.ProcessEnv;
+      expect(resolveStateDir(env)).toBe(explicitHome);
+      const candidates = resolveDefaultConfigCandidates(env);
+      expect(candidates[0]).toBe(path.join(explicitHome, "openclaw.json"));
+    });
+
+    it("preserves the parent-home convention when OPENCLAW_HOME is a non-state-dir path", () => {
+      const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+      const resolvedHome = path.resolve("/srv/openclaw-home");
+      // Non-state-dir basename: existing behavior must still append `.openclaw`.
+      expect(resolveStateDir(env)).toBe(path.join(resolvedHome, ".openclaw"));
+    });
+
+    it("preserves the parent-home convention when OPENCLAW_HOME is unset and HOME ends in .openclaw", () => {
+      // The implicit-home path (no `OPENCLAW_HOME`) keeps the documented
+      // `$HOME/.openclaw` convention even if the OS home happens to be
+      // named `.openclaw`; we only opt in when the operator was explicit.
+      const env = { HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv;
+      const resolved = resolveStateDir(env);
+      expect(resolved.endsWith(path.join(".openclaw", ".openclaw"))).toBe(true);
     });
   });
 });

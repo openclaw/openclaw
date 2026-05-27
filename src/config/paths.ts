@@ -25,6 +25,35 @@ const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
+/**
+ * Closed set of basenames that count as an OpenClaw state directory. Used by
+ * `resolveStateDir` and `resolveConfigDir` to detect when an explicit
+ * `OPENCLAW_HOME` already points at the state dir itself, so we do not
+ * silently nest a second `.openclaw` underneath (#45765).
+ */
+export const ALL_STATE_DIRNAMES: ReadonlySet<string> = new Set<string>([
+  NEW_STATE_DIRNAME,
+  ...LEGACY_STATE_DIRNAMES,
+]);
+
+/**
+ * True when the caller explicitly set `OPENCLAW_HOME` AND the resolved path's
+ * basename is itself a known state directory name (`.openclaw`, `.clawdbot`).
+ * In that case the home dir IS the state dir; appending another `.openclaw`
+ * would produce `~/.openclaw/.openclaw` (#45765). The implicit `$HOME` /
+ * `USERPROFILE` path keeps the existing `~/.openclaw` convention even when
+ * the OS home happens to end with a state-dir name.
+ */
+export function isExplicitOpenClawHomeStateDir(
+  env: NodeJS.ProcessEnv,
+  resolvedHome: string,
+): boolean {
+  if (!env.OPENCLAW_HOME?.trim()) {
+    return false;
+  }
+  return ALL_STATE_DIRNAMES.has(path.basename(resolvedHome));
+}
+
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
 }
@@ -63,6 +92,13 @@ export function resolveStateDir(
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
+  }
+  // When the caller already pointed `OPENCLAW_HOME` at a state dir (e.g.
+  // `~/.openclaw`), treat it as the state dir directly. Without this guard
+  // both `resolveStateDir` and the downstream `resolveConfigDir` would nest a
+  // second `.openclaw` under it (#45765).
+  if (isExplicitOpenClawHomeStateDir(env, effectiveHomedir())) {
+    return effectiveHomedir();
   }
   const newDir = newStateDir(effectiveHomedir);
   if (env.OPENCLAW_TEST_FAST === "1") {
@@ -266,7 +302,16 @@ export function resolveDefaultConfigCandidates(
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
+  // When `OPENCLAW_HOME` already points at a state dir, the home dir IS the
+  // state dir. Use it as the single canonical default candidate instead of
+  // nesting `.openclaw`/`.clawdbot` underneath (#45765); the alternative
+  // would feed `resolveConfigPathCandidate` paths like
+  // `~/.openclaw/.openclaw/openclaw.json` and silently load the nested copy
+  // ahead of the real config.
+  const home = effectiveHomedir();
+  const defaultDirs = isExplicitOpenClawHomeStateDir(env, home)
+    ? [home]
+    : [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
   for (const dir of defaultDirs) {
     candidates.push(path.join(dir, CONFIG_FILENAME));
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));

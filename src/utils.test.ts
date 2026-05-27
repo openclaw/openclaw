@@ -102,6 +102,29 @@ describe("resolveConfigDir", () => {
       });
     }
   });
+
+  describe("OPENCLAW_HOME nesting guard (#45765)", () => {
+    it("uses OPENCLAW_HOME directly when it already names .openclaw", () => {
+      // Reporter's observed shape on Linux Kylin: `~/.openclaw` mapped to
+      // `~/.openclaw/.openclaw/openclaw.json` on current main. The guard
+      // must short-circuit the `.openclaw` append so onboarding writes the
+      // canonical path.
+      const explicitHome = path.resolve("/home/user/.openclaw");
+      const env = { OPENCLAW_HOME: explicitHome } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(explicitHome);
+    });
+
+    it("uses OPENCLAW_HOME directly when it names a legacy .clawdbot dir", () => {
+      const explicitHome = path.resolve("/home/user/.clawdbot");
+      const env = { OPENCLAW_HOME: explicitHome } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(explicitHome);
+    });
+
+    it("still appends .openclaw when OPENCLAW_HOME is a non-state-dir path", () => {
+      const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+      expect(resolveConfigDir(env)).toBe(path.resolve("/srv/openclaw-home", ".openclaw"));
+    });
+  });
 });
 
 describe("resolveHomeDir", () => {
