@@ -636,6 +636,7 @@ final class GatewayConnectionController {
 
     private func savedManualEndpointFallback(defaults: UserDefaults = .standard) -> SavedManualEndpoint? {
         guard defaults.bool(forKey: "gateway.autoconnect") else { return nil }
+        guard defaults.bool(forKey: "gateway.manual.enabled") else { return nil }
         let host = defaults.string(forKey: "gateway.manual.host")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }

@@ -148,6 +148,7 @@ import UIKit
     @Test @MainActor func savedManualEndpointFallbackUsesOnboardingHostWhenAutoConnectIsEnabled() {
         withUserDefaults([
             "gateway.autoconnect": true,
+            "gateway.manual.enabled": true,
             "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
             "gateway.manual.port": 0,
             "gateway.manual.tls": false,
@@ -164,9 +165,26 @@ import UIKit
         }
     }
 
+    @Test @MainActor func savedManualEndpointFallbackRequiresManualGatewayEnabled() {
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            #expect(controller._test_savedManualEndpointFallback() == nil)
+        }
+    }
+
     @Test @MainActor func savedManualEndpointFallbackRequiresAutoConnect() {
         withUserDefaults([
             "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
             "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
             "gateway.manual.port": 443,
             "gateway.manual.tls": true,
