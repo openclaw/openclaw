@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSdkAccessAdapter } from "../../bridge/sdk-adapter.js";
 import { registerPlatformAdapter, type PlatformAdapter } from "../adapter/index.js";
 import type { InteractionEvent } from "../types.js";
 import { createInteractionHandler } from "./interaction-handler.js";
@@ -17,13 +18,17 @@ vi.mock("../messaging/sender.js", () => ({
 
 const resolveApprovalMock = vi.fn(async () => true);
 
-const account: GatewayAccount = {
-  accountId: "default",
-  appId: "app",
-  clientSecret: "secret",
-  markdownSupport: false,
-  config: {},
-};
+function makeAccount(config: GatewayAccount["config"] = {}): GatewayAccount {
+  return {
+    accountId: "default",
+    appId: "app",
+    clientSecret: "secret",
+    markdownSupport: false,
+    config,
+  };
+}
+
+const account = makeAccount();
 
 const runtime = {} as GatewayPluginRuntime;
 
@@ -176,6 +181,62 @@ describe("createInteractionHandler approval buttons", () => {
   it("resolves fallback approval buttons from explicit command-authorized senders", async () => {
     const handler = createInteractionHandler(account, runtime, undefined, {
       getActiveCfg: () => makeCommandAuthorizedFallbackCfg(),
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    );
+  });
+
+  it("delegates fallback approval button auth to the gateway command resolver", async () => {
+    const access = createSdkAccessAdapter();
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: {
+                qqbot: ["ATTACKER_OPENID"],
+              },
+            },
+          },
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["accessGroup:operators"],
+            },
+          },
+        }) as OpenClawConfig,
+      resolveCommandAuthorized: (params) => access.resolveSlashCommandAuthorization(params),
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    );
+  });
+
+  it("uses merged account config for fallback button command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              accounts: {
+                default: {
+                  allowFrom: ["ATTACKER_OPENID"],
+                },
+              },
+            },
+          },
+        }) as OpenClawConfig,
     });
 
     handler(makeApprovalEvent());
