@@ -210,7 +210,9 @@ describe("handleToolExecutionStart read path checks", () => {
   });
 
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, trace, onBlockReplyFlush, onExecutionPhase } = createTestContext();
+    const { ctx, warn, trace, isEnabled, onBlockReplyFlush, onExecutionPhase } =
+      createTestContext();
+    isEnabled.mockImplementation((level: string) => level === "trace");
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -229,7 +231,8 @@ describe("handleToolExecutionStart read path checks", () => {
       source: "pi-embedded",
     });
     expect(warn).not.toHaveBeenCalled();
-    expect(trace).not.toHaveBeenCalled();
+    expect(trace).toHaveBeenCalledTimes(1);
+    expect(trace.mock.calls[0]?.[1]).not.toHaveProperty("requiredParamsMissing");
   });
 
   it("warns when read tool has neither path nor file_path", async () => {

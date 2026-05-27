@@ -76,6 +76,11 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const TRACE_REQUIRED_PARAM_GROUPS = {
+  read: [{ keys: ["path", "file_path"], label: "path" }],
+  write: REQUIRED_PARAM_GROUPS.write,
+  edit: REQUIRED_PARAM_GROUPS.edit,
+} satisfies Record<string, readonly RequiredParamGroup[]>;
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -109,16 +114,7 @@ function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
 function getRequiredParamGroupsForTool(
   toolName: string,
 ): readonly RequiredParamGroup[] | undefined {
-  if (toolName === "read") {
-    return REQUIRED_PARAM_GROUPS.read;
-  }
-  if (toolName === "write") {
-    return REQUIRED_PARAM_GROUPS.write;
-  }
-  if (toolName === "edit") {
-    return REQUIRED_PARAM_GROUPS.edit;
-  }
-  return undefined;
+  return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
 }
 
 function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
