@@ -237,7 +237,10 @@ export function normalizeBrokerPlatformId(value: string): string {
 
 export function normalizeBrokerKnownPlatformId(value: string): string {
   const normalized = normalizeBrokerPlatformId(value);
-  return BROKER_PLATFORM_ALIASES[normalized as keyof typeof BROKER_PLATFORM_ALIASES] ?? normalized;
+  const alias = Object.hasOwn(BROKER_PLATFORM_ALIASES, normalized)
+    ? BROKER_PLATFORM_ALIASES[normalized as keyof typeof BROKER_PLATFORM_ALIASES]
+    : undefined;
+  return alias ?? normalized;
 }
 
 function normalizeBrokerConversationType(value: BrokerConversationType): BrokerConversationType {

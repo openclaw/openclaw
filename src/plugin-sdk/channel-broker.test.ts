@@ -33,6 +33,7 @@ describe("channel-broker SDK", () => {
     expect(normalizeBrokerKnownPlatformId("weixin")).toBe("wechat");
     expect(normalizeBrokerKnownPlatformId("openclaw-weixin")).toBe("wechat");
     expect(normalizeBrokerKnownPlatformId("custom-regional-chat")).toBe("custom-regional-chat");
+    expect(normalizeBrokerKnownPlatformId("constructor")).toBe("constructor");
   });
 
   it("round-trips broker conversation targets without losing thread scope", () => {
