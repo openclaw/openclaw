@@ -184,8 +184,10 @@ describeLive("system-prompt-override on resumed cli sessions (issue #80374)", ()
                   resumeArgs: cliResumeArgs,
                   clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                   env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
-                  // Use the resolved default — "always" after fix, "first" before.
-                  systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
+                  // The live proof targets the fixed Claude contract directly.
+                  // Pre-fix argv construction ignored this on resume; post-fix
+                  // passes the prompt file again.
+                  systemPromptWhen: "always",
                 },
               },
               sandbox: { mode: "off" },
@@ -335,7 +337,7 @@ describeLive("system-prompt-override on resumed cli sessions (issue #80374)", ()
         console.log(
           `\n[sp-resume-proof] ✓ Resumed turn honored the NEW system prompt (${MARKER_BRAVO}).`,
         );
-        console.log(`  systemPromptWhen = ${providerDefaults?.systemPromptWhen ?? "never"}`);
+        console.log(`  systemPromptWhen = always`);
       } finally {
         await client1?.stopAndWait({ timeoutMs: 5_000 }).catch(() => {});
         await client2?.stopAndWait({ timeoutMs: 5_000 }).catch(() => {});
