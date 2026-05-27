@@ -160,12 +160,7 @@ const config = {
       ],
     },
     ui: {
-      entry: [
-        "index.html!",
-        "src/main.ts!",
-        "vite.config.ts!",
-        "vitest*.ts!",
-      ],
+      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {

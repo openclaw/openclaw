@@ -1,10 +1,25 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import {
+  formatCost,
+  formatRelativeTimestamp,
+  formatDurationHuman,
+  formatTokens,
+} from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
+import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
+import { formatNextRun } from "../presenter.ts";
+import {
+  collectQuotaWindows,
+  formatQuotaRemaining,
+  formatQuotaReset,
+  quotaLabelNeedsQuotaSuffix,
+  type QuotaWindowSummary,
+} from "../provider-quota-summary.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import type { UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
@@ -17,8 +32,6 @@ import type {
   SkillStatusReport,
 } from "../types.ts";
 import { renderConnectCommand } from "./connect-command.ts";
-import { renderOverviewAttention } from "./overview-attention.ts";
-import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
@@ -63,6 +76,173 @@ export type OverviewProps = {
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
 };
+
+type OverviewTone = "ok" | "warn" | "danger" | "neutral";
+
+function renderOverviewBadge(label: string | TemplateResult, tone: OverviewTone = "neutral") {
+  return html`<span class=${`ov-status-badge ${tone}`}>${label}</span>`;
+}
+
+function renderSummaryTile(params: {
+  kind?: string;
+  label: string;
+  value: string | TemplateResult;
+  hint: string | TemplateResult;
+  tone?: OverviewTone;
+  tab?: string;
+  onNavigate: (tab: string) => void;
+}) {
+  const dataKind = params.kind ?? nothing;
+  const content = html`
+    <span class="ov-summary-tile__label">${params.label}</span>
+    <span class="ov-summary-tile__value">${params.value}</span>
+    <span class="ov-summary-tile__hint">${params.hint}</span>
+  `;
+  if (!params.tab) {
+    return html`<div class=${`ov-summary-tile ${params.tone ?? "neutral"}`} data-kind=${dataKind}>
+      ${content}
+    </div>`;
+  }
+  return html`
+    <button
+      class=${`ov-summary-tile ov-summary-tile--button ${params.tone ?? "neutral"}`}
+      data-kind=${dataKind}
+      @click=${() => params.onNavigate(params.tab as string)}
+    >
+      ${content}
+    </button>
+  `;
+}
+
+function renderUsageStat(params: {
+  label: string | TemplateResult;
+  value: string | TemplateResult;
+  detail?: string | TemplateResult | null;
+  tone?: OverviewTone;
+}) {
+  return html`
+    <div class="stat">
+      <div class="stat-label">${params.label}</div>
+      <div class=${`stat-value ${params.tone ?? ""}`}>${params.value}</div>
+      ${params.detail ? html`<div class="stat-detail">${params.detail}</div>` : nothing}
+    </div>
+  `;
+}
+
+function renderEmptyOperatorRow(
+  title: string,
+  description: string,
+  tone: OverviewTone = "neutral",
+) {
+  return html`
+    <div class=${`ov-operator-row ${tone}`}>
+      <div>
+        <div class="ov-operator-row__title">${title}</div>
+        <div class="ov-operator-row__meta">${description}</div>
+      </div>
+    </div>
+  `;
+}
+
+const DIGIT_RUN_PART = /^\d{3,}$/;
+
+function blurDigitRuns(value: string): TemplateResult {
+  return html`${value
+    .split(/(\d{3,})/g)
+    .map((part) =>
+      DIGIT_RUN_PART.test(part) ? html`<span class="blur-digits">${part}</span>` : part,
+    )}`;
+}
+
+function tCount(singularKey: string, pluralKey: string, count: number): string {
+  return t(count === 1 ? singularKey : pluralKey, { count: String(count) });
+}
+
+function quotaLimitLabel(entry: QuotaWindowSummary): string {
+  return entry.label && quotaLabelNeedsQuotaSuffix(entry.label)
+    ? t("overview.operator.quotaLimitLabel", { label: entry.label })
+    : entry.label || t("overview.operator.providerQuota");
+}
+
+function quotaIdentity(entry: QuotaWindowSummary): string {
+  return [entry.displayName, entry.label].filter(Boolean).join(" · ");
+}
+
+function quotaUsageDetail(entry: QuotaWindowSummary): string | null {
+  const used = entry.usedLabel?.trim();
+  const total = entry.totalLabel?.trim();
+  if (used && total) {
+    return t("overview.operator.quotaUsedOfTotalDetail", { used, total });
+  }
+  if (used) {
+    return t("overview.operator.quotaUsedDetail", { used });
+  }
+  if (total) {
+    return t("overview.operator.quotaTotalDetail", { total });
+  }
+  return null;
+}
+
+function quotaWindowDurationMinutes(label: string): number {
+  const normalized = label.trim().toLowerCase();
+  const explicitDuration = /^(\d+(?:\.\d+)?)\s*([hmwd])\b/.exec(normalized);
+  if (explicitDuration) {
+    const amount = Number(explicitDuration[1]);
+    const unit = explicitDuration[2];
+    const multiplier = unit === "h" ? 60 : unit === "d" ? 24 * 60 : unit === "w" ? 7 * 24 * 60 : 1;
+    return Number.isFinite(amount) ? amount * multiplier : Number.POSITIVE_INFINITY;
+  }
+  if (/\bweekly?\b|\bweek\b/.test(normalized)) {
+    return 7 * 24 * 60;
+  }
+  if (/\bmonthly?\b|\bmonth\b/.test(normalized)) {
+    return 30 * 24 * 60;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function compareQuotaStatDisplayOrder(a: QuotaWindowSummary, b: QuotaWindowSummary): number {
+  const durationDelta = quotaWindowDurationMinutes(a.label) - quotaWindowDurationMinutes(b.label);
+  if (durationDelta !== 0) {
+    return durationDelta;
+  }
+  return (a.resetAt ?? Number.POSITIVE_INFINITY) - (b.resetAt ?? Number.POSITIVE_INFINITY);
+}
+
+function summarizeLogLines(lines: string[]) {
+  const visible = lines.slice(-200);
+  const errors = visible.filter((line) => /\b(error|fatal|exception|failed)\b/i.test(line)).length;
+  const warnings = visible.filter((line) => /\b(warn|warning)\b/i.test(line)).length;
+  return { lines: visible.length, errors, warnings };
+}
+
+function sessionStatusLabel(session: SessionsListResult["sessions"][number]): {
+  label: string;
+  tone: OverviewTone;
+} {
+  if (session.hasActiveRun || session.hasActiveSubagentRun || session.status === "running") {
+    return { label: t("common.running"), tone: "ok" };
+  }
+  if (session.status === "failed" || session.status === "timeout") {
+    return {
+      label:
+        session.status === "timeout"
+          ? t("overview.operator.timeout")
+          : t("overview.operator.failed"),
+      tone: "danger",
+    };
+  }
+  if (session.status === "killed") {
+    return { label: t("overview.operator.killed"), tone: "warn" };
+  }
+  if (session.status === "done") {
+    return { label: t("sessionsView.status.done"), tone: "neutral" };
+  }
+  return {
+    label: session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : t("common.na"),
+    tone: "neutral",
+  };
+}
 
 const PAIRING_HINT_COPY: Record<
   PairingHint["kind"],
@@ -253,226 +433,710 @@ export function renderOverview(props: OverviewProps) {
     ? props.settings.locale
     : i18n.getLocale();
 
-  return html`
-    <section class="grid">
-      <div class="card">
-        <div class="card-title">${t("overview.access.title")}</div>
-        <div class="card-sub">${t("overview.access.subtitle")}</div>
-        <div class="ov-access-grid" style="margin-top: 16px;">
-          <label class="field ov-access-grid__full">
-            <span>${t("overview.access.wsUrl")}</span>
-            <input
-              .value=${props.settings.gatewayUrl}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
-              }}
-              placeholder="ws://100.x.y.z:18789"
-            />
-          </label>
-          ${isTrustedProxy
-            ? ""
-            : html`
-                <label class="field">
-                  <span>${t("overview.access.token")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                    <input
-                      type=${props.showGatewayToken ? "text" : "password"}
-                      autocomplete="off"
-                      style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
-                      .value=${props.settings.token}
-                      @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onSettingsChange({ ...props.settings, token: v });
-                      }}
-                      placeholder="OPENCLAW_GATEWAY_TOKEN"
-                    />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayToken
-                        ? t("overview.access.hideToken")
-                        : t("overview.access.showToken")}
-                      aria-label=${t("overview.access.toggleTokenVisibility")}
-                      aria-pressed=${props.showGatewayToken}
-                      @click=${props.onToggleGatewayTokenVisibility}
-                    >
-                      ${props.showGatewayToken ? icons.eye : icons.eyeOff}
-                    </button>
-                  </div>
-                </label>
-                <label class="field">
-                  <span>${t("overview.access.password")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                    <input
-                      type=${props.showGatewayPassword ? "text" : "password"}
-                      autocomplete="off"
-                      style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
-                      .value=${props.password}
-                      @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onPasswordChange(v);
-                      }}
-                      placeholder=${t("overview.access.passwordPlaceholder")}
-                    />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayPassword
-                        ? t("overview.access.hidePassword")
-                        : t("overview.access.showPassword")}
-                      aria-label=${t("overview.access.togglePasswordVisibility")}
-                      aria-pressed=${props.showGatewayPassword}
-                      @click=${props.onToggleGatewayPasswordVisibility}
-                    >
-                      ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
-                    </button>
-                  </div>
-                </label>
-              `}
-          <label class="field">
-            <span>${t("overview.access.sessionKey")}</span>
-            <input
-              .value=${props.settings.sessionKey}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSessionKeyChange(v);
-              }}
-            />
-          </label>
-          <label class="field">
-            <span>${t("overview.access.language")}</span>
-            <select
-              .value=${currentLocale}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
-            >
-              ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc} ?selected=${currentLocale === loc}>
-                  ${t(`languages.${key}`)}
-                </option>`;
-              })}
-            </select>
-          </label>
-        </div>
-        <div class="row" style="margin-top: 14px;">
-          <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-          <span class="muted"
-            >${isTrustedProxy
-              ? t("overview.access.trustedProxy")
-              : t("overview.access.connectHint")}</span
-          >
-        </div>
-        ${!props.connected
-          ? html`
-              <div class="login-gate__help" style="margin-top: 16px;">
-                <div class="login-gate__help-title">${t("overview.connection.title")}</div>
-                <ol class="login-gate__steps">
-                  <li>
-                    ${t("overview.connection.step1")}
-                    ${renderConnectCommand("openclaw gateway run")}
-                  </li>
-                  <li>
-                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
-                  </li>
-                  <li>${t("overview.connection.step3")}</li>
-                  <li>
-                    ${t("overview.connection.step4")}<code
-                      >openclaw doctor --generate-gateway-token</code
-                    >
-                  </li>
-                </ol>
-                <div class="login-gate__docs">
-                  ${t("overview.connection.docsHint")}
-                  <a
-                    class="session-link"
-                    href="https://docs.openclaw.ai/web/dashboard"
-                    target="_blank"
-                    rel="noreferrer"
-                    >${t("overview.connection.docsLink")}</a
+  const sessions = props.sessionsResult?.sessions ?? [];
+  const activeSessions = sessions.filter(
+    (session) =>
+      session.hasActiveRun || session.hasActiveSubagentRun || session.status === "running",
+  );
+  const failedSessions = sessions.filter(
+    (session) => session.status === "failed" || session.status === "timeout",
+  );
+  const recentSessionLimit = 3;
+  const recentSessions = sessions.slice(0, recentSessionLimit);
+  const remainingRecentSessions = Math.max(0, sessions.length - recentSessions.length);
+  const totals = props.usageResult?.totals;
+  const totalCost = formatCost(totals?.totalCost);
+  const totalTokens = formatTokens(totals?.totalTokens);
+  const totalMessages = String(props.usageResult?.aggregates?.messages?.total ?? 0);
+  const skills = props.skillsReport?.skills ?? [];
+  const enabledSkills = skills.filter((skill) => !skill.disabled).length;
+  const blockedSkills = skills.filter((skill) => skill.blockedByAllowlist).length;
+  const failedCronJobs = props.cronJobs.filter((job) => job.state?.lastStatus === "error");
+  const overdueCronJobs = props.cronJobs.filter(
+    (job) =>
+      job.enabled && job.state?.nextRunAtMs != null && Date.now() - job.state.nextRunAtMs > 300_000,
+  );
+  const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
+  const authProviders = props.modelAuthStatus?.providers ?? [];
+  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
+  const expiredProviders = monitoredProviders.filter(
+    (provider) => provider.status === "expired" || provider.status === "missing",
+  );
+  const expiringProviders = monitoredProviders.filter((provider) => provider.status === "expiring");
+  const quotaWindows = collectQuotaWindows(authProviders);
+  const primaryQuota = quotaWindows[0];
+  const sameProviderSecondaryQuota = quotaWindows.find(
+    (entry) =>
+      entry.displayName === primaryQuota?.displayName && entry.label !== primaryQuota?.label,
+  );
+  const secondaryQuota =
+    sameProviderSecondaryQuota ??
+    quotaWindows.find(
+      (entry) =>
+        entry.displayName !== primaryQuota?.displayName || entry.label !== primaryQuota?.label,
+    );
+  const quotaCardWindows = primaryQuota
+    ? quotaWindows
+        .filter(
+          (entry) => entry.displayName === primaryQuota.displayName || !sameProviderSecondaryQuota,
+        )
+        .slice(0, 3)
+    : [];
+  const hasMultipleQuotaWindows = quotaCardWindows.length > 1;
+  const primaryQuotaReset = primaryQuota ? formatQuotaReset(primaryQuota.resetAt) : null;
+  const secondaryQuotaStat = sameProviderSecondaryQuota ?? null;
+  const primaryQuotaLabel = primaryQuota
+    ? quotaLimitLabel(primaryQuota)
+    : t("overview.operator.quota");
+  const secondaryQuotaHint = secondaryQuota
+    ? `${quotaIdentity(secondaryQuota)} ${formatQuotaRemaining(secondaryQuota)}`
+    : null;
+  const primaryQuotaHint = primaryQuota
+    ? [
+        quotaIdentity(primaryQuota),
+        secondaryQuotaHint,
+        !secondaryQuotaHint && primaryQuotaReset
+          ? t("overview.operator.quotaResetShort", { time: primaryQuotaReset })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const visibleAttentionItems = props.attentionItems.slice(0, 3);
+  const remainingAttentionItems = Math.max(
+    0,
+    props.attentionItems.length - visibleAttentionItems.length,
+  );
+  const quotaStatusNote = primaryQuota
+    ? null
+    : props.modelAuthStatus === null
+      ? t("overview.operator.usageQuotaLoading")
+      : authProviders.length > 0
+        ? t("overview.operator.usageQuotaNoWindows")
+        : t("overview.operator.usageQuotaNotConfigured");
+  const showSecondaryQuotaStat =
+    Boolean(primaryQuota && secondaryQuotaStat && hasMultipleQuotaWindows) && totalCost === "$0.00";
+  const visibleQuotaStats =
+    showSecondaryQuotaStat && primaryQuota && secondaryQuotaStat
+      ? [primaryQuota, secondaryQuotaStat].toSorted(compareQuotaStatDisplayOrder)
+      : primaryQuota
+        ? [primaryQuota]
+        : [];
+  const usageCardProviderName = visibleQuotaStats[0]?.displayName ?? null;
+  const usageCardTitle = usageCardProviderName
+    ? `${usageCardProviderName} ${t("tabs.usage")}`
+    : t("overview.operator.providerUsageTitle");
+  const showLocalCostStat = totalCost !== "$0.00" || visibleQuotaStats.length === 0;
+  const logSummary = summarizeLogLines(props.overviewLogLines);
+  const hasOperationalData =
+    props.usageResult != null ||
+    props.sessionsResult != null ||
+    props.skillsReport != null ||
+    props.cronStatus != null ||
+    props.modelAuthStatus != null;
+
+  const accessCard = html`
+    <div class="card">
+      <div class="card-title">${t("overview.access.title")}</div>
+      <div class="card-sub">${t("overview.access.subtitle")}</div>
+      <div class="ov-access-grid" style="margin-top: 16px;">
+        <label class="field ov-access-grid__full">
+          <span>${t("overview.access.wsUrl")}</span>
+          <input
+            .value=${props.settings.gatewayUrl}
+            @input=${(e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              props.onSettingsChange({
+                ...props.settings,
+                gatewayUrl: v,
+                token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
+              });
+            }}
+            placeholder="ws://100.x.y.z:18789"
+          />
+        </label>
+        ${isTrustedProxy
+          ? ""
+          : html`
+              <label class="field">
+                <span>${t("overview.access.token")}</span>
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                  <input
+                    type=${props.showGatewayToken ? "text" : "password"}
+                    autocomplete="off"
+                    style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
+                    .value=${props.settings.token}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onSettingsChange({ ...props.settings, token: v });
+                    }}
+                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                  />
+                  <button
+                    type="button"
+                    class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                    style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                    title=${props.showGatewayToken
+                      ? t("overview.access.hideToken")
+                      : t("overview.access.showToken")}
+                    aria-label=${t("overview.access.toggleTokenVisibility")}
+                    aria-pressed=${props.showGatewayToken}
+                    @click=${props.onToggleGatewayTokenVisibility}
                   >
+                    ${props.showGatewayToken ? icons.eye : icons.eyeOff}
+                  </button>
+                </div>
+              </label>
+              <label class="field">
+                <span>${t("overview.access.password")}</span>
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                  <input
+                    type=${props.showGatewayPassword ? "text" : "password"}
+                    autocomplete="off"
+                    style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
+                    .value=${props.password}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onPasswordChange(v);
+                    }}
+                    placeholder=${t("overview.access.passwordPlaceholder")}
+                  />
+                  <button
+                    type="button"
+                    class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                    style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                    title=${props.showGatewayPassword
+                      ? t("overview.access.hidePassword")
+                      : t("overview.access.showPassword")}
+                    aria-label=${t("overview.access.togglePasswordVisibility")}
+                    aria-pressed=${props.showGatewayPassword}
+                    @click=${props.onToggleGatewayPasswordVisibility}
+                  >
+                    ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
+                  </button>
+                </div>
+              </label>
+            `}
+        <label class="field">
+          <span>${t("overview.access.sessionKey")}</span>
+          <input
+            .value=${props.settings.sessionKey}
+            @input=${(e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              props.onSessionKeyChange(v);
+            }}
+          />
+        </label>
+        <label class="field">
+          <span>${t("overview.access.language")}</span>
+          <select
+            .value=${currentLocale}
+            @change=${(e: Event) => {
+              const v = (e.target as HTMLSelectElement).value as Locale;
+              void i18n.setLocale(v);
+              props.onSettingsChange({ ...props.settings, locale: v });
+            }}
+          >
+            ${SUPPORTED_LOCALES.map((loc) => {
+              const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
+              return html`<option value=${loc} ?selected=${currentLocale === loc}>
+                ${t(`languages.${key}`)}
+              </option>`;
+            })}
+          </select>
+        </label>
+      </div>
+      <div class="row" style="margin-top: 14px;">
+        <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
+        <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
+        <span class="muted"
+          >${isTrustedProxy
+            ? t("overview.access.trustedProxy")
+            : t("overview.access.connectHint")}</span
+        >
+      </div>
+      ${!props.connected
+        ? html`
+            <div class="login-gate__help" style="margin-top: 16px;">
+              <div class="login-gate__help-title">${t("overview.connection.title")}</div>
+              <ol class="login-gate__steps">
+                <li>
+                  ${t("overview.connection.step1")} ${renderConnectCommand("openclaw gateway run")}
+                </li>
+                <li>
+                  ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
+                </li>
+                <li>${t("overview.connection.step3")}</li>
+                <li>
+                  ${t("overview.connection.step4")}<code
+                    >openclaw doctor --generate-gateway-token</code
+                  >
+                </li>
+              </ol>
+              <div class="login-gate__docs">
+                ${t("overview.connection.docsHint")}
+                <a
+                  class="session-link"
+                  href="https://docs.openclaw.ai/web/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  >${t("overview.connection.docsLink")}</a
+                >
+              </div>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+
+  const snapshotCard = html`
+    <div class="card">
+      <div class="card-title">${t("overview.snapshot.title")}</div>
+      <div class="card-sub">${t("overview.snapshot.subtitle")}</div>
+      <div class="stat-grid" style="margin-top: 16px;">
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.status")}</div>
+          <div class="stat-value ${props.connected ? "ok" : "warn"}">
+            ${props.connected ? t("common.ok") : t("common.offline")}
+          </div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.uptime")}</div>
+          <div class="stat-value">${uptime}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.tickInterval")}</div>
+          <div class="stat-value">${tick}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
+          <div class="stat-value">
+            ${props.lastChannelsRefresh
+              ? formatRelativeTimestamp(props.lastChannelsRefresh)
+              : t("common.na")}
+          </div>
+        </div>
+      </div>
+      ${props.lastError
+        ? html`<div class="callout danger" style="margin-top: 14px;">
+            <div>${props.lastError}</div>
+            ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
+            ${queryTokenHint ?? ""}
+          </div>`
+        : html`
+            <div class="callout" style="margin-top: 14px">
+              ${t("overview.snapshot.channelsHint")}
+            </div>
+          `}
+    </div>
+  `;
+
+  return html`
+    ${!props.connected
+      ? html`<section class="grid">${accessCard}${snapshotCard}</section>`
+      : html`
+          <section class="ov-summary-strip" aria-label=${t("overview.operator.overviewSummary")}>
+            ${renderSummaryTile({
+              label: t("overview.operator.gateway"),
+              value: html`${renderOverviewBadge(t("common.ok"), "ok")} ${t("common.online")}`,
+              hint: t("overview.operator.uptime", { time: uptime }),
+              tone: "ok",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: t("tabs.channels"),
+              value: props.lastChannelsRefresh
+                ? html`${renderOverviewBadge(t("overview.operator.fresh"), "ok")}
+                  ${t("overview.operator.refreshed")}`
+                : html`${renderOverviewBadge(t("common.na"), "neutral")}
+                  ${t("sessionsView.unknown")}`,
+              hint: props.lastChannelsRefresh
+                ? formatRelativeTimestamp(props.lastChannelsRefresh)
+                : t("overview.snapshot.channelsHint"),
+              tone: props.lastChannelsRefresh ? "ok" : "neutral",
+              tab: "channels",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: t("overview.operator.activeWork"),
+              value: t("overview.operator.activeSessions", {
+                active: String(activeSessions.length),
+                total: String(props.sessionsResult?.count ?? sessions.length),
+              }),
+              hint:
+                failedSessions.length > 0
+                  ? t("overview.operator.failedOrTimedOutCount", {
+                      count: String(failedSessions.length),
+                    })
+                  : t("overview.operator.noFailedActiveSessions"),
+              tone:
+                failedSessions.length > 0 ? "danger" : activeSessions.length > 0 ? "ok" : "neutral",
+              tab: "sessions",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: t("overview.stats.cron"),
+              value:
+                props.cronStatus?.enabled === false
+                  ? html`${renderOverviewBadge(t("common.disabled"), "neutral")}`
+                  : failedCronJobs.length > 0
+                    ? html`${renderOverviewBadge(
+                        tCount(
+                          "overview.operator.failedCount",
+                          "overview.operator.failedCountPlural",
+                          failedCronJobs.length,
+                        ),
+                        "danger",
+                      )}
+                      ${t("overview.operator.jobsCount", { count: String(props.cronJobs.length) })}`
+                    : t("overview.operator.jobsCount", { count: String(props.cronJobs.length) }),
+              hint: cronNext ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) }) : "",
+              tone: failedCronJobs.length > 0 ? "danger" : "neutral",
+              tab: "cron",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              kind: primaryQuota ? "quota" : "usage",
+              label: primaryQuota ? primaryQuotaLabel : t("tabs.usage"),
+              value: primaryQuota
+                ? html`${formatQuotaRemaining(primaryQuota)}`
+                : t("overview.operator.usageCostMessages", {
+                    cost: totalCost,
+                    count: totalMessages,
+                  }),
+              hint: primaryQuota
+                ? primaryQuotaHint
+                : t("overview.operator.tokensCount", { count: totalTokens }),
+              tone:
+                primaryQuota?.remaining != null && primaryQuota.remaining <= 25
+                  ? "warn"
+                  : "neutral",
+              tab: "usage",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: t("overview.cards.modelAuth"),
+              value:
+                expiredProviders.length > 0
+                  ? html`${renderOverviewBadge(
+                      tCount(
+                        "overview.operator.expiredCount",
+                        "overview.operator.expiredCountPlural",
+                        expiredProviders.length,
+                      ),
+                      "danger",
+                    )}`
+                  : expiringProviders.length > 0
+                    ? html`${renderOverviewBadge(
+                        tCount(
+                          "overview.operator.expiringCount",
+                          "overview.operator.expiringCountPlural",
+                          expiringProviders.length,
+                        ),
+                        "warn",
+                      )}`
+                    : monitoredProviders.length > 0
+                      ? html`${renderOverviewBadge(
+                          t("overview.operator.okCount", {
+                            count: String(monitoredProviders.length),
+                          }),
+                          "ok",
+                        )}`
+                      : html`${renderOverviewBadge(t("common.na"), "neutral")}`,
+              hint:
+                monitoredProviders.length > 0
+                  ? monitoredProviders
+                      .map((provider) => provider.displayName)
+                      .slice(0, 2)
+                      .join(", ")
+                  : t("overview.operator.apiKeyOnlyUnavailable"),
+              tone:
+                expiredProviders.length > 0
+                  ? "danger"
+                  : expiringProviders.length > 0
+                    ? "warn"
+                    : "neutral",
+              tab: "overview",
+              onNavigate: props.onNavigate,
+            })}
+          </section>
+
+          <section class="ov-operator-grid">
+            <div class="card ov-attention ov-operator-attention">
+              <div class="card-title">${t("overview.attention.title")}</div>
+              <div class="card-sub">${t("overview.operator.attentionSubtitle")}</div>
+              <div class="ov-attention-list" style="margin-top: 12px;">
+                ${visibleAttentionItems.length > 0
+                  ? html`
+                      ${visibleAttentionItems.map(
+                        (item) => html`
+                          <div
+                            class=${`ov-attention-item ${item.severity === "error" ? "danger" : item.severity === "warning" ? "warn" : ""}`}
+                          >
+                            <span class="ov-attention-icon">${icons.radio}</span>
+                            <div class="ov-attention-body">
+                              <div class="ov-attention-title">${item.title}</div>
+                              <div class="muted">${item.description}</div>
+                            </div>
+                            ${item.href
+                              ? html`<a
+                                  class="ov-attention-link"
+                                  href=${item.href}
+                                  target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
+                                  rel=${item.external ? buildExternalLinkRel() : nothing}
+                                  >${t("common.docs")}</a
+                                >`
+                              : nothing}
+                          </div>
+                        `,
+                      )}
+                      ${remainingAttentionItems > 0
+                        ? html`<div class="ov-operator-more">
+                            ${tCount(
+                              "overview.operator.moreAttentionItem",
+                              "overview.operator.moreAttentionItems",
+                              remainingAttentionItems,
+                            )}
+                          </div>`
+                        : nothing}
+                    `
+                  : renderEmptyOperatorRow(
+                      t("overview.operator.noUrgentAttention"),
+                      t("overview.operator.gatewayAuthClear"),
+                      "ok",
+                    )}
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">${t("overview.cards.recentSessions")}</div>
+              <div class="card-sub">${t("overview.operator.recentSessionsSubtitle")}</div>
+              <div class="ov-operator-list" style="margin-top: 12px;">
+                ${recentSessions.length > 0
+                  ? recentSessions.map((session) => {
+                      const status = sessionStatusLabel(session);
+                      return html`
+                        <button
+                          class="ov-operator-row ov-operator-row--button"
+                          @click=${() => props.onNavigate("sessions")}
+                        >
+                          <div>
+                            <div class="ov-operator-row__title">
+                              <span class="ov-recent__key"
+                                >${blurDigitRuns(
+                                  resolveSessionDisplayName(session.key, session),
+                                )}</span
+                              >
+                            </div>
+                            <div class="ov-operator-row__meta">
+                              ${[session.model, session.kind].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+                          ${renderOverviewBadge(status.label, status.tone)}
+                        </button>
+                      `;
+                    })
+                  : renderEmptyOperatorRow(
+                      t("overview.operator.noSessionsLoaded"),
+                      hasOperationalData
+                        ? t("overview.operator.noRecentSessionsMatch")
+                        : t("overview.operator.sessionDataLoading"),
+                    )}
+                ${remainingRecentSessions > 0
+                  ? html`<button
+                      class="ov-operator-more ov-operator-more--button"
+                      @click=${() => props.onNavigate("sessions")}
+                    >
+                      ${tCount(
+                        "overview.operator.moreSession",
+                        "overview.operator.moreSessions",
+                        remainingRecentSessions,
+                      )}
+                    </button>`
+                  : nothing}
+              </div>
+            </div>
+
+            <div class="card ov-usage-card">
+              <div class="card-title">${usageCardTitle}</div>
+              <div class="card-sub">${t("overview.operator.providerUsageSubtitle")}</div>
+              <div class="ov-usage-metrics">
+                ${visibleQuotaStats.length > 0
+                  ? visibleQuotaStats.map((entry) => {
+                      const reset = formatQuotaReset(entry.resetAt);
+                      const details = [
+                        quotaUsageDetail(entry),
+                        reset ? t("overview.operator.quotaResetShort", { time: reset }) : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
+                      return renderUsageStat({
+                        label: quotaLimitLabel(entry),
+                        value: formatQuotaRemaining(entry),
+                        detail: details || null,
+                        tone: entry.remaining <= 25 ? "warn" : "ok",
+                      });
+                    })
+                  : renderUsageStat({
+                      label: primaryQuotaLabel,
+                      value: t("common.na"),
+                      tone: "ok",
+                    })}
+                ${showSecondaryQuotaStat || !showLocalCostStat
+                  ? nothing
+                  : renderUsageStat({
+                      label: t("overview.cards.cost"),
+                      value: totalCost,
+                    })}
+                ${renderUsageStat({
+                  label: t("overview.operator.messages"),
+                  value: totalMessages,
+                })}
+                ${renderUsageStat({
+                  label: t("overview.operator.tokens"),
+                  value: totalTokens,
+                })}
+              </div>
+              ${quotaStatusNote
+                ? html`<div class="ov-usage-note">${quotaStatusNote}</div>`
+                : nothing}
+            </div>
+          </section>
+
+          <section class="ov-operator-grid ov-operator-grid--secondary">
+            <div class="card">
+              <div class="card-title">${t("tabs.cron")}</div>
+              <div class="card-sub">${t("overview.operator.cronSubtitle")}</div>
+              <div class="ov-operator-list" style="margin-top: 12px;">
+                ${failedCronJobs.length > 0
+                  ? failedCronJobs.slice(0, 4).map(
+                      (job) => html`
+                        <button
+                          class="ov-operator-row ov-operator-row--button danger"
+                          @click=${() => props.onNavigate("cron")}
+                        >
+                          <div>
+                            <div class="ov-operator-row__title">${job.name}</div>
+                            <div class="ov-operator-row__meta">
+                              ${job.state?.lastErrorReason ??
+                              job.state?.lastError ??
+                              t("overview.operator.lastRunFailed")}
+                            </div>
+                          </div>
+                          ${renderOverviewBadge(t("overview.operator.failed"), "danger")}
+                        </button>
+                      `,
+                    )
+                  : overdueCronJobs.length > 0
+                    ? overdueCronJobs.slice(0, 4).map(
+                        (job) => html`
+                          <button
+                            class="ov-operator-row ov-operator-row--button warn"
+                            @click=${() => props.onNavigate("cron")}
+                          >
+                            <div>
+                              <div class="ov-operator-row__title">${job.name}</div>
+                              <div class="ov-operator-row__meta">
+                                ${t("overview.operator.nextRunOverdue")}
+                              </div>
+                            </div>
+                            ${renderOverviewBadge(t("overview.operator.overdue"), "warn")}
+                          </button>
+                        `,
+                      )
+                    : renderEmptyOperatorRow(
+                        t("overview.operator.noFailedCronJobs"),
+                        cronNext
+                          ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) })
+                          : t("overview.operator.noNextWakeScheduled"),
+                        "ok",
+                      )}
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">${t("overview.operator.connectorsSkillsTitle")}</div>
+              <div class="card-sub">${t("overview.operator.connectorsSkillsSubtitle")}</div>
+              <div class="ov-operator-list" style="margin-top: 12px;">
+                ${renderEmptyOperatorRow(
+                  t("overview.cards.modelAuth"),
+                  expiredProviders.length > 0
+                    ? expiredProviders.map((provider) => provider.displayName).join(", ")
+                    : expiringProviders.length > 0
+                      ? expiringProviders.map((provider) => provider.displayName).join(", ")
+                      : monitoredProviders.length > 0
+                        ? t("overview.operator.monitoredProvidersOk", {
+                            count: String(monitoredProviders.length),
+                          })
+                        : t("overview.operator.noExpiringProviders"),
+                  expiredProviders.length > 0
+                    ? "danger"
+                    : expiringProviders.length > 0
+                      ? "warn"
+                      : "ok",
+                )}
+                ${renderEmptyOperatorRow(
+                  t("overview.cards.skills"),
+                  skills.length > 0
+                    ? blockedSkills > 0
+                      ? t("overview.operator.skillsEnabledBlocked", {
+                          enabled: String(enabledSkills),
+                          total: String(skills.length),
+                          blocked: String(blockedSkills),
+                        })
+                      : t("overview.operator.skillsEnabled", {
+                          enabled: String(enabledSkills),
+                          total: String(skills.length),
+                        })
+                    : t("overview.operator.skillStatusUnavailable"),
+                  blockedSkills > 0 ? "warn" : "neutral",
+                )}
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">${t("overview.operator.logEventAnomaliesTitle")}</div>
+              <div class="card-sub">${t("overview.operator.logEventAnomaliesSubtitle")}</div>
+              <div class="stat-grid" style="margin-top: 16px;">
+                <div class="stat">
+                  <div class="stat-label">${t("overview.operator.events")}</div>
+                  <div class="stat-value">${props.eventLog.length}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">${t("overview.operator.logLines")}</div>
+                  <div class="stat-value">${logSummary.lines}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">${t("overview.operator.warnings")}</div>
+                  <div class="stat-value ${logSummary.warnings > 0 ? "warn" : "ok"}">
+                    ${logSummary.warnings}
+                  </div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">${t("overview.operator.errors")}</div>
+                  <div class="stat-value ${logSummary.errors > 0 ? "warn" : "ok"}">
+                    ${logSummary.errors}
+                  </div>
                 </div>
               </div>
-            `
-          : nothing}
-      </div>
-
-      <div class="card">
-        <div class="card-title">${t("overview.snapshot.title")}</div>
-        <div class="card-sub">${t("overview.snapshot.subtitle")}</div>
-        <div class="stat-grid" style="margin-top: 16px;">
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.status")}</div>
-            <div class="stat-value ${props.connected ? "ok" : "warn"}">
-              ${props.connected ? t("common.ok") : t("common.offline")}
             </div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.uptime")}</div>
-            <div class="stat-value">${uptime}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.tickInterval")}</div>
-            <div class="stat-value">${tick}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
-            <div class="stat-value">
-              ${props.lastChannelsRefresh
-                ? formatRelativeTimestamp(props.lastChannelsRefresh)
-                : t("common.na")}
-            </div>
-          </div>
-        </div>
-        ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
-              <div>${props.lastError}</div>
-              ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
-              ${queryTokenHint ?? ""}
-            </div>`
-          : html`
-              <div class="callout" style="margin-top: 14px">
-                ${t("overview.snapshot.channelsHint")}
-              </div>
-            `}
-      </div>
-    </section>
+          </section>
 
-    <div class="ov-section-divider"></div>
+          <div class="ov-section-divider"></div>
 
-    ${renderOverviewCards({
-      usageResult: props.usageResult,
-      sessionsResult: props.sessionsResult,
-      skillsReport: props.skillsReport,
-      cronJobs: props.cronJobs,
-      cronStatus: props.cronStatus,
-      modelAuthStatus: props.modelAuthStatus,
-      presenceCount: props.presenceCount,
-      onNavigate: props.onNavigate,
-    })}
-    ${renderOverviewAttention({ items: props.attentionItems })}
+          <div class="ov-bottom-grid">
+            ${renderOverviewEventLog({
+              events: props.eventLog,
+            })}
+            ${renderOverviewLogTail({
+              lines: props.overviewLogLines,
+              onRefreshLogs: props.onRefreshLogs,
+            })}
+          </div>
 
-    <div class="ov-section-divider"></div>
+          <div class="ov-section-divider"></div>
 
-    <div class="ov-bottom-grid">
-      ${renderOverviewEventLog({
-        events: props.eventLog,
-      })}
-      ${renderOverviewLogTail({
-        lines: props.overviewLogLines,
-        onRefreshLogs: props.onRefreshLogs,
-      })}
-    </div>
+          <section class="grid ov-setup-grid">${accessCard}${snapshotCard}</section>
+        `}
   `;
 }

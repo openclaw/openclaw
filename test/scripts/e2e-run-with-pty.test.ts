@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
 
-function runPtyProbe(logPath: string): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runPtyProbe(
+  logPath: string,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,

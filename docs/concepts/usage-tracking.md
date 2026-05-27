@@ -10,8 +10,9 @@ title: "Usage tracking"
 
 - Pulls provider usage/quota directly from their usage endpoints.
 - No estimated costs; only the provider-reported windows.
-- Human-readable status output is normalized to `X% left`, even when an
-  upstream API reports consumed quota, remaining quota, or only raw counts.
+- Human-readable status output uses provider-native remaining labels when the
+  upstream API reports them, such as OpenRouter dollar credits, and otherwise
+  falls back to normalized `X% left` windows.
 - Session-level `/status` and `session_status` can fall back to the latest
   transcript usage entry when the live session snapshot is sparse. That
   fallback fills missing token/cache counters, can recover the active runtime
@@ -35,6 +36,10 @@ title: "Usage tracking"
   - JSON usage falls back to `stats`; `stats.cached` is normalized into
     `cacheRead`.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
+- **OpenRouter**: API key via env/config/auth store (`OPENROUTER_API_KEY`).
+  OpenClaw polls account credits and key limits when available. Account credits
+  display as dollar balances instead of synthesized percentages, while the
+  normalized percentage remains available for sorting and pressure ranking.
 - **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
   surface, prefers stored MiniMax OAuth when present, and otherwise falls back

@@ -34,10 +34,26 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
 }
 
 function formatWindowShort(window: UsageWindow, now?: number): string {
-  const remaining = clampPercent(100 - window.usedPercent);
   const reset = formatResetRemaining(window.resetAt, now);
   const resetSuffix = reset ? ` ⏱${reset}` : "";
-  return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
+  return `${formatWindowRemaining(window)} (${window.label}${formatWindowDetail(window)}${resetSuffix})`;
+}
+
+function formatWindowRemaining(window: UsageWindow): string {
+  const remainingLabel = window.remainingLabel?.trim();
+  if (remainingLabel) {
+    return remainingLabel.toLowerCase() === "unlimited" ? remainingLabel : `${remainingLabel} left`;
+  }
+  const remaining = clampPercent(100 - window.usedPercent);
+  return `${remaining.toFixed(0)}% left`;
+}
+
+function formatWindowDetail(window: UsageWindow): string {
+  const parts = [
+    window.usedLabel?.trim() ? `${window.usedLabel.trim()} used` : null,
+    window.totalLabel?.trim() ? `of ${window.totalLabel.trim()}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? ` · ${parts.join(" ")}` : "";
 }
 
 export function formatUsageWindowSummary(
@@ -58,10 +74,9 @@ export function formatUsageWindowSummary(
   const includeResets = opts?.includeResets ?? false;
   const windows = snapshot.windows.slice(0, maxWindows);
   const parts = windows.map((window) => {
-    const remaining = clampPercent(100 - window.usedPercent);
     const reset = includeResets ? formatResetRemaining(window.resetAt, now) : null;
     const resetSuffix = reset ? ` ⏱${reset}` : "";
-    return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
+    return `${window.label} ${formatWindowRemaining(window)}${formatWindowDetail(window)}${resetSuffix}`;
   });
   return parts.join(" · ");
 }
@@ -104,10 +119,11 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
     }
     lines.push(`  ${entry.displayName}${planSuffix}`);
     for (const window of entry.windows) {
-      const remaining = clampPercent(100 - window.usedPercent);
       const reset = formatResetRemaining(window.resetAt, opts?.now);
       const resetSuffix = reset ? ` · resets ${reset}` : "";
-      lines.push(`    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
+      lines.push(
+        `    ${window.label}: ${formatWindowRemaining(window)}${formatWindowDetail(window)}${resetSuffix}`,
+      );
     }
   }
   return lines;

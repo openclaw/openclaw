@@ -29,6 +29,7 @@ import {
   resolveOpenRouterThinkingProfile,
   supportsOpenRouterXHighThinking,
 } from "./thinking-policy.js";
+import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
@@ -169,6 +170,15 @@ export default definePluginEntry({
       extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
+      resolveUsageAuth: (ctx) => {
+        const token = ctx.resolveApiKeyFromConfigAndStore({
+          providerIds: ["openrouter"],
+          envDirect: [ctx.env.OPENROUTER_API_KEY],
+        });
+        return token ? { token } : null;
+      },
+      fetchUsageSnapshot: async (ctx) =>
+        await fetchOpenRouterUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());

@@ -6,7 +6,9 @@ import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
 import {
   collectQuotaWindows,
+  formatQuotaRemaining,
   formatQuotaReset,
+  quotaLabelNeedsQuotaSuffix,
   type QuotaWindowSummary,
 } from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
@@ -62,6 +64,10 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     return null;
   }
   const reset = formatQuotaReset(primary.resetAt);
+  const primaryLabel =
+    primary.label && quotaLabelNeedsQuotaSuffix(primary.label)
+      ? t("overview.operator.quotaLimitLabel", { label: primary.label })
+      : primary.label || t("overview.operator.providerQuota");
   const primaryHint = [primary.displayName, primary.label, reset ? `reset ${reset}` : null].filter(
     Boolean,
   );
@@ -69,22 +75,15 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
   );
   const secondaryHint = secondary
-    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${t(
-        "overview.cards.modelAuthUsageLeft",
-        {
-          pct: String(secondary.remaining),
-        },
-      )}`
+    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${formatQuotaRemaining(secondary)}`
     : null;
   const valueClass = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "";
 
   return {
     kind: "quota",
     tab: "usage",
-    label: t("tabs.usage"),
-    value: html`<span class=${valueClass}
-      >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
-    >`,
+    label: primaryLabel,
+    value: html`<span class=${valueClass}>${formatQuotaRemaining(primary)}</span>`,
     hint: [primaryHint.join(" · "), secondaryHint].filter(Boolean).join(" · "),
   };
 }
@@ -135,7 +134,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const authLoading = props.modelAuthStatus === null;
   const authProviders = props.modelAuthStatus?.providers ?? [];
   const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
-  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(monitoredProviders));
+  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(authProviders));
 
   const cronValue =
     cronEnabled == null
