@@ -177,20 +177,6 @@ function resolveToolErrorWarningPolicy(params: {
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
-  // Response-timeout false-failure for file write/edit: the disk mutation
-  // completed but the tool ack reply timed out, then the surfaced
-  // `lastToolError` makes a successful write look failed and the chat
-  // shows "Write failed" / "Edit failed" even though the file is present.
-  // `fileTarget` is set by `tool-mutation.ts` only for the `write` / `edit`
-  // tool family (FILE_MUTATING_TOOL_NAMES), so its presence is the
-  // narrow boundary: this branch never matches exec/message/cron/gateway
-  // mutating tools where the disk-write idempotency reasoning does not
-  // apply. (#55424; replaces the closed-stale direct attempt in #55444.)
-  const isFileWriteResponseTimeoutFalseFailure =
-    params.lastToolError.timedOut === true && params.lastToolError.fileTarget !== undefined;
-  if (isFileWriteResponseTimeoutFalseFailure) {
-    return { showWarning: false, includeDetails };
-  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {

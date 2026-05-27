@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
+import { wrapEditToolWithRecovery, wrapWriteToolWithRecovery } from "./pi-tools.host-edit.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxFsBridge, SandboxFsStat } from "./sandbox/fs-bridge.js";
 
@@ -332,5 +333,173 @@ describe("edit tool recovery hardening", () => {
     );
 
     expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
+  });
+});
+
+describe("write tool recovery hardening", () => {
+  let tmpDir = "";
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+      tmpDir = "";
+    }
+  });
+
+  function createRecoveredWriteTool(params: {
+    root: string;
+    readFile: (absolutePath: string) => Promise<string>;
+    execute: AnyAgentTool["execute"];
+  }) {
+    const base = {
+      name: "write",
+      execute: params.execute,
+    } as unknown as AnyAgentTool;
+    return wrapWriteToolWithRecovery(base, {
+      root: params.root,
+      readFile: params.readFile,
+    });
+  }
+
+  it("recovers success after a post-write abort when readback matches requested content", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    const controller = new AbortController();
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async (_toolCallId, params) => {
+        const record = params as { path: string; content: string };
+        await fs.writeFile(record.path, record.content, "utf-8");
+        controller.abort();
+        throw new Error("Operation aborted");
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "finished\n" },
+      controller.signal,
+    );
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully wrote ${"finished\n".length} bytes to ${filePath}`,
+    });
+  });
+
+  it("keeps the original abort when readback does not match requested content", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    const controller = new AbortController();
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "partial\n", "utf-8");
+        controller.abort();
+        throw new Error("Operation aborted");
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "finished\n" }, controller.signal),
+    ).rejects.toThrow("Operation aborted");
+  });
+
+  it("keeps the original abort when the file already matched before execution", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "finished\n", "utf-8");
+    const controller = new AbortController();
+    controller.abort();
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        throw new Error("Operation aborted");
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "finished\n" }, controller.signal),
+    ).rejects.toThrow("Operation aborted");
+  });
+
+  it("recovers @-prefixed write paths through the upstream write path contract", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "notes.md");
+    const controller = new AbortController();
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async (_toolCallId, params) => {
+        const record = params as { content: string };
+        await fs.writeFile(filePath, record.content, "utf-8");
+        controller.abort();
+        throw new Error("Operation aborted");
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "@notes.md", content: "finished\n" },
+      controller.signal,
+    );
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
+  });
+
+  it("recovers timeout-like post-write errors when readback matches requested content", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async (_toolCallId, params) => {
+        const record = params as { path: string; content: string };
+        await fs.writeFile(record.path, record.content, "utf-8");
+        throw new Error("node invoke timed out");
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "finished\n" },
+      undefined,
+    );
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
+  });
+
+  it("recovers file URL write paths through the upstream write path contract", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-recovery-"));
+    const filePath = path.join(tmpDir, "notes.md");
+    const fileUrl = pathToFileURL(filePath).href;
+    const controller = new AbortController();
+
+    const tool = createRecoveredWriteTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async (_toolCallId, params) => {
+        const record = params as { content: string };
+        await fs.writeFile(filePath, record.content, "utf-8");
+        controller.abort();
+        throw new Error("Operation aborted");
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: fileUrl, content: "finished\n" },
+      controller.signal,
+    );
+
+    expect((result as { isError?: unknown }).isError).toBe(false);
   });
 });

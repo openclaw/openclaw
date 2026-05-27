@@ -468,46 +468,6 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
-  it("suppresses Write failed warning when write tool ack timed out and fileTarget is recorded (#55424)", () => {
-    // Response-timeout false-failure: the disk write completed but the ack
-    // reply timed out, then the surfaced `lastToolError` makes a successful
-    // write look failed. `fileTarget` is set by tool-mutation only for the
-    // write/edit family, so this narrow combination is the safe gate.
-    const payloads = buildPayloads({
-      assistantTexts: ["Done."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "write",
-        error: "invoke timed out",
-        timedOut: true,
-        mutatingAction: true,
-        fileTarget: { path: "/tmp/openclaw/output.md" },
-      },
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Done.");
-    expect(payloads[0]?.isError).toBeUndefined();
-  });
-
-  it("suppresses Edit failed warning when edit tool ack timed out and fileTarget is recorded (#55424)", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Updated."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "edit",
-        error: "Response timeout",
-        timedOut: true,
-        mutatingAction: true,
-        fileTarget: { path: "/tmp/openclaw/notes.md" },
-      },
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Updated.");
-    expect(payloads[0]?.isError).toBeUndefined();
-  });
-
   it("still shows write tool errors when timedOut is true but no fileTarget was recorded", () => {
     // Without `fileTarget` we cannot distinguish a confirmed file write from
     // an unrelated mutating-tool timeout, so the default-visible warning is
@@ -520,6 +480,24 @@ describe("buildEmbeddedRunPayloads", () => {
         error: "invoke timed out",
         timedOut: true,
         mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("still shows write tool errors when timedOut and fileTarget only prove the attempted path", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "invoke timed out",
+        timedOut: true,
+        mutatingAction: true,
+        fileTarget: { path: "/tmp/openclaw/output.md" },
       },
     });
 

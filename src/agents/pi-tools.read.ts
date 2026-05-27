@@ -15,7 +15,7 @@ import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
+import { wrapEditToolWithRecovery, wrapWriteToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -239,7 +239,10 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
+  const normalized = value
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "");
   return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
 }
 
@@ -802,7 +805,12 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const withRecovery = wrapWriteToolWithRecovery(base, {
+    root: params.root,
+    readFile: async (absolutePath: string) =>
+      (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
+  });
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
@@ -821,7 +829,11 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  const withRecovery = wrapWriteToolWithRecovery(base, {
+    root,
+    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
+  });
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
