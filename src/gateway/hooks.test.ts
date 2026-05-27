@@ -194,23 +194,36 @@ describe("gateway hooks helpers", () => {
     expect(resolveHookTargetAgentId(resolved, undefined)).toBeUndefined();
   });
 
-  test("isHookAgentAllowed honors hooks.allowedAgentIds for explicit routing", () => {
+  test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, undefined)).toBe(false);
+    expect(isHookAgentAllowed(resolved, "")).toBe(false);
+    expect(isHookAgentAllowed(resolved, "   ")).toBe(false);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(false);
   });
 
-  test("isHookAgentAllowed treats empty allowlist as deny-all for explicit agentId", () => {
+  test("isHookAgentAllowed treats empty allowlist as deny-all routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, undefined)).toBe(false);
+    expect(isHookAgentAllowed(resolved, "")).toBe(false);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
+  });
+
+  test("isHookAgentAllowed allows omitted agentId when default agent is allowlisted", () => {
+    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["main"]));
+    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, "")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
+    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
   });
 
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, "")).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
   });

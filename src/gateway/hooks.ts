@@ -298,17 +298,17 @@ export function isHookAgentAllowed(
   hooksConfig: HooksConfigResolved,
   agentId: string | undefined,
 ): boolean {
-  // Keep backwards compatibility for callers that omit agentId.
-  const raw = normalizeOptionalString(agentId);
-  if (!raw) {
-    return true;
-  }
   const allowed = hooksConfig.agentPolicy.allowedAgentIds;
   if (allowed === undefined) {
     return true;
   }
-  const resolved = resolveHookTargetAgentId(hooksConfig, raw);
-  return resolved ? allowed.has(resolved) : false;
+  const raw = normalizeOptionalString(agentId);
+  // Omitted agentId still dispatches to the default agent downstream, so the
+  // allowlist must authorize that effective target before dispatch.
+  const targetAgentId = raw
+    ? resolveHookTargetAgentId(hooksConfig, raw)
+    : hooksConfig.agentPolicy.defaultAgentId;
+  return targetAgentId ? allowed.has(targetAgentId) : false;
 }
 
 export const getHookAgentPolicyError = () => "agentId is not allowed by hooks.allowedAgentIds";
