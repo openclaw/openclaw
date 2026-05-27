@@ -148,6 +148,9 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsPnpm.run).toContain("corepack enable --install-directory $env:PNPM_HOME");
     expect(hydrateWindowsPnpm.run).toContain("pnpm @installArgs");
+    expect(hydrateWindowsPnpm.run).toContain(
+      '$corepackShimDir = Join-Path $nodeBin "node_modules\\corepack\\shims"',
+    );
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
     );
@@ -156,6 +159,8 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBe("runner.os != 'Windows'");
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBe("runner.os != 'Windows'");
     expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("COREPACK_HOME");
+    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("NODE_BIN PNPM_HOME");
+    expect(workflowStep(hydrate, "Mark Crabbox ready").run).toContain("VIRTUAL_STORE_DIR PATH");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3");
