@@ -1448,9 +1448,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assemble).toHaveBeenCalledTimes(2);
     const inputText = getRequestInputText(harness);
     expect(inputText).toContain("successor compacted context");
-    expect(optionalString(requireRequestParams(harness, "thread/start").developerInstructions)).toContain(
-      "compacted context system",
-    );
+    expect(
+      optionalString(requireRequestParams(harness, "thread/start").developerInstructions),
+    ).toContain("compacted context system");
 
     await harness.completeTurn();
     await run;
@@ -1473,14 +1473,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         summary: "summary",
         firstKeptEntryId: "entry-1",
         tokensBefore: 100_000,
+        tokensAfter: 12_345.8,
         sessionId: "session-1-compacted",
         sessionFile: successorSessionFile,
       },
     }));
     const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
-      messages: Array.from({ length: 8 }, (_, index) =>
-        toolResultMessage(hugePayload, index + 1),
-      ),
+      messages: Array.from({ length: 8 }, (_, index) => toolResultMessage(hugePayload, index + 1)),
       estimatedTokens: 100_000,
       contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
     });
@@ -1498,6 +1497,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(result.preflightRecovery?.route).not.toBe("fits");
     expect(result.sessionIdUsed).toBe("session-1-compacted");
     expect(result.sessionFileUsed).toBe(successorSessionFile);
+    expect(result.compactionCount).toBe(1);
+    expect(result.compactionTokensAfter).toBe(12_345);
     expect(compact).toHaveBeenCalledTimes(1);
     expect(assemble).toHaveBeenCalledTimes(2);
     expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
@@ -1518,9 +1519,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       result: { summary: "unchanged", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
     }));
     const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
-      messages: Array.from({ length: 8 }, (_, index) =>
-        toolResultMessage(hugePayload, index + 1),
-      ),
+      messages: Array.from({ length: 8 }, (_, index) => toolResultMessage(hugePayload, index + 1)),
       estimatedTokens: 100_000,
       contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
     });
@@ -1572,9 +1571,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         }),
     );
     const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
-      messages: Array.from({ length: 8 }, (_, index) =>
-        toolResultMessage(hugePayload, index + 1),
-      ),
+      messages: Array.from({ length: 8 }, (_, index) => toolResultMessage(hugePayload, index + 1)),
       estimatedTokens: 100_000,
       contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
     });

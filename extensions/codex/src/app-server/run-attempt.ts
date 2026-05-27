@@ -1097,7 +1097,9 @@ function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean
   return !params.messageChannel && !params.messageProvider;
 }
 
-type ContextEngineProviderBoundaryPrecheck = ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>;
+type ContextEngineProviderBoundaryPrecheck = ReturnType<
+  typeof shouldPreemptivelyCompactBeforePrompt
+>;
 type ContextEngineProviderBoundaryOverflowPrecheck = ContextEngineProviderBoundaryPrecheck & {
   route: Exclude<ContextEngineProviderBoundaryPrecheck["route"], "fits">;
 };
@@ -1439,12 +1441,16 @@ export async function runCodexAppServerAttempt(
       contextEnginePluginId: activeContextEnginePluginId,
       tokenBudget: params.contextTokenBudget,
     });
+  type ContextEngineOverflowCompactionResult = Pick<
+    EmbeddedRunAttemptResult,
+    "compactionCount" | "compactionTokensAfter"
+  >;
   const forceContextEngineCompactionForCodexOverflow = async (
     error: unknown,
     options: { threadId?: string } = {},
-  ): Promise<boolean> => {
+  ): Promise<ContextEngineOverflowCompactionResult | undefined> => {
     if (!activeContextEngine?.info.ownsCompaction) {
-      return false;
+      return undefined;
     }
     embeddedAgentLog.warn(
       "codex app-server context-engine prompt overflowed; forcing context-engine compaction",
@@ -1491,7 +1497,7 @@ export async function runCodexAppServerAttempt(
         tokensAfter: compactResult.result?.tokensAfter,
       });
       if (!compactResult.ok || !compactResult.compacted) {
-        return false;
+        return undefined;
       }
       adoptContextEngineCompactionTranscript(compactResult);
       await runHarnessContextEngineMaintenance({
@@ -1503,7 +1509,13 @@ export async function runCodexAppServerAttempt(
         runtimeContext: buildActiveContextEngineRuntimeContext(),
         config: params.config,
       });
-      return true;
+      const tokensAfter = compactResult.result?.tokensAfter;
+      return {
+        compactionCount: 1,
+        ...(typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0
+          ? { compactionTokensAfter: Math.floor(tokensAfter) }
+          : {}),
+      };
     } catch (compactErr) {
       if (runAbortController.signal.aborted || isAbortLikeError(compactErr)) {
         throw compactErr;
@@ -1514,7 +1526,7 @@ export async function runCodexAppServerAttempt(
         engineId: activeContextEngine.info.id,
         error: formatErrorMessage(compactErr),
       });
-      return false;
+      return undefined;
     }
   };
   if (activeContextEngine) {
@@ -1820,6 +1832,7 @@ export async function runCodexAppServerAttempt(
   const buildPreStartPromptErrorResult = (
     message: string,
     preflightRecovery?: EmbeddedRunAttemptResult["preflightRecovery"],
+    compactionResult?: ContextEngineOverflowCompactionResult,
   ): EmbeddedRunAttemptResult => {
     const activeAttempt = buildActiveRunAttemptParams();
     return {
@@ -1832,9 +1845,8 @@ export async function runCodexAppServerAttempt(
         ],
         systemPromptReport: buildCurrentSystemPromptReport(activeAttempt),
       }),
-      ...(preflightRecovery
-        ? { promptErrorSource: "precheck" as const, preflightRecovery }
-        : {}),
+      ...compactionResult,
+      ...(preflightRecovery ? { promptErrorSource: "precheck" as const, preflightRecovery } : {}),
     };
   };
   const buildPreStartAbortResult = (error: unknown): EmbeddedRunAttemptResult => ({
@@ -1844,8 +1856,9 @@ export async function runCodexAppServerAttempt(
     promptError: undefined,
     promptErrorSource: null,
   });
-  const maybeCompactContextEngineForProviderBoundaryPrecheck =
-    async (): Promise<EmbeddedRunAttemptResult | undefined> => {
+  const maybeCompactContextEngineForProviderBoundaryPrecheck = async (): Promise<
+    EmbeddedRunAttemptResult | undefined
+  > => {
     if (!activeContextEngine?.info.ownsCompaction) {
       return undefined;
     }
@@ -1879,10 +1892,10 @@ export async function runCodexAppServerAttempt(
         route: precheck.route,
       });
     }
-    const compacted = await forceContextEngineCompactionForCodexOverflow(
+    const compactionResult = await forceContextEngineCompactionForCodexOverflow(
       PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     );
-    if (!compacted) {
+    if (!compactionResult) {
       return buildPreStartPromptErrorResult(PREEMPTIVE_OVERFLOW_ERROR_TEXT, {
         route: precheck.route,
       });
@@ -1903,14 +1916,17 @@ export async function runCodexAppServerAttempt(
         overflowTokens: afterCompactionPrecheck.overflowTokens,
       },
     );
-    return buildPreStartPromptErrorResult(PREEMPTIVE_OVERFLOW_ERROR_TEXT, {
-      route: afterCompactionPrecheck.route,
-    });
+    return buildPreStartPromptErrorResult(
+      PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+      {
+        route: afterCompactionPrecheck.route,
+      },
+      compactionResult,
+    );
   };
   let providerBoundaryPrecheckFailure: EmbeddedRunAttemptResult | undefined;
   try {
-    providerBoundaryPrecheckFailure =
-      await maybeCompactContextEngineForProviderBoundaryPrecheck();
+    providerBoundaryPrecheckFailure = await maybeCompactContextEngineForProviderBoundaryPrecheck();
   } catch (error) {
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     if (runAbortController.signal.aborted || isAbortLikeError(error)) {
