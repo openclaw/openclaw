@@ -878,6 +878,18 @@ function packageNameForLockPath(lockPath, metadata) {
   return metadata?.name ?? parseLockPackagePath(lockPath).at(-1)?.name ?? null;
 }
 
+function isStablePatchDrift(generatedVersion, currentVersion) {
+  const generatedParts = stableVersionParts(generatedVersion);
+  const currentParts = stableVersionParts(currentVersion);
+  return (
+    generatedParts !== null &&
+    currentParts !== null &&
+    generatedParts.major === currentParts.major &&
+    generatedParts.minor === currentParts.minor &&
+    generatedParts.patch !== currentParts.patch
+  );
+}
+
 function restoreCurrentPnpmLockedPackages(
   generated,
   current,
@@ -913,6 +925,7 @@ function restoreCurrentPnpmLockedPackages(
       typeof currentMetadata !== "object" ||
       !currentMetadata.version ||
       currentPackageName !== packageName ||
+      !isStablePatchDrift(metadata.version, currentMetadata.version) ||
       !pnpmLockPackages.has(`${packageName}@${currentMetadata.version}`)
     ) {
       continue;

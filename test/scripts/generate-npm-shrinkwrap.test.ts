@@ -180,6 +180,29 @@ describe("generate-npm-shrinkwrap", () => {
     expect(restoreCurrentPnpmLockedPackages(generated, current, pnpmPackages)).toEqual(current);
   });
 
+  it("does not restore incompatible generated shrinkwrap versions", () => {
+    const generated = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "12.0.0",
+        },
+      },
+    };
+    const current = {
+      packages: {
+        "": {},
+        "node_modules/lru-cache": {
+          version: "11.5.0",
+        },
+      },
+    };
+
+    expect(
+      restoreCurrentPnpmLockedPackages(generated, current, new Set(["lru-cache@11.5.0"])),
+    ).toEqual(generated);
+  });
+
   it("pins current shrinkwrap versions that are still in the pnpm lock", () => {
     const lockfile = {
       packages: {
