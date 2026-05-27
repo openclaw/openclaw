@@ -44,7 +44,10 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
-import { resolveBundledStaticCatalogModel } from "./model.static-catalog.js";
+import {
+  canonicalizeManifestModelCatalogProviderAlias,
+  resolveBundledStaticCatalogModel,
+} from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
   applyProviderResolvedTransportWithPlugin?: (
@@ -1109,6 +1112,23 @@ function preferProviderRuntimeResolvedModel(params: {
   return params.explicitModel;
 }
 
+function normalizeProviderModelRef(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+}): { provider: string; model: string } {
+  const provider = canonicalizeManifestModelCatalogProviderAlias({
+    provider: params.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  return {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), params.modelId),
+  };
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -1118,18 +1138,14 @@ export function resolveModelWithRegistry(params: {
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
-  const normalizedRef = {
-    provider: params.provider,
-    model: normalizeStaticProviderModelId(normalizeProviderId(params.provider), params.modelId),
-  };
+  const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
+  const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
   const normalizedParams = {
     ...params,
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,
   };
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
-  const workspaceDir =
-    normalizedParams.workspaceDir ?? normalizedParams.cfg?.agents?.defaults?.workspace;
   const scopedParams = {
     ...normalizedParams,
     ...(workspaceDir !== undefined ? { workspaceDir } : {}),
@@ -1183,12 +1199,9 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
-  const normalizedRef = {
-    provider,
-    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
-  };
-  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const workspaceDir = options?.workspaceDir ?? cfg?.agents?.defaults?.workspace;
+  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const cachedStores =
     !options?.authStorage && !options?.modelRegistry
       ? discoverCachedAgentStoresForAgent(resolvedAgentDir, cfg)
@@ -1248,12 +1261,9 @@ export async function resolveModelAsync(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
-  const normalizedRef = {
-    provider,
-    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
-  };
-  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const workspaceDir = options?.workspaceDir ?? cfg?.agents?.defaults?.workspace;
+  const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
+  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const emptyDiscoveryStores =
     options?.skipAgentDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyAgentDiscoveryStores()

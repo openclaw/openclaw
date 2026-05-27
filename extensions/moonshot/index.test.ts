@@ -7,6 +7,7 @@ import plugin from "./index.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 type MoonshotManifest = {
+  providerAuthAliases?: Record<string, string>;
   setup?: {
     providers?: Array<{
       id?: string;
@@ -30,6 +31,16 @@ describe("moonshot provider plugin", () => {
     expect([...manifestEnvVars].toSorted()).toStrictEqual(
       [...createKimiWebSearchProvider().envVars].toSorted(),
     );
+  });
+
+  it("declares shipped Moonshot provider aliases in runtime and manifest metadata", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.aliases).toEqual(["moonshotai", "moonshot-ai"]);
+    expect(readManifest().providerAuthAliases).toEqual({
+      moonshotai: "moonshot",
+      "moonshot-ai": "moonshot",
+    });
   });
 
   it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {

@@ -3,6 +3,8 @@ import type { Model } from "../../llm/types.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../provider-id.js";
@@ -62,6 +64,53 @@ function listBundledStaticCatalogPlugins(env: NodeJS.ProcessEnv): StaticCatalogP
       },
     ];
   });
+}
+
+function resolveManifestModelCatalogProviderAlias(params: {
+  provider: string;
+  plugins: readonly Pick<PluginManifestRecord, "providers" | "modelCatalog">[];
+}): string | undefined {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return undefined;
+  }
+  const targets = new Set<string>();
+  for (const plugin of params.plugins) {
+    for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+      const normalizedAlias = normalizeProviderId(rawAlias);
+      const normalizedTarget = normalizeProviderId(alias.provider);
+      if (
+        normalizedAlias === provider &&
+        normalizedTarget &&
+        plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedTarget)
+      ) {
+        targets.add(normalizedTarget);
+      }
+    }
+  }
+  return targets.size === 1 ? [...targets][0] : undefined;
+}
+
+export function canonicalizeManifestModelCatalogProviderAlias(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return params.provider;
+  }
+  return (
+    resolveManifestModelCatalogProviderAlias({
+      provider,
+      plugins: loadPluginManifestRegistry({
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env: params.env ?? process.env,
+      }).plugins,
+    }) ?? params.provider
+  );
 }
 
 export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {

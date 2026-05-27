@@ -77,6 +77,26 @@ function resolveProviderSurfacePluginIdSet(
   );
 }
 
+function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider: string): boolean {
+  if (
+    plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider)
+  ) {
+    return true;
+  }
+  for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+    const alias = normalizeProviderId(rawAlias);
+    const targetProvider = normalizeProviderId(target.provider);
+    if (
+      alias === normalizedProvider &&
+      targetProvider &&
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
   return (
     plugin.modelCatalog?.runtimeAugment === true ||
@@ -512,11 +532,7 @@ export function resolveOwningPluginIdsForProvider(params: {
     }).manifestRegistry;
 
   const pluginIds = manifestRegistry.plugins
-    .filter((plugin) =>
-      plugin.providers.some(
-        (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-      ),
-    )
+    .filter((plugin) => pluginOwnsProviderRef(plugin, normalizedProvider))
     .map((plugin) => plugin.id);
 
   return pluginIds.length > 0 ? pluginIds : undefined;

@@ -128,9 +128,13 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeExternalAuthProviderRefs: resolveRuntimeExternalAuthProviderRefsMock,
 }));
 
-vi.mock("./model.static-catalog.js", () => ({
-  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
-}));
+vi.mock("./model.static-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
+  return {
+    ...actual,
+    resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+  };
+});
 
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
@@ -1671,7 +1675,7 @@ describe("resolveModel", () => {
     expect(result.error).toBe("Unknown model: bytedance/vision-model");
   });
 
-  it("does not resolve direct moonshotai refs through core provider aliases", () => {
+  it("resolves direct moonshotai refs through manifest-owned provider aliases", () => {
     const cfg = {
       models: {
         providers: {
@@ -1692,10 +1696,14 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("moonshotai", "kimi-k2.6", "/tmp/agent", cfg);
 
-    expect(result.error).toBe("Unknown model: moonshotai/kimi-k2.6");
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "moonshot",
+      id: "kimi-k2.6",
+    });
   });
 
-  it("does not resolve direct moonshot-ai refs through core provider aliases", () => {
+  it("resolves direct moonshot-ai refs through manifest-owned provider aliases", () => {
     const cfg = {
       models: {
         providers: {
@@ -1710,7 +1718,11 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("moonshot-ai", "kimi-k2.6", "/tmp/agent", cfg);
 
-    expect(result.error).toBe("Unknown model: moonshot-ai/kimi-k2.6");
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "moonshot",
+      id: "kimi-k2.6",
+    });
   });
 
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {

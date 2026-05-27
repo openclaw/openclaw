@@ -6,6 +6,10 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
+  "providerAuthAliases": {
+    "moonshotai": "moonshot",
+    "moonshot-ai": "moonshot"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "moonshot-native",

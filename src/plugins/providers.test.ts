@@ -542,6 +542,24 @@ describe("resolvePluginProviders", () => {
     expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
   });
 
+  it("maps manifest model catalog provider aliases to owning plugin ids", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        modelCatalog: {
+          aliases: {
+            moonshotai: { provider: "moonshot" },
+            "moonshot-ai": { provider: "moonshot" },
+          },
+        },
+      }),
+    ]);
+
+    expectOwningPluginIds("moonshotai", ["moonshot"]);
+    expectOwningPluginIds("moonshot-ai", ["moonshot"]);
+  });
+
   it("reflects provider ownership manifest changes on the next lookup", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
