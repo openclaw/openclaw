@@ -46,8 +46,8 @@ export function describeCodexNotificationCorrelation(
   notification: CodexServerNotification,
   active: { threadId: string; turnId?: string },
 ): CodexNotificationCorrelation {
-  const params = isJsonObject(notification.params) ? notification.params : undefined;
-  const turn = params && isJsonObject(params.turn) ? params.turn : undefined;
+  const params = readJsonObject(notification, "params");
+  const turn = params ? readJsonObject(params, "turn") : undefined;
   const threadId = params ? readString(params, "threadId") : undefined;
   const turnId = params ? readString(params, "turnId") : undefined;
   const nestedTurnThreadId = turn ? readString(turn, "threadId") : undefined;
@@ -58,10 +58,10 @@ export function describeCodexNotificationCorrelation(
   const matchesActiveTurn = active.turnId
     ? matchesActiveThread && resolvedTurnId === active.turnId
     : undefined;
-  const items = turn?.items;
+  const items = turn ? readValue(turn, "items") : undefined;
   return {
     method: notification.method,
-    ...(params ? { paramsKeys: Object.keys(params).toSorted() } : {}),
+    ...(params ? { paramsKeys: readObjectKeys(params).toSorted() } : {}),
     activeThreadId: active.threadId,
     ...(active.turnId ? { activeTurnId: active.turnId } : {}),
     ...(threadId ? { threadId } : {}),
@@ -76,16 +76,40 @@ export function describeCodexNotificationCorrelation(
 }
 
 function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
+  const turn = readJsonObject(record, "turn");
+  return turn ? readString(turn, "id") : undefined;
 }
 
 function readNestedTurnThreadId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "threadId") : undefined;
+  const turn = readJsonObject(record, "turn");
+  return turn ? readString(turn, "threadId") : undefined;
+}
+
+function readJsonObject(
+  record: JsonObject | CodexServerNotification,
+  key: string,
+): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readObjectKeys(record: JsonObject): string[] {
+  try {
+    return Object.keys(record);
+  } catch {
+    return [];
+  }
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readValue(record: JsonObject | CodexServerNotification, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
