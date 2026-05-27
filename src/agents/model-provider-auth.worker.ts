@@ -46,7 +46,9 @@ export async function runProviderAuthWarmWorkerInput(
     if (input.runtimeAuthStores?.length) {
       replaceRuntimeAuthProfileStoreSnapshots(input.runtimeAuthStores);
     }
-    const snapshot = await buildCurrentProviderAuthStateSnapshot(input.cfg);
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(input.cfg, {
+      readOnlyAuthStore: true,
+    });
     return {
       status: "ok",
       snapshot,

@@ -899,6 +899,8 @@ export function ensureAuthProfileStore(
     externalCli?: ExternalCliAuthDiscovery;
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
+    readOnly?: boolean;
+    syncExternalCli?: boolean;
   },
 ): AuthProfileStore {
   const externalCli = resolveExternalCliOverlayOptions(options);
@@ -921,7 +923,12 @@ export function ensureAuthProfileStore(
 
 export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean },
+  options?: {
+    allowKeychainPrompt?: boolean;
+    readOnly?: boolean;
+    resolveLegacyOAuthSidecars?: boolean;
+    syncExternalCli?: boolean;
+  },
 ): AuthProfileStore {
   const effectiveOptions: LoadAuthProfileStoreOptions = {
     ...options,

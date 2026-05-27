@@ -121,6 +121,25 @@ describe("prepared provider auth state", () => {
     });
   });
 
+  it("disables persisted auth-store sync for read-only warm snapshots", async () => {
+    const cfg = {} as OpenClawConfig;
+    const externalCli = { mode: "scoped" };
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    authProfilesMocks.externalCliDiscoveryForProviders.mockReturnValue(externalCli as never);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+
+    await buildCurrentProviderAuthStateSnapshot(cfg, { readOnlyAuthStore: true });
+
+    expect(authProfilesMocks.ensureAuthProfileStore).toHaveBeenCalledWith("/warm/default-agent", {
+      config: cfg,
+      externalCli,
+      readOnly: true,
+      syncExternalCli: false,
+    });
+  });
+
   it("hasAuthForModelProvider returns the prepared answer after warm and falls through to compute after clear", async () => {
     const cfg = {} as OpenClawConfig;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([

@@ -277,7 +277,7 @@ function publishProviderAuthWarmSnapshot(snapshot: ProviderAuthWarmSnapshot): vo
 
 export async function buildCurrentProviderAuthStateSnapshot(
   cfg: OpenClawConfig,
-  options: { isCancelled?: () => boolean } = {},
+  options: { isCancelled?: () => boolean; readOnlyAuthStore?: boolean } = {},
 ): Promise<ProviderAuthWarmSnapshot> {
   const isWarmStale = () => options.isCancelled?.() === true;
   const catalog = await loadModelCatalog({ config: cfg, readOnly: true });
@@ -306,13 +306,21 @@ export async function buildCurrentProviderAuthStateSnapshot(
     });
     // One AuthProfileStore scoped to every candidate provider; without this
     // the per-provider externalCli discovery rebuilds the store ~N times.
-    const store = ensureAuthProfileStore(agentDir, {
-      config: cfg,
-      externalCli: externalCliDiscoveryForProviders({
-        cfg,
-        providers: providerList,
-      }),
+    const externalCli = externalCliDiscoveryForProviders({
+      cfg,
+      providers: providerList,
     });
+    const store = options.readOnlyAuthStore
+      ? ensureAuthProfileStore(agentDir, {
+          config: cfg,
+          externalCli,
+          readOnly: true,
+          syncExternalCli: false,
+        })
+      : ensureAuthProfileStore(agentDir, {
+          config: cfg,
+          externalCli,
+        });
     const state = new Map<string, boolean>();
     for (const provider of providers) {
       if (isWarmStale()) {
