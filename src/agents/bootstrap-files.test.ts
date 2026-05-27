@@ -10,7 +10,10 @@ import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT,
+  countRecentCompletedBootstrapTurns,
   hasCompletedBootstrapTurn,
+  hasReachedBootstrapPersistLimit,
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
@@ -619,6 +622,207 @@ describe("hasCompletedBootstrapTurn", () => {
     );
     await fs.symlink(realFile, linkFile);
     expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+  });
+});
+
+describe("countRecentCompletedBootstrapTurns (#63998 doomloop circuit breaker)", () => {
+  let tmpDir: string;
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-count-"));
+  });
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeBootstrapEntries(count: number, opts?: { suffix?: string }): string {
+    const sessionFile = path.join(tmpDir, `count-${opts?.suffix ?? count}.jsonl`);
+    const lines: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      lines.push(
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: i },
+        }),
+      );
+    }
+    fs.writeFile(sessionFile, lines.join("\n") + (lines.length ? "\n" : ""), "utf8");
+    return sessionFile;
+  }
+
+  it("returns 0 for missing file", async () => {
+    expect(await countRecentCompletedBootstrapTurns(path.join(tmpDir, "missing.jsonl"))).toBe(0);
+  });
+
+  it("returns 0 for an empty session file", async () => {
+    const sessionFile = path.join(tmpDir, "empty.jsonl");
+    await fs.writeFile(sessionFile, "", "utf8");
+    expect(await countRecentCompletedBootstrapTurns(sessionFile)).toBe(0);
+  });
+
+  it("counts every recent bootstrap-context:full entry up to the supplied limit (early-out)", async () => {
+    const sessionFile = path.join(tmpDir, "many.jsonl");
+    const lines: string[] = [];
+    for (let i = 0; i < 15; i += 1) {
+      lines.push(
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: i },
+        }),
+      );
+    }
+    await fs.writeFile(sessionFile, lines.join("\n") + "\n", "utf8");
+
+    expect(await countRecentCompletedBootstrapTurns(sessionFile, 10)).toBe(10);
+    expect(await countRecentCompletedBootstrapTurns(sessionFile, 20)).toBe(15);
+  });
+
+  it("ignores non-bootstrap records and malformed JSON lines", async () => {
+    const sessionFile = path.join(tmpDir, "mixed.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "user", content: "hi" } }),
+        "{broken-json",
+        JSON.stringify({ type: "compaction", summary: "trimmed" }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
+        JSON.stringify({ type: "custom", customType: "openclaw:other-marker", data: {} }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 2 },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await countRecentCompletedBootstrapTurns(sessionFile, 10)).toBe(2);
+  });
+
+  it("returns 0 for symbolic links", async () => {
+    const realFile = path.join(tmpDir, "real.jsonl");
+    const linkFile = path.join(tmpDir, "link.jsonl");
+    await fs.writeFile(
+      realFile,
+      `${JSON.stringify({ type: "custom", customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, data: { timestamp: 1 } })}\n`,
+      "utf8",
+    );
+    await fs.symlink(realFile, linkFile);
+    expect(await countRecentCompletedBootstrapTurns(linkFile)).toBe(0);
+  });
+
+  it("uses default FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT when no limit is passed", async () => {
+    expect(FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT).toBe(10);
+    const sessionFile = path.join(tmpDir, "default-limit.jsonl");
+    const lines: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      lines.push(
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: i },
+        }),
+      );
+    }
+    await fs.writeFile(sessionFile, lines.join("\n") + "\n", "utf8");
+    expect(await countRecentCompletedBootstrapTurns(sessionFile)).toBe(
+      FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT,
+    );
+  });
+
+  it("only scans the recent tail; entries pushed out of the tail window are not counted", async () => {
+    const sessionFile = path.join(tmpDir, "tail-only.jsonl");
+    const hugeUserContent = "x".repeat(300 * 1024);
+    const lines = [
+      // This bootstrap entry is at the head and sits before the 256KB tail window.
+      JSON.stringify({
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 0 },
+      }),
+      JSON.stringify({ type: "message", message: { role: "user", content: hugeUserContent } }),
+      // This bootstrap entry sits inside the tail window.
+      JSON.stringify({
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 1 },
+      }),
+    ];
+    await fs.writeFile(sessionFile, lines.join("\n") + "\n", "utf8");
+    expect(await countRecentCompletedBootstrapTurns(sessionFile, 10)).toBe(1);
+  });
+
+  // Avoid unused helper warning.
+  void writeBootstrapEntries;
+});
+
+describe("hasReachedBootstrapPersistLimit (#63998 doomloop circuit breaker)", () => {
+  let tmpDir: string;
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-cap-"));
+  });
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeNEntries(count: number, name: string): Promise<string> {
+    const sessionFile = path.join(tmpDir, `${name}.jsonl`);
+    const lines: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      lines.push(
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: i },
+        }),
+      );
+    }
+    return fs
+      .writeFile(sessionFile, lines.join("\n") + (lines.length ? "\n" : ""), "utf8")
+      .then(() => sessionFile);
+  }
+
+  it("returns false when the session has no bootstrap entries", async () => {
+    const sessionFile = path.join(tmpDir, "empty.jsonl");
+    await fs.writeFile(sessionFile, "", "utf8");
+    expect(await hasReachedBootstrapPersistLimit(sessionFile)).toBe(false);
+  });
+
+  it("returns false strictly below the configured limit", async () => {
+    const sessionFile = await writeNEntries(FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT - 1, "below");
+    expect(await hasReachedBootstrapPersistLimit(sessionFile)).toBe(false);
+  });
+
+  it("returns true at exactly the configured limit", async () => {
+    const sessionFile = await writeNEntries(FULL_BOOTSTRAP_COMPLETED_PERSIST_LIMIT, "exactly");
+    expect(await hasReachedBootstrapPersistLimit(sessionFile)).toBe(true);
+  });
+
+  it("returns true past the configured limit (doomloop case in #63998, 1,635 entries)", async () => {
+    const sessionFile = path.join(tmpDir, "doomloop.jsonl");
+    // Simulate a degraded session with many recurring bootstrap markers in the tail.
+    const lines: string[] = [];
+    for (let i = 0; i < 50; i += 1) {
+      lines.push(
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: i },
+        }),
+      );
+    }
+    await fs.writeFile(sessionFile, lines.join("\n") + "\n", "utf8");
+    expect(await hasReachedBootstrapPersistLimit(sessionFile)).toBe(true);
+  });
+
+  it("honors caller-supplied limit override", async () => {
+    const sessionFile = await writeNEntries(4, "override");
+    expect(await hasReachedBootstrapPersistLimit(sessionFile, 3)).toBe(true);
+    expect(await hasReachedBootstrapPersistLimit(sessionFile, 5)).toBe(false);
   });
 });
 
