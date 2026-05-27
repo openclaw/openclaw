@@ -1118,9 +1118,12 @@ function buildVisibleReplyInstruction(
     ? dynamicTools.some((tool) => tool.name.trim() === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "To send a visible message, use the `message` tool.";
+    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
   }
-  return "To send a visible reply, use the active Codex delivery path.";
+  if (messageToolAvailable) {
+    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
+  }
+  return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
 }
 
 function buildUserInput(

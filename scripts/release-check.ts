@@ -40,13 +40,13 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
   resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
 } from "./openclaw-npm-postpublish-verify.ts";
-import { resolveNpmRunner } from "./npm-runner.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -117,6 +117,7 @@ const forbiddenPrivateQaContentMarkers = [
   "qa-lab/runtime-api.js",
 ] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
+const forbiddenPluginSdkRootAliasMinifiedExportPattern = /\bmod\.[A-Za-z_$]\b/u;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -297,11 +298,14 @@ function runPackDry(): PackResult[] {
 }
 
 function runPack(packDestination: string): PackResult[] {
-  const raw = execNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 1024 * 1024 * 100,
-  });
+  const raw = execNpm(
+    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024 * 100,
+    },
+  );
   return JSON.parse(raw) as PackResult[];
 }
 
@@ -442,6 +446,15 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
     errors.push(
       `installed openclaw binary version mismatch: expected ${params.expectedVersion}, found ${params.installedBinaryVersion || "<missing>"}.`,
     );
+  }
+  const rootAliasPath = join(params.packageRoot, "dist", "plugin-sdk", "root-alias.cjs");
+  if (existsSync(rootAliasPath)) {
+    const rootAliasSource = readFileSync(rootAliasPath, "utf8");
+    if (forbiddenPluginSdkRootAliasMinifiedExportPattern.test(rootAliasSource)) {
+      errors.push(
+        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
+      );
+    }
   }
   return errors;
 }

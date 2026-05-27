@@ -175,6 +175,7 @@ function checkedOutput(command, commandArgs) {
   return {
     status: result.status ?? 1,
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
+    stdout: (result.stdout ?? "").trim(),
   };
 }
 
@@ -390,6 +391,48 @@ function commandProvider(commandArgs) {
 
 function selectedProvider(commandArgs) {
   return commandProvider(commandArgs) || configuredProvider();
+}
+
+function shouldRequireBrokeredAws(commandArgs, providerName) {
+  if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
+    return false;
+  }
+  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  if (canonicalProvider !== "aws") {
+    return false;
+  }
+  if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
+    return true;
+  }
+  return commandArgs[0] === "actions" && commandArgs[1] === "hydrate";
+}
+
+function brokerAuthConfigured() {
+  const config = checkedOutput(binary, ["config", "show", "--json"]);
+  if (config.status !== 0) {
+    return false;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(config.stdout || config.text);
+  } catch {
+    return false;
+  }
+  return Boolean(parsed?.coordinator && parsed?.brokerAuth === "configured");
+}
+
+function enforceBrokeredAws(commandArgs, providerName) {
+  if (!shouldRequireBrokeredAws(commandArgs, providerName) || brokerAuthConfigured()) {
+    return;
+  }
+  console.error(
+    [
+      "[crabbox] provider=aws requires a configured Crabbox broker for OpenClaw proof.",
+      "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai --provider aws`, then retry.",
+      "[crabbox] for intentional direct AWS provider debugging, set OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS=1.",
+    ].join("\n"),
+  );
+  process.exit(2);
 }
 
 function optionValue(commandArgs, name) {
@@ -1371,7 +1414,11 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
 }
 
 function scopedAwsMacosEnvCommand(commandArgs) {
-  if (commandArgs.length <= 1 || shellWordBasename(commandArgs[0]) !== "env" || commandArgs[0].includes("/")) {
+  if (
+    commandArgs.length <= 1 ||
+    shellWordBasename(commandArgs[0]) !== "env" ||
+    commandArgs[0].includes("/")
+  ) {
     return null;
   }
 
@@ -1381,7 +1428,10 @@ function scopedAwsMacosEnvCommand(commandArgs) {
   }
 
   const targetEntrypoint = shellWordBasename(targetWords[0]);
-  if (!jsRuntimeEntrypoints.has(targetEntrypoint) && !awsMacosCorepackEntrypoints.has(targetEntrypoint)) {
+  if (
+    !jsRuntimeEntrypoints.has(targetEntrypoint) &&
+    !awsMacosCorepackEntrypoints.has(targetEntrypoint)
+  ) {
     return null;
   }
 
@@ -1397,7 +1447,8 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const directScopedEnvCommand = hasOption(commandArgs, "--shell")
     ? null
     : scopedAwsMacosEnvCommand(runArgs);
-  const runtimeEntrypoint = directScopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
+  const runtimeEntrypoint =
+    directScopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
   if (!isAwsMacosRemoteTarget(commandArgs, providerName) || !runtimeEntrypoint) {
     return commandArgs;
   }
@@ -1415,7 +1466,8 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
       ? remoteCommand[0]
       : shellJoin(remoteCommand));
   const shellCommand = `${remoteAwsMacosJsBootstrap({
-    packageManager: directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
+    packageManager:
+      directScopedEnvCommand?.packageManager || commandNeedsAwsMacosPackageManager(runArgs),
   })} && { ${originalShellCommand}\n}`;
 
   if (!hasOption(normalizedArgs, "--shell")) {
@@ -1721,6 +1773,8 @@ if (provider && !isProviderAdvertised(provider, providers)) {
   );
   process.exit(2);
 }
+
+enforceBrokeredAws(normalizedArgs, provider);
 
 if (provider === "blacksmith-testbox") {
   const envProvider = process.env.CRABBOX_PROVIDER?.trim();

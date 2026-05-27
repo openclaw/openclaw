@@ -285,7 +285,7 @@ export async function executePreparedCliRun(
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
-    !useResume && systemPromptArg
+    systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
       ? await writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,

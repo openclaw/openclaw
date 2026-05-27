@@ -3,10 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import {
-  getRenderedModalDialog,
-  installDialogPolyfill,
-} from "../../test-helpers/modal-dialog.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import type { ExecApprovalRequest } from "../controllers/exec-approval.ts";
@@ -130,30 +127,27 @@ describe("approval and confirmation modals", () => {
     expect(spans).toEqual(["ls", "python -c"]);
   });
 
-  it("maps Escape to exec denial when approval is idle", async () => {
+  it("does not render a visible neutral dismiss action", async () => {
+    render(renderExecApprovalPrompt(createExecState()), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Always allow", "Deny"]);
+  });
+
+  it("denies exec approval on Escape", async () => {
     const handleExecApprovalDecision = vi.fn(async () => undefined);
     render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);
 
     const { dialog } = await getRenderedDialog();
+
     dispatchEscape(dialog);
 
-    expect(handleExecApprovalDecision).toHaveBeenCalledTimes(1);
     expect(handleExecApprovalDecision).toHaveBeenCalledWith("deny");
-  });
-
-  it("does not dispatch an extra exec decision from Escape while busy", async () => {
-    const handleExecApprovalDecision = vi.fn(async () => undefined);
-    render(
-      renderExecApprovalPrompt(
-        createExecState({ execApprovalBusy: true, handleExecApprovalDecision }),
-      ),
-      container,
-    );
-
-    const { dialog } = await getRenderedDialog();
-    dispatchEscape(dialog);
-
-    expect(handleExecApprovalDecision).not.toHaveBeenCalled();
   });
 
   it("renders exec approval chrome from the active locale", async () => {

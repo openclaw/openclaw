@@ -236,12 +236,13 @@ TRASH
 openclaw_e2e_run_script_with_pty() {
   local command="$1"
   local log_path="$2"
+  local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
   if script --version >/dev/null 2>&1; then
-    script -q -f -c "$command" "$log_path"
+    openclaw_e2e_maybe_timeout "$timeout_value" script -q -f -c "$command" "$log_path"
   elif node -e 'import("@lydell/node-pty")' >/dev/null 2>&1; then
-    node scripts/e2e/lib/run-with-pty.mjs "$log_path" /bin/bash -lc "$command"
+    openclaw_e2e_maybe_timeout "$timeout_value" node scripts/e2e/lib/run-with-pty.mjs "$log_path" /bin/bash -lc "$command"
   else
-    script -q -F "$log_path" /bin/bash -lc "$command"
+    openclaw_e2e_maybe_timeout "$timeout_value" script -q -F "$log_path" /bin/bash -lc "$command"
   fi
 }
 openclaw_e2e_stop_process() {
@@ -332,7 +333,22 @@ openclaw_e2e_assert_log_not_contains() {
 openclaw_e2e_run_logged() {
   local label="$1" log_path="/tmp/openclaw-onboard-${1}.log"
   shift
-  "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
+  openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
+}
+openclaw_e2e_run_command() {
+  local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
+  openclaw_e2e_maybe_timeout "$timeout_value" "$@"
+}
+openclaw_e2e_enable_openclaw_cli_timeout() {
+  OPENCLAW_E2E_CLI_BIN="$(type -P openclaw)"
+  if [ -z "$OPENCLAW_E2E_CLI_BIN" ]; then
+    echo "OpenClaw CLI binary not found on PATH" >&2
+    return 1
+  fi
+  export OPENCLAW_E2E_CLI_BIN
+  openclaw() {
+    openclaw_e2e_run_command "$OPENCLAW_E2E_CLI_BIN" "$@"
+  }
 }
 openclaw_e2e_dump_logs() {
   local path

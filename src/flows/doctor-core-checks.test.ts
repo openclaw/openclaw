@@ -14,7 +14,7 @@ import {
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const runtime = { log() {}, error() {}, exit() {} };
 
@@ -64,6 +64,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
       return [];
     },
     async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
+      return [];
+    },
+    async collectRuntimeToolSchemaFindings() {
       return [];
     },
     ...overrides,
@@ -312,6 +315,43 @@ describe("registerCoreHealthChecks", () => {
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
         message: "Memory system not found in workspace.",
+      }),
+    );
+  });
+
+  it("reports active runtime tool schema projection findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectRuntimeToolSchemaFindings(): Promise<readonly HealthFinding[]> {
+            return [
+              {
+                checkId: "core/doctor/runtime-tool-schemas",
+                severity: "error",
+                message:
+                  "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
+                path: "plugins.entries.dofbot",
+                target: "dofbot_move_angles",
+                requirement: 'dofbot_move_angles.parameters.type must be "object"',
+              },
+            ];
+          },
+        }),
+      ),
+      "core/doctor/runtime-tool-schemas",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        target: "dofbot_move_angles",
       }),
     );
   });
