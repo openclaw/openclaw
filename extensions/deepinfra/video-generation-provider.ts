@@ -34,6 +34,9 @@ type DeepInfraVideoStatus = {
 
 type DeepInfraVideoResponse = {
   video_url?: string;
+  video?: string;
+  videos?: Array<string | { url?: string; video_url?: string }>;
+  status?: string;
   seed?: number;
   request_id?: string;
   inference_status?: DeepInfraVideoStatus;
@@ -128,10 +131,28 @@ function buildDeepInfraVideoBody(
   return body;
 }
 
+function firstDeepInfraVideoUrl(payload: DeepInfraVideoResponse): string | undefined {
+  const direct =
+    normalizeOptionalString(payload.video_url) ?? normalizeOptionalString(payload.video);
+  if (direct) {
+    return direct;
+  }
+  for (const entry of payload.videos ?? []) {
+    const videoUrl =
+      typeof entry === "string"
+        ? normalizeOptionalString(entry)
+        : (normalizeOptionalString(entry.url) ?? normalizeOptionalString(entry.video_url));
+    if (videoUrl) {
+      return videoUrl;
+    }
+  }
+  return undefined;
+}
+
 function extractDeepInfraVideoAsset(payload: DeepInfraVideoResponse): GeneratedVideoAsset {
-  const videoUrl = normalizeOptionalString(payload.video_url);
+  const videoUrl = firstDeepInfraVideoUrl(payload);
   if (!videoUrl) {
-    throw new Error("DeepInfra video response missing video_url");
+    throw new Error("DeepInfra video response missing video URL");
   }
   const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl);
   const dataAsset = parseVideoDataUrl(normalizedUrl);
@@ -146,7 +167,10 @@ function extractDeepInfraVideoAsset(payload: DeepInfraVideoResponse): GeneratedV
 }
 
 function failureMessage(payload: DeepInfraVideoResponse): string | undefined {
-  const status = normalizeOptionalString(payload.inference_status?.status)?.toLowerCase();
+  const status = (
+    normalizeOptionalString(payload.inference_status?.status) ??
+    normalizeOptionalString(payload.status)
+  )?.toLowerCase();
   if (status === "failed" || status === "error") {
     return "DeepInfra video generation failed";
   }
@@ -157,9 +181,10 @@ function failureMessage(payload: DeepInfraVideoResponse): string | undefined {
 export function buildDeepInfraVideoGenerationProvider(options?: {
   videoGenModels?: readonly DeepInfraSurfaceModel[];
 }): VideoGenerationProvider {
-  const ids = options?.videoGenModels && options.videoGenModels.length > 0
-    ? options.videoGenModels.map((model) => model.id)
-    : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
+  const ids =
+    options?.videoGenModels && options.videoGenModels.length > 0
+      ? options.videoGenModels.map((model) => model.id)
+      : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
   const defaultModel = ids[0] ?? DEEPINFRA_VIDEO_FALLBACK_MODELS[0];
   return {
     id: "deepinfra",
@@ -256,7 +281,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           metadata: {
             requestId: normalizeOptionalString(payload.request_id),
             seed: payload.seed,
-            status: payload.inference_status?.status,
+            status: payload.inference_status?.status ?? payload.status,
           },
         };
       } finally {

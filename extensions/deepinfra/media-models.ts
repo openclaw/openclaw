@@ -29,10 +29,10 @@ export const DEEPINFRA_TTS_FALLBACK_MODELS = [
 ] as const;
 
 export const DEEPINFRA_VIDEO_FALLBACK_MODELS = [
+  "Wan-AI/Wan2.6-T2V",
   "Pixverse/Pixverse-T2V",
   "Pixverse/Pixverse-T2V-HD",
-  "Wan-AI/Wan2.1-T2V-1.3B",
-  "google/veo-3.0-fast",
+  "google/veo-3.1-fast",
 ] as const;
 
 export const DEEPINFRA_STT_FALLBACK_MODELS = [
@@ -40,13 +40,9 @@ export const DEEPINFRA_STT_FALLBACK_MODELS = [
   "openai/whisper-large-v3",
 ] as const;
 
-export const DEEPINFRA_EMBED_FALLBACK_MODELS = [
-  "BAAI/bge-m3",
-] as const;
+export const DEEPINFRA_EMBED_FALLBACK_MODELS = ["BAAI/bge-m3"] as const;
 
-export const DEEPINFRA_VLM_FALLBACK_MODELS = [
-  "moonshotai/Kimi-K2.5",
-] as const;
+export const DEEPINFRA_VLM_FALLBACK_MODELS = ["moonshotai/Kimi-K2.5"] as const;
 
 export function normalizeDeepInfraModelRef(model: string | undefined, fallback: string): string {
   const value = normalizeOptionalString(model) ?? fallback;
