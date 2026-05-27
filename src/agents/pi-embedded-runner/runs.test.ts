@@ -1,10 +1,13 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
   testing,
   abortAndDrainEmbeddedPiRun,
@@ -18,6 +21,7 @@ import {
   queueEmbeddedPiMessageWithOutcomeAsync,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
+  resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -79,6 +83,28 @@ describe("pi-embedded runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves active embedded runs by canonical session file", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-registry-"));
+    try {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const symlinkFile = path.join(tempDir, "session-link.jsonl");
+      await fs.writeFile(sessionFile, '{"type":"session"}\n', "utf8");
+      await fs.symlink(sessionFile, symlinkFile);
+      const handle = createRunHandle();
+
+      setActiveEmbeddedRun("session-file-run", handle, "agent:main:visible", sessionFile);
+
+      expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(symlinkFile)).toBe(
+        "session-file-run",
+      );
+
+      clearActiveEmbeddedRun("session-file-run", handle, "agent:main:visible", sessionFile);
+      expect(resolveActiveEmbeddedRunHandleSessionIdBySessionFile(symlinkFile)).toBeUndefined();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("passes steering options to active embedded runs", () => {

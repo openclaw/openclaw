@@ -249,6 +249,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSessionFile,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
@@ -339,7 +340,9 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
+  acquireEmbeddedAttemptSessionFileOwner,
   EmbeddedAttemptSessionTakeoverError,
+  type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
   installSessionExternalHookWriteLock,
@@ -1344,6 +1347,7 @@ export async function runEmbeddedAttempt(
   let beforeAgentRunBlockedBy: string | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
   let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
+  let retainedSessionFileOwner: EmbeddedAttemptSessionFileOwner | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
@@ -2279,6 +2283,11 @@ export async function runEmbeddedAttempt(
       compactionTimeoutMs,
     });
     await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+    retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile: params.sessionFile,
+      timeoutMs: sessionWriteLockOptions.maxHoldMs,
+      signal: params.abortSignal,
+    });
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
@@ -3493,7 +3502,12 @@ export async function runEmbeddedAttempt(
           onBeforeLifecycleTerminal: () => {
             // Clear embedded-run activity before emitting terminal lifecycle events so
             // post-completion cleanup does not observe a logically finished run as active.
-            clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+            clearActiveEmbeddedRun(
+              params.sessionId,
+              queueHandle,
+              params.sessionKey,
+              params.sessionFile,
+            );
           },
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
@@ -3609,7 +3623,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
@@ -4732,6 +4746,7 @@ export async function runEmbeddedAttempt(
               if (rotation.rotated) {
                 sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
                 sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
+                updateActiveEmbeddedRunSessionFile(params.sessionId, sessionFileUsed);
                 log.info(
                   `[compaction] rotated active transcript after automatic compaction ` +
                     `(sessionKey=${params.sessionKey ?? params.sessionId})`,
@@ -4805,7 +4820,12 @@ export async function runEmbeddedAttempt(
         if (params.replyOperation) {
           params.replyOperation.detachBackend(queueHandle);
         }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        clearActiveEmbeddedRun(
+          params.sessionId,
+          queueHandle,
+          params.sessionKey,
+          params.sessionFile,
+        );
       }
 
       const toolMetasNormalized = toolMetas
@@ -5260,6 +5280,8 @@ export async function runEmbeddedAttempt(
         `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
       );
     }
+    retainedSessionFileOwner?.release();
+    retainedSessionFileOwner = undefined;
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),
