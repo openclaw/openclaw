@@ -16,6 +16,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
+import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -1851,7 +1852,7 @@ function resolvePromptCacheKey(
   if (cacheRetention === "none") {
     return undefined;
   }
-  return options?.promptCacheKey ?? options?.sessionId;
+  return clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId);
 }
 
 function getPromptCacheRetention(

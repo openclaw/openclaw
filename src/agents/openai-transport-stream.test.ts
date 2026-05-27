@@ -2236,6 +2236,34 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_key).toBe("cron-cache-key");
   });
 
+  it("clamps Responses promptCacheKey before sending it upstream", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        promptCacheKey: "x".repeat(80),
+        sessionId: "session-123",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBe("x".repeat(64));
+  });
+
   it("omits Responses prompt_cache_key when caching is disabled", () => {
     const params = buildOpenAIResponsesParams(
       {
