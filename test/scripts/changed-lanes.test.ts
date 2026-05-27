@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -88,6 +88,32 @@ describe("scripts/changed-lanes", () => {
         "win32",
       ),
     ).toBe(false);
+  });
+
+  it("prints changed lane help without treating --help as a changed path", () => {
+    const result = spawnSync(process.execPath, ["scripts/changed-lanes.mjs", "--help"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: createNestedGitEnv(),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/changed-lanes.mjs");
+    expect(result.stdout).not.toContain("--help: unknown surface");
+  });
+
+  it("prints changed check help without running the changed gate", () => {
+    const result = spawnSync(process.execPath, ["scripts/check-changed.mjs", "--help"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...createNestedGitEnv(), OPENCLAW_TESTBOX: "1" },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/check-changed.mjs");
+    expect(result.stdout).not.toContain("[check:changed]");
   });
 
   it("includes untracked worktree files in the default local diff", () => {

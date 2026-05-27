@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  type AgentSession,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -116,8 +120,6 @@ import {
 } from "../../pi-bundle-mcp-tools.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -195,6 +197,10 @@ import {
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import {
+  filterRuntimeCompatibleTools,
+  type RuntimeToolSchemaDiagnostic,
+} from "../../tool-schema-projection.js";
+import {
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -249,6 +255,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSessionFile,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
@@ -339,7 +346,9 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
+  acquireEmbeddedAttemptSessionFileOwner,
   EmbeddedAttemptSessionTakeoverError,
+  type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
   installSessionExternalHookWriteLock,
@@ -369,8 +378,9 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
-  shouldApplyReplayToolCallIdSanitizer,
+  sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
+  shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -409,8 +419,8 @@ import {
 } from "./preemptive-compaction.js";
 import {
   buildCurrentInboundPrompt,
-  buildRuntimeContextSystemContext,
-  queueRuntimeContextForNextTurn,
+  buildRuntimeContextCustomMessage,
+  type RuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -478,6 +488,40 @@ function collectTrustedLocalMediaToolNames(params: {
     ),
     ...params.trustedPluginToolNames,
   ]);
+}
+
+function logRuntimeToolSchemaQuarantine(params: {
+  diagnostics: readonly RuntimeToolSchemaDiagnostic[];
+  tools: readonly Parameters<typeof getPluginToolMeta>[0][];
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+}): void {
+  if (params.diagnostics.length === 0) {
+    return;
+  }
+  const summary = params.diagnostics
+    .map((diagnostic) => {
+      const tool = params.tools[diagnostic.toolIndex];
+      const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
+      const owner = pluginId ? ` plugin=${pluginId}` : "";
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.blocked",
+        runId: params.runId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        toolName: diagnostic.toolName,
+        toolSource: pluginId ? "plugin" : "core",
+        ...(pluginId ? { toolOwner: pluginId } : {}),
+        deniedReason: "unsupported_tool_schema",
+        reason: diagnostic.violations.join(", "),
+      });
+      return `${diagnostic.toolName}${owner}: ${diagnostic.violations.join(", ")}`;
+    })
+    .join("; ");
+  log.warn(
+    `[tools] quarantined ${params.diagnostics.length} unsupported tool schema${params.diagnostics.length === 1 ? "" : "s"} before model runtime projection: ${summary}. Run openclaw doctor for details.`,
+  );
 }
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
@@ -823,6 +867,7 @@ async function cancelQueuedSteeringMessage(
 
 export const testing = {
   cancelQueuedSteeringMessage,
+  insertRuntimeContextMessageForPrompt,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveAttemptStreamAuthProfileId,
   steerAndWaitForTranscriptCommit,
@@ -959,6 +1004,89 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   const withoutHistoricalInboundMetadata =
     stripHistoricalInboundMetadataFromUserMessages(normalized);
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
+}
+
+function normalizeMessagesForCurrentPromptBoundary(params: {
+  messages: AgentMessage[];
+  prompt: string;
+}): AgentMessage[] {
+  const promptMessage = {
+    role: "user" as const,
+    content: [{ type: "text" as const, text: params.prompt }],
+    timestamp: Date.now(),
+  };
+  return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
+}
+
+function installRuntimeContextMessageForPrompt(params: {
+  session: AgentSession;
+  message?: RuntimeContextCustomMessage;
+}): () => void {
+  const { message, session } = params;
+  if (!message) {
+    return () => undefined;
+  }
+  const installBeforePrompt = () => {
+    if (!session.messages.includes(message)) {
+      session.agent.state.messages = appendRuntimeContextMessageForPrompt({
+        message,
+        messages: session.messages,
+      });
+    }
+  };
+  const installBeforeRetry = () => {
+    if (!session.messages.includes(message)) {
+      session.agent.state.messages = insertRuntimeContextMessageForPrompt({
+        message,
+        messages: session.messages,
+      });
+    }
+  };
+  installBeforePrompt();
+  const agent = session.agent;
+  const originalContinue = Reflect.get(agent, "continue", agent) as unknown;
+  if (typeof originalContinue === "function") {
+    const continueWithAgent = originalContinue.bind(agent) as () => Promise<void>;
+    agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
+      // Pi overflow recovery can rebuild state from the persisted branch before retrying.
+      installBeforeRetry();
+      return continueWithAgent();
+    };
+  }
+  return () => {
+    if (typeof originalContinue === "function") {
+      agent.continue = originalContinue as typeof agent.continue;
+    }
+    session.agent.state.messages = session.messages.filter((candidate) => candidate !== message);
+  };
+}
+
+function appendRuntimeContextMessageForPrompt(params: {
+  message: RuntimeContextCustomMessage;
+  messages: AgentMessage[];
+}): AgentMessage[] {
+  if (params.messages.includes(params.message)) {
+    return params.messages;
+  }
+  return [...params.messages, params.message];
+}
+
+function insertRuntimeContextMessageForPrompt(params: {
+  message: RuntimeContextCustomMessage;
+  messages: AgentMessage[];
+}): AgentMessage[] {
+  if (params.messages.includes(params.message)) {
+    return params.messages;
+  }
+  const activeUserMessageIndex = findActiveUserMessageIndex(params.messages);
+  if (activeUserMessageIndex === -1) {
+    return [...params.messages, params.message];
+  }
+  return [
+    ...params.messages.slice(0, activeUserMessageIndex),
+    params.message,
+    ...params.messages.slice(activeUserMessageIndex),
+  ];
 }
 
 function stripHistoricalInboundMetadataFromUserMessages(messages: AgentMessage[]): AgentMessage[] {
@@ -1344,6 +1472,7 @@ export async function runEmbeddedAttempt(
   let beforeAgentRunBlockedBy: string | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
   let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
+  let retainedSessionFileOwner: EmbeddedAttemptSessionFileOwner | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
@@ -1917,11 +2046,22 @@ export async function runEmbeddedAttempt(
             model: params.model,
           })
         : filteredBundledTools;
-    const uncompactedEffectiveTools = filterLocalModelLeanTools({
+    const projectedUncompactedEffectiveTools = filterLocalModelLeanTools({
       tools: [...tools, ...normalizedBundledTools],
       config: params.config,
       agentId: sessionAgentId,
     });
+    const uncompactedToolSchemaProjection = filterRuntimeCompatibleTools(
+      projectedUncompactedEffectiveTools,
+    );
+    logRuntimeToolSchemaQuarantine({
+      diagnostics: uncompactedToolSchemaProjection.diagnostics,
+      tools: projectedUncompactedEffectiveTools,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -1978,11 +2118,20 @@ export async function runEmbeddedAttempt(
           toolHookContext: catalogToolHookContext,
         });
     toolSearchCatalogApplied = true;
-    effectiveTools = filterLocalModelLeanTools({
+    const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
       config: params.config,
       agentId: sessionAgentId,
     });
+    const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
+    logRuntimeToolSchemaQuarantine({
+      diagnostics: toolSearchSchemaProjection.diagnostics,
+      tools: projectedToolSearchTools,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    effectiveTools = [...toolSearchSchemaProjection.tools];
     if (toolSearch.compacted) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -2279,6 +2428,11 @@ export async function runEmbeddedAttempt(
       compactionTimeoutMs,
     });
     await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+    retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile: params.sessionFile,
+      timeoutMs: sessionWriteLockOptions.maxHoldMs,
+      signal: params.abortSignal,
+    });
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
@@ -2321,12 +2475,15 @@ export async function runEmbeddedAttempt(
 
       await prewarmSessionFile(params.sessionFile);
       await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+      const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         config: params.config,
         contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
+        preparedUserTurnMessage,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         missingToolResultText:
           params.model.api === "openai-responses" ||
@@ -3079,10 +3236,7 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          // Strip orphaned reasoning blocks first, then fix function-call
-          // pairing — matches the call order in google.ts.
-          const reasoningSanitized = downgradeOpenAIReasoningBlocks(messages as AgentMessage[]);
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(reasoningSanitized);
+          const sanitized = sanitizeOpenAIResponsesReplayForStream(messages as AgentMessage[]);
           if (sanitized === messages) {
             return inner(model, context, options);
           }
@@ -3490,7 +3644,12 @@ export async function runEmbeddedAttempt(
           onBeforeLifecycleTerminal: () => {
             // Clear embedded-run activity before emitting terminal lifecycle events so
             // post-completion cleanup does not observe a logically finished run as active.
-            clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+            clearActiveEmbeddedRun(
+              params.sessionId,
+              queueHandle,
+              params.sessionKey,
+              params.sessionFile,
+            );
           },
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
@@ -3606,7 +3765,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
@@ -3947,12 +4106,15 @@ export async function runEmbeddedAttempt(
           const runtimeContextForHook = promptSubmission.runtimeOnly
             ? undefined
             : promptSubmission.runtimeContext?.trim();
-          const runtimeSystemPromptForHook = runtimeContextForHook
-            ? composeSystemPromptWithHookContext({
-                baseSystemPrompt: systemPromptText,
-                appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
-              })
-            : undefined;
+          const runtimeContextMessageForCurrentTurn =
+            buildRuntimeContextCustomMessage(runtimeContextForHook);
+          const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
+            ? [...activeSession.messages, runtimeContextMessageForCurrentTurn]
+            : activeSession.messages;
+          const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
+            messages: messagesForCurrentPrompt,
+            prompt: promptForModel,
+          });
           if (systemPromptReport) {
             systemPromptReport.currentTurn = {
               ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),
@@ -3962,7 +4124,7 @@ export async function runEmbeddedAttempt(
                 : (runtimeContextForHook?.length ?? 0),
             };
           }
-          const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
+          const systemPromptForHook = systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
             message: string;
@@ -4004,9 +4166,7 @@ export async function runEmbeddedAttempt(
           };
 
           if (hookRunner?.hasHooks("before_agent_run")) {
-            const beforeRunMessages = cloneHookMessages(
-              normalizeMessagesForLlmBoundary(activeSession.messages),
-            );
+            const beforeRunMessages = cloneHookMessages(hookMessagesForCurrentPrompt);
             let beforeRunResult:
               | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
               | undefined;
@@ -4237,9 +4397,7 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   systemPrompt: systemPromptForHook,
                   prompt: promptForModel,
-                  historyMessages: cloneHookMessages(
-                    normalizeMessagesForLlmBoundary(activeSession.messages),
-                  ),
+                  historyMessages: cloneHookMessages(hookMessagesForCurrentPrompt),
                   imagesCount: imageResult.images.length,
                   tools: tools,
                 },
@@ -4262,7 +4420,7 @@ export async function runEmbeddedAttempt(
           const preemptiveCompaction = skipPromptSubmission
             ? null
             : shouldPreemptivelyCompactBeforePrompt({
-                messages: activeSession.messages,
+                messages: messagesForCurrentPrompt,
                 ...(contextEnginePromptAuthority === "preassembly_may_overflow"
                   ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
                   : {}),
@@ -4398,17 +4556,20 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await promptActiveSession(promptForModel);
             } else {
-              await queueRuntimeContextForNextTurn({
+              const cleanupRuntimeContextMessage = installRuntimeContextMessageForPrompt({
                 session: activeSession,
-                runtimeContext: runtimeContextForHook,
+                message: runtimeContextMessageForCurrentTurn,
               });
-
-              // Only pass images option if there are actually images to pass
-              // This avoids potential issues with models that don't expect the images parameter
-              if (imageResult.images.length > 0) {
-                await promptActiveSession(promptForModel, { images: imageResult.images });
-              } else {
-                await promptActiveSession(promptForModel);
+              try {
+                // Only pass images option if there are actually images to pass
+                // This avoids potential issues with models that don't expect the images parameter
+                if (imageResult.images.length > 0) {
+                  await promptActiveSession(promptForModel, { images: imageResult.images });
+                } else {
+                  await promptActiveSession(promptForModel);
+                }
+              } finally {
+                cleanupRuntimeContextMessage();
               }
             }
           }
@@ -4425,6 +4586,7 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               sessionId: params.sessionId,
             });
+            await sessionLockController.releaseHeldLockForAbort();
             await sessionLockController.waitForSessionEvents(activeSession);
             await sessionLockController.withSessionWriteLock(async () => {
               stripSessionsYieldArtifacts(activeSession);
@@ -4728,6 +4890,7 @@ export async function runEmbeddedAttempt(
               if (rotation.rotated) {
                 sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
                 sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
+                updateActiveEmbeddedRunSessionFile(params.sessionId, sessionFileUsed);
                 log.info(
                   `[compaction] rotated active transcript after automatic compaction ` +
                     `(sessionKey=${params.sessionKey ?? params.sessionId})`,
@@ -4801,7 +4964,12 @@ export async function runEmbeddedAttempt(
         if (params.replyOperation) {
           params.replyOperation.detachBackend(queueHandle);
         }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        clearActiveEmbeddedRun(
+          params.sessionId,
+          queueHandle,
+          params.sessionKey,
+          params.sessionFile,
+        );
       }
 
       const toolMetasNormalized = toolMetas
@@ -5256,6 +5424,8 @@ export async function runEmbeddedAttempt(
         `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
       );
     }
+    retainedSessionFileOwner?.release();
+    retainedSessionFileOwner = undefined;
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),

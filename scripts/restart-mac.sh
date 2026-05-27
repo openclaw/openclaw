@@ -188,13 +188,11 @@ fi
 run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
 
 choose_app_bundle() {
-  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
-    return 0
-  fi
-
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
+  if [[ -n "${APP_BUNDLE}" ]]; then
+    if [[ -d "${APP_BUNDLE}" ]]; then
+      return 0
+    fi
+    fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"
   fi
 
   if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
@@ -202,6 +200,11 @@ choose_app_bundle() {
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
       fail "dist/OpenClaw.app missing Sparkle after packaging"
     fi
+    return 0
+  fi
+
+  if [[ -d "/Applications/OpenClaw.app" ]]; then
+    APP_BUNDLE="/Applications/OpenClaw.app"
     return 0
   fi
 

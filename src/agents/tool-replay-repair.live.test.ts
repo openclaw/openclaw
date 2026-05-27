@@ -11,6 +11,8 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -20,7 +22,6 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const DEFAULT_TARGET_MODEL_REFS = "openai-codex/gpt-5.5,google/gemini-3-flash-preview";
 const TARGET_MODEL_REFS = parseTargetModelRefs(
   process.env.OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS ?? DEFAULT_TARGET_MODEL_REFS,
@@ -72,19 +73,11 @@ function createNoopTools() {
   ];
 }
 
-function replayValidationTools() {
-  return createNoopTools();
-}
-
-function disableResponsesReplayToolChoice(payload: unknown, model: Model<Api>): unknown {
-  if (!isOpenAIResponsesFamily(model.api) || !payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const next = payload as { tool_choice?: unknown };
-  // Replay probes include historical tool calls to validate transcript repair,
-  // but they should not force a fresh noop tool call during the live request.
-  next.tool_choice = "none";
-  return next;
+function replayValidationTools(model: Model<Api>) {
+  // Responses-family providers may force or reject fresh tool-choice policy
+  // when tools are present. These probes validate repaired historical transcript
+  // shape, not new tool invocation.
+  return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
 }
 
 function buildReplayMessages(model: Model<Api>): AgentMessage[] {
@@ -222,14 +215,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -278,13 +277,12 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: sanitized as never,
-            tools: replayValidationTools(),
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
             reasoning: "low",
             maxTokens: 96,
-            onPayload: disableResponsesReplayToolChoice,
           },
           120_000,
         );
@@ -328,14 +326,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -354,13 +358,12 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: transformed as never,
-            tools: replayValidationTools(),
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
             reasoning: "low",
             maxTokens: 96,
-            onPayload: disableResponsesReplayToolChoice,
           },
           120_000,
         );

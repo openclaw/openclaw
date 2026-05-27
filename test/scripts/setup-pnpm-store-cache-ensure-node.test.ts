@@ -55,6 +55,20 @@ function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.Process
   return result;
 }
 
+function runVersionMatch(actual: string, requested: string) {
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      [
+        `source "${ensureNodeScript}"`,
+        `openclaw_node_version_matches "${actual}" "${requested}"`,
+      ].join("; "),
+    ],
+    { encoding: "utf8", env: process.env },
+  );
+}
+
 describe("setup-pnpm-store-cache ensure-node", () => {
   it("uses a matching active node", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
@@ -184,6 +198,31 @@ exit 1
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("keeps the Node 22 wildcard at the supported minimum", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "22.18.0");
+      const toolcacheBin = join(root, "toolcache", "node", "22.22.3", "x64", "bin");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "22.22.3");
+      const result = runEnsureNode(root, "22.x", {
+        PATH: `${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TOOL_CACHE: join(root, "toolcache"),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Using Node 22.22.3 from ${toolcacheNode}`);
+      expect(result.stdout.trim().endsWith("22.22.3")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Node 22 wildcard matches below the supported minimum", () => {
+    expect(runVersionMatch("22.18.0", "22.x").status).toBe(1);
+    expect(runVersionMatch("22.19.0", "22.x").status).toBe(0);
   });
 
   it("fails clearly when no matching node is available", () => {

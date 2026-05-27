@@ -1033,6 +1033,100 @@ describe("loadModelCatalog", () => {
     expect(entry.contextWindow).toBe(128_000);
   });
 
+  it("overlays configured model compat onto discovered catalog rows", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen3 8B",
+        provider: "vllm",
+        reasoning: false,
+        compat: { supportsStrictMode: false },
+      },
+    ]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://localhost:9000/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "vllm/Qwen/Qwen3-8B",
+                  name: "Configured Qwen3 8B",
+                  compat: { thinkingFormat: "qwen-chat-template" },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "vllm", "Qwen/Qwen3-8B");
+    expect(result.filter((entry) => entry.provider === "vllm")).toHaveLength(1);
+    expect(entry.name).toBe("Qwen3 8B");
+    expect(entry.reasoning).toBe(true);
+    expect(entry.compat).toEqual(
+      expect.objectContaining({
+        supportsStrictMode: false,
+        thinkingFormat: "qwen-chat-template",
+      }),
+    );
+  });
+
+  it("overlays configured model compat onto persisted read-only catalog rows", async () => {
+    readFileMock.mockResolvedValue(
+      JSON.stringify({
+        providers: {
+          vllm: {
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3 8B",
+                reasoning: false,
+                compat: { supportsStrictMode: false },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://localhost:9000/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "vllm/Qwen/Qwen3-8B",
+                  name: "Configured Qwen3 8B",
+                  compat: { thinkingFormat: "qwen-chat-template" },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      readOnly: true,
+    });
+
+    const entry = requireCatalogEntry(result, "vllm", "Qwen/Qwen3-8B");
+    expect(result.filter((entry) => entry.provider === "vllm")).toHaveLength(1);
+    expect(entry.name).toBe("Qwen3 8B");
+    expect(entry.reasoning).toBe(true);
+    expect(entry.compat).toEqual(
+      expect.objectContaining({
+        supportsStrictMode: false,
+        thinkingFormat: "qwen-chat-template",
+      }),
+    );
+  });
+
   it("merges manifest model catalog rows on the normal catalog path", async () => {
     mockSingleOpenAiCatalogModel();
     currentPluginMetadataSnapshotMock.mockReturnValue({

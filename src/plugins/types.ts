@@ -1981,6 +1981,10 @@ export type PluginCommandContext = {
   threadParentId?: string;
   /** Sensitive diagnostics-only session inventory for owner-gated commands. */
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Host-bound runtime capabilities scoped to this command invocation. */
+  runtimeContext?: {
+    llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
+  };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
   /** Internal diagnostics-only marker to preview upload effects without exposing ids. */
@@ -2877,7 +2881,12 @@ export type OpenClawPluginApi = {
    * @deprecated Use registerMemoryCapability({ runtime }) instead.
    */
   registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
-  /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
+  /**
+   * Register a memory embedding provider adapter. Multiple adapters may coexist.
+   * @deprecated New embedding providers should use `registerEmbeddingProvider`
+   * and `contracts.embeddingProviders`. This memory-specific seam is retained
+   * while existing memory providers migrate.
+   */
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;

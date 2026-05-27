@@ -52,6 +52,7 @@ export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-help
 export {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  normalizeOpenAIResponsesToolCallIds,
 } from "./pi-embedded-helpers/openai.js";
 export {
   isEmptyAssistantMessageContent,

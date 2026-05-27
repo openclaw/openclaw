@@ -206,26 +206,37 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
+openclaw_live_timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf '%s\n' timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf '%s\n' gtimeout
+  else
+    return 1
+  fi
+}
+
 openclaw_live_timeout_supports_kill_after() {
-  command -v timeout >/dev/null 2>&1 || return 1
-  timeout --kill-after=1s 1s true >/dev/null 2>&1
+  local timeout_bin="${1:?timeout binary required}"
+  "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1
 }
 
 openclaw_live_init_docker_run_args() {
   local target_array="${1:?target array required}"
   local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
+  local timeout_bin
   local quoted_timeout
 
-  if command -v timeout >/dev/null 2>&1; then
-    quoted_timeout="$(printf '%q' "$timeout_value")"
-    if openclaw_live_timeout_supports_kill_after; then
-      eval "${target_array}=(timeout --kill-after=30s ${quoted_timeout} docker run)"
-    else
-      eval "${target_array}=(timeout ${quoted_timeout} docker run)"
-    fi
-    return
+  if ! timeout_bin="$(openclaw_live_timeout_bin)"; then
+    echo "timeout command not found; cannot bound live Docker run after ${timeout_value}" >&2
+    return 127
   fi
-  eval "${target_array}=(docker run)"
+  quoted_timeout="$(printf '%q' "$timeout_value")"
+  if openclaw_live_timeout_supports_kill_after "$timeout_bin"; then
+    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run)"
+  else
+    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
+  fi
 }
 
 openclaw_live_stage_auth_into_home() {

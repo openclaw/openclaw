@@ -97,8 +97,20 @@ vi.mock("../config/io.js", () => ({
   },
 }));
 
+const capturedReplaceConfigFileCalls: Array<{
+  nextConfig: OpenClawConfig;
+  writeOptions?: { allowConfigSizeDrop?: boolean };
+}> = [];
+
 vi.mock("../config/config.js", () => ({
-  replaceConfigFile: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+  replaceConfigFile: async ({
+    nextConfig,
+    writeOptions,
+  }: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { allowConfigSizeDrop?: boolean };
+  }) => {
+    capturedReplaceConfigFileCalls.push({ nextConfig, ...(writeOptions ? { writeOptions } : {}) });
     testConfigStore.set(resolveTestConfigPath(), nextConfig);
   },
   resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
@@ -375,6 +387,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   afterEach(() => {
     waitForGatewayReachableMock = undefined;
     testConfigStore.clear();
+    capturedReplaceConfigFileCalls.length = 0;
     ensureWorkspaceAndSessionsMock.mockClear();
     installGatewayDaemonNonInteractiveMock.mockClear();
     createPreMigrationBackupMock.mockClear();
@@ -385,6 +398,62 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
   });
+
+  it("preserves existing agents.list and bindings on onboard rerun (openclaw#84692)", async () => {
+    await withStateDir("state-preserve-agents-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      const seededAgents = [
+        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+        { id: "beta", model: "openai/gpt-4o" },
+      ];
+      const seededBindings = [
+        {
+          type: "route" as const,
+          agentId: "alpha",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct" as const, id: "user-1" },
+          },
+        },
+        {
+          type: "route" as const,
+          agentId: "beta",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct" as const, id: "user-2" },
+          },
+        },
+      ];
+      testConfigStore.set(resolveTestConfigPath(), {
+        agents: { list: seededAgents, defaults: { workspace } },
+        bindings: seededBindings,
+        gateway: { mode: "local", port: 18789, auth: { mode: "token", token: "seed_tok" } },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "seed_tok",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+      expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.bindings).toEqual(seededBindings);
+
+      const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
+    });
+  }, 60_000);
 
   it("writes gateway token auth into config", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
@@ -555,6 +624,54 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("preserves existing agents.list and bindings on remote onboard rerun (openclaw#84692)", async () => {
+    await withStateDir("state-remote-preserve-agents-", async (_stateDir) => {
+      const port = getPseudoPort(30_000);
+      const token = "tok_remote_seed";
+      const seededAgents = [
+        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+        { id: "beta", model: "openai/gpt-4o" },
+      ];
+      const seededBindings = [
+        {
+          type: "route" as const,
+          agentId: "alpha",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct" as const, id: "user-1" },
+          },
+        },
+      ];
+      testConfigStore.set(resolveTestConfigPath(), {
+        agents: { list: seededAgents },
+        bindings: seededBindings,
+        gateway: {
+          mode: "remote",
+          remote: { url: `ws://127.0.0.1:${port}`, token },
+        },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: `ws://127.0.0.1:${port}`,
+          remoteToken: token,
+          authChoice: "skip",
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+      expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.bindings).toEqual(seededBindings);
+
+      const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);
 

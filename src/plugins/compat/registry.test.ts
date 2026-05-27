@@ -150,12 +150,17 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "legacy-root-sdk-import",
     file: "src/plugin-sdk/compat.ts",
-    marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-outbound`.",
   },
   {
     code: "legacy-deactivate-hook-alias",
     file: "src/plugins/hook-types.ts",
     marker: "@deprecated Use gateway_stop",
+  },
+  {
+    code: "deprecated-memory-embedding-provider-api",
+    file: "src/plugins/types.ts",
+    marker: "registerMemoryEmbeddingProvider",
   },
   {
     code: "channel-route-key-aliases",

@@ -229,6 +229,10 @@ describe("loadDotEnv", () => {
           [
             "SAFE_KEY=from-cwd",
             "NODE_OPTIONS=--require ./evil.js",
+            "NODE_REDIRECT_WARNINGS=./warnings.log",
+            "NODE_REPL_EXTERNAL_MODULE=./evil-repl.js",
+            "NODE_REPL_HISTORY=./repl-history",
+            "NODE_V8_COVERAGE=./coverage",
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
@@ -249,6 +253,10 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
         delete process.env.NODE_OPTIONS;
+        delete process.env.NODE_REDIRECT_WARNINGS;
+        delete process.env.NODE_REPL_EXTERNAL_MODULE;
+        delete process.env.NODE_REPL_HISTORY;
+        delete process.env.NODE_V8_COVERAGE;
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.CLOUDSDK_PYTHON;
@@ -267,6 +275,10 @@ describe("loadDotEnv", () => {
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+        expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+        expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+        expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
@@ -691,6 +703,10 @@ describe("loadCliDotEnv", () => {
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "NODE_OPTIONS=--require ./evil.js",
+            "NODE_REDIRECT_WARNINGS=./warnings.log",
+            "NODE_REPL_EXTERNAL_MODULE=./evil-repl.js",
+            "NODE_REPL_HISTORY=./repl-history",
+            "NODE_V8_COVERAGE=./coverage",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
@@ -703,6 +719,10 @@ describe("loadCliDotEnv", () => {
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
+        delete process.env.NODE_REDIRECT_WARNINGS;
+        delete process.env.NODE_REPL_EXTERNAL_MODULE;
+        delete process.env.NODE_REPL_HISTORY;
+        delete process.env.NODE_V8_COVERAGE;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
@@ -716,6 +736,10 @@ describe("loadCliDotEnv", () => {
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+        expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+        expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+        expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();

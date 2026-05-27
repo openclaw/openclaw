@@ -171,6 +171,8 @@ export type ModelProviderConfig = {
   contextTokens?: number;
   maxTokens?: number;
   timeoutSeconds?: number;
+  /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
+  region?: string;
   injectNumCtxForOpenAICompat?: boolean;
   /** Provider-specific runtime parameters interpreted by provider plugins. */
   params?: Record<string, unknown>;

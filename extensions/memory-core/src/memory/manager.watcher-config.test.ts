@@ -151,8 +151,11 @@ describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
   let workspaceDir = "";
   let extraDir = "";
+  let originalPlatform: NodeJS.Platform;
 
   beforeEach(async () => {
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     vi.clearAllMocks();
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
@@ -166,6 +169,7 @@ describe("memory watcher config", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     watchMock.mockClear();
     nativeWatchMock.mockClear();
     createdChokidarWatchers.length = 0;

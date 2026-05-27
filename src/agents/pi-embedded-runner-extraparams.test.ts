@@ -2647,6 +2647,55 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.cacheRetention).toBe("long");
   });
 
+  it("passes through explicit cacheRetention for prompt-cache-key openai-completions providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildModelConfig("omlx-local/local_model", {
+      cacheRetention: "long",
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "omlx-local", "local_model");
+
+    const model = {
+      api: "openai-completions",
+      provider: "omlx-local",
+      id: "local_model",
+      compat: { supportsPromptCacheKey: true },
+    } as unknown as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      sessionId: "session-81281",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+    expect(calls[0]?.sessionId).toBe("session-81281");
+  });
+
+  it("keeps explicit cacheRetention off openai-completions providers without prompt-cache-key support", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = buildModelConfig("omlx-local/local_model", {
+      cacheRetention: "long",
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "omlx-local", "local_model");
+
+    const model = {
+      api: "openai-completions",
+      provider: "omlx-local",
+      id: "local_model",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      sessionId: "session-81281",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+    expect(calls[0]?.sessionId).toBe("session-81281");
+  });
+
   it("passes through explicit cacheRetention for custom anthropic-messages providers", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
