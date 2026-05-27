@@ -19,6 +19,7 @@ const modelAuthMocks = vi.hoisted(() => ({
       authEvidenceMap: {},
     },
     syntheticAuthProviderRefs: [],
+    syntheticAuthProviderRefsComplete: true,
   })),
   hasRuntimeAvailableProviderAuth:
     vi.fn<
@@ -138,6 +139,43 @@ describe("prepared provider auth state", () => {
       readOnly: true,
       syncExternalCli: false,
     });
+  });
+
+  it("does not cache false worker answers for process-local plugin synthetic auth", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          "plugin-provider": {
+            api: "plugin-api",
+            baseUrl: "https://example.com/v1",
+            models: [{ id: "plugin-model", name: "Plugin Model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "plugin-model", name: "Plugin Model", provider: "plugin-provider" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      runtimeAuthLookups: new Map([
+        [
+          "default",
+          {
+            envApiKey: {
+              aliasMap: {},
+              candidateMap: {},
+              authEvidenceMap: {},
+            },
+            syntheticAuthProviderRefs: ["plugin-api"],
+            syntheticAuthProviderRefsComplete: true,
+          },
+        ],
+      ]),
+    });
+
+    expect(snapshot.agents[0]?.providers).toEqual([]);
   });
 
   it("hasAuthForModelProvider returns the prepared answer after warm and falls through to compute after clear", async () => {
@@ -374,8 +412,11 @@ describe("prepared provider auth state", () => {
 
     modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
     await expect(hasAuthForModelProvider({ provider: "openai", cfg })).resolves.toBe(true);
+    const runtimeAuthLookup =
+      modelAuthMocks.createRuntimeProviderAuthLookup.mock.results.at(-1)?.value;
     expect(runWorker).toHaveBeenCalledWith({
       cfg,
+      runtimeAuthLookups: [{ agentId: "default", lookup: runtimeAuthLookup }],
       timeoutMs: 120_000,
       isCancelled: expect.any(Function),
       workerUrl: undefined,
@@ -411,6 +452,8 @@ describe("prepared provider auth state", () => {
 
     await warmCurrentProviderAuthStateOffMainThread(cfg, { runWorker });
 
+    const runtimeAuthLookup =
+      modelAuthMocks.createRuntimeProviderAuthLookup.mock.results.at(-1)?.value;
     expect(runWorker).toHaveBeenCalledWith({
       cfg,
       runtimeAuthStores: [
@@ -427,10 +470,29 @@ describe("prepared provider auth state", () => {
           },
         },
       ],
+      runtimeAuthLookups: [{ agentId: "default", lookup: runtimeAuthLookup }],
       timeoutMs: 120_000,
       isCancelled: expect.any(Function),
       workerUrl: undefined,
     });
+  });
+
+  it("skips off-main-thread warm when plugin synthetic auth lookup is incomplete", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelAuthMocks.createRuntimeProviderAuthLookup.mockReturnValueOnce({
+      envApiKey: {
+        aliasMap: {},
+        candidateMap: {},
+        authEvidenceMap: {},
+      },
+      syntheticAuthProviderRefs: [],
+      syntheticAuthProviderRefsComplete: false,
+    });
+    const runWorker = vi.fn(async () => ({ agents: [] }));
+
+    await warmCurrentProviderAuthStateOffMainThread(cfg, { runWorker });
+
+    expect(runWorker).not.toHaveBeenCalled();
   });
 
   it("terminates the off-main-thread warm worker when cancellation fires", async () => {

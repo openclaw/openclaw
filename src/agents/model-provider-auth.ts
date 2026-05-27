@@ -62,9 +62,15 @@ type ProviderAuthWarmRuntimeAuthStore = {
   store: AuthProfileStore;
 };
 
+type ProviderAuthWarmRuntimeAuthLookup = {
+  agentId: string;
+  lookup: RuntimeProviderAuthLookup;
+};
+
 type ProviderAuthWarmWorkerRunner = (params: {
   cfg: OpenClawConfig;
   runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
+  runtimeAuthLookups?: ProviderAuthWarmRuntimeAuthLookup[];
   timeoutMs: number;
   isCancelled: () => boolean;
   workerUrl?: URL;
@@ -275,9 +281,45 @@ function publishProviderAuthWarmSnapshot(snapshot: ProviderAuthWarmSnapshot): vo
   );
 }
 
+function resolveProviderConfigApi(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): string | undefined {
+  const providers = cfg?.models?.providers ?? {};
+  const direct = providers[provider];
+  if (direct?.api) {
+    return direct.api;
+  }
+  const normalized = normalizeProviderId(provider);
+  const matched = Object.entries(providers).find(
+    ([key]) => normalizeProviderId(key) === normalized,
+  )?.[1];
+  return matched?.api;
+}
+
+function shouldOmitFalsePreparedAuthForProcessSyntheticProvider(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  runtimeAuthLookup: RuntimeProviderAuthLookup;
+}): boolean {
+  const syntheticRefs = params.runtimeAuthLookup.syntheticAuthProviderRefs;
+  if (!syntheticRefs?.length) {
+    return false;
+  }
+  const eligibleRefs = new Set(syntheticRefs.map((ref) => normalizeProviderId(ref)));
+  const providerApi = resolveProviderConfigApi(params.cfg, params.provider);
+  return [params.provider, providerApi]
+    .filter((ref): ref is string => typeof ref === "string" && ref.trim().length > 0)
+    .some((ref) => eligibleRefs.has(normalizeProviderId(ref)));
+}
+
 export async function buildCurrentProviderAuthStateSnapshot(
   cfg: OpenClawConfig,
-  options: { isCancelled?: () => boolean; readOnlyAuthStore?: boolean } = {},
+  options: {
+    isCancelled?: () => boolean;
+    readOnlyAuthStore?: boolean;
+    runtimeAuthLookups?: ReadonlyMap<string, RuntimeProviderAuthLookup>;
+  } = {},
 ): Promise<ProviderAuthWarmSnapshot> {
   const isWarmStale = () => options.isCancelled?.() === true;
   const catalog = await loadModelCatalog({ config: cfg, readOnly: true });
@@ -300,10 +342,12 @@ export async function buildCurrentProviderAuthStateSnapshot(
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
-    const runtimeAuthLookup = createRuntimeProviderAuthLookup({
-      cfg,
-      workspaceDir,
-    });
+    const runtimeAuthLookup =
+      options.runtimeAuthLookups?.get(agentId) ??
+      createRuntimeProviderAuthLookup({
+        cfg,
+        workspaceDir,
+      });
     // One AuthProfileStore scoped to every candidate provider; without this
     // the per-provider externalCli discovery rebuilds the store ~N times.
     const externalCli = externalCliDiscoveryForProviders({
@@ -334,6 +378,16 @@ export async function buildCurrentProviderAuthStateSnapshot(
         store,
         runtimeAuthLookup,
       });
+      if (
+        !value &&
+        shouldOmitFalsePreparedAuthForProcessSyntheticProvider({
+          cfg,
+          provider,
+          runtimeAuthLookup,
+        })
+      ) {
+        continue;
+      }
       state.set(provider, value);
     }
     states.set(agentId, {
@@ -456,9 +510,27 @@ function collectProviderAuthWarmRuntimeAuthStores(
   return entries;
 }
 
+function collectProviderAuthWarmRuntimeAuthLookups(
+  cfg: OpenClawConfig,
+): ProviderAuthWarmRuntimeAuthLookup[] | null {
+  const entries: ProviderAuthWarmRuntimeAuthLookup[] = [];
+  for (const agentId of listAgentIds(cfg)) {
+    const lookup = createRuntimeProviderAuthLookup({
+      cfg,
+      workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+    });
+    if (lookup.syntheticAuthProviderRefsComplete === false) {
+      return null;
+    }
+    entries.push({ agentId, lookup });
+  }
+  return entries;
+}
+
 function runProviderAuthWarmWorker(params: {
   cfg: OpenClawConfig;
   runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
+  runtimeAuthLookups?: ProviderAuthWarmRuntimeAuthLookup[];
   timeoutMs: number;
   isCancelled: () => boolean;
   workerUrl?: URL;
@@ -467,6 +539,9 @@ function runProviderAuthWarmWorker(params: {
     workerData: {
       cfg: params.cfg,
       ...(params.runtimeAuthStores?.length ? { runtimeAuthStores: params.runtimeAuthStores } : {}),
+      ...(params.runtimeAuthLookups?.length
+        ? { runtimeAuthLookups: params.runtimeAuthLookups }
+        : {}),
     },
   });
   worker.unref?.();
@@ -575,9 +650,14 @@ export async function warmCurrentProviderAuthStateOffMainThread(
     return;
   }
   const runtimeAuthStores = collectProviderAuthWarmRuntimeAuthStores(cfg);
+  const runtimeAuthLookups = collectProviderAuthWarmRuntimeAuthLookups(cfg);
+  if (runtimeAuthLookups === null) {
+    return;
+  }
   const snapshot = await (options.runWorker ?? runProviderAuthWarmWorker)({
     cfg,
     ...(runtimeAuthStores.length ? { runtimeAuthStores } : {}),
+    ...(runtimeAuthLookups.length ? { runtimeAuthLookups } : {}),
     timeoutMs: options.timeoutMs ?? PROVIDER_AUTH_WARM_WORKER_TIMEOUT_MS,
     isCancelled: isWarmStale,
     workerUrl: options.workerUrl,

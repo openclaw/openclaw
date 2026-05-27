@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { replaceRuntimeAuthProfileStoreSnapshots, type AuthProfileStore } from "./auth-profiles.js";
+import type { RuntimeProviderAuthLookup } from "./model-auth.js";
 import { buildCurrentProviderAuthStateSnapshot } from "./model-provider-auth.js";
 
 type ProviderAuthWarmRuntimeAuthStore = {
@@ -11,6 +12,10 @@ type ProviderAuthWarmRuntimeAuthStore = {
 type ProviderAuthWarmWorkerInput = {
   cfg: OpenClawConfig;
   runtimeAuthStores?: ProviderAuthWarmRuntimeAuthStore[];
+  runtimeAuthLookups?: Array<{
+    agentId: string;
+    lookup: RuntimeProviderAuthLookup;
+  }>;
 };
 
 type ProviderAuthWarmWorkerResult =
@@ -29,7 +34,9 @@ function isWorkerInput(value: unknown): value is ProviderAuthWarmWorkerInput {
     typeof value === "object" &&
     "cfg" in value &&
     (!("runtimeAuthStores" in value) ||
-      Array.isArray((value as { runtimeAuthStores?: unknown }).runtimeAuthStores))
+      Array.isArray((value as { runtimeAuthStores?: unknown }).runtimeAuthStores)) &&
+    (!("runtimeAuthLookups" in value) ||
+      Array.isArray((value as { runtimeAuthLookups?: unknown }).runtimeAuthLookups))
   );
 }
 
@@ -48,6 +55,9 @@ export async function runProviderAuthWarmWorkerInput(
     }
     const snapshot = await buildCurrentProviderAuthStateSnapshot(input.cfg, {
       readOnlyAuthStore: true,
+      runtimeAuthLookups: new Map(
+        input.runtimeAuthLookups?.map(({ agentId, lookup }) => [agentId, lookup]),
+      ),
     });
     return {
       status: "ok",
