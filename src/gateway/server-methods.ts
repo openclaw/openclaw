@@ -515,7 +515,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadRestartHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["message.action", "send", "poll"],
+    methods: ["message.action", "approval.routeNotice.send", "send", "poll"],
     loadHandlers: loadSendHandlers,
   }),
   ...createLazyCoreHandlers({

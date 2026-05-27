@@ -183,6 +183,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "system-presence", scope: "operator.read" },
   { name: "system-event", scope: "operator.admin" },
   { name: "message.action", scope: "operator.write" },
+  { name: "approval.routeNotice.send", scope: "operator.approvals", advertise: false },
   { name: "send", scope: "operator.write" },
   { name: "agent", scope: "operator.write" },
   { name: "agent.identity.get", scope: "operator.read" },

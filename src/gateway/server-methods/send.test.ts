@@ -3,6 +3,7 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -122,10 +123,11 @@ async function loadSendHandlersForTest() {
   ({ sendHandlers } = await import("./send.js"));
 }
 
-const makeContext = (): GatewayRequestContext =>
+const makeContext = (overrides?: Partial<GatewayRequestContext>): GatewayRequestContext =>
   ({
     dedupe: new Map(),
     getRuntimeConfig: () => ({}),
+    ...overrides,
   }) as unknown as GatewayRequestContext;
 
 async function runSend(params: Record<string, unknown>) {
@@ -134,7 +136,11 @@ async function runSend(params: Record<string, unknown>) {
 
 async function runSendWithClient(
   params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
+  client?: {
+    connId?: string;
+    connect?: { scopes?: string[]; device?: { id: string }; client?: { id: string } };
+    internal?: { approvalRuntime?: boolean };
+  } | null,
 ) {
   const respond = vi.fn();
   await sendHandlers.send({
@@ -146,6 +152,61 @@ async function runSendWithClient(
     isWebchatConnect: () => false,
   });
   return { respond };
+}
+
+async function runApprovalRouteNoticeSend(
+  params: Record<string, unknown>,
+  client?: {
+    connId?: string;
+    connect?: { scopes?: string[]; device?: { id: string }; client?: { id: string } };
+    internal?: { approvalRuntime?: boolean };
+  } | null,
+  context = makeContext(),
+) {
+  const respond = vi.fn();
+  await sendHandlers["approval.routeNotice.send"]({
+    params: params as never,
+    respond,
+    context,
+    req: { type: "req", id: "1", method: "approval.routeNotice.send" },
+    client: (client ?? null) as never,
+    isWebchatConnect: () => false,
+  });
+  return { respond };
+}
+
+function createApprovalRouteNoticeContext(params?: {
+  id?: string;
+  turnSourceChannel?: string | null;
+  turnSourceTo?: string | null;
+  turnSourceAccountId?: string | null;
+  turnSourceThreadId?: string | number | null;
+  allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+  requestedByDeviceId?: string | null;
+  requestedByConnId?: string | null;
+  requestedByClientId?: string | null;
+}) {
+  const id = params?.id ?? "req-1";
+  const manager = new ExecApprovalManager();
+  const record = manager.create(
+    {
+      command: "echo hi",
+      turnSourceChannel:
+        params?.turnSourceChannel === undefined ? "discord" : params.turnSourceChannel,
+      turnSourceTo: params?.turnSourceTo === undefined ? "channel:C1" : params.turnSourceTo,
+      turnSourceAccountId:
+        params?.turnSourceAccountId === undefined ? "default" : params.turnSourceAccountId,
+      turnSourceThreadId: params?.turnSourceThreadId ?? undefined,
+      allowedDecisions: params?.allowedDecisions,
+    },
+    60_000,
+    id,
+  );
+  record.requestedByDeviceId = params?.requestedByDeviceId ?? null;
+  record.requestedByConnId = params?.requestedByConnId ?? null;
+  record.requestedByClientId = params?.requestedByClientId ?? null;
+  void manager.register(record, 60_000);
+  return makeContext({ execApprovalManager: manager });
 }
 
 async function runPoll(params: Record<string, unknown>) {
@@ -584,6 +645,320 @@ describe("gateway send mirroring", () => {
 
     expect(deliveryCall()?.channel).toBe("slack");
     expect(deliveryCall()?.gatewayClientScopes).toEqual([]);
+  });
+
+  it("lets approval runtimes send derived route notices without operator.write", async () => {
+    mockDeliverySuccess("m-approval-route-notice");
+    const context = createApprovalRouteNoticeContext({
+      id: "req-1",
+      turnSourceChannel: "discord",
+      turnSourceTo: "channel:C1",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "12345",
+    });
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-1",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C1",
+          accountId: "default",
+          threadId: "12345",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+      },
+      {
+        connect: { scopes: ["operator.approvals"] },
+        internal: { approvalRuntime: true },
+      },
+      context,
+    );
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "default",
+        mode: "explicit",
+      }),
+    );
+    expect(deliveryCall()?.channel).toBe("discord");
+    expect(deliveryCall()?.payloads).toEqual([
+      {
+        text: "Approval required. I sent the approval request to Discord DMs, not this chat.",
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      },
+    ]);
+    expect(deliveryCall()?.threadId).toBe("12345");
+    expect(deliveryCall()?.gatewayClientScopes).toEqual(["operator.approvals"]);
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+  });
+
+  it("rejects route notices from ordinary approval clients", async () => {
+    mockDeliverySuccess("m-ordinary-route-notice");
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-ordinary",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C1",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+      },
+      { connect: { scopes: ["operator.approvals"] } },
+      createApprovalRouteNoticeContext({ id: "req-ordinary" }),
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("unknown or expired approval route notice");
+  });
+
+  it("rejects route notices for approvals requested by the caller", async () => {
+    mockDeliverySuccess("m-self-requested-route-notice");
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-self-requested",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C1",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+      },
+      {
+        connId: "conn-requester",
+        connect: {
+          scopes: ["operator.approvals"],
+          client: { id: "gateway-client" },
+        },
+        internal: { approvalRuntime: true },
+      },
+      createApprovalRouteNoticeContext({
+        id: "req-self-requested",
+        requestedByConnId: "conn-requester",
+        requestedByClientId: "gateway-client",
+      }),
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("unknown or expired approval route notice");
+  });
+
+  it("preserves coordinator-provided fallback route notice targets when server-derived", async () => {
+    mockDeliverySuccess("m-approval-route-fallback-notice");
+    mocks.getChannelPlugin.mockReturnValue({
+      actions: { handleAction: true },
+      approvalCapability: {
+        native: {
+          describeDeliveryCapabilities: () => ({
+            enabled: true,
+            preferredSurface: "approver-dm",
+            supportsOriginSurface: true,
+            supportsApproverDmSurface: true,
+            notifyOriginWhenDmOnly: true,
+          }),
+          resolveOriginTarget: async () => ({ to: "channel:C2", threadId: "67890" }),
+        },
+      },
+      outbound: { sendPoll: mocks.sendPoll },
+    });
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-fallback",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C2",
+          accountId: "default",
+          threadId: "67890",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+      },
+      {
+        connect: { scopes: ["operator.approvals"] },
+        internal: { approvalRuntime: true },
+      },
+      createApprovalRouteNoticeContext({
+        id: "req-fallback",
+        turnSourceChannel: null,
+        turnSourceTo: null,
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      }),
+    );
+
+    expect(deliveryCall()?.channel).toBe("discord");
+    expect(deliveryCall()?.to).toBe("resolved");
+    expect(deliveryCall()?.accountId).toBe("default");
+    expect(deliveryCall()?.threadId).toBe("67890");
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+  });
+
+  it("rejects caller-provided route notice targets without a server-derived origin", async () => {
+    mockDeliverySuccess("m-unverified-route-notice");
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-unverified",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C2",
+          accountId: "default",
+          threadId: "67890",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+      },
+      {
+        connect: { scopes: ["operator.approvals"] },
+        internal: { approvalRuntime: true },
+      },
+      createApprovalRouteNoticeContext({
+        id: "req-unverified",
+        turnSourceChannel: null,
+        turnSourceTo: null,
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      }),
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("approval route notice target unavailable");
+  });
+
+  it("rejects approval route notices for resolved approval ids", async () => {
+    mockDeliverySuccess("m-resolved-route-notice");
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo hi",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:C1",
+      },
+      60_000,
+      "req-resolved",
+    );
+    void manager.register(record, 60_000);
+    manager.resolve("req-resolved", "allow-once");
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-resolved",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C1",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+      },
+      {
+        connect: { scopes: ["operator.approvals"] },
+        internal: { approvalRuntime: true },
+      },
+      makeContext({ execApprovalManager: manager }),
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("unknown or expired approval route notice");
+  });
+
+  it("rejects approval route notices with generic send payload fields", async () => {
+    mockDeliverySuccess("m-rejected-route-notice-media");
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "req-extra",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C1",
+        },
+        notice: {
+          kind: "routed-elsewhere",
+          destinations: ["Discord DMs"],
+        },
+        message: "Approval required.",
+      },
+      {
+        connect: { scopes: ["operator.approvals"] },
+        internal: { approvalRuntime: true },
+      },
+      createApprovalRouteNoticeContext({ id: "req-extra" }),
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("invalid approval route notice request");
+  });
+
+  it("builds delivery-failed route notice text from the approval snapshot", async () => {
+    mockDeliverySuccess("m-delivery-failed-route-notice");
+
+    const { respond } = await runApprovalRouteNoticeSend(
+      {
+        approvalId: "deadbeef-1234-4567-89ab-cdef01234567",
+        approvalKind: "exec",
+        target: {
+          channel: "discord",
+          to: "channel:C1",
+        },
+        notice: { kind: "delivery-failed" },
+      },
+      {
+        connect: { scopes: ["operator.approvals"] },
+        internal: { approvalRuntime: true },
+      },
+      createApprovalRouteNoticeContext({
+        id: "deadbeef-1234-4567-89ab-cdef01234567",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    expect(deliveryCall()?.payloads).toEqual([
+      {
+        text:
+          "Approval required. I could not deliver the native approval request.\n" +
+          "Reply with: /approve deadbeef allow-once|deny\n" +
+          "If the short code is ambiguous, use the full id in /approve.",
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      },
+    ]);
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
   });
 
   it("rejects empty sends when neither text nor media is present", async () => {

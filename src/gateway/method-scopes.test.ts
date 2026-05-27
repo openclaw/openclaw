@@ -76,6 +76,7 @@ describe("method scope resolution", () => {
     ["exec.approvals.set", ["operator.admin"]],
     ["exec.approvals.node.get", ["operator.admin"]],
     ["exec.approvals.node.set", ["operator.admin"]],
+    ["approval.routeNotice.send", ["operator.approvals"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
@@ -290,18 +291,20 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it.each(["exec.approval.get", "exec.approval.list", "exec.approval.resolve"])(
-    "requires approvals scope for %s",
-    (method) => {
-      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-        allowed: false,
-        missingScope: "operator.approvals",
-      });
-      expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
-        allowed: true,
-      });
-    },
-  );
+  it.each([
+    "approval.routeNotice.send",
+    "exec.approval.get",
+    "exec.approval.list",
+    "exec.approval.resolve",
+  ])("requires approvals scope for %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.approvals",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: true,
+    });
+  });
 
   it.each([
     "exec.approvals.get",

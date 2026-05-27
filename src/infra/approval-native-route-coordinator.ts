@@ -6,11 +6,7 @@ import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
 } from "./approval-native-delivery.js";
-import {
-  describeApprovalDeliveryDestination,
-  resolveApprovalDeliveryFailedNoticeText,
-  resolveApprovalRoutedElsewhereNoticeText,
-} from "./approval-native-route-notice.js";
+import { describeApprovalDeliveryDestination } from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
@@ -58,6 +54,25 @@ type RouteNoticeTarget = {
   accountId?: string | null;
   threadId?: string | number | null;
 };
+
+type RouteNoticeGatewayPayload =
+  | {
+      approvalId: string;
+      approvalKind: ChannelApprovalKind;
+      target: RouteNoticeTarget;
+      notice: {
+        kind: "delivery-failed";
+      };
+    }
+  | {
+      approvalId: string;
+      approvalKind: ChannelApprovalKind;
+      target: RouteNoticeTarget;
+      notice: {
+        kind: "routed-elsewhere";
+        destinations: string[];
+      };
+    };
 
 const activeApprovalRouteRuntimes = new Map<string, ApprovalRouteRuntimeRecord>();
 const pendingApprovalRouteNotices = new Map<string, PendingApprovalRouteNotice>();
@@ -156,20 +171,11 @@ function hasPlannedNativeTargets(report: ApprovalRouteReport): boolean {
   return report.deliveryPlan.targets.length > 0;
 }
 
-function readAllowedDecisionStrings(request: ApprovalRequest): string[] | undefined {
-  const allowedDecisions =
-    "allowedDecisions" in request.request ? request.request.allowedDecisions : undefined;
-  if (!Array.isArray(allowedDecisions)) {
-    return undefined;
-  }
-  return allowedDecisions.filter((value): value is string => typeof value === "string");
-}
-
 function resolveApprovalRouteNotice(params: {
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
   reports: readonly ApprovalRouteReport[];
-}): { requestGateway: GatewayRequestFn; target: RouteNoticeTarget; text: string } | null {
+}): { requestGateway: GatewayRequestFn; payload: RouteNoticeGatewayPayload } | null {
   const explicitTarget = resolveRouteNoticeTargetFromRequest(params.request);
   const originChannel = normalizeChannel(
     explicitTarget?.channel ?? params.request.request.turnSourceChannel,
@@ -197,12 +203,12 @@ function resolveApprovalRouteNotice(params: {
       requestGateway:
         params.reports.find((report) => activeApprovalRouteRuntimes.has(report.runtimeId))
           ?.requestGateway ?? params.reports[0].requestGateway,
-      target,
-      text: resolveApprovalDeliveryFailedNoticeText({
+      payload: {
         approvalId: params.request.id,
         approvalKind: params.approvalKind,
-        allowedDecisions: readAllowedDecisionStrings(params.request),
-      }),
+        target,
+        notice: { kind: "delivery-failed" },
+      },
     };
   }
 
@@ -247,8 +253,7 @@ function resolveApprovalRouteNotice(params: {
       }),
     ];
   });
-  const text = resolveApprovalRoutedElsewhereNoticeText(destinations);
-  if (!text) {
+  if (destinations.length === 0) {
     return null;
   }
 
@@ -261,8 +266,15 @@ function resolveApprovalRouteNotice(params: {
 
   return {
     requestGateway,
-    target,
-    text,
+    payload: {
+      approvalId: params.request.id,
+      approvalKind: params.approvalKind,
+      target,
+      notice: {
+        kind: "routed-elsewhere",
+        destinations,
+      },
+    },
   };
 }
 
@@ -311,14 +323,7 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 
   try {
-    await notice.requestGateway("send", {
-      channel: notice.target.channel,
-      to: notice.target.to,
-      accountId: notice.target.accountId ?? undefined,
-      threadId: notice.target.threadId ?? undefined,
-      message: notice.text,
-      idempotencyKey: `approval-route-notice:${approvalId}`,
-    });
+    await notice.requestGateway("approval.routeNotice.send", notice.payload);
   } catch {
     // The approval delivery already succeeded; the follow-up notice is best-effort.
   }

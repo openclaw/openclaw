@@ -117,13 +117,19 @@ describe("createApprovalNativeRouteReporter", () => {
       ],
     });
 
-    expect(requestGateway).toHaveBeenCalledWith("send", {
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "default",
-      threadId: "1712345678.123456",
-      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
-      idempotencyKey: "approval-route-notice:approval-1",
+    expect(requestGateway).toHaveBeenCalledWith("approval.routeNotice.send", {
+      approvalId: "approval-1",
+      approvalKind: "exec",
+      target: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "default",
+        threadId: "1712345678.123456",
+      },
+      notice: {
+        kind: "routed-elsewhere",
+        destinations: ["Slack DMs"],
+      },
     });
     expect(lateRuntimeGateway).not.toHaveBeenCalled();
   });
@@ -209,13 +215,19 @@ describe("createApprovalNativeRouteReporter", () => {
       ],
     });
 
-    expect(originGateway).toHaveBeenCalledWith("send", {
-      channel: "slack",
-      to: "channel:C123",
-      accountId: "work-a",
-      threadId: undefined,
-      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
-      idempotencyKey: "approval-route-notice:approval-2",
+    expect(originGateway).toHaveBeenCalledWith("approval.routeNotice.send", {
+      approvalId: "approval-2",
+      approvalKind: "exec",
+      target: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "work-a",
+        threadId: undefined,
+      },
+      notice: {
+        kind: "routed-elsewhere",
+        destinations: ["Slack DMs"],
+      },
     });
     expect(otherGateway).not.toHaveBeenCalled();
   });
@@ -269,16 +281,16 @@ describe("createApprovalNativeRouteReporter", () => {
       deliveredTargets: [],
     });
 
-    expect(requestGateway).toHaveBeenCalledWith("send", {
-      channel: "discord",
-      to: "channel:C123",
-      accountId: "default",
-      threadId: undefined,
-      message:
-        "Approval required. I could not deliver the native approval request.\n" +
-        "Reply with: /approve deadbeef allow-once|deny\n" +
-        "If the short code is ambiguous, use the full id in /approve.",
-      idempotencyKey: "approval-route-notice:deadbeef-1234-4567-89ab-cdef01234567",
+    expect(requestGateway).toHaveBeenCalledWith("approval.routeNotice.send", {
+      approvalId: "deadbeef-1234-4567-89ab-cdef01234567",
+      approvalKind: "exec",
+      target: {
+        channel: "discord",
+        to: "channel:C123",
+        accountId: "default",
+        threadId: undefined,
+      },
+      notice: { kind: "delivery-failed" },
     });
   });
 });
