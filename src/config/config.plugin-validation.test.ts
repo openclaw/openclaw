@@ -834,6 +834,7 @@ describe("config plugin validation", () => {
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
     const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
     await mkdirSafe(path.dirname(installedPluginIndexPath));
+    clearLoadInstalledPluginIndexInstallRecordsCache();
     await fs.writeFile(
       installedPluginIndexPath,
       JSON.stringify(
@@ -872,6 +873,7 @@ describe("config plugin validation", () => {
       });
     } finally {
       await fs.rm(installedPluginIndexPath, { force: true });
+      clearLoadInstalledPluginIndexInstallRecordsCache();
     }
   });
 
