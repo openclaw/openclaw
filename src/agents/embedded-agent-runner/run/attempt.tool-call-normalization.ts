@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { streamSimple } from "../../../llm/stream.js";
 import {
   parseStandalonePlainTextToolCallBlocks,
   type PlainTextToolCallBlock,
@@ -21,7 +20,6 @@ import {
 } from "../../embedded-agent-helpers.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
-import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultIds,
@@ -40,6 +38,7 @@ type UnknownToolLoopGuardState = {
   count: number;
   countedMessages: WeakSet<object>;
 };
+type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
 function resolveCaseInsensitiveAllowedToolName(
   rawName: string,
@@ -1092,9 +1091,9 @@ function createStandaloneToolCallNameMatcher(
 }
 
 function wrapStreamPromoteStandaloneTextToolCalls(
-  stream: ReturnType<typeof streamSimple>,
+  stream: AssistantStream,
   allowedToolNames: Set<string>,
-): ReturnType<typeof streamSimple> {
+): AssistantStream {
   const matcher = createStandaloneToolCallNameMatcher(allowedToolNames);
   const normalizedMessages = new WeakMap<
     object,
@@ -1189,10 +1188,10 @@ export function wrapStreamFnPromoteStandaloneTextToolCalls(
 }
 
 function wrapStreamTrimToolCallNames(
-  stream: ReturnType<typeof streamSimple>,
+  stream: AssistantStream,
   allowedToolNames?: Set<string>,
   options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
-): ReturnType<typeof streamSimple> {
+): AssistantStream {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
     countedMessages: new WeakSet<object>(),
