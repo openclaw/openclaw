@@ -2702,11 +2702,18 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    // Explicit command turns (native or authorized text-slash like /compact) are
+    // user-initiated, so a marked terminal reply for the command bypasses
+    // room_event suppression. Ambient marked notices (no CommandTurn) stay
+    // suppressed in room_event. sendPolicy: deny still suppresses everything.
+    // Uses the same helper as the source-reply visibility policy so the bypass
+    // and the policy stay aligned.
+    const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
-      ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
+      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
+      (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
     for (const reply of replies) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
