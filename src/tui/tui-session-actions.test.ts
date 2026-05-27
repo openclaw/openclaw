@@ -443,6 +443,7 @@ describe("tui session actions", () => {
     const state = createBaseState({
       activeChatRunId: "run-finishing",
       pendingChatRunId: "run-queued",
+      pendingOptimisticUserMessage: true,
       activityStatus: "waiting",
     });
 
@@ -460,6 +461,7 @@ describe("tui session actions", () => {
       runId: "run-queued",
     });
     expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
     expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 

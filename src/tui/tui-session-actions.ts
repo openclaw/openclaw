@@ -417,6 +417,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
+    const abortsPendingRun = Boolean(
+      state.pendingChatRunId && runIds.includes(state.pendingChatRunId),
+    );
     try {
       for (const runId of runIds) {
         await client.abortChat({
@@ -425,6 +428,9 @@ export function createSessionActions(context: SessionActionContext) {
         });
       }
       state.pendingChatRunId = null;
+      if (abortsPendingRun) {
+        state.pendingOptimisticUserMessage = false;
+      }
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);
