@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { resolveCompactionProviderIdForOwnerPlugin } from "../../plugins/compaction-provider.js";
-import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import { resolveCompactionProviderIdForOwnerPlugin } from "../../plugins/compaction-provider.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveMemoryRoleSlot } from "../../plugins/slot-resolution.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import {
-  resolveAgentCompactionConfig,
-  resolveAgentContextPruningConfig,
-} from "../agent-scope-config.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
+import {
+  resolveAgentCompactionConfig,
+  resolveAgentContextPruningConfig,
+} from "../agent-scope-config.js";
 import {
   ensureAgentCompactionReserveTokens,
   resolveEffectiveCompactionMode,
@@ -191,20 +191,19 @@ export function buildEmbeddedExtensionFactories(params: {
   modelRegistry?: ModelRegistry;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  const compactionCfg =
-    params.cfg && params.agentId
-      ? (resolveAgentConfig(params.cfg, params.agentId)?.compaction ??
-        params.cfg.agents?.defaults?.compaction)
-      : params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg = resolveAgentCompactionConfig(params.cfg, params.agentId);
   if (resolveEffectiveCompactionMode(params.cfg, params.agentId) === "safeguard") {
     const compactionSlot =
       params.cfg && !compactionCfg?.provider
-        ? resolveMemoryRoleSlot({ cfg: params.cfg, role: "compaction", agentId: params.agentId })
+        ? resolveMemoryRoleSlot({
+            cfg: params.cfg,
+            role: "compaction",
+            agentId: params.agentId ?? undefined,
+          })
         : undefined;
-    const slotCompactionProvider =
-      typeof compactionSlot === "string"
-        ? resolveCompactionProviderIdForOwnerPlugin(compactionSlot)
-        : undefined;
+    const slotCompactionProvider = compactionSlot
+      ? resolveCompactionProviderIdForOwnerPlugin(compactionSlot)
+      : undefined;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     const runtimeModel = resolveSafeguardRuntimeModel(params);
     const contextWindowInfo = resolveContextWindowInfo({

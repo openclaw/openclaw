@@ -4243,7 +4243,7 @@ describe("runAgentTurnWithFallback", () => {
 
   it("prefers a per-agent notifyUser override over defaults", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -4304,7 +4304,7 @@ describe("runAgentTurnWithFallback", () => {
 
   it("uses the followup agent notifyUser override for legacy session keys", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
       return { payloads: [{ text: "final" }], meta: {} };
     });

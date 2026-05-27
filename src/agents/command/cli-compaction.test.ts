@@ -336,7 +336,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       resolveContextEngine: async () => contextEngine,
       ensureSelectedAgentHarnessPlugin,
       maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -1096,7 +1096,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -1159,7 +1159,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
     setCliCompactionTestDeps({
       resolveContextEngine: async () => buildContextEngine({ compactCalls }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -1309,7 +1309,7 @@ describe("runCliTurnCompactionLifecycle", () => {
           return await new Promise(() => {});
         },
       }),
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},
@@ -1381,7 +1381,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         compactCalls.push(compactParams as Record<string, unknown>);
         return await new Promise(() => {});
       }) as never,
-      createPreparedEmbeddedPiSettingsManager: async () => ({
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
         applyOverrides: () => {},

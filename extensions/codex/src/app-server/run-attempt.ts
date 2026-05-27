@@ -1036,7 +1036,9 @@ export async function runCodexAppServerAttempt(
   let codexExecutionCwd = effectiveCwd;
   let codexSandboxPolicy: CodexSandboxPolicy | undefined;
   let restartContextEngineCodexThread:
-    | (() => Promise<CodexAppServerThreadLifecycleBinding>)
+    | ((
+        contextEngineProjection?: CodexContextEngineThreadBootstrapProjection,
+      ) => Promise<CodexAppServerThreadLifecycleBinding>)
     | undefined;
   const startupTimeoutMs = resolveCodexStartupTimeoutMs({
     timeoutMs: params.timeoutMs,
@@ -1870,7 +1872,7 @@ export async function runCodexAppServerAttempt(
         if (compactedForRetry) {
           await rebuildPromptAfterContextEngineCompaction();
         }
-        thread = await restartContextEngineCodexThread();
+        thread = await restartContextEngineCodexThread(contextEngineProjection);
         emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",
           data: { phase: "thread_ready_retry", threadId: thread.threadId },

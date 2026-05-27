@@ -66,7 +66,9 @@ export type StartCodexAttemptThreadResult = {
   executionCwd: string;
   sandboxPolicy: CodexSandboxPolicy | undefined;
   releaseSharedClientLease: () => void;
-  restartContextEngineCodexThread: () => Promise<CodexAppServerThreadLifecycleBinding>;
+  restartContextEngineCodexThread: (
+    contextEngineProjection?: CodexContextEngineThreadBootstrapProjection,
+  ) => Promise<CodexAppServerThreadLifecycleBinding>;
 };
 
 export async function startCodexAttemptThread(params: {
@@ -300,8 +302,14 @@ export async function startCodexAttemptThread(params: {
                 environmentSelection: startupEnvironmentSelection,
                 executionCwd: startupExecutionCwd,
                 sandboxPolicy: startupSandboxPolicy,
-                restartContextEngineCodexThread: () =>
-                  startOrResumeThread(buildThreadLifecycleParams()),
+                restartContextEngineCodexThread: (
+                  contextEngineProjection?: CodexContextEngineThreadBootstrapProjection,
+                ) =>
+                  startOrResumeThread({
+                    ...buildThreadLifecycleParams(),
+                    contextEngineProjection:
+                      contextEngineProjection ?? params.contextEngineProjection,
+                  }),
               };
             } catch (error) {
               await releaseStartupSandboxEnvironment();

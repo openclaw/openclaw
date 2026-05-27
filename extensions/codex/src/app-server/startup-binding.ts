@@ -5,7 +5,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentCompactionConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -243,7 +243,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (!binding?.threadId) {
     return binding;
   }
-  const compactionConfig = resolveAgentCompactionConfig(params.config, params.sessionAgentId);
+  const compactionConfig =
+    params.config && params.sessionAgentId
+      ? (resolveAgentConfig(params.config, params.sessionAgentId)?.compaction ??
+        params.config.agents?.defaults?.compaction)
+      : params.config?.agents?.defaults?.compaction;
   if (compactionConfig?.truncateAfterCompaction !== true) {
     return binding;
   }

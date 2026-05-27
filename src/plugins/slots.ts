@@ -3,19 +3,39 @@ import type { PluginSlotsConfig } from "../config/types.plugins.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
+export type ExclusivePluginSlotKey = "memory.recall" | "contextEngine";
+
+export const MEMORY_PLUGIN_SLOT_KEYS = [
+  "memory",
+  "memory.recall",
+  "memory.compaction",
+  "memory.capture",
+  "memory.dreaming",
+  "memory.userModel",
+] as const satisfies readonly PluginSlotKey[];
+
+export const PLUGIN_SLOT_KEYS = [
+  ...MEMORY_PLUGIN_SLOT_KEYS,
+  "contextEngine",
+] as const satisfies readonly PluginSlotKey[];
 
 type SlotPluginRecord = {
   id: string;
   kind?: PluginKind | PluginKind[];
 };
 
-const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
-  memory: "memory",
+const SLOT_BY_KIND: Record<PluginKind, ExclusivePluginSlotKey> = {
+  memory: "memory.recall",
   "context-engine": "contextEngine",
 };
 
 const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   memory: "memory-core",
+  "memory.recall": "memory-core",
+  "memory.compaction": "none",
+  "memory.capture": "none",
+  "memory.dreaming": "none",
+  "memory.userModel": "none",
   contextEngine: "legacy",
 };
 
@@ -46,14 +66,37 @@ export function kindsEqual(
 }
 
 /** Return all slot keys that a plugin's kind field maps to. */
-export function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[] {
+export function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): ExclusivePluginSlotKey[] {
   return normalizeKinds(kind)
     .map((k) => SLOT_BY_KIND[k])
-    .filter((k): k is PluginSlotKey => k != null);
+    .filter((k): k is ExclusivePluginSlotKey => k != null);
 }
 
 export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {
   return DEFAULT_SLOT_BY_KEY[slotKey];
+}
+
+export function resetPluginSlotReferences<
+  T extends Partial<Record<PluginSlotKey, string | undefined>>,
+>(
+  slots: T | undefined,
+  pluginId: string,
+  slotKeys: readonly PluginSlotKey[] = PLUGIN_SLOT_KEYS,
+): { slots: T | undefined; changed: boolean; resetKeys: PluginSlotKey[] } {
+  if (!slots) {
+    return { slots, changed: false, resetKeys: [] };
+  }
+  let next: T | undefined;
+  const resetKeys: PluginSlotKey[] = [];
+  for (const slotKey of slotKeys) {
+    if (slots[slotKey] !== pluginId) {
+      continue;
+    }
+    next ??= { ...slots };
+    Object.assign(next, { [slotKey]: defaultSlotIdForKey(slotKey) });
+    resetKeys.push(slotKey);
+  }
+  return { slots: next ?? slots, changed: resetKeys.length > 0, resetKeys };
 }
 
 export type SlotSelectionResult = {

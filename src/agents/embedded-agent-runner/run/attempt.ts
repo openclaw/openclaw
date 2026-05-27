@@ -1903,7 +1903,11 @@ export async function runEmbeddedAttempt(
         agentDir,
         cfg: params.config,
         agentId: sessionAgentId,
-        pluginMetadataSnapshot,
+        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+          config: params.config,
+          env: process.env,
+          workspaceDir: effectiveWorkspace,
+        }),
         contextTokenBudget: params.contextTokenBudget,
       });
       const autoCompactionGuardArgs = {

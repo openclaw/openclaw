@@ -839,7 +839,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       });
     resolveRunModelFallbacksOverrideMock.mockReturnValue(["anthropic/claude-agent-fallback"]);
 
-    const result = await compactEmbeddedPiSessionDirect({
+    const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "legacy-session-1",
       sessionKey: "legacy-topic-47",
       agentId: "lossless-agent",
@@ -981,7 +981,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("uses global compaction.thinkingLevel for compaction sessions", async () => {
-    const result = await compactEmbeddedPiSessionDirect({
+    const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
@@ -1005,7 +1005,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("prefers per-agent compaction.thinkingLevel for compaction sessions", async () => {
-    const result = await compactEmbeddedPiSessionDirect({
+    const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
@@ -1351,7 +1351,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     const sync = vi.fn(async () => {});
     getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
 
-    const result = await compactEmbeddedPiSessionDirect({
+    const result = await compactEmbeddedAgentSessionDirect({
       sessionId: "legacy-session-1",
       sessionKey: "legacy-topic-47",
       agentId: "lossless-agent",
@@ -1985,7 +1985,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("honors explicit agentId scope for legacy queued compaction sessions", async () => {
-    await compactEmbeddedPiSession(
+    await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         sessionKey: "legacy-topic-47",
         agentId: "lossless-agent",
@@ -2040,7 +2040,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       },
     };
 
-    await compactEmbeddedPiSession(
+    await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         sessionKey: "legacy-topic-47",
         agentId: "lossless-agent",
@@ -2052,7 +2052,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("uses compaction.thinkingLevel for queued context-engine compaction", async () => {
-    await compactEmbeddedPiSession(
+    await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         sessionKey: "legacy-topic-47",
         agentId: "lossless-agent",
@@ -2095,7 +2095,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       maintain,
     } as never);
 
-    await compactEmbeddedPiSession(
+    await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
         sessionKey: "legacy-topic-47",
         agentId: "lossless-agent",

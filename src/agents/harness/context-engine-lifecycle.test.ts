@@ -1,8 +1,8 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
-import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -10,7 +10,7 @@ import {
   runHarnessContextEngineMaintenance,
 } from "./context-engine-lifecycle.js";
 
-vi.mock("../pi-embedded-runner/context-engine-maintenance.js", () => ({
+vi.mock("../embedded-agent-runner/context-engine-maintenance.js", () => ({
   runContextEngineMaintenance: vi.fn(async () => ({
     changed: false,
     bytesFreed: 0,

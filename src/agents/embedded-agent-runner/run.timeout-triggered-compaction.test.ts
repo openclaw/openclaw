@@ -510,7 +510,7 @@ describe("timeout-triggered compaction", () => {
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       agentId: "lossless-agent",
       config,
