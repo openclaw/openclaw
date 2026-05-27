@@ -836,7 +836,7 @@ export function registerPluginsCli(program: Command) {
         buildPluginDiagnosticsReport,
         formatPluginCompatibilityNotice,
       } = await import("../plugins/status.js");
-      const report = buildPluginDiagnosticsReport();
+      const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const compatibility = buildPluginCompatibilityNotices({ report });

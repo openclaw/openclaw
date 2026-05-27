@@ -451,7 +451,7 @@ describe("launchd install", () => {
 
   it("writes TMPDIR to LaunchAgent environment when provided", async () => {
     const env = createDefaultLaunchdEnv();
-    const tmpDir = "/var/folders/xy/abc123/T/";
+    const tmpDir = "/Users/test/.openclaw/tmp";
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
@@ -464,6 +464,20 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>TMPDIR</key>");
     expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
+    const env = createDefaultLaunchdEnv();
+    const tmpDir = "/Users/test/.openclaw/tmp";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { TMPDIR: tmpDir },
+    });
+
+    expect(state.dirs.has(tmpDir)).toBe(true);
+    expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
   it("writes KeepAlive=true policy with restrictive umask", async () => {

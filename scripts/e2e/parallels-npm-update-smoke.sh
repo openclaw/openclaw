@@ -1944,7 +1944,7 @@ if platform_enabled windows; then
 fi
 
 if platform_enabled linux; then
-  bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
+  OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR=1 bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
     --mode fresh \
     --provider "$PROVIDER" \
     --model "$MODEL_ID" \

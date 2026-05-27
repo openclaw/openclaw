@@ -312,10 +312,6 @@ describe("getCachedPluginJitiLoader", () => {
 
     const loose = loader as unknown as (t: string, ...a: unknown[]) => unknown;
     loose("/repo/dist/extensions/demo/api.js", { hint: "x" }, 42);
-    expect(jitiLoader).toHaveBeenCalledWith(
-      "/repo/dist/extensions/demo/api.js",
-      { hint: "x" },
-      42,
-    );
+    expect(jitiLoader).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", { hint: "x" }, 42);
   });
 });

@@ -277,6 +277,8 @@ export const uk: TranslationMap = {
       tailscaleDocsLink: "Документація: Tailscale Serve",
       insecureHttpDocsTitle: "Документація щодо незахищеного HTTP (відкривається в новій вкладці)",
       insecureHttpDocsLink: "Документація: незахищений HTTP",
+      copyCommand: "Копіювати команду",
+      copyCommandAria: "Копіювати команду: {command}",
     },
     cards: {
       cost: "Вартість",
@@ -313,6 +315,30 @@ export const uk: TranslationMap = {
     palette: {
       placeholder: "Введіть команду…",
       noResults: "Немає результатів",
+      categories: {
+        search: "Пошук",
+        navigation: "Навігація",
+        skills: "Навички",
+      },
+      items: {
+        overview: "Огляд",
+        sessions: "Сеанси",
+        scheduled: "Заплановано",
+        skills: "Навички",
+        settings: "Налаштування",
+        agents: "Агенти",
+        shellCommand: "Команда оболонки",
+        debugMode: "Режим налагодження",
+      },
+      descriptions: {
+        shellCommand: "Запустити оболонку",
+        debugMode: "Перемкнути налагодження",
+      },
+      footer: {
+        navigate: "навігація",
+        select: "вибрати",
+        close: "закрити",
+      },
     },
   },
   dreaming: {

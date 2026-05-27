@@ -268,6 +268,8 @@ export const th: TranslationMap = {
       tailscaleDocsLink: "เอกสาร: Tailscale Serve",
       insecureHttpDocsTitle: "เอกสาร HTTP ที่ไม่ปลอดภัย (เปิดในแท็บใหม่)",
       insecureHttpDocsLink: "เอกสาร: HTTP ที่ไม่ปลอดภัย",
+      copyCommand: "คัดลอกคำสั่ง",
+      copyCommandAria: "คัดลอกคำสั่ง: {command}",
     },
     cards: {
       cost: "ค่าใช้จ่าย",
@@ -303,6 +305,30 @@ export const th: TranslationMap = {
     palette: {
       placeholder: "พิมพ์คำสั่ง…",
       noResults: "ไม่พบผลลัพธ์",
+      categories: {
+        search: "ค้นหา",
+        navigation: "การนำทาง",
+        skills: "ทักษะ",
+      },
+      items: {
+        overview: "ภาพรวม",
+        sessions: "เซสชัน",
+        scheduled: "กำหนดเวลาแล้ว",
+        skills: "ทักษะ",
+        settings: "การตั้งค่า",
+        agents: "เอเจนต์",
+        shellCommand: "คำสั่งเชลล์",
+        debugMode: "โหมดดีบัก",
+      },
+      descriptions: {
+        shellCommand: "เรียกใช้เชลล์",
+        debugMode: "สลับดีบัก",
+      },
+      footer: {
+        navigate: "นำทาง",
+        select: "เลือก",
+        close: "ปิด",
+      },
     },
   },
   dreaming: {
@@ -554,7 +580,7 @@ export const th: TranslationMap = {
       total: "ทั้งหมด {count}",
       avg: "เฉลี่ย",
       all: "ทั้งหมด",
-      recent: "ดูล่าสุด",
+      recent: "ดูล่า��ุด",
       recentShort: "ล่าสุด",
       sort: "เรียงลำดับ",
       ascending: "น้อยไปมาก",

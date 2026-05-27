@@ -71,6 +71,7 @@ import {
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
+import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
@@ -134,6 +135,7 @@ import type {
 } from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
+export { PluginLoadReentryError } from "./loader-cache-state.js";
 
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
@@ -207,16 +209,6 @@ export class PluginLoadFailureError extends Error {
   }
 }
 
-export class PluginLoadReentryError extends Error {
-  readonly cacheKey: string;
-
-  constructor(cacheKey: string) {
-    super(`plugin load reentry detected for cache key: ${cacheKey}`);
-    this.name = "PluginLoadReentryError";
-    this.cacheKey = cacheKey;
-  }
-}
-
 type CachedPluginState = {
   registry: PluginRegistry;
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
@@ -234,10 +226,9 @@ type CachedPluginState = {
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
-const registryCache = new Map<string, CachedPluginState>();
-const inFlightPluginRegistryLoads = new Set<string>();
-const openAllowlistWarningCache = new Set<string>();
+const pluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
+  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+);
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "config",
@@ -255,9 +246,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 ] as const satisfies readonly (keyof PluginRuntime)[];
 
 export function clearPluginLoaderCache(): void {
-  registryCache.clear();
-  inFlightPluginRegistryLoads.clear();
-  openAllowlistWarningCache.clear();
+  pluginLoaderCacheState.clear();
   clearBundledRuntimeDependencyNodePaths();
   bundledRuntimeDependencyJitiAliases.clear();
   clearAgentHarnesses();
@@ -949,39 +938,19 @@ export const __testing = {
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
-    return pluginRegistryCacheEntryCap;
+    return pluginLoaderCacheState.maxEntries;
   },
   setMaxPluginRegistryCacheEntriesForTest(value?: number) {
-    pluginRegistryCacheEntryCap =
-      typeof value === "number" && Number.isFinite(value) && value > 0
-        ? Math.max(1, Math.floor(value))
-        : MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
+    pluginLoaderCacheState.setMaxEntriesForTest(value);
   },
 };
 
 function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefined {
-  const cached = registryCache.get(cacheKey);
-  if (!cached) {
-    return undefined;
-  }
-  // Refresh insertion order so frequently reused registries survive eviction.
-  registryCache.delete(cacheKey);
-  registryCache.set(cacheKey, cached);
-  return cached;
+  return pluginLoaderCacheState.get(cacheKey);
 }
 
 function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): void {
-  if (registryCache.has(cacheKey)) {
-    registryCache.delete(cacheKey);
-  }
-  registryCache.set(cacheKey, state);
-  while (registryCache.size > pluginRegistryCacheEntryCap) {
-    const oldestKey = registryCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    registryCache.delete(oldestKey);
-  }
+  pluginLoaderCacheState.set(cacheKey, state);
 }
 
 function buildCacheKey(params: {
@@ -1398,7 +1367,7 @@ export function resolvePluginRegistryLoadCacheKey(options: PluginLoadOptions = {
 }
 
 export function isPluginRegistryLoadInFlight(options: PluginLoadOptions = {}): boolean {
-  return inFlightPluginRegistryLoads.has(resolvePluginRegistryLoadCacheKey(options));
+  return pluginLoaderCacheState.isLoadInFlight(resolvePluginRegistryLoadCacheKey(options));
 }
 
 export function resolveCompatibleRuntimePluginRegistry(
@@ -2089,7 +2058,7 @@ function warnWhenAllowlistIsOpen(params: {
   if (autoDiscoverable.length === 0) {
     return;
   }
-  if (openAllowlistWarningCache.has(params.warningCacheKey)) {
+  if (pluginLoaderCacheState.hasOpenAllowlistWarning(params.warningCacheKey)) {
     return;
   }
   const preview = autoDiscoverable
@@ -2097,7 +2066,7 @@ function warnWhenAllowlistIsOpen(params: {
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
   const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
-  openAllowlistWarningCache.add(params.warningCacheKey);
+  pluginLoaderCacheState.recordOpenAllowlistWarning(params.warningCacheKey);
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
@@ -2210,10 +2179,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       return cached.registry;
     }
   }
-  if (inFlightPluginRegistryLoads.has(cacheKey)) {
-    throw new PluginLoadReentryError(cacheKey);
-  }
-  inFlightPluginRegistryLoads.add(cacheKey);
+  pluginLoaderCacheState.beginLoad(cacheKey);
   try {
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
@@ -3195,7 +3161,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     return registry;
   } finally {
-    inFlightPluginRegistryLoads.delete(cacheKey);
+    pluginLoaderCacheState.finishLoad(cacheKey);
   }
 }
 
