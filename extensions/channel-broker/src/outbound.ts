@@ -16,6 +16,7 @@ import {
   type ChannelMessageSendResult,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-message";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveChannelBrokerAccount } from "./accounts.js";
 import { createBrokerRequestId, sendBrokerOutboundRequest } from "./runtime.js";
 import { parseChannelBrokerTarget } from "./target.js";
@@ -181,7 +182,7 @@ async function sendChannelBrokerFinal(params: {
   to: string;
   payloads: BrokerOutboundPayload[];
   requirements: BrokerDeliveryRequirements;
-  receiptKind: "text" | "media";
+  receiptKind: "text" | "media" | "voice";
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
@@ -280,6 +281,9 @@ export async function sendChannelBrokerMedia(params: {
   to: string;
   text?: string | null;
   mediaUrl: string;
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   audioAsVoice?: boolean;
   threadId?: string | number | null;
   replyToId?: string | number | null;
@@ -290,10 +294,16 @@ export async function sendChannelBrokerMedia(params: {
   if (!url) {
     throw new Error("Channel broker media send requires a media URL.");
   }
-  const attachment: BrokerMessageAttachment = {
-    url,
-    mediaType: params.audioAsVoice ? "voice" : "media",
-  };
+  const mediaType = params.audioAsVoice ? "voice" : "media";
+  const attachment: BrokerMessageAttachment = /^https?:\/\//i.test(url)
+    ? { url, mediaType }
+    : await createInlineBrokerMediaAttachment({
+        mediaUrl: url,
+        mediaType,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
+      });
   const text = params.text?.trim();
   return await sendChannelBrokerFinal({
     ...params,
@@ -307,8 +317,29 @@ export async function sendChannelBrokerMedia(params: {
       media: true,
       ...(text ? { text: true } : {}),
     },
-    receiptKind: "media",
+    receiptKind: params.audioAsVoice ? "voice" : "media",
   });
+}
+
+async function createInlineBrokerMediaAttachment(params: {
+  mediaUrl: string;
+  mediaType: string;
+  mediaAccess?: ChannelOutboundContext["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+}): Promise<BrokerMessageAttachment> {
+  const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  });
+  return {
+    mediaType: params.mediaType,
+    contentBase64: media.buffer.toString("base64"),
+    sizeBytes: media.buffer.byteLength,
+    ...(media.contentType ? { mimeType: media.contentType } : {}),
+    ...(media.fileName ? { name: media.fileName } : {}),
+  };
 }
 
 export async function sendChannelBrokerOutboundText(
@@ -341,6 +372,9 @@ export async function sendChannelBrokerOutboundMedia(
     to: ctx.to,
     text: ctx.text,
     mediaUrl: ctx.mediaUrl,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
     silent: ctx.silent,

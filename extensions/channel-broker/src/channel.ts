@@ -115,6 +115,9 @@ const channelBrokerMessageAdapter = defineChannelMessageAdapter({
         to: ctx.to,
         text: ctx.text,
         mediaUrl: ctx.mediaUrl,
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
         silent: ctx.silent,
@@ -171,14 +174,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
         looksLikeId: (raw) => Boolean(normalizeBrokerTarget(raw)),
         hint: "<platform>:<conversationId>[?threadId=<threadId>]",
       },
-      resolveOutboundSessionRoute: ({
-        cfg,
-        agentId,
-        accountId,
-        target,
-        replyToId,
-        threadId,
-      }) => {
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, replyToId, threadId }) => {
         const account = resolveChannelBrokerAccount({ cfg: cfg as CoreConfig, accountId });
         const parsed = parseChannelBrokerTarget({ rawTarget: target, account, threadId });
         const brokerConversationType = parsed.conversationType ?? "channel";

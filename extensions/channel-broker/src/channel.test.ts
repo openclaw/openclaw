@@ -192,8 +192,7 @@ describe("channel-broker plugin", () => {
       agentId: "main",
       accountId: "acme",
       target: "slack:C123",
-      currentSessionKey:
-        "agent:main:channel-broker:channel:slack:c123:thread:1716500000.000001",
+      currentSessionKey: "agent:main:channel-broker:channel:slack:c123:thread:1716500000.000001",
     } as never);
 
     expect(route?.sessionKey).toBe("agent:main:channel-broker:channel:slack:c123");
@@ -384,6 +383,73 @@ describe("channel-broker plugin", () => {
       }),
     });
     expect(result?.receipt.parts[0]?.kind).toBe("media");
+  });
+
+  it("inlines local media through the outbound media reader instead of leaking host paths", async () => {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const mediaReadFile = vi.fn(async () => png);
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-local-media-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["native-local-media-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-local-media-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.media?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "slack:C123",
+      text: "see attached",
+      mediaUrl: "file:///private/tmp/openclaw-media/photo.png",
+      mediaLocalRoots: ["/private/tmp/openclaw-media"],
+      mediaReadFile,
+      accountId: "acme",
+    } as never);
+
+    expect(mediaReadFile).toHaveBeenCalledWith("/private/tmp/openclaw-media/photo.png");
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        payloads: [
+          {
+            text: "see attached",
+            attachments: [
+              expect.objectContaining({
+                mediaType: "media",
+                contentBase64: png.toString("base64"),
+                mimeType: "image/png",
+                name: "photo.png",
+                sizeBytes: png.length,
+              }),
+            ],
+          },
+        ],
+      }),
+    });
+    const attachment =
+      sendOutboundRequest.mock.calls[0]?.[0]?.request.payloads[0]?.attachments?.[0];
+    expect(attachment).not.toHaveProperty("url");
   });
 
   it("rejects non-sent provider receipts before reporting send success", async () => {
