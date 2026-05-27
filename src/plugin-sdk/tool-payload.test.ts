@@ -193,6 +193,24 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     ).toBeNull();
   });
 
+  it("parses legacy tool-prefixed XML parameter calls without a function close", () => {
+    const raw = ["[tool:exec]", "<parameter=command>", "pwd", "</parameter>"].join("\n");
+
+    expect(
+      parseStandalonePlainTextToolCallBlocks(raw, {
+        allowedToolNames: ["exec"],
+      }),
+    ).toEqual([
+      {
+        arguments: { command: "pwd" },
+        end: raw.length,
+        name: "exec",
+        raw,
+        start: 0,
+      },
+    ]);
+  });
+
   it("finds XML parameter close tags without lowercased string offsets", () => {
     const dottedCapitalI = "\u0130";
     const raw = [

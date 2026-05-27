@@ -448,7 +448,9 @@ function parseXmlishPlainTextToolCallBlockAt(
     return null;
   }
 
-  const end = consumeXmlishFunctionClose(text, cursor);
+  const end = opening.allowsOptionalXmlishClose
+    ? consumeOptionalXmlishFunctionClose(text, cursor)
+    : consumeXmlishFunctionClose(text, cursor);
   if (end === null) {
     return null;
   }
