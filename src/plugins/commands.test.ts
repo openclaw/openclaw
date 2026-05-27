@@ -733,7 +733,7 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBeUndefined();
   });
 
-  it("exposes owner status to plugin commands that opt in", async () => {
+  it("ignores owner status opt-in from direct plugin command registration", async () => {
     let observedOwnerStatus: boolean | undefined;
     registerPluginCommand("demo-plugin", {
       name: "voice",
@@ -752,6 +752,84 @@ describe("registerPluginCommand", () => {
       isAuthorizedSender: true,
       senderIsOwner: true,
       commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("ignores owner status opt-in from external plugin registry commands", async () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    let observedOwnerStatus: boolean | undefined;
+    pluginRegistry.registerCommand(
+      {
+        ...createBundledPluginRecord("external-plugin"),
+        origin: "workspace",
+        source: "/workspace/external-plugin/index.ts",
+        rootDir: "/workspace/external-plugin",
+      },
+      {
+        name: "external",
+        description: "External command",
+        exposeSenderIsOwner: true,
+        handler: async (ctx) => {
+          observedOwnerStatus = ctx.senderIsOwner;
+          return { text: "ok" };
+        },
+      },
+    );
+    const match = requirePluginCommandMatch("/external");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/external",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("exposes owner status to trusted bundled plugin commands that opt in", async () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
+    });
+    let observedOwnerStatus: boolean | undefined;
+    pluginRegistry.registerCommand(createBundledPluginRecord("phone-control"), {
+      name: "phone",
+      description: "Phone command",
+      exposeSenderIsOwner: true,
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch("/phone");
+
+    await executePluginCommand({
+      command: match.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/phone",
       config: {},
     });
 

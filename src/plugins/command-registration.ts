@@ -313,7 +313,12 @@ export function pluginCommandSupportsChannel(
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
+  opts?: {
+    pluginName?: string;
+    pluginRoot?: string;
+    allowReservedCommandNames?: boolean;
+    allowOwnerStatusExposure?: boolean;
+  },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (isPluginCommandRegistryLocked()) {
@@ -368,6 +373,9 @@ export function registerPluginCommand(
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
+    ...(opts?.allowOwnerStatusExposure === true && normalizedCommand.exposeSenderIsOwner === true
+      ? { trustedOwnerStatusExposure: true as const }
+      : {}),
   });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
