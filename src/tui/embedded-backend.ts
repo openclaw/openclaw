@@ -861,6 +861,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (!run) {
         return;
       }
+      if (params.controller.signal.aborted || result?.meta?.aborted === true) {
+        this.emitChatAborted(params.runId, run);
+        return;
+      }
 
       if (run.isBtw) {
         const text = payloadText(result?.payloads);

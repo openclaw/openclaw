@@ -498,6 +498,10 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
     backend.start();
     await backend.sendChat({
       sessionKey: "agent:main:main",
@@ -756,6 +760,10 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
     backend.start();
     await backend.sendChat({
       sessionKey: "agent:main:main",
@@ -778,6 +786,14 @@ describe("EmbeddedTuiBackend", () => {
     expect(firstAbortListener).toHaveBeenCalledTimes(1);
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
     await flushMicrotasks();
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-local-first-terminal",
+        sessionKey: "agent:main:main",
+        state: "aborted",
+      },
+    });
   });
 
   it("sends broad stop-like text as a normal prompt when idle", async () => {
