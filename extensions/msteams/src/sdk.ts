@@ -735,7 +735,7 @@ function hasExpectedBotIdentity(payload: unknown, expectedAppId: string): boolea
   );
 }
 
-function normalizeBotFrameworkServiceUrl(value: unknown): string | null {
+function validateAndNormalizeBotFrameworkServiceUrl(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -745,10 +745,10 @@ function normalizeBotFrameworkServiceUrl(value: unknown): string | null {
   }
   try {
     const url = new URL(trimmed);
-    if (url.protocol !== "https:") {
-      return null;
-    }
-    if (url.search || url.hash) {
+    // Match the signed endpoint, not a loosely equivalent URL: the URL parser
+    // normalizes host/default port, while path casing and encoding stay intact.
+    // Query/fragment values are not valid Bot Framework service endpoints.
+    if (url.protocol !== "https:" || url.search || url.hash) {
       return null;
     }
     return url.toString().replace(/\/+$/, "");
@@ -761,11 +761,14 @@ function hasMatchingServiceUrlClaim(
   payload: BotFrameworkJwtPayload,
   activityServiceUrl: string | undefined,
 ): boolean {
-  const expectedServiceUrl = normalizeBotFrameworkServiceUrl(activityServiceUrl);
+  const expectedServiceUrl = validateAndNormalizeBotFrameworkServiceUrl(activityServiceUrl);
   if (!expectedServiceUrl) {
     return false;
   }
-  const claimServiceUrl = normalizeBotFrameworkServiceUrl(payload.serviceurl ?? payload.serviceUrl);
+  // Bot Framework tokens commonly use lowercase `serviceurl`; keep the
+  // documented camelCase spelling as a narrow fallback for SDK/source variants.
+  const claimValue = payload.serviceurl ?? payload.serviceUrl;
+  const claimServiceUrl = validateAndNormalizeBotFrameworkServiceUrl(claimValue);
   return claimServiceUrl === expectedServiceUrl;
 }
 
@@ -836,11 +839,11 @@ async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
  * - signature verification via issuer-specific JWKS endpoints
  * - audience validation: appId, api://appId, and https://api.botframework.com
  * - issuer validation: strict allowlist (Bot Framework + tenant-scoped Entra)
- * - service URL binding: JWT serviceurl claim must match Activity.serviceUrl
+ * - service URL binding: JWT serviceurl claim must match a usable Activity.serviceUrl
  * - expiration validation with 5-minute clock tolerance
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
-  validate: (authHeader: string, activityServiceUrl: string | undefined) => Promise<boolean>;
+  validate: (authHeader: string, activityServiceUrl?: string) => Promise<boolean>;
 }> {
   const { jwt, JwksClient } = await loadBotFrameworkJwtDeps();
 

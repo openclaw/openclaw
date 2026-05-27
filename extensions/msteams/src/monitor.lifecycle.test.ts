@@ -322,6 +322,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!app) {
       throw new Error("expected Express app to be created");
     }
+    // This test intentionally locks auth middleware ordering: the cheap Bearer
+    // gate must run before bounded JSON parsing, and JWT validation must run
+    // after parsing so it can bind the token to Activity.serviceUrl.
     expect(app.use).toHaveBeenCalledTimes(4);
 
     const jsonMiddleware = vi.mocked((await import("express")).json).mock.results[0]?.value;
@@ -367,6 +370,27 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         "https://smba.trafficmanager.net/amer/",
       );
       expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    jwtValidate.mockReset().mockResolvedValueOnce(false);
+    const missingServiceUrlNext = vi.fn();
+    const missingServiceUrlResponse = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as Response;
+    jwtMiddleware(
+      {
+        headers: { authorization: "Bearer token-no-service-url" },
+        body: { type: "message" },
+      } as Request,
+      missingServiceUrlResponse,
+      missingServiceUrlNext,
+    );
+
+    await vi.waitFor(() => {
+      expect(jwtValidate).toHaveBeenCalledWith("Bearer token-no-service-url", undefined);
+      expect(missingServiceUrlResponse.status).toHaveBeenCalledWith(401);
+      expect(missingServiceUrlNext).not.toHaveBeenCalled();
     });
 
     abort.abort();

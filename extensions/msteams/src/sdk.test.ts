@@ -365,6 +365,16 @@ describe("createBotFrameworkJwtValidator", () => {
     expect(opts.audience).toContain("https://api.botframework.com");
   });
 
+  it("accepts tokens with documented serviceUrl claim casing", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceUrl: activityServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(true);
+  });
+
   it("accepts global audience tokens when azp matches the configured app id", async () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
     jwtState.verifyResult = {
@@ -403,6 +413,18 @@ describe("createBotFrameworkJwtValidator", () => {
     await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
   });
 
+  it("rejects schemeless activity serviceUrls even when the host matches the token claim", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: activityServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(
+      validator.validate("Bearer botfw-token", "smba.trafficmanager.net/amer/"),
+    ).resolves.toBe(false);
+  });
+
   it("rejects tokens when the serviceurl claim is missing", async () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
     jwtState.verifyResult = {
@@ -415,18 +437,69 @@ describe("createBotFrameworkJwtValidator", () => {
 
   it("rejects tokens when the activity serviceUrl is missing", async () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: activityServiceUrl,
+    };
 
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer botfw-token", undefined)).resolves.toBe(false);
   });
 
-  it("rejects serviceUrl values that are not Bot Framework base URLs", async () => {
+  it("rejects tokens when the activity serviceUrl is malformed", async () => {
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: activityServiceUrl,
+    };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(
-      validator.validate("Bearer botfw-token", `${activityServiceUrl}?target=attacker`),
-    ).resolves.toBe(false);
+    await expect(validator.validate("Bearer botfw-token", "not a url")).resolves.toBe(false);
+  });
+
+  it.each([
+    "http://smba.trafficmanager.net/amer",
+    "HTTP://smba.trafficmanager.net/amer",
+    "wss://smba.trafficmanager.net/amer",
+    "ftp://smba.trafficmanager.net/amer",
+  ])("rejects non-HTTPS activity serviceUrl %s", async (serviceUrl) => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: serviceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", serviceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects serviceUrl values with query strings", async () => {
+    const queriedServiceUrl = `${activityServiceUrl}?target=attacker`;
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: queriedServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", queriedServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects serviceUrl values with fragments", async () => {
+    const fragmentServiceUrl = `${activityServiceUrl}#fragment`;
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: fragmentServiceUrl,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", fragmentServiceUrl)).resolves.toBe(false);
+  });
+
+  it("rejects tokens when the serviceurl claim is not a string", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      serviceurl: 123,
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer botfw-token", activityServiceUrl)).resolves.toBe(false);
   });
 
   it("rejects non-object verified payloads", async () => {
