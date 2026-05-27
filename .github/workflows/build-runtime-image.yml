@@ -32,18 +32,36 @@ on:
   push:
     branches: [main]
     # Only rebuild when paths that affect the runtime image actually change.
-    # Skipping image-irrelevant paths (docs, top-level READMEs, agent prompts)
-    # cuts ~30 min of useless build time per unrelated push.
+    # Skipping image-irrelevant paths (root *.md governance, designs/, plans/,
+    # test/, .github/ non-this-workflow) cuts ~30 min of useless build time
+    # per unrelated push. Anything `COPY . .` in Dockerfile.multitenant's
+    # build stage walks — or that downstream `pnpm build:docker`/`ui:build`/
+    # `qa:lab:build` compiles into dist/ — must be enumerated here. See
+    # rockie-workspace#914 for the audit that produced this list.
     paths:
       - "Dockerfile.multitenant"
+      - ".dockerignore"
       - "overlay/multitenant/**"
       - "apps/broker/**"
-      - "pyproject.toml"
-      - "uv.lock"
+      - "apps/shared/**"
+      - "src/**"
+      - "ui/**"
+      - "qa/**"
+      - "packages/**"
+      - "extensions/**"
+      - "scripts/**"
+      - "patches/**"
+      - "skills/**"
+      - "config/**"
+      - "docs/**"
+      - "vendor/a2ui/**"
+      - "openclaw.mjs"
+      - "tsconfig*.json"
+      - "pnpm-workspace.yaml"
+      - ".npmrc"
       - "package.json"
       - "bun.lockb"
       - "pnpm-lock.yaml"
-      - "requirements*.txt"
       - ".github/workflows/build-runtime-image.yml"
   workflow_dispatch: {}
   repository_dispatch:
