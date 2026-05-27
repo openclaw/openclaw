@@ -490,6 +490,12 @@ describe("runCliAgent spawn path", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as { argv?: string[] };
       pluginDir = requireArgAfter(input.argv, "--plugin-dir");
+      const systemPromptFile = requireArgAfter(input.argv, "--append-system-prompt-file");
+      const systemPrompt = await fs.readFile(systemPromptFile, "utf-8");
+      expect(systemPrompt).toContain("You are a helpful assistant.");
+      expect(systemPrompt).not.toContain("## Skills");
+      expect(systemPrompt).not.toContain("<available_skills>");
+      expect(systemPrompt).not.toContain("Use weather tools for forecasts.");
       const manifest = JSON.parse(
         await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
       ) as { name?: string; skills?: string };
@@ -517,8 +523,19 @@ describe("runCliAgent spawn path", () => {
           model: "sonnet",
           runId: "run-claude-skills-plugin",
           workspaceDir,
+          backend: {
+            systemPromptFileArg: "--append-system-prompt-file",
+          },
           skillsSnapshot: {
-            prompt: "",
+            prompt: [
+              "<available_skills>",
+              "  <skill>",
+              "    <name>weather</name>",
+              "    <description>Use weather tools for forecasts.</description>",
+              `    <location>${path.join(skillDir, "SKILL.md")}</location>`,
+              "  </skill>",
+              "</available_skills>",
+            ].join("\n"),
             skills: [{ name: "weather" }],
             resolvedSkills: [
               {

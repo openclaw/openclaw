@@ -24,6 +24,7 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
 import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { stripOpenClawSkillsPromptSection } from "./claude-skills-system-prompt.js";
 import {
   buildCliSupervisorScopeKey,
   buildCliArgs,
@@ -279,10 +280,18 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
+  const claudeSkillsPlugin = await prepareClaudeCliSkillsPlugin({
+    backendId: context.backendResolved.id,
+    skillsSnapshot: params.skillsSnapshot,
+  });
+  const systemPromptForRun =
+    claudeSkillsPlugin.args.length > 0
+      ? stripOpenClawSkillsPromptSection(context.systemPrompt)
+      : context.systemPrompt;
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
     isNewSession: isNew,
-    systemPrompt: context.systemPrompt,
+    systemPrompt: systemPromptForRun,
   });
   const systemPromptFile =
     systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
@@ -322,10 +331,6 @@ export async function executePreparedCliRun(
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
-  const claudeSkillsPlugin = await prepareClaudeCliSkillsPlugin({
-    backendId: context.backendResolved.id,
-    skillsSnapshot: params.skillsSnapshot,
-  });
   let claudeSkillsPluginCleanupOwned = false;
   const baseArgsWithSkills =
     claudeSkillsPlugin.args.length > 0
