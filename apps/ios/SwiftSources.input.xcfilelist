@@ -11,7 +11,6 @@ Sources/Design/OpenClawBrand.swift
 Sources/Design/AgentProDreamingDestination.swift
 Sources/Design/AgentProNodesDestination.swift
 Sources/Design/AgentProTab.swift
-Sources/Design/AgentProTab+Details.swift
 Sources/Design/ChatProTab.swift
 Sources/Design/CommandCenterTab.swift
 Sources/Design/OpenClawProComponents.swift
@@ -22,6 +21,12 @@ Sources/Design/SettingsProTabSections.swift
 Sources/Design/SettingsProTabActions.swift
 Sources/Design/CommandCenterSupport.swift
 Sources/Design/AgentProTab+Overview.swift
+Sources/Design/AgentProTab+Destinations.swift
+Sources/Design/AgentProTab+Skills.swift
+Sources/Design/AgentProTab+Cron.swift
+Sources/Design/AgentProTab+Usage.swift
+Sources/Design/AgentProTab+DetailComponents.swift
+Sources/Design/AgentProTab+GatewayData.swift
 Sources/Design/AgentProModels.swift
 Sources/EventKit/EventKitAuthorization.swift
 Sources/Gateway/DeepLinkAgentPromptAlert.swift
