@@ -55,7 +55,7 @@ describe("fetchMinimaxUsage", () => {
     });
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch, { baseUrl });
-    expect(result.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 98, resetAt: undefined }]);
   });
 
   it.each([
@@ -153,11 +153,11 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
-      name: "treats MiniMax current_interval_usage_count as remaining quota (not consumed)",
+      name: "treats MiniMax current_interval_usage_count as used (consumed) quota",
       payload: {
         data: {
           current_interval_total_count: 100,
-          current_interval_usage_count: 98,
+          current_interval_usage_count: 2,
           plan_name: "Coding Plan",
         },
       },
@@ -208,7 +208,7 @@ describe("fetchMinimaxUsage", () => {
             {
               model_name: "MiniMax-M*",
               current_interval_total_count: 600,
-              current_interval_usage_count: 595,
+              current_interval_usage_count: 5,
               start_time: 1_774_180_800_000,
               end_time: 1_774_195_200_000,
             },
@@ -240,7 +240,7 @@ describe("fetchMinimaxUsage", () => {
             {
               model_name: "video-01",
               current_interval_total_count: 200,
-              current_interval_usage_count: 150,
+              current_interval_usage_count: 50,
               start_time: 1_774_180_800_000,
               end_time: 1_774_195_200_000,
             },

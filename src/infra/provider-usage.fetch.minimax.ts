@@ -79,6 +79,12 @@ const USED_KEYS = [
   "prompts_used",
   "promptsUsed",
   "consumed",
+  // MiniMax token_plan/remains endpoint returns these as used (consumed) counts,
+  // not remaining. See https://github.com/openclaw/openclaw/issues/86885
+  "current_interval_usage_count",
+  "currentIntervalUsageCount",
+  "current_weekly_usage_count",
+  "currentWeeklyUsageCount",
 ] as const;
 
 const TOTAL_KEYS = [
@@ -144,12 +150,6 @@ const REMAINING_KEYS = [
   "prompts_left",
   "promptsLeft",
   "left",
-  // MiniMax usage endpoints misname these: values are remaining quota, not consumed.
-  // See https://github.com/MiniMax-AI/MiniMax-M2/issues/99
-  "current_interval_usage_count",
-  "currentIntervalUsageCount",
-  "current_weekly_usage_count",
-  "currentWeeklyUsageCount",
 ] as const;
 
 const PLAN_KEYS = ["plan", "plan_name", "planName", "product", "tier"] as const;
