@@ -172,6 +172,8 @@ describe("armLocalAgentHardTimeout", () => {
 });
 
 describe("exitAfterLocalAgentCompletion", () => {
+  const otelPreExitSymbol = Symbol.for("openclaw.otel.preExit");
+
   it("does nothing outside local agent runs", async () => {
     const stdout = { write: vi.fn() };
     const stderr = { write: vi.fn() };
@@ -219,5 +221,72 @@ describe("exitAfterLocalAgentCompletion", () => {
     await expect(result).rejects.toThrow("exit");
     expect(exit).toHaveBeenCalledWith(process.exitCode ?? 0);
     expect(clearTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for an optional otel pre-exit hook before forcing exit", async () => {
+    let resolveHook: (() => void) | undefined;
+    const hook = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveHook = resolve;
+        }),
+    );
+    const setTimeout = vi.fn((_cb: () => void, _timeoutMs: number) => ({ unref: vi.fn() }));
+    const clearTimeout = vi.fn();
+    const kill = vi.fn();
+    const exit = vi.fn(() => {
+      throw new Error("exit");
+    });
+
+    const result = exitAfterLocalAgentCompletion({
+      argv: agentLocalArgv(),
+      globalObject: { [otelPreExitSymbol]: hook },
+      stdout: { write: vi.fn(), destroyed: true } as never,
+      stderr: { write: vi.fn(), destroyed: true } as never,
+      setTimeout: setTimeout as never,
+      clearTimeout: clearTimeout as never,
+      exit: exit as never,
+      kill,
+      pid: 12345,
+      forceKillTimeoutMs: 3,
+    });
+
+    await vi.waitFor(() => expect(hook).toHaveBeenCalledOnce());
+    expect(exit).not.toHaveBeenCalled();
+
+    resolveHook?.();
+    await expect(result).rejects.toThrow("exit");
+
+    expect(exit).toHaveBeenCalledWith(process.exitCode ?? 0);
+    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 3);
+    const killCallback = setTimeout.mock.calls.find(([, timeoutMs]) => timeoutMs === 3)?.[0];
+    killCallback?.();
+    expect(kill).toHaveBeenCalledWith(12345, "SIGKILL");
+  });
+
+  it("still exits when the optional otel pre-exit hook rejects", async () => {
+    const hook = vi.fn(() => Promise.reject(new Error("flush failed")));
+    const setTimeout = vi.fn((_cb: () => void, _timeoutMs: number) => ({ unref: vi.fn() }));
+    const exit = vi.fn(() => {
+      throw new Error("exit");
+    });
+
+    await expect(
+      exitAfterLocalAgentCompletion({
+        argv: agentLocalArgv(),
+        globalObject: { [otelPreExitSymbol]: hook },
+        stdout: { write: vi.fn(), destroyed: true } as never,
+        stderr: { write: vi.fn(), destroyed: true } as never,
+        setTimeout: setTimeout as never,
+        clearTimeout: vi.fn() as never,
+        exit: exit as never,
+        kill: vi.fn(),
+        forceKillTimeoutMs: 3,
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(process.exitCode ?? 0);
+    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 3);
   });
 });

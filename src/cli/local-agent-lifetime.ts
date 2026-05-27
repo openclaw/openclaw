@@ -4,6 +4,8 @@ const LOCAL_AGENT_HARD_TIMEOUT_GRACE_MS = 30_000;
 const LOCAL_AGENT_HARD_TIMEOUT_GRACE_SECONDS = LOCAL_AGENT_HARD_TIMEOUT_GRACE_MS / 1000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const CLI_COMPLETION_STREAM_DRAIN_TIMEOUT_MS = 250;
+const CLI_COMPLETION_FORCE_KILL_TIMEOUT_MS = 3_000;
+const OTEL_PRE_EXIT_SYMBOL = Symbol.for("openclaw.otel.preExit");
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 const AGENT_VALUE_FLAGS = new Set([
   "-m",
@@ -35,14 +37,18 @@ type LocalAgentHardTimeoutDeps = {
 
 type CliCompletionExitDeps = {
   argv?: string[];
+  globalObject?: Record<symbol, unknown>;
   stdout?: Pick<NodeJS.WriteStream, "write"> &
     Partial<Pick<NodeJS.WriteStream, "destroyed" | "writableEnded">>;
   stderr?: Pick<NodeJS.WriteStream, "write"> &
     Partial<Pick<NodeJS.WriteStream, "destroyed" | "writableEnded">>;
   setTimeout?: typeof globalThis.setTimeout;
   clearTimeout?: typeof globalThis.clearTimeout;
-  exit?: (code?: number) => never;
+  exit?: (code?: number) => never | void;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+  pid?: number;
   drainTimeoutMs?: number;
+  forceKillTimeoutMs?: number;
 };
 
 type LocalAgentTimeoutPlan = {
@@ -248,6 +254,29 @@ function waitForStreamFlush(
   return writeAndFlushStream(stream, "", deps);
 }
 
+async function flushOtelBeforeExit(deps: CliCompletionExitDeps): Promise<void> {
+  const hook = (deps.globalObject ?? (globalThis as Record<symbol, unknown>))[OTEL_PRE_EXIT_SYMBOL];
+  if (typeof hook !== "function") {
+    return;
+  }
+  try {
+    await hook();
+  } catch {}
+}
+
+function exitWithKillFallback(deps: CliCompletionExitDeps): void {
+  const setTimer = deps.setTimeout ?? globalThis.setTimeout;
+  const kill = deps.kill ?? process.kill.bind(process);
+  const exit = deps.exit ?? process.exit.bind(process);
+  const pid = deps.pid ?? process.pid;
+  setTimer(() => {
+    try {
+      kill(pid, "SIGKILL");
+    } catch {}
+  }, deps.forceKillTimeoutMs ?? CLI_COMPLETION_FORCE_KILL_TIMEOUT_MS);
+  exit(process.exitCode ?? 0);
+}
+
 export async function exitAfterLocalAgentCompletion(
   deps: CliCompletionExitDeps = {},
 ): Promise<void> {
@@ -263,6 +292,6 @@ export async function exitAfterLocalAgentCompletion(
     waitForStreamFlush(deps.stdout ?? process.stdout, drainDeps),
     waitForStreamFlush(deps.stderr ?? process.stderr, drainDeps),
   ]);
-  const exit = deps.exit ?? process.exit.bind(process);
-  exit(process.exitCode ?? 0);
+  await flushOtelBeforeExit(deps);
+  exitWithKillFallback(deps);
 }
