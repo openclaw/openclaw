@@ -7,6 +7,7 @@ import {
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
+  resolveNpmPackInvocation,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
@@ -128,5 +129,121 @@ describe("resolve-openclaw-package-candidate", () => {
     await expect(readPackageBuildSourceSha(tarball)).resolves.toBe(
       "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
     );
+  });
+});
+
+describe("resolveNpmPackInvocation", () => {
+  const packArgsTail = (spec: string, outputDir: string) => [
+    "pack",
+    spec,
+    "--ignore-scripts",
+    "--json",
+    "--pack-destination",
+    outputDir,
+  ];
+
+  it("uses the active node toolchain npm-cli.js on POSIX when present", () => {
+    const execPath = "/usr/local/n/versions/node/24.13.0/bin/node";
+    const expectedNpmCliPath = path.posix.resolve(
+      path.posix.dirname(execPath),
+      "../lib/node_modules/npm/bin/npm-cli.js",
+    );
+
+    const invocation = resolveNpmPackInvocation({
+      packageSpec: "openclaw@beta",
+      outputDir: "/tmp/out",
+      execPath,
+      env: {},
+      existsSync: (candidate: string) => candidate === expectedNpmCliPath,
+      platform: "darwin",
+    });
+
+    expect(invocation).toEqual({
+      command: execPath,
+      args: [expectedNpmCliPath, ...packArgsTail("openclaw@beta", "/tmp/out")],
+      options: { capture: true },
+    });
+  });
+
+  it("routes through cmd.exe when only npm.cmd is present next to node on Windows (issue #87233)", () => {
+    // This is the RED-first case: before the fix, bare spawn("npm", ...) on Windows
+    // would fail with ENOENT because PATHEXT is not consulted. resolveNpmRunner wraps
+    // the .cmd shim via cmd.exe with windowsVerbatimArguments.
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const invocation = resolveNpmPackInvocation({
+      packageSpec: "openclaw@latest",
+      outputDir: "C:\\out",
+      execPath,
+      env: {},
+      existsSync: (candidate: string) => candidate === npmCmdPath,
+      comSpec: "C:\\Windows\\System32\\cmd.exe",
+      platform: "win32",
+    });
+
+    expect(invocation.command).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(invocation.args[0]).toBe("/d");
+    expect(invocation.args[1]).toBe("/s");
+    expect(invocation.args[2]).toBe("/c");
+    expect(invocation.args[3]).toContain(npmCmdPath);
+    expect(invocation.args[3]).toContain("pack");
+    expect(invocation.args[3]).toContain("openclaw@latest");
+    expect(invocation.options).toEqual({
+      capture: true,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("uses an adjacent npm.exe on Windows without a cmd.exe wrapper", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmExePath = path.win32.resolve(path.win32.dirname(execPath), "npm.exe");
+
+    const invocation = resolveNpmPackInvocation({
+      packageSpec: "openclaw@alpha",
+      outputDir: "C:\\out",
+      execPath,
+      env: {},
+      existsSync: (candidate: string) => candidate === npmExePath,
+      platform: "win32",
+    });
+
+    expect(invocation).toEqual({
+      command: npmExePath,
+      args: packArgsTail("openclaw@alpha", "C:\\out"),
+      options: { capture: true },
+    });
+  });
+
+  it("falls back to bare npm on POSIX, prefixing PATH with the node dir", () => {
+    const invocation = resolveNpmPackInvocation({
+      packageSpec: "openclaw@beta",
+      outputDir: "/tmp/out",
+      execPath: "/tmp/node",
+      env: { PATH: "/usr/bin:/bin" },
+      existsSync: () => false,
+      platform: "linux",
+    });
+
+    expect(invocation.command).toBe("npm");
+    expect(invocation.args).toEqual(packArgsTail("openclaw@beta", "/tmp/out"));
+    expect(invocation.options.capture).toBe(true);
+    expect(invocation.options.env).toEqual({
+      PATH: `/tmp${path.delimiter}/usr/bin:/bin`,
+    });
+    expect(invocation.options.windowsVerbatimArguments).toBeUndefined();
+  });
+
+  it("fails closed on Windows when no toolchain-local npm can be located", () => {
+    expect(() =>
+      resolveNpmPackInvocation({
+        packageSpec: "openclaw@beta",
+        outputDir: "C:\\out",
+        execPath: "C:\\nodejs\\node.exe",
+        env: { Path: "C:\\Windows\\System32" },
+        existsSync: () => false,
+        platform: "win32",
+      }),
+    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
   });
 });

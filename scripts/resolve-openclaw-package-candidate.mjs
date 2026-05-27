@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
@@ -87,11 +88,51 @@ export function validateOpenClawPackageSpec(spec) {
   }
 }
 
+/**
+ * Build the spawn invocation for `npm pack <spec>` via resolveNpmRunner so that
+ * Windows resolves npm.cmd / npm.exe through the active Node toolchain instead
+ * of relying on PATHEXT lookup. Non-Windows behavior is byte-identical to the
+ * prior bare `spawn("npm", ...)` call other than going through the helper.
+ */
+export function resolveNpmPackInvocation(params = {}) {
+  const npmArgs = [
+    "pack",
+    params.packageSpec,
+    "--ignore-scripts",
+    "--json",
+    "--pack-destination",
+    params.outputDir,
+  ];
+  const runner = resolveNpmRunner({
+    npmArgs,
+    execPath: params.execPath,
+    env: params.env,
+    existsSync: params.existsSync,
+    platform: params.platform,
+    comSpec: params.comSpec,
+  });
+  return {
+    command: runner.command,
+    args: runner.args,
+    options: {
+      capture: true,
+      ...(runner.env ? { env: runner.env } : {}),
+      ...(runner.windowsVerbatimArguments
+        ? { windowsVerbatimArguments: runner.windowsVerbatimArguments }
+        : {}),
+    },
+  };
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd ?? ROOT_DIR,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"],
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.windowsVerbatimArguments
+        ? { windowsVerbatimArguments: options.windowsVerbatimArguments }
+        : {}),
     });
     let timedOut = false;
     const timeout =
@@ -416,17 +457,14 @@ async function resolveCandidate(options) {
       ]);
     } else if (options.source === "npm") {
       validateOpenClawPackageSpec(options.packageSpec);
+      const npmPackInvocation = resolveNpmPackInvocation({
+        outputDir,
+        packageSpec: options.packageSpec,
+      });
       const packOutput = await run(
-        "npm",
-        [
-          "pack",
-          options.packageSpec,
-          "--ignore-scripts",
-          "--json",
-          "--pack-destination",
-          outputDir,
-        ],
-        { capture: true },
+        npmPackInvocation.command,
+        npmPackInvocation.args,
+        npmPackInvocation.options,
       );
       await moveNewestPackedTarball(
         outputDir,
