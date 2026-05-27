@@ -1110,7 +1110,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("overlays configured model compat onto discovered catalog rows", async () => {
-    mockPiDiscoveryModels([
+    mockAgentDiscoveryModels([
       {
         id: "Qwen/Qwen3-8B",
         name: "Qwen3 8B",
