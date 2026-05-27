@@ -4118,12 +4118,6 @@ export async function runEmbeddedAttempt(
           const runtimeContextForHook = promptSubmission.runtimeOnly
             ? undefined
             : promptSubmission.runtimeContext?.trim();
-          const runtimeSystemPromptForHook = runtimeContextForHook
-            ? composeSystemPromptWithHookContext({
-                baseSystemPrompt: systemPromptText,
-                appendDynamicSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
-              })
-            : undefined;
           const runtimeContextMessageForCurrentTurn =
             buildRuntimeContextCustomMessage(runtimeContextForHook);
           const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
@@ -4142,7 +4136,9 @@ export async function runEmbeddedAttempt(
                 : (runtimeContextForHook?.length ?? 0),
             };
           }
-          const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
+          // Non-runtimeOnly runtime context is delivered as a prompt-local custom message;
+          // keep hook/precheck systemPrompt aligned with the actual model system prompt.
+          const systemPromptForHook = systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
             message: string;

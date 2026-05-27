@@ -345,6 +345,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("sends transcriptPrompt visibly and keeps runtime context out of transcript messages", async () => {
+    const runBeforeAgentRun = vi.fn(async () => undefined);
+    const runLlmInput = vi.fn(async () => undefined);
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_agent_run" || name === "llm_input"),
+      runBeforeAgentRun,
+      runLlmInput,
+    });
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -388,6 +395,25 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     );
     expect(seen.systemPrompt).not.toContain("secret runtime context");
+    const precheck = hoisted.preemptiveCompactionCalls.at(-1);
+    expect(precheck, "preemptive compaction request").toBeDefined();
+    expect(String(precheck?.systemPrompt ?? "")).not.toContain("secret runtime context");
+    expect(JSON.stringify(precheck?.messages ?? [])).toContain("secret runtime context");
+    const beforeAgentRunPayload = requireRecord(
+      runBeforeAgentRun.mock.calls[0]?.[0],
+      "before_agent_run payload",
+    );
+    expect(String(beforeAgentRunPayload.systemPrompt ?? "")).not.toContain(
+      "secret runtime context",
+    );
+    expect(JSON.stringify(beforeAgentRunPayload.messages ?? [])).toContain(
+      "secret runtime context",
+    );
+    const llmInputPayload = requireRecord(runLlmInput.mock.calls[0]?.[0], "llm_input payload");
+    expect(String(llmInputPayload.systemPrompt ?? "")).not.toContain("secret runtime context");
+    expect(JSON.stringify(llmInputPayload.historyMessages ?? [])).toContain(
+      "secret runtime context",
+    );
     expect(JSON.stringify(seen.messages)).not.toContain(
       "visible ask",
     );
