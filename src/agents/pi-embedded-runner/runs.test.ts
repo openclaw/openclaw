@@ -41,6 +41,7 @@ function createRunHandle(
     isCompacting?: boolean;
     isStreaming?: boolean;
     supportsTranscriptCommitWait?: boolean;
+    isAcceptingMessages?: boolean;
   } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
@@ -48,6 +49,9 @@ function createRunHandle(
     queueMessage: async () => {},
     isStreaming: () => overrides.isStreaming ?? true,
     isCompacting: () => overrides.isCompacting ?? false,
+    ...(overrides.isAcceptingMessages !== undefined
+      ? { isAcceptingMessages: () => overrides.isAcceptingMessages ?? true }
+      : {}),
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
   };
@@ -226,6 +230,31 @@ describe("pi-embedded runner run registry", () => {
       reason: "compacting",
       gatewayHealth: "live",
     });
+  });
+
+  it("rejects queueing into a sessions_yield-aborting run before the stream fully clears", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-yield-aborting",
+      {
+        ...createRunHandle({ isStreaming: true, isAcceptingMessages: false }),
+        queueMessage,
+      },
+      "agent:main:yield-parent",
+    );
+
+    const outcome = queueEmbeddedPiMessageWithOutcome(
+      "session-yield-aborting",
+      "subagent completion",
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-yield-aborting",
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("returns runtime rejection details when async queue delivery fails", async () => {

@@ -1792,6 +1792,7 @@ export async function runEmbeddedAttempt(
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
+              yieldAbortInProgress = true;
               queueYieldInterruptForSession?.();
               runAbortController.abort("sessions_yield");
               abortSessionForYield?.();
@@ -1945,6 +1946,7 @@ export async function runEmbeddedAttempt(
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
+    let yieldAbortInProgress = false;
     // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
@@ -3746,6 +3748,7 @@ export async function runEmbeddedAttempt(
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
+        isAcceptingMessages: () => !yieldAbortInProgress,
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: () => {

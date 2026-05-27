@@ -884,7 +884,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
-  it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
+  it("uses direct requester-agent handoff before steering active completion requesters", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackThreadAnnouncement({
@@ -898,24 +898,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectRecordFields(result, {
       delivered: true,
-      path: "steered",
-      enqueuedAt: 4_100,
-      deliveredAt: 4_200,
+      path: "direct",
+      phases: [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }],
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
-      "requester-session-1",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-        waitForTranscriptCommit: true,
-        deliveryTimeoutMs: 120_000,
-      },
-    );
-    expect(callGateway).not.toHaveBeenCalled();
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("does not also direct-run a queued active completion", async () => {
+  it("falls back to queued steering only after direct active completion handoff fails", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackThreadAnnouncement({
@@ -931,11 +928,27 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: true,
       path: "steered",
-      enqueuedAt: 4_100,
-      deliveredAt: 4_200,
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          deliveredAt: undefined,
+          enqueuedAt: undefined,
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: true,
+          path: "steered",
+          deliveredAt: 4_200,
+          enqueuedAt: 4_100,
+          error: undefined,
+        },
+      ],
     });
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
-    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps direct external delivery for dormant completion requesters", async () => {
@@ -1525,28 +1538,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "channel:C123",
       threadId: "171.222",
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      1,
-      "requester-session-4",
-      "child done",
-      {
-        debounceMs: 500,
-        deliveryTimeoutMs: 120_000,
-        steeringMode: "all",
-        waitForTranscriptCommit: true,
-      },
-    );
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
-      "requester-session-4",
-      "child done",
-      {
-        debounceMs: 500,
-        deliveryTimeoutMs: 120_000,
-        steeringMode: "all",
-      },
-    );
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1765,17 +1757,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
       ],
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
-      "requester-session-telegram",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-        waitForTranscriptCommit: true,
-        deliveryTimeoutMs: 10,
-      },
-    );
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1835,7 +1817,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
       ],
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
@@ -2507,7 +2489,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("keeps generated media completions on the active requester session path", async () => {
+  it("keeps generated media completions on the direct requester handoff path", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const sendMessage = createSendMessageMock();
@@ -2540,23 +2522,20 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expectRecordFields(result, {
       delivered: true,
-      path: "steered",
-      enqueuedAt: 4_100,
-      deliveredAt: 4_200,
+      path: "direct",
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
-      "requester-session-channel",
-      "child done",
-      {
-        steeringMode: "all",
-        sourceReplyDeliveryMode: "message_tool_only",
-        debounceMs: 500,
-        waitForTranscriptCommit: true,
-        deliveryTimeoutMs: 120_000,
-      },
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated video is ready.",
+        mediaUrls: ["/tmp/generated-corgi.mp4"],
+        idempotencyKey: "announce-channel-media-active-direct:generated-media-direct",
+      }),
     );
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("directly delivers missing generated media after active requester wake failure", async () => {
@@ -2612,7 +2591,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
