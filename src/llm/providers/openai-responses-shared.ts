@@ -1,6 +1,5 @@
 import type OpenAI from "openai";
 import type {
-  Tool as OpenAITool,
   ResponseCreateParamsStreaming,
   ResponseFunctionCallOutputItemList,
   ResponseFunctionToolCall,
@@ -23,7 +22,6 @@ import type {
   TextContent,
   TextSignatureV1,
   ThinkingContent,
-  Tool,
   ToolCall,
   Usage,
 } from "../types.js";
@@ -82,10 +80,8 @@ export interface OpenAIResponsesStreamOptions {
 export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
 }
-
-export interface ConvertResponsesToolsOptions {
-  strict?: boolean | null;
-}
+export { convertResponsesTools } from "./openai-responses-tools.js";
+export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
 
 // =============================================================================
 // Message conversion
@@ -280,24 +276,6 @@ export function convertResponsesMessages<TApi extends Api>(
   }
 
   return messages;
-}
-
-// =============================================================================
-// Tool conversion
-// =============================================================================
-
-export function convertResponsesTools(
-  tools: Tool[],
-  options?: ConvertResponsesToolsOptions,
-): OpenAITool[] {
-  const strict = options?.strict === undefined ? false : options.strict;
-  return tools.map((tool) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
-    strict,
-  }));
 }
 
 // =============================================================================
