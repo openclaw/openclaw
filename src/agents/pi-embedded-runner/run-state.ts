@@ -11,6 +11,7 @@ export type EmbeddedPiQueueHandle = {
   queueMessage: (text: string, options?: EmbeddedPiQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  isAcceptingMessages?: () => boolean;
   supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;

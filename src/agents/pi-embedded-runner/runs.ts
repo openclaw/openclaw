@@ -261,7 +261,7 @@ function prepareEmbeddedPiQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "no_active_run") };
   }
-  if (!handle.isStreaming()) {
+  if (handle.isAcceptingMessages?.() === false || !handle.isStreaming()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "not_streaming") };
   }

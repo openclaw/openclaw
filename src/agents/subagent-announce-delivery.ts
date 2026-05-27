@@ -459,6 +459,7 @@ async function maybeSteerSubagentAnnounce(params: {
   deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
+  sourceReplyDeliveryMode?: "message_tool_only";
   signal?: AbortSignal;
 }): Promise<
   { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
@@ -484,6 +485,9 @@ async function maybeSteerSubagentAnnounce(params: {
   const queueOptions: EmbeddedPiQueueMessageOptions = {
     deliveryTimeoutMs: params.deliveryTimeoutMs,
     steeringMode: "all",
+    ...(params.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+      : {}),
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
   };
@@ -566,7 +570,7 @@ function requiresAgentMediatedCompletionDelivery(params: {
 }
 
 function collectExpectedMediaFromInternalEvents(
-  events: AgentInternalEvent[] | undefined,
+  events: readonly AgentInternalEvent[] | undefined,
 ): string[] {
   if (!events?.length) {
     return [];
@@ -880,6 +884,7 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
   expectsCompletionMessage: boolean;
+  allowActiveRequesterWake?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
@@ -965,7 +970,11 @@ async function sendSubagentAnnounceDirectly(params: {
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     let activeRequesterWakeFailed = false;
     const tryGeneratedMediaDirectDelivery = async (announceResponse?: unknown) => {
-      if (requesterActivity.isActive && !activeRequesterWakeFailed) {
+      if (
+        params.allowActiveRequesterWake === true &&
+        requesterActivity.isActive &&
+        !activeRequesterWakeFailed
+      ) {
         return undefined;
       }
       const missingMediaUrls = resolveGeneratedMediaDirectFallbackUrls({
@@ -998,6 +1007,7 @@ async function sendSubagentAnnounceDirectly(params: {
     });
     if (
       params.expectsCompletionMessage &&
+      params.allowActiveRequesterWake === true &&
       requesterActivity.sessionId &&
       requesterActivity.isActive
     ) {
@@ -1252,6 +1262,23 @@ async function sendSubagentAnnounceDirectly(params: {
   }
 }
 
+function resolveFallbackSteerSourceReplyDeliveryMode(params: {
+  expectsCompletionMessage: boolean;
+  sourceTool?: string;
+  internalEvents?: readonly AgentInternalEvent[];
+}): "message_tool_only" | undefined {
+  if (
+    requiresAgentMediatedCompletionDelivery({
+      expectsCompletionMessage: params.expectsCompletionMessage,
+      sourceTool: params.sourceTool,
+    }) &&
+    collectExpectedMediaFromInternalEvents(params.internalEvents).length > 0
+  ) {
+    return "message_tool_only";
+  }
+  return undefined;
+}
+
 export async function deliverSubagentAnnouncement(params: {
   requesterSessionKey: string;
   announceId?: string;
@@ -1283,6 +1310,11 @@ export async function deliverSubagentAnnouncement(params: {
         ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
+        sourceReplyDeliveryMode: resolveFallbackSteerSourceReplyDeliveryMode({
+          expectsCompletionMessage: params.expectsCompletionMessage,
+          sourceTool: params.sourceTool,
+          internalEvents: params.internalEvents,
+        }),
         signal: params.signal,
       }),
     direct: async () =>
@@ -1300,6 +1332,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        allowActiveRequesterWake: !params.expectsCompletionMessage,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),
