@@ -360,6 +360,8 @@ export const zh_CN: TranslationMap = {
     pending: "{count} 个待处理",
     allowOnce: "允许一次",
     alwaysAllow: "始终允许",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "拒绝",
     labels: {
       host: "主机",
@@ -391,6 +393,7 @@ export const zh_CN: TranslationMap = {
   },
   tabs: {
     agents: "代理",
+    activity: "Activity",
     overview: "概览",
     channels: "频道",
     instances: "实例",
@@ -412,6 +415,7 @@ export const zh_CN: TranslationMap = {
   },
   subtitles: {
     agents: "工作区、工具、身份。",
+    activity: "Browser-local tool activity summaries.",
     overview: "状态、入口点、健康。",
     channels: "频道和设置。",
     instances: "已连接客户端和节点。",
@@ -430,6 +434,42 @@ export const zh_CN: TranslationMap = {
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
     dreams: "睡眠时进行记忆巩固。",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Search",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "工具",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "清除",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Run",
+    session: "会话",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "运行中",
+      done: "已完成",
+      error: "Error",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

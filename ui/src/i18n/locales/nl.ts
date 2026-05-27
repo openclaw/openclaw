@@ -364,6 +364,8 @@ export const nl: TranslationMap = {
     pending: "{count} in behandeling",
     allowOnce: "Eenmalig toestaan",
     alwaysAllow: "Altijd toestaan",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Weigeren",
     labels: {
       host: "Host",
@@ -395,6 +397,7 @@ export const nl: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    activity: "Activity",
     overview: "Overzicht",
     channels: "Kanalen",
     instances: "Instanties",
@@ -416,6 +419,7 @@ export const nl: TranslationMap = {
   },
   subtitles: {
     agents: "Werkruimten, tools, identiteiten.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Status, toegangspunten, gezondheid.",
     channels: "Kanalen en instellingen.",
     instances: "Verbonden clients en nodes.",
@@ -434,6 +438,42 @@ export const nl: TranslationMap = {
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
     dreams: "Geheugendromen, consolidatie en reflectie.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Zoeken",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Tool",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Wissen",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Voer uit",
+    session: "Sessie",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Actief",
+      done: "Voltooid",
+      error: "Fout",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

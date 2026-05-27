@@ -2,6 +2,7 @@ import {
   context as otelContextApi,
   metrics,
   trace,
+  SpanKind,
   SpanStatusCode,
   TraceFlags,
 } from "@opentelemetry/api";
@@ -13,8 +14,18 @@ import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
-import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
+import {
+  BatchSpanProcessor,
+  ParentBasedSampler,
+  TraceIdRatioBasedSampler,
+} from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import {
+  ATTR_GEN_AI_INPUT_MESSAGES,
+  ATTR_GEN_AI_OUTPUT_MESSAGES,
+  ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
+  ATTR_GEN_AI_TOOL_DEFINITIONS,
+} from "@opentelemetry/semantic-conventions/incubating";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type {
   DiagnosticEventMetadata,
@@ -32,19 +43,29 @@ import {
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.callId",
+  "openclaw.call_id",
   "openclaw.chatId",
+  "openclaw.chat_id",
   "openclaw.messageId",
+  "openclaw.message_id",
   "openclaw.parentSpanId",
+  "openclaw.parent_span_id",
   "openclaw.runId",
+  "openclaw.run_id",
   "openclaw.sessionId",
+  "openclaw.session_id",
   "openclaw.sessionKey",
+  "openclaw.session_key",
   "openclaw.spanId",
+  "openclaw.span_id",
   "openclaw.toolCallId",
+  "openclaw.tool_call_id",
   "openclaw.traceId",
+  "openclaw.trace_id",
 ]);
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
-const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 4 * 1024;
-const MAX_OTEL_CONTENT_ARRAY_ITEMS = 16;
+const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 128 * 1024;
+const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
 const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
 const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
@@ -72,6 +93,15 @@ type OtelContentCapturePolicy = {
   toolInputs: boolean;
   toolOutputs: boolean;
   systemPrompt: boolean;
+  toolDefinitions: boolean;
+  logBodies: boolean;
+};
+
+type OtelModelCallContent = {
+  inputMessages?: unknown;
+  outputMessages?: unknown;
+  systemPrompt?: string;
+  toolDefinitions?: unknown;
 };
 
 type MessageDeliveryDiagnosticEvent = Extract<
@@ -105,6 +135,8 @@ const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   toolInputs: false,
   toolOutputs: false,
   systemPrompt: false,
+  toolDefinitions: false,
+  logBodies: false,
 };
 
 function normalizeEndpoint(endpoint?: string): string | undefined {
@@ -119,6 +151,16 @@ function resolveOtelUrl(endpoint: string | undefined, path: string): string | un
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
   if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
     return endpoint;
+  }
+  if (/[?#]/u.test(endpoint)) {
+    try {
+      const url = new URL(endpoint);
+      const basePath = url.pathname.replace(/\/+$/u, "");
+      url.pathname = `${basePath}/${path}`;
+      return url.toString();
+    } catch {
+      // Fall back to the historical concatenation path for non-URL test doubles.
+    }
   }
   return `${endpoint}/${path}`;
 }
@@ -258,7 +300,29 @@ function lowCardinalityAttr(value: string | undefined, fallback = "unknown"): st
     return fallback;
   }
   const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
+function lowCardinalityQueueLaneAttr(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:")) {
+    return fallback;
+  }
+  const scopedLaneIndex = redacted.indexOf(":");
+  const lane = scopedLaneIndex >= 0 ? redacted.slice(0, scopedLaneIndex) : redacted;
+  return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
+}
+
+function shouldCaptureOtelLogBody(policy: OtelContentCapturePolicy): boolean {
+  return policy.logBodies;
 }
 
 function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
@@ -347,6 +411,17 @@ function assignGenAiModelCallAttrs(
   assignGenAiSpanIdentityAttrs(attrs, evt);
 }
 
+function modelCallSpanName(evt: { api?: string; model?: string }): string {
+  if (!emitLatestGenAiSemconv()) {
+    return "openclaw.model.call";
+  }
+  return `${genAiOperationName(evt.api)} ${lowCardinalityAttr(evt.model)}`;
+}
+
+function modelCallSpanKind(): SpanKind | undefined {
+  return emitLatestGenAiSemconv() ? SpanKind.CLIENT : undefined;
+}
+
 function addUpstreamRequestIdSpanEvent(
   span: { addEvent?: (name: string, attributes?: Record<string, string>) => void },
   upstreamRequestIdHash: string | undefined,
@@ -379,6 +454,8 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
       toolInputs: true,
       toolOutputs: true,
       systemPrompt: false,
+      toolDefinitions: true,
+      logBodies: true,
     };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -395,6 +472,8 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
     toolInputs: config.toolInputs === true,
     toolOutputs: config.toolOutputs === true,
     systemPrompt: config.systemPrompt === true,
+    toolDefinitions: config.toolDefinitions === true,
+    logBodies: false,
   };
 }
 
@@ -417,7 +496,367 @@ function normalizeOtelContentValue(value: unknown): string | undefined {
       return normalizeOtelLogString(items.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
     }
   }
+  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+  if (json) {
+    return json;
+  }
   return undefined;
+}
+
+const TRUNCATED_JSON_TEXT_SUFFIX = "...(truncated)";
+const JSON_TRUNCATION_STRING_BUDGETS = [8192, 4096, 2048, 1024, 512, 256, 128, 64, 32] as const;
+const JSON_TRUNCATION_ARRAY_ITEM_BUDGETS = [
+  MAX_OTEL_CONTENT_ARRAY_ITEMS,
+  100,
+  50,
+  25,
+  10,
+  5,
+  1,
+] as const;
+const JSON_TRUNCATION_MAX_OBJECT_FIELDS = 64;
+const JSON_TRUNCATION_MAX_DEPTH = 8;
+
+type JsonTruncationOptions = {
+  maxArrayItems: number;
+  maxDepth: number;
+  maxObjectFields: number;
+  maxStringChars: number;
+  seen: WeakSet<object>;
+};
+
+function safeJsonString(value: unknown, maxChars: number): string | undefined {
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    return undefined;
+  }
+  const exact = stringifyJsonForOtelAttribute(value);
+  if (exact && exact.length <= maxChars) {
+    return exact;
+  }
+  for (const maxArrayItems of JSON_TRUNCATION_ARRAY_ITEM_BUDGETS) {
+    for (const maxStringChars of JSON_TRUNCATION_STRING_BUDGETS) {
+      const candidate = truncateJsonValueForOtelAttribute(value, {
+        maxArrayItems,
+        maxDepth: JSON_TRUNCATION_MAX_DEPTH,
+        maxObjectFields: JSON_TRUNCATION_MAX_OBJECT_FIELDS,
+        maxStringChars,
+        seen: new WeakSet<object>(),
+      });
+      const json = stringifyJsonForOtelAttribute(candidate);
+      if (json && json.length <= maxChars) {
+        return json;
+      }
+    }
+  }
+  const summary = stringifyJsonForOtelAttribute({
+    truncated: true,
+    reason: exact ? "max_attribute_size" : "unserializable_value",
+    type: describeJsonValue(value),
+  });
+  return summary && summary.length <= maxChars ? summary : undefined;
+}
+
+function stringifyJsonForOtelAttribute(value: unknown): string | undefined {
+  try {
+    const json = JSON.stringify(value);
+    if (!json) {
+      return undefined;
+    }
+    return redactSensitiveText(json);
+  } catch {
+    return undefined;
+  }
+}
+
+function truncateJsonValueForOtelAttribute(
+  value: unknown,
+  options: JsonTruncationOptions,
+): unknown {
+  if (typeof value === "string") {
+    return truncateJsonTextForOtelAttribute(value, options.maxStringChars);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return truncateJsonTextForOtelAttribute(String(value), options.maxStringChars);
+  }
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    return undefined;
+  }
+  if (options.maxDepth <= 0) {
+    return { truncated: true, reason: "max_depth" };
+  }
+  if (Array.isArray(value)) {
+    return truncateJsonArrayForOtelAttribute(value, options);
+  }
+  if (typeof value === "object") {
+    return truncateJsonObjectForOtelAttribute(value as Record<string, unknown>, options);
+  }
+  return undefined;
+}
+
+function truncateJsonArrayForOtelAttribute(
+  value: readonly unknown[],
+  options: JsonTruncationOptions,
+): unknown[] {
+  if (options.seen.has(value)) {
+    return [{ truncated: true, reason: "circular_reference" }];
+  }
+  options.seen.add(value);
+  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
+  const items = value
+    .slice(0, options.maxArrayItems)
+    .map((item) => truncateJsonValueForOtelAttribute(item, nextOptions));
+  if (value.length > items.length) {
+    items.push({ truncated: true, omittedItems: value.length - items.length });
+  }
+  options.seen.delete(value);
+  return items;
+}
+
+function truncateJsonObjectForOtelAttribute(
+  value: Record<string, unknown>,
+  options: JsonTruncationOptions,
+): Record<string, unknown> {
+  if (options.seen.has(value)) {
+    return { truncated: true, reason: "circular_reference" };
+  }
+  options.seen.add(value);
+  const nextOptions = { ...options, maxDepth: options.maxDepth - 1 };
+  const result: Record<string, unknown> = {};
+  const entries = Object.entries(value).filter(
+    ([, field]) => field !== undefined && typeof field !== "function" && typeof field !== "symbol",
+  );
+  for (const [key, field] of entries.slice(0, options.maxObjectFields)) {
+    result[key] = truncateJsonValueForOtelAttribute(field, nextOptions);
+  }
+  if (entries.length > options.maxObjectFields) {
+    result.truncated = true;
+    result.omittedFields = entries.length - options.maxObjectFields;
+  }
+  options.seen.delete(value);
+  return result;
+}
+
+function truncateJsonTextForOtelAttribute(value: string, maxChars: number): string {
+  const redacted = redactSensitiveText(value);
+  if (redacted.length <= maxChars) {
+    return redacted;
+  }
+  const suffixBudget = Math.min(TRUNCATED_JSON_TEXT_SUFFIX.length, maxChars);
+  const prefixBudget = Math.max(0, maxChars - suffixBudget);
+  return `${redacted.slice(0, prefixBudget)}${TRUNCATED_JSON_TEXT_SUFFIX.slice(
+    TRUNCATED_JSON_TEXT_SUFFIX.length - suffixBudget,
+  )}`;
+}
+
+function describeJsonValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  return typeof value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function textPart(content: string): Record<string, unknown> {
+  return { type: "text", content };
+}
+
+function toolCallResponsePart(part: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: "tool_call_response",
+    ...(typeof part.id === "string" ? { id: part.id } : {}),
+    result: part.result ?? part.response ?? part.content ?? part.details ?? "",
+  };
+}
+
+function contentParts(value: unknown): Record<string, unknown>[] {
+  if (typeof value === "string") {
+    return value.length > 0 ? [textPart(value)] : [];
+  }
+  if (!Array.isArray(value)) {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      return [textPart(String(value))];
+    }
+    const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    return json ? [textPart(json)] : [];
+  }
+  const parts: Record<string, unknown>[] = [];
+  for (const part of value) {
+    if (typeof part === "string") {
+      if (part.length > 0) {
+        parts.push(textPart(part));
+      }
+      continue;
+    }
+    if (!isRecord(part)) {
+      continue;
+    }
+    if (part.type === "text" && typeof part.text === "string") {
+      parts.push(textPart(part.text));
+    } else if (part.type === "text" && typeof part.content === "string") {
+      parts.push(textPart(part.content));
+    } else if (part.type === "thinking" && typeof part.thinking === "string") {
+      parts.push({ type: "reasoning", content: part.thinking });
+    } else if (part.type === "toolCall" && typeof part.name === "string") {
+      parts.push({
+        type: "tool_call",
+        name: part.name,
+        ...(typeof part.id === "string" ? { id: part.id } : {}),
+        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+      });
+    } else if (part.type === "tool_call" && typeof part.name === "string") {
+      parts.push({
+        type: "tool_call",
+        name: part.name,
+        ...(typeof part.id === "string" ? { id: part.id } : {}),
+        ...(part.arguments !== undefined ? { arguments: part.arguments } : {}),
+      });
+    } else if (part.type === "tool_call_response") {
+      parts.push(toolCallResponsePart(part));
+    } else if (part.type === "image") {
+      const data = typeof part.data === "string" ? part.data : undefined;
+      parts.push({
+        type: "blob",
+        modality: "image",
+        ...(typeof part.mimeType === "string" ? { mime_type: part.mimeType } : {}),
+        ...(typeof part.mime_type === "string" ? { mime_type: part.mime_type } : {}),
+        ...(data ? { content: data } : {}),
+      });
+    }
+  }
+  return parts;
+}
+
+function normalizeGenAiMessage(
+  value: unknown,
+  fallbackRole = "user",
+): Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    return { role: fallbackRole, parts: [textPart(value)] };
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const rawRole = typeof value.role === "string" ? value.role : fallbackRole;
+  const role = rawRole === "toolResult" ? "tool" : rawRole;
+  let parts: Record<string, unknown>[];
+  if (role === "tool") {
+    const explicitParts = contentParts(value.parts);
+    parts =
+      explicitParts.length > 0
+        ? explicitParts
+        : [
+            toolCallResponsePart({
+              id: value.toolCallId,
+              result: value.content ?? value.details ?? "",
+            }),
+          ];
+  } else {
+    parts = contentParts(value.parts ?? value.content);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return {
+    role,
+    parts,
+    ...(typeof value.name === "string" ? { name: value.name } : {}),
+    ...(typeof value.finish_reason === "string" ? { finish_reason: value.finish_reason } : {}),
+    ...(typeof value.stopReason === "string" ? { finish_reason: value.stopReason } : {}),
+  };
+}
+
+function normalizeGenAiMessages(value: unknown, fallbackRole: "user" | "assistant") {
+  const source = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  const messages: Record<string, unknown>[] = [];
+  for (const item of source.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
+    const message = normalizeGenAiMessage(item, fallbackRole);
+    if (message) {
+      messages.push(message);
+    }
+  }
+  return messages;
+}
+
+function normalizeGenAiToolDefinition(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || typeof value.name !== "string" || value.name.trim().length === 0) {
+    return undefined;
+  }
+  return {
+    type: typeof value.type === "string" ? value.type : "function",
+    name: value.name,
+    ...(typeof value.description === "string" ? { description: value.description } : {}),
+    ...(value.parameters !== undefined ? { parameters: value.parameters } : {}),
+  };
+}
+
+function normalizeGenAiToolDefinitions(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const definitions: Record<string, unknown>[] = [];
+  for (const item of value.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
+    const definition = normalizeGenAiToolDefinition(item);
+    if (definition) {
+      definitions.push(definition);
+    }
+  }
+  return definitions;
+}
+
+function assignJsonAttribute(
+  attributes: Record<string, string | number | boolean>,
+  key: string,
+  value: unknown,
+): void {
+  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+  if (json) {
+    attributes[key] = json;
+  }
+}
+
+function assignGenAiModelContentAttributes(
+  attributes: Record<string, string | number | boolean>,
+  content: OtelModelCallContent | undefined,
+  policy: OtelContentCapturePolicy,
+): void {
+  if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
+    const systemInstructions = [textPart(content.systemPrompt)];
+    assignJsonAttribute(attributes, ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, systemInstructions);
+  }
+  if (policy.inputMessages) {
+    const inputMessages = normalizeGenAiMessages(content?.inputMessages, "user");
+    if (inputMessages.length > 0) {
+      assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
+      assignJsonAttribute(attributes, "input.value", inputMessages);
+      attributes["input.mime_type"] = "application/json";
+    }
+  }
+  if (policy.toolDefinitions) {
+    const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
+    if (toolDefinitions.length > 0) {
+      assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
+    }
+  }
+  if (policy.outputMessages) {
+    const outputMessages = normalizeGenAiMessages(content?.outputMessages, "assistant");
+    if (outputMessages.length > 0) {
+      assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
+      assignJsonAttribute(attributes, "output.value", outputMessages);
+      attributes["output.mime_type"] = "application/json";
+    }
+  }
 }
 
 function assignOtelContentAttribute(
@@ -433,21 +872,37 @@ function assignOtelContentAttribute(
 
 function assignOtelModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  event: Record<string, unknown>,
+  content: OtelModelCallContent | undefined,
   policy: OtelContentCapturePolicy,
 ): void {
+  assignGenAiModelContentAttributes(attributes, content, policy);
   if (policy.inputMessages) {
-    assignOtelContentAttribute(attributes, "openclaw.content.input_messages", event.inputMessages);
+    assignOtelContentAttribute(
+      attributes,
+      "openclaw.content.input_messages",
+      content?.inputMessages,
+    );
+  }
+  if (policy.toolDefinitions) {
+    assignOtelContentAttribute(
+      attributes,
+      "openclaw.content.tool_definitions",
+      content?.toolDefinitions,
+    );
   }
   if (policy.outputMessages) {
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.output_messages",
-      event.outputMessages,
+      content?.outputMessages,
     );
   }
   if (policy.systemPrompt) {
-    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", event.systemPrompt);
+    assignOtelContentAttribute(
+      attributes,
+      "openclaw.content.system_prompt",
+      content?.systemPrompt,
+    );
   }
 }
 
@@ -630,7 +1085,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
-      if (!cfg?.enabled || !otel?.enabled) {
+      if (!cfg || cfg.enabled === false || !otel?.enabled) {
         return;
       }
 
@@ -716,6 +1171,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               ...(headers ? { headers } : {}),
             })
           : undefined;
+        const spanProcessors =
+          traceExporter && typeof otel.flushIntervalMs === "number"
+            ? [
+                new BatchSpanProcessor(traceExporter, {
+                  scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs),
+                }),
+              ]
+            : undefined;
 
         const metricExporter = metricsEnabled
           ? new OTLPMetricExporter({
@@ -735,7 +1198,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
         sdk = new NodeSDK({
           resource,
-          ...(traceExporter ? { traceExporter } : {}),
+          ...(spanProcessors ? { spanProcessors } : traceExporter ? { traceExporter } : {}),
           ...(metricReader ? { metricReader } : {}),
           ...(sampleRate !== undefined
             ? {
@@ -972,6 +1435,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Detected repetitive tool-call loop events",
       });
+      const skillUsedCounter = meter.createCounter("openclaw.skill.used", {
+        unit: "1",
+        description: "Skills used by agent runs",
+      });
       const modelCallDurationHistogram = meter.createHistogram("openclaw.model_call.duration_ms", {
         unit: "ms",
         description: "Model call duration",
@@ -997,11 +1464,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Elapsed time before the first streamed model response event",
         },
       );
+      const modelFailoverCounter = meter.createCounter("openclaw.model.failover", {
+        unit: "1",
+        description: "Model failovers by source, destination, lane, and reason",
+      });
       const toolExecutionDurationHistogram = meter.createHistogram(
         "openclaw.tool.execution.duration_ms",
         {
           unit: "ms",
           description: "Tool execution duration",
+        },
+      );
+      const toolExecutionBlockedCounter = meter.createCounter(
+        "openclaw.tool.execution.blocked",
+        {
+          unit: "1",
+          description: "Tool executions blocked by policy or sandbox diagnostics",
         },
       );
       const execProcessDurationHistogram = meter.createHistogram("openclaw.exec.duration_ms", {
@@ -1042,6 +1520,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           description: "Async diagnostic queue drops by dropped event class",
         },
       );
+      const payloadLargeCounter = meter.createCounter("openclaw.payload.large", {
+        unit: "1",
+        description: "Oversized payload diagnostics by surface and action",
+      });
+      const payloadLargeBytesHistogram = meter.createHistogram("openclaw.payload.large_bytes", {
+        unit: "By",
+        description: "Oversized payload byte sizes by surface and action",
+      });
       const livenessWarningCounter = meter.createCounter("openclaw.liveness.warning", {
         unit: "1",
         description: "Diagnostic liveness warning events",
@@ -1106,6 +1592,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           try {
             const logLevelName = evt.level || "INFO";
             const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
+            const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+              ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
+              : "log";
             const attributes = Object.create(null) as Record<string, string | number | boolean>;
             assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
             if (evt.loggerName) {
@@ -1130,7 +1619,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             }
 
             const logRecord: LogRecord = {
-              body: normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS),
+              body,
               severityText: logLevelName,
               severityNumber,
               attributes: redactOtelAttributes(attributes),
@@ -1168,6 +1657,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         options: {
           parentContext?: ReturnType<typeof contextForTraceContext> | null;
           endTimeMs?: number;
+          kind?: SpanKind;
           startTimeMs?: number;
         } = {},
       ) => {
@@ -1184,6 +1674,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           name,
           {
             attributes: redactOtelAttributes(attributes),
+            ...(options.kind !== undefined ? { kind: options.kind } : {}),
             ...(startTime !== undefined ? { startTime } : {}),
           },
           parentContext,
@@ -1606,7 +2097,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordLaneEnqueue = (
         evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>,
       ) => {
-        const attrs = { "openclaw.lane": evt.lane };
+        const attrs = { "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane) };
         laneEnqueueCounter.add(1, attrs);
         queueDepthHistogram.record(evt.queueSize, attrs);
       };
@@ -1614,7 +2105,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordLaneDequeue = (
         evt: Extract<DiagnosticEventPayload, { type: "queue.lane.dequeue" }>,
       ) => {
-        const attrs = { "openclaw.lane": evt.lane };
+        const attrs = { "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane) };
         laneDequeueCounter.add(1, attrs);
         queueDepthHistogram.record(evt.queueSize, attrs);
         if (typeof evt.waitMs === "number") {
@@ -2026,6 +2517,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: ModelFailoverDiagnosticEvent,
         metadata: DiagnosticEventMetadata,
       ) => {
+        const metricAttrs: Record<string, string> = {
+          "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+          "openclaw.failover.suspended":
+            evt.suspended === undefined ? "unknown" : String(evt.suspended),
+          "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane, "unknown"),
+          "openclaw.model": lowCardinalityAttr(evt.fromModel),
+          "openclaw.provider": lowCardinalityAttr(evt.fromProvider),
+          "openclaw.failover.to_model": lowCardinalityAttr(evt.toModel),
+          "openclaw.failover.to_provider": lowCardinalityAttr(evt.toProvider),
+        };
+        modelFailoverCounter.add(1, metricAttrs);
         if (!tracesEnabled) {
           return;
         }
@@ -2045,7 +2547,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.failover.to_model"] = evt.toModel;
         }
         if (evt.lane) {
-          spanAttrs["openclaw.lane"] = lowCardinalityAttr(evt.lane, "unknown");
+          spanAttrs["openclaw.lane"] = lowCardinalityQueueLaneAttr(evt.lane, "unknown");
         }
         if (evt.suspended !== undefined) {
           spanAttrs["openclaw.failover.suspended"] = evt.suspended;
@@ -2114,7 +2616,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         trackTrustedSpan(
           evt,
           metadata,
-          spanWithDuration("openclaw.model.call", spanAttrs, undefined, {
+          spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {
+            kind: modelCallSpanKind(),
             parentContext: activeTrustedParentContext(evt, metadata),
             startTimeMs: evt.ts,
           }),
@@ -2124,6 +2627,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallCompleted = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" }>,
         metadata: DiagnosticEventMetadata,
+        modelContent?: OtelModelCallContent,
       ) => {
         const metricAttrs = modelCallMetricAttrs(evt);
         modelCallDurationHistogram.record(evt.durationMs, metricAttrs);
@@ -2147,14 +2651,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
-        assignOtelModelContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
-          spanWithDuration("openclaw.model.call", spanAttrs, evt.durationMs, {
+          spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
+            kind: modelCallSpanKind(),
             parentContext: activeTrustedParentContext(evt, metadata),
             endTimeMs: evt.ts,
           });
@@ -2166,6 +2667,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const recordModelCallError = (
         evt: Extract<DiagnosticEventPayload, { type: "model.call.error" }>,
         metadata: DiagnosticEventMetadata,
+        modelContent?: OtelModelCallContent,
       ) => {
         const errorType = lowCardinalityAttr(evt.errorCategory, "other");
         const metricAttrs = {
@@ -2201,14 +2703,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.transport"] = evt.transport;
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
-        assignOtelModelContentAttributes(
-          spanAttrs,
-          evt as unknown as Record<string, unknown>,
-          contentCapturePolicy,
-        );
+        assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
-          spanWithDuration("openclaw.model.call", spanAttrs, evt.durationMs, {
+          spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
+            kind: modelCallSpanKind(),
             parentContext: activeTrustedParentContext(evt, metadata),
             endTimeMs: evt.ts,
           });
@@ -2234,9 +2733,43 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         >,
       ): Record<string, string | number | boolean> => ({
         "openclaw.toolName": evt.toolName,
+        "openclaw.tool.source": lowCardinalityAttr(evt.toolSource, "core"),
         "gen_ai.tool.name": evt.toolName,
+        ...(evt.toolOwner ? { "openclaw.tool.owner": lowCardinalityAttr(evt.toolOwner) } : {}),
         ...paramsSummaryAttrs(evt.paramsSummary),
       });
+
+      const skillUsedAttrs = (
+        evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
+      ): Record<string, string | number | boolean> => ({
+        "openclaw.skill.name": lowCardinalityAttr(evt.skillName, "skill"),
+        "openclaw.skill.source": lowCardinalityAttr(evt.skillSource),
+        "openclaw.skill.activation": lowCardinalityAttr(evt.activation),
+        ...(evt.agentId ? { "openclaw.agent": lowCardinalityAttr(evt.agentId) } : {}),
+        ...(evt.toolName ? { "openclaw.toolName": lowCardinalityAttr(evt.toolName, "tool") } : {}),
+      });
+
+      const recordSkillUsed = (
+        evt: Extract<DiagnosticEventPayload, { type: "skill.used" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!metadata.trusted) {
+          return;
+        }
+        const attrs = skillUsedAttrs(evt);
+        skillUsedCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+        addRunAttrs(spanAttrs, evt);
+        const span = spanWithDuration("openclaw.skill.used", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        setSpanAttrs(span, spanAttrs);
+        span.end(evt.ts);
+      };
 
       const recordToolExecutionStarted = (
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
@@ -2259,10 +2792,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.completed" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
-        const attrs = {
-          "openclaw.toolName": evt.toolName,
-          ...paramsSummaryAttrs(evt.paramsSummary),
-        };
+        const attrs = toolExecutionBaseAttrs(evt);
         toolExecutionDurationHistogram.record(evt.durationMs, attrs);
         if (!tracesEnabled) {
           return;
@@ -2291,9 +2821,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metadata: DiagnosticEventMetadata,
       ) => {
         const attrs = {
-          "openclaw.toolName": evt.toolName,
+          ...toolExecutionBaseAttrs(evt),
           "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
-          ...paramsSummaryAttrs(evt.paramsSummary),
         };
         toolExecutionDurationHistogram.record(evt.durationMs, attrs);
         if (!tracesEnabled) {
@@ -2330,6 +2859,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }>,
         metadata: DiagnosticEventMetadata,
       ) => {
+        toolExecutionBlockedCounter.add(1, {
+          ...toolExecutionBaseAttrs(evt),
+          "openclaw.deniedReason": lowCardinalityAttr(evt.deniedReason, "other"),
+        });
         if (!tracesEnabled) {
           return;
         }
@@ -2345,6 +2878,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         });
         setSpanAttrs(span, spanAttrs);
         span.end(evt.ts);
+      };
+
+      const recordPayloadLarge = (
+        evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>,
+      ) => {
+        const attrs = {
+          "openclaw.payload.action": evt.action,
+          "openclaw.payload.surface": lowCardinalityAttr(evt.surface, "unknown"),
+          "openclaw.channel": lowCardinalityAttr(evt.channel, "none"),
+          "openclaw.plugin": lowCardinalityAttr(evt.pluginId, "none"),
+          "openclaw.reason": lowCardinalityAttr(evt.reason, "none"),
+        };
+        payloadLargeCounter.add(1, attrs);
+        const bytes = positiveFiniteNumber(evt.bytes);
+        if (bytes !== undefined) {
+          payloadLargeBytesHistogram.record(bytes, attrs);
+        }
       };
 
       const recordExecProcessCompleted = (
@@ -2510,7 +3060,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      unsubscribe = subscribe((evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
+      unsubscribe = subscribe((evt, metadata, privateData) => {
         try {
           switch (evt.type) {
             case "model.usage":
@@ -2612,10 +3162,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordModelCallStarted(evt, metadata);
               return;
             case "model.call.completed":
-              recordModelCallCompleted(evt, metadata);
+              recordModelCallCompleted(evt, metadata, privateData.modelContent);
               return;
             case "model.call.error":
-              recordModelCallError(evt, metadata);
+              recordModelCallError(evt, metadata, privateData.modelContent);
               return;
             case "tool.execution.started":
               recordToolExecutionStarted(evt, metadata);
@@ -2628,6 +3178,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.blocked":
               recordToolExecutionBlocked(evt, metadata);
+              return;
+            case "skill.used":
+              recordSkillUsed(evt, metadata);
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);
@@ -2651,6 +3204,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordTelemetryExporter(evt, metadata);
               return;
             case "payload.large":
+              recordPayloadLarge(evt);
               return;
             case "model.failover":
               recordModelFailover(evt, metadata);

@@ -23,6 +23,12 @@ function Fail-Install {
     return $false
 }
 
+function Test-BooleanSuccessResult {
+    param([object[]]$Results)
+
+    return ($Results.Count -gt 0 -and $Results[-1] -eq $true)
+}
+
 function Complete-Install {
     param([bool]$Succeeded)
 
@@ -623,6 +629,53 @@ function Get-PnpmCommandPath {
     return (Resolve-CommandPath -Candidates @("pnpm.cmd", "pnpm.exe", "pnpm"))
 }
 
+function Get-WindowsCommandSafeDirectory {
+    $userHome = [Environment]::GetFolderPath("UserProfile")
+    if (-not [string]::IsNullOrWhiteSpace($userHome) -and (Test-Path $userHome)) {
+        return $userHome
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP) -and (Test-Path $env:TEMP)) {
+        return $env:TEMP
+    }
+    return $null
+}
+
+function Invoke-CommandFromWindowsSafeDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CommandPath,
+        [string[]]$Arguments = @()
+    )
+
+    $safeDir = Get-WindowsCommandSafeDirectory
+    $pushedLocation = $false
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($safeDir)) {
+            Push-Location -LiteralPath $safeDir
+            $pushedLocation = $true
+        }
+        & $CommandPath @Arguments
+    } finally {
+        if ($pushedLocation) {
+            Pop-Location
+        }
+    }
+}
+
+function Invoke-NpmCommand {
+    param([string[]]$Arguments = @())
+    Invoke-CommandFromWindowsSafeDirectory -CommandPath (Get-NpmCommandPath) -Arguments $Arguments
+}
+
+function Invoke-CorepackCommand {
+    param([string[]]$Arguments = @())
+    $corepackCommand = Get-CorepackCommandPath
+    if (-not $corepackCommand) {
+        throw "corepack not found on PATH."
+    }
+    Invoke-CommandFromWindowsSafeDirectory -CommandPath $corepackCommand -Arguments $Arguments
+}
+
 function Get-NpmGlobalBinCandidates {
     param(
         [string]$NpmPrefix
@@ -647,7 +700,7 @@ function Ensure-OpenClawOnPath {
 
     $npmPrefix = $null
     try {
-        $npmPrefix = (& (Get-NpmCommandPath) config get prefix 2>$null).Trim()
+        $npmPrefix = (Invoke-NpmCommand -Arguments @("config", "get", "prefix") 2>$null).Trim()
     } catch {
         $npmPrefix = $null
     }
@@ -751,8 +804,8 @@ function Ensure-Pnpm {
     $corepackCommand = Get-CorepackCommandPath
     if ($corepackCommand) {
         try {
-            & $corepackCommand enable | Out-Null
-            & $corepackCommand prepare $pnpmSpec --activate | Out-Null
+            Invoke-CorepackCommand -Arguments @("enable") | Out-Null
+            Invoke-CorepackCommand -Arguments @("prepare", $pnpmSpec, "--activate") | Out-Null
             if (Test-PnpmCommandMatchesVersion -PnpmVersion $pnpmVersion -RepoDir $RepoDir) {
                 Write-Host "[OK] pnpm installed via corepack ($pnpmSpec)" -ForegroundColor Green
                 return
@@ -765,7 +818,7 @@ function Ensure-Pnpm {
     $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     try {
-        & (Get-NpmCommandPath) install -g $pnpmSpec
+        Invoke-NpmCommand -Arguments @("install", "-g", $pnpmSpec)
     } finally {
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
     }
@@ -776,6 +829,52 @@ function Ensure-Pnpm {
 }
 
 # Install OpenClaw
+function Resolve-LocalNpmPackagePath {
+    param([string]$PackagePath)
+
+    try {
+        return (Resolve-Path -LiteralPath $PackagePath -ErrorAction Stop).ProviderPath
+    } catch {
+        return [System.IO.Path]::GetFullPath($PackagePath)
+    }
+}
+
+function Resolve-LocalNpmPackageInstallSpec {
+    param([string]$InstallSpec)
+
+    if ([string]::IsNullOrWhiteSpace($InstallSpec)) {
+        return $InstallSpec
+    }
+    if ($InstallSpec -match '^file:(?<path>.+)$') {
+        $filePath = $Matches["path"]
+        if (
+            $filePath -match '^/' -or
+            $filePath -match '^\\\\' -or
+            $filePath -match '^[A-Za-z]:[\\/]'
+        ) {
+            return $InstallSpec
+        }
+        return ([System.Uri](Resolve-LocalNpmPackagePath -PackagePath $filePath)).AbsoluteUri
+    }
+    if (
+        $InstallSpec -match '^https?:' -or
+        $InstallSpec -match '^(git\+|github:)' -or
+        $InstallSpec -match '^[A-Za-z]:[\\/]' -or
+        $InstallSpec -match '^\\\\'
+    ) {
+        return $InstallSpec
+    }
+    if ($InstallSpec -notmatch '^\.\.?[\\/]' -and $InstallSpec -notmatch '\.tgz$') {
+        return $InstallSpec
+    }
+
+    try {
+        return (Resolve-LocalNpmPackagePath -PackagePath $InstallSpec)
+    } catch {
+        return $InstallSpec
+    }
+}
+
 function Resolve-NpmOpenClawInstallSpec {
     param(
         [string]$PackageName,
@@ -795,7 +894,7 @@ function Resolve-NpmOpenClawInstallSpec {
         $trimmedTag -match '^\.\.?[\\/]' -or
         $trimmedTag -match '\.tgz($|[?#])'
     ) {
-        return $trimmedTag
+        return (Resolve-LocalNpmPackageInstallSpec -InstallSpec $trimmedTag)
     }
 
     return "$PackageName@$trimmedTag"
@@ -831,6 +930,63 @@ function Test-OpenClawSourcePackageInstallSpec {
     )
 }
 
+function Resolve-NpmConfigPath {
+    param([string]$RawPath)
+    if ([string]::IsNullOrWhiteSpace($RawPath) -or $RawPath -eq "null" -or $RawPath -eq "undefined") {
+        return $null
+    }
+    if (($RawPath.StartsWith("~/") -or $RawPath.StartsWith("~\")) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(2))
+    }
+    if (($RawPath.StartsWith('${HOME}/') -or $RawPath.StartsWith('${HOME}\')) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(8))
+    }
+    return $RawPath
+}
+
+function Test-NpmConfigFileKey {
+    param(
+        [string]$Path,
+        [string]$Key
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $escapedKey = [regex]::Escape($Key)
+    return [bool](Select-String -LiteralPath $Path -Pattern "^\s*$escapedKey\s*=" -Quiet)
+}
+
+function Test-NpmConfigRawKey {
+    param([string]$Key)
+    $files = New-Object System.Collections.Generic.List[string]
+    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    if ($userConfig) {
+        $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
+        if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
+    } elseif (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $files.Add((Join-Path $HOME ".npmrc"))
+    }
+
+    $globalConfig = if ($env:NPM_CONFIG_GLOBALCONFIG) { $env:NPM_CONFIG_GLOBALCONFIG } else { $env:npm_config_globalconfig }
+    if ($globalConfig) {
+        $resolvedGlobalConfig = Resolve-NpmConfigPath $globalConfig
+        if ($resolvedGlobalConfig) { $files.Add($resolvedGlobalConfig) }
+    }
+
+    $detectedGlobalConfig = (Invoke-NpmCommand -Arguments @("config", "get", "globalconfig", "--global") 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $resolvedDetectedGlobalConfig = Resolve-NpmConfigPath $detectedGlobalConfig
+        if ($resolvedDetectedGlobalConfig) { $files.Add($resolvedDetectedGlobalConfig) }
+    }
+
+    foreach ($file in ($files | Select-Object -Unique)) {
+        if (Test-NpmConfigFileKey -Path $file -Key $Key) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Install-OpenClaw {
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         $Tag = "latest"
@@ -852,9 +1008,12 @@ function Install-OpenClaw {
     $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName $packageName -RequestedTag $Tag
     Write-Host "[*] Installing OpenClaw ($installSpec)..." -ForegroundColor Yellow
     $freshnessArgs = @("--min-release-age=0")
-    $minReleaseAge = (& (Get-NpmCommandPath) config get min-release-age 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
-        $beforeValue = (& (Get-NpmCommandPath) config get before 2>$null)
+    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age", "--global") 2>$null)
+    $minReleaseAgeStatus = $LASTEXITCODE
+    if (Test-NpmConfigRawKey -Key "min-release-age") {
+        $freshnessArgs = @("--min-release-age=0")
+    } elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
+        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before", "--global") 2>$null)
         if ($LASTEXITCODE -eq 0 -and $beforeValue -and $beforeValue.Trim() -ne "null" -and $beforeValue.Trim() -ne "undefined") {
             $freshnessArgs = @("--before=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))")
         }
@@ -876,7 +1035,7 @@ function Install-OpenClaw {
     Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
     Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
-        $npmOutput = & (Get-NpmCommandPath) install -g @freshnessArgs "$installSpec" 2>&1
+        $npmOutput = Invoke-NpmCommand -Arguments (@("install", "-g") + $freshnessArgs + @("$installSpec")) 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] npm install failed" -ForegroundColor Red
             if ($npmOutput -match "spawn git" -or $npmOutput -match "ENOENT.*git") {
@@ -950,10 +1109,18 @@ function Install-OpenClawFromGit {
         Push-Location -LiteralPath $RepoDir
         $pushedRepoLocation = $true
         & $pnpmCommand install
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[!] pnpm install failed for the Git checkout" -ForegroundColor Red
+            return $false
+        }
         if (-not (& $pnpmCommand ui:build)) {
             Write-Host "[!] UI build failed; continuing (CLI may still work)" -ForegroundColor Yellow
         }
         & $pnpmCommand build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[!] pnpm build failed for the Git checkout" -ForegroundColor Red
+            return $false
+        }
     } finally {
         if ($pushedRepoLocation) {
             Pop-Location
@@ -961,12 +1128,18 @@ function Install-OpenClawFromGit {
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevPnpmScriptShell
     }
 
+    $entryPath = Join-Path $RepoDir "dist\\entry.js"
+    if (-not (Test-Path $entryPath)) {
+        Write-Host "[!] OpenClaw build did not produce $entryPath" -ForegroundColor Red
+        return $false
+    }
+
     $binDir = Join-Path $env:USERPROFILE ".local\\bin"
     if (-not (Test-Path $binDir)) {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     }
     $cmdPath = Join-Path $binDir "openclaw.cmd"
-    $cmdContents = "@echo off`r`nnode ""$RepoDir\\dist\\entry.js"" %*`r`n"
+    $cmdContents = "@echo off`r`nnode ""$entryPath"" %*`r`n"
     Set-Content -Path $cmdPath -Value $cmdContents -NoNewline
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -1104,12 +1277,13 @@ function Main {
         try {
             $npmCommand = Get-NpmCommandPath
             if ($npmCommand) {
-                & $npmCommand uninstall -g openclaw 2>$null | Out-Null
+                Invoke-NpmCommand -Arguments @("uninstall", "-g", "openclaw") 2>$null | Out-Null
                 Write-Host "[OK] Removed npm global install if present" -ForegroundColor Green
             }
         } catch { }
         $finalGitDir = $GitDir
-        if (-not (Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)) {
+        $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
+        if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
             return (Fail-Install)
         }
     } else {
@@ -1118,7 +1292,8 @@ function Main {
             Remove-Item -Force $gitWrapper
             Write-Host "[OK] Removed git wrapper (switching to npm)" -ForegroundColor Green
         }
-        if (-not (Install-OpenClaw)) {
+        $npmInstallResults = @(Install-OpenClaw)
+        if (-not (Test-BooleanSuccessResult -Results $npmInstallResults)) {
             return (Fail-Install)
         }
     }
@@ -1144,7 +1319,7 @@ function Main {
     }
     if (-not $installedVersion) {
         try {
-            $npmList = & (Get-NpmCommandPath) list -g --depth 0 --json 2>$null | ConvertFrom-Json
+            $npmList = Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json") 2>$null | ConvertFrom-Json
             if ($npmList -and $npmList.dependencies -and $npmList.dependencies.openclaw -and $npmList.dependencies.openclaw.version) {
                 $installedVersion = $npmList.dependencies.openclaw.version
             }
@@ -1228,5 +1403,5 @@ function Main {
 }
 
 $mainResults = @(Main)
-$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true
+$installSucceeded = Test-BooleanSuccessResult -Results $mainResults
 Complete-Install -Succeeded:$installSucceeded

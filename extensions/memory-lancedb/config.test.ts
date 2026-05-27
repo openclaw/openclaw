@@ -73,7 +73,7 @@ describe("memory-lancedb config", () => {
     expect(manifestResult.ok).toBe(false);
     if (!manifestResult.ok) {
       expect(manifestResult.errors.map((error) => error.text)).toContain(
-        "embedding: must NOT have fewer than 1 properties",
+        "embedding: must not have fewer than 1 properties",
       );
     }
 

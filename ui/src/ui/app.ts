@@ -1,6 +1,7 @@
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -43,9 +44,11 @@ import { createChatSession as createChatSessionInternal } from "./app-render.hel
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
+  handleActivityScroll as handleActivityScrollInternal,
   handleChatScroll as handleChatScrollInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
+  scheduleActivityScroll as scheduleActivityScrollInternal,
   scheduleChatScroll as scheduleChatScrollInternal,
 } from "./app-scroll.ts";
 import {
@@ -91,7 +94,12 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import {
+  dismissExecApprovalPrompt,
+  isStaleApprovalResolutionError,
+  refreshPendingApprovalQueue,
+  type ExecApprovalRequest,
+} from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
   ClawHubSearchResult,
@@ -208,12 +216,25 @@ export class OpenClawApp extends LitElement {
   @state() serverVersion: string | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
+  chatSessionMessageSubscriptionKey: string | null = null;
+  chatSessionMessageSubscriptionRequestedKey: string | null = null;
   currentSessionId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
   @state() chatToolMessages: unknown[] = [];
+  @state() activityEntries: ActivityEntry[] = [];
+  @state() activityFilterText = "";
+  @state() activityStatusFilters: Record<ActivityStatus, boolean> = {
+    running: true,
+    done: true,
+    error: true,
+  };
+  @state() activityToolFilter = "";
+  @state() activityExpandedIds = new Set<string>();
+  @state() activityAutoFollow = true;
+  @state() activityAtBottom = true;
   @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
@@ -619,6 +640,7 @@ export class OpenClawApp extends LitElement {
   debugPollInterval: number | null = null;
   sessionsChangedReloadTimer: number | ReturnType<typeof globalThis.setTimeout> | null = null;
   logsScrollFrame: number | null = null;
+  activityScrollFrame: number | null = null;
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
   toolStreamOrder: string[] = [];
@@ -771,6 +793,20 @@ export class OpenClawApp extends LitElement {
     handleLogsScrollInternal(
       this as unknown as Parameters<typeof handleLogsScrollInternal>[0],
       event,
+    );
+  }
+
+  handleActivityScroll(event: Event) {
+    handleActivityScrollInternal(
+      this as unknown as Parameters<typeof handleActivityScrollInternal>[0],
+      event,
+    );
+  }
+
+  scheduleActivityScroll(force = false) {
+    scheduleActivityScrollInternal(
+      this as unknown as Parameters<typeof scheduleActivityScrollInternal>[0],
+      force,
     );
   }
 
@@ -1195,8 +1231,16 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      dismissExecApprovalPrompt(this, active.id);
     } catch (err) {
+      if (isStaleApprovalResolutionError(err)) {
+        dismissExecApprovalPrompt(this, active.id);
+        await refreshPendingApprovalQueue(this);
+        return;
+      }
+      if (!this.execApprovalQueue.some((entry) => entry.id === active.id)) {
+        return;
+      }
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;

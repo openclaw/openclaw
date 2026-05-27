@@ -91,6 +91,7 @@ describe("bundled capability metadata", () => {
       realtimeTranscriptionProviderIds: [],
       realtimeVoiceProviderIds: [],
       mediaUnderstandingProviderIds: [],
+      transcriptSourceProviderIds: [],
       documentExtractorIds: [],
       imageGenerationProviderIds: [],
       videoGenerationProviderIds: [],

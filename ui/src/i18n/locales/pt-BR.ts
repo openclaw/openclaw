@@ -362,6 +362,8 @@ export const pt_BR: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -393,6 +395,7 @@ export const pt_BR: TranslationMap = {
   },
   tabs: {
     agents: "Agentes",
+    activity: "Activity",
     overview: "Visão Geral",
     channels: "Canais",
     instances: "Instâncias",
@@ -414,6 +417,7 @@ export const pt_BR: TranslationMap = {
   },
   subtitles: {
     agents: "Espaços, ferramentas, identidades.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Status, entrada, saúde.",
     channels: "Canais e configurações.",
     instances: "Clientes e nós conectados.",
@@ -432,6 +436,42 @@ export const pt_BR: TranslationMap = {
     debug: "Snapshots, eventos, RPC.",
     logs: "Logs ao vivo do gateway.",
     dreams: "Consolidação de memória durante o sono.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Search",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Ferramenta",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Limpar",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Executar",
+    session: "Sessão",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Em execução",
+      done: "Concluída",
+      error: "Erro",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

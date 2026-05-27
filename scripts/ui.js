@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -15,42 +16,6 @@ const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
-}
-
-function which(cmd) {
-  try {
-    const key = process.platform === "win32" ? "Path" : "PATH";
-    const paths = (process.env[key] ?? process.env.PATH ?? "")
-      .split(path.delimiter)
-      .filter(Boolean);
-    const extensions =
-      process.platform === "win32"
-        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
-        : [""];
-    for (const entry of paths) {
-      for (const ext of extensions) {
-        const candidate = path.join(entry, process.platform === "win32" ? `${cmd}${ext}` : cmd);
-        try {
-          if (fs.existsSync(candidate)) {
-            return candidate;
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-function resolveRunner() {
-  const pnpm = which("pnpm");
-  if (pnpm) {
-    return { cmd: pnpm, kind: "pnpm" };
-  }
-  return null;
 }
 
 export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
@@ -89,19 +54,42 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 }
 
-function run(cmd, args) {
-  const { command, args: spawnArgs, options } = resolveSpawnCall(cmd, args);
+export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
+  const env = envOverride ?? process.env;
+  const platform = params.platform ?? process.platform;
+  const runner = resolvePnpmRunner({
+    pnpmArgs,
+    nodeExecPath: params.nodeExecPath ?? process.execPath,
+    npmExecPath: params.npmExecPath ?? env.npm_execpath,
+    comSpec: params.comSpec ?? env.ComSpec,
+    platform,
+  });
+  return {
+    command: runner.command,
+    args: runner.args,
+    options: {
+      cwd: params.cwd ?? uiDir,
+      stdio: "inherit",
+      env,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    },
+  };
+}
+
+function runSpawnCall(spawnCall, label) {
+  const { command, args: spawnArgs, options } = spawnCall;
   let child;
   try {
     child = spawn(command, spawnArgs, options);
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
     return;
   }
 
   child.on("error", (err) => {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
   });
   child.on("exit", (code) => {
@@ -111,13 +99,21 @@ function run(cmd, args) {
   });
 }
 
-function runSync(cmd, args, envOverride) {
-  const { command, args: spawnArgs, options } = resolveSpawnCall(cmd, args, envOverride);
+function run(cmd, args) {
+  runSpawnCall(resolveSpawnCall(cmd, args), cmd);
+}
+
+function runPnpm(args, envOverride) {
+  runSpawnCall(resolvePnpmSpawnCall(args, envOverride), "pnpm");
+}
+
+function runSpawnCallSync(spawnCall, label) {
+  const { command, args: spawnArgs, options } = spawnCall;
   let result;
   try {
     result = spawnSync(command, spawnArgs, options);
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
     return;
   }
@@ -127,6 +123,10 @@ function runSync(cmd, args, envOverride) {
   if ((result.status ?? 1) !== 0) {
     process.exit(result.status ?? 1);
   }
+}
+
+function runPnpmSync(args, envOverride) {
+  runSpawnCallSync(resolvePnpmSpawnCall(args, envOverride), "pnpm");
 }
 
 function depsInstalled(kind) {
@@ -168,35 +168,10 @@ export function main(argv = process.argv.slice(2)) {
     process.exit(2);
   }
 
-  const runner = resolveRunner();
-  if (!runner) {
-    process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
-    process.exit(1);
-  }
-
   const script = resolveScriptAction(action);
   if (action !== "install" && !script) {
     usage();
     process.exit(2);
-  }
-
-  if (action === "install") {
-    run(runner.cmd, ["install", ...rest]);
-    return;
-  }
-
-  if (!depsInstalled(action === "test" ? "test" : "build")) {
-    if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
-      run(process.execPath, [
-        path.join(repoRoot, "node_modules/vite/bin/vite.js"),
-        "build",
-        ...rest,
-      ]);
-      return;
-    }
-    const installEnv = process.env;
-    const installArgs = ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
   }
 
   if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
@@ -204,13 +179,43 @@ export function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  run(runner.cmd, ["run", script, ...rest]);
+  if (action === "install") {
+    runPnpm(["install", ...rest]);
+    return;
+  }
+
+  if (!depsInstalled(action === "test" ? "test" : "build")) {
+    const installEnv = process.env;
+    const installArgs = ["install"];
+    runPnpmSync(installArgs, installEnv);
+  }
+
+  runPnpm(["run", script, ...rest]);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
-})();
+export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+  const resolved = path.resolve(entry);
+  try {
+    return realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+export function isDirectScriptExecution(
+  entry = process.argv[1],
+  scriptPath = fileURLToPath(import.meta.url),
+  realpath = fs.realpathSync.native,
+) {
+  if (!entry) {
+    return false;
+  }
+  return (
+    resolveDirectExecutionPath(entry, realpath) === resolveDirectExecutionPath(scriptPath, realpath)
+  );
+}
+
+const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
   main();

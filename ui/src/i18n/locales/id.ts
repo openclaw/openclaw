@@ -362,6 +362,8 @@ export const id: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -393,6 +395,7 @@ export const id: TranslationMap = {
   },
   tabs: {
     agents: "Agen",
+    activity: "Activity",
     overview: "Ikhtisar",
     channels: "Saluran",
     instances: "Instans",
@@ -414,6 +417,7 @@ export const id: TranslationMap = {
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Status, titik masuk, kesehatan.",
     channels: "Saluran dan pengaturan.",
     instances: "Klien dan node yang terhubung.",
@@ -432,6 +436,42 @@ export const id: TranslationMap = {
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
     dreams: "Konsolidasi memori saat tidur.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Cari",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Alat",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Bersihkan",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Jalankan",
+    session: "Sesi",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Berjalan",
+      done: "Selesai",
+      error: "Kesalahan",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

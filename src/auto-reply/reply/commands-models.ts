@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
@@ -20,7 +21,10 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import {
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  createModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -149,13 +153,18 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalogForBrowse({
+    cfg,
+    view: options.view ?? "default",
+    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly }),
+  });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
   const visibleCatalog = await resolveVisibleModelCatalog({
     cfg,
@@ -168,6 +177,7 @@ export async function buildModelsProviderData(
       (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
       resolveDefaultAgentWorkspaceDir(),
     view: options.view,
+    runtimeAuthDiscovery: false,
   });
 
   const aliasIndex = buildModelAliasIndex({

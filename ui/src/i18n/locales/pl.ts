@@ -363,6 +363,8 @@ export const pl: TranslationMap = {
     pending: "{count} pending",
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",
@@ -394,6 +396,7 @@ export const pl: TranslationMap = {
   },
   tabs: {
     agents: "Agenci",
+    activity: "Activity",
     overview: "Przegląd",
     channels: "Kanały",
     instances: "Instancje",
@@ -415,6 +418,7 @@ export const pl: TranslationMap = {
   },
   subtitles: {
     agents: "Obszary robocze, narzędzia, tożsamości.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Status, punkty dostępu, stan.",
     channels: "Kanały i ustawienia.",
     instances: "Połączone klienty i węzły.",
@@ -433,6 +437,42 @@ export const pl: TranslationMap = {
     debug: "Migawki, zdarzenia, RPC.",
     logs: "Logi Gateway na żywo.",
     dreams: "Konsolidacja pamięci podczas snu.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Szukaj",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Narzędzie",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Wyczyść",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Uruchom",
+    session: "Sesja",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Uruchomiono",
+      done: "Gotowe",
+      error: "Błąd",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

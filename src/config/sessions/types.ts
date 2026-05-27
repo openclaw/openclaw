@@ -111,6 +111,33 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionContextBudgetStatusRoute =
+  | "fits"
+  | "compact_only"
+  | "truncate_tool_results_only"
+  | "compact_then_truncate";
+
+export type SessionContextBudgetStatus = {
+  schemaVersion: 1;
+  source: "pre-prompt-estimate";
+  updatedAt: number;
+  provider: string;
+  model: string;
+  route: SessionContextBudgetStatusRoute;
+  shouldCompact: boolean;
+  estimatedPromptTokens: number;
+  contextTokenBudget: number;
+  promptBudgetBeforeReserve: number;
+  reserveTokens: number;
+  effectiveReserveTokens: number;
+  remainingPromptBudgetTokens: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
+  messageCount: number;
+  unwindowedMessageCount: number;
+  sessionId?: string;
+};
+
 export type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
@@ -336,6 +363,7 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
@@ -616,6 +644,7 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+    hash?: string;
   };
   currentTurn?: {
     kind?: "user_request" | "room_event";
@@ -632,6 +661,7 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
+    hash?: string;
     entries: Array<{ name: string; blockChars: number }>;
   };
   tools: {
@@ -640,7 +670,9 @@ export type SessionSystemPromptReport = {
     entries: Array<{
       name: string;
       summaryChars: number;
+      summaryHash?: string;
       schemaChars: number;
+      schemaHash?: string;
       propertiesCount?: number | null;
     }>;
   };

@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -48,6 +49,7 @@ type IncompleteTurnAttempt = Pick<
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
+  | "toolMetas"
 > &
   Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
 
@@ -133,6 +135,19 @@ const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when
 // constrained, but it should not inherit the stricter planning-only/ack prompts.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
+// Model APIs eligible for the non-visible turn retry guard.  OpenAI Responses
+// family can produce reasoning-only turns where usage.output > 0 but no visible
+// text is emitted; without the guard these pass through as successful. (#85364)
+const RETRY_GUARD_MODEL_APIS = new Set([
+  "openai-completions",
+  "anthropic-messages",
+  "bedrock-converse-stream",
+  "openai-responses",
+  "openai-codex-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
 const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
@@ -205,8 +220,10 @@ export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadMutatingTools ||
+    hadAsyncStartedTool ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
@@ -259,6 +276,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return null;
+  }
+
   const stopReason = params.attempt.lastAssistant?.stopReason;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
@@ -295,6 +316,10 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
     nonEmptyTexts.length > 0 &&
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
   );
+}
+
+function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
+  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
 function isToolResultRole(role: string): boolean {
@@ -627,11 +652,7 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   if (shouldApplyPlanningOnlyRetryGuard(params)) {
     return true;
   }
-  if (
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions" ||
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages" ||
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "bedrock-converse-stream"
-  ) {
+  if (RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? ""))) {
     return true;
   }
   // Non-visible final turns are narrower than planning-only turns: there is no
@@ -710,28 +731,18 @@ export function resolveAckExecutionFastPathInstruction(params: {
 }
 
 function extractPlanningOnlySteps(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const bulletLines = lines
-    .map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "").trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
+  const bulletLines = normalizeStringEntries(
+    lines.map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "")),
+  );
   if (bulletLines.length >= 2) {
     return bulletLines.slice(0, 4);
   }
-  return text
-    .split(/(?<=[.!?])\s+/u)
-    .map((step) => step.trim())
-    .filter(Boolean)
-    .slice(0, 4);
+  return normalizeStringEntries(text.split(/(?<=[.!?])\s+/u)).slice(0, 4);
 }
 
 function hasStructuredPlanningOnlyFormat(text: string): boolean {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
   if (lines.length === 0) {
     return false;
   }

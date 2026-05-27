@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
-import { loadModelCatalog } from "../../agents/model-catalog.runtime.js";
+import { loadManifestModelCatalog, loadModelCatalog } from "../../agents/model-catalog.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
+  loadManifestModelCatalog: vi.fn(() => []),
   loadModelCatalog: vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
@@ -53,6 +54,8 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
+  vi.mocked(loadManifestModelCatalog).mockClear();
   authProfileStoreMock.reset();
 });
 
@@ -174,6 +177,42 @@ describe("createModelSelectionState catalog loading", () => {
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
     expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  it("uses manifest metadata before hydrating the runtime thinking catalog", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: true },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({ provider: "openai", id: "gpt-5.5", reasoning: true }),
+    ]);
+    expect(loadManifestModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      fallbackToMetadataScan: false,
+    });
+    expect(loadModelCatalog).not.toHaveBeenCalled();
   });
 
   it("prefers per-agent thinkingDefault over model and global defaults", async () => {
@@ -763,45 +802,6 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverrideRef).toBe("openai/gpt-4o-mini");
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
-  });
-
-  it("keeps one-turn model overrides ahead of stored overrides and allowlist fallback", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-4o" },
-          models: {
-            "openai/gpt-4o": {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const sessionKey = "agent:main:telegram:direct:1";
-    const sessionEntry = makeEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-    });
-    const sessionStore = { [sessionKey]: sessionEntry };
-
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o",
-      provider: "openai",
-      model: "gpt-4o-mini",
-      hasModelDirective: false,
-      hasOneTurnModelOverride: true,
-    });
-
-    expect(state.provider).toBe("openai");
-    expect(state.model).toBe("gpt-4o-mini");
-    expect(state.resetModelOverride).toBe(false);
-    expect(sessionStore[sessionKey]?.providerOverride).toBe("anthropic");
-    expect(sessionStore[sessionKey]?.modelOverride).toBe("claude-opus-4-6");
   });
 
   it("keeps wildcard-provider overrides when configured catalog rows are unavailable", async () => {

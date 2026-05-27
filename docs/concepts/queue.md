@@ -78,6 +78,20 @@ quiet window in `steer` mode:
 
 Defaults: `debounceMs: 500`, `cap: 20`, `drop: summarize`.
 
+## Steer and streaming
+
+When channel streaming is `partial` or `block`, steering can look like several
+short visible replies while the active run reaches runtime boundaries:
+
+- `partial`: the preview may finalize early, then a new preview starts after
+  steering is accepted.
+- `block`: draft-sized blocks can create the same sequential appearance.
+- Without streaming, steering falls back to a followup after the active run when
+  the runtime cannot accept same-turn steering.
+
+`steer` does not abort in-flight tools. Use `/queue interrupt` when the newest
+message should abort the current run.
+
 ## Precedence
 
 For mode selection, OpenClaw resolves:
@@ -112,7 +126,7 @@ keys.
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 
 ## Related
 

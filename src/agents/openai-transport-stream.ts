@@ -29,15 +29,20 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
+import { supportsModelTools } from "./model-tool-support.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
   resolveModelSseDebugMode,
 } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   flattenCompletionMessagesToStringContent,
@@ -119,6 +124,9 @@ type BaseStreamOptions = {
   headers?: Record<string, string>;
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
 };
 
 type ModelStreamCooperativeScheduler = {
@@ -1857,10 +1865,6 @@ function resolveOpenAIReasoningEffort(
   ) as OpenAIApiReasoningEffort;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function hasResponsesWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
@@ -1901,7 +1905,10 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 }
 
 function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
-  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+  return (
+    model.provider === "openai-codex" &&
+    (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
+  );
 }
 
 function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
@@ -2288,6 +2295,19 @@ function hasToolHistory(messages: Context["messages"]): boolean {
   );
 }
 
+function assertOpenAICompletionsPayloadHasConversationTurn(
+  params: Record<string, unknown>,
+  model: Model<Api>,
+): void {
+  const messages = params.messages;
+  if (!Array.isArray(messages) || hasOpenAICompatibleConversationTurn(messages)) {
+    return;
+  }
+  throw new Error(
+    `OpenAI-compatible chat payload for ${model.provider}/${model.id} contains no non-empty user or assistant messages after compaction and transport transforms; refusing to send a system/tool-only request. Start a new user turn or repair the compacted session history.`,
+  );
+}
+
 function createOpenAICompletionsClient(
   model: Model<Api>,
   context: Context,
@@ -2403,6 +2423,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           enforceCodeModeResponsesToolSurface(params);
           assertCodeModeResponsesToolSurface(params);
         }
+        const compat = getCompat(model as OpenAIModeModel);
+        if (compat.requiresNonEmptyUserOrAssistantMessage) {
+          assertOpenAICompletionsPayloadHasConversationTurn(params, model);
+        }
         const responseStream = (await client.chat.completions.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
@@ -2439,22 +2463,25 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  type ToolCallBlock = {
+    type: "toolCall";
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    partialArgs: string;
+    thoughtSignature?: string;
+  };
   let currentBlock:
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
-    | {
-        type: "toolCall";
-        id: string;
-        name: string;
-        arguments: Record<string, unknown>;
-        partialArgs: string;
-        thoughtSignature?: string;
-      }
+    | ToolCallBlock
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
-  let currentToolCallArgumentBytes = 0;
   let isFlushingPendingPostToolCallDeltas = false;
+  const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
+  const toolCallBlocksById = new Map<string, ToolCallBlock>();
+  const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
@@ -2463,11 +2490,11 @@ async function processOpenAICompletionsStream(
     }
     if (currentBlock.type === "toolCall") {
       currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
-      const completed = {
-        ...currentBlock,
-        arguments: parseStreamingJson(currentBlock.partialArgs),
-      };
-      output.content[blockIndex()] = completed;
+    }
+  };
+  const finishAllToolCallBlocks = () => {
+    for (const block of toolCallBlocksByIndex.values()) {
+      block.arguments = parseStreamingJson(block.partialArgs);
     }
   };
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
@@ -2645,11 +2672,12 @@ async function processOpenAICompletionsStream(
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
       for (const toolCall of choiceDelta.tool_calls) {
-        if (
-          !currentBlock ||
-          currentBlock.type !== "toolCall" ||
-          (toolCall.id && currentBlock.id !== toolCall.id)
-        ) {
+        const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+        let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
+        if (!block && toolCall.id) {
+          block = toolCallBlocksById.get(toolCall.id);
+        }
+        if (!block) {
           const switchingToolCall = currentBlock?.type === "toolCall";
           finishCurrentBlock();
           if (switchingToolCall) {
@@ -2657,7 +2685,7 @@ async function processOpenAICompletionsStream(
             flushPendingPostToolCallDeltas();
           }
           const initialSig = extractGoogleThoughtSignature(toolCall);
-          currentBlock = {
+          block = {
             type: "toolCall",
             id: toolCall.id || "",
             name: toolCall.function?.name || "",
@@ -2665,37 +2693,40 @@ async function processOpenAICompletionsStream(
             partialArgs: "",
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
-          currentToolCallArgumentBytes = 0;
-          output.content.push(currentBlock);
-          stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+          output.content.push(block);
+          stream.push({
+            type: "toolcall_start",
+            contentIndex: output.content.indexOf(block),
+            partial: output,
+          });
         }
-        if (currentBlock.type !== "toolCall") {
-          continue;
+        if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
+          toolCallBlocksByIndex.set(streamIndex, block);
         }
         if (toolCall.id) {
-          currentBlock.id = toolCall.id;
+          block.id = toolCall.id;
+          toolCallBlocksById.set(toolCall.id, block);
         }
+        currentBlock = block;
         if (toolCall.function?.name) {
-          currentBlock.name = toolCall.function.name;
+          block.name = toolCall.function.name;
         }
         const deltaSig = extractGoogleThoughtSignature(toolCall);
         if (deltaSig) {
-          currentBlock.thoughtSignature = deltaSig;
+          block.thoughtSignature = deltaSig;
         }
         if (toolCall.function?.arguments) {
           const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
-          if (
-            currentToolCallArgumentBytes + nextArgumentBytes >
-            MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES
-          ) {
+          const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
+          if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
             throw new Error("Exceeded tool-call argument buffer limit");
           }
-          currentToolCallArgumentBytes += nextArgumentBytes;
-          currentBlock.partialArgs += toolCall.function.arguments;
-          currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+          toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
+          block.partialArgs += toolCall.function.arguments;
+          block.arguments = parseStreamingJson(block.partialArgs);
           stream.push({
             type: "toolcall_delta",
-            contentIndex: blockIndex(),
+            contentIndex: output.content.indexOf(block),
             delta: toolCall.function.arguments,
             partial: output,
           });
@@ -2706,10 +2737,8 @@ async function processOpenAICompletionsStream(
     await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
-  finishCurrentBlock();
-  if (currentBlock?.type === "toolCall") {
-    currentBlock = null;
-  }
+  finishAllToolCallBlocks();
+  currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
   if (output.stopReason === "toolUse" && !hasToolCalls) {
@@ -2847,6 +2876,7 @@ function detectCompat(model: OpenAIModeModel) {
     supportsStrictMode: compatDefaults.supportsStrictMode,
     requiresReasoningContentOnAssistantMessages:
       compatDefaults.requiresReasoningContentOnAssistantMessages,
+    requiresNonEmptyUserOrAssistantMessage: compatDefaults.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 
@@ -2869,6 +2899,7 @@ function getCompat(model: OpenAIModeModel): {
   strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
   requiresReasoningContentOnAssistantMessages: boolean;
+  requiresNonEmptyUserOrAssistantMessage: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -2902,6 +2933,7 @@ function getCompat(model: OpenAIModeModel): {
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:
       detected.requiresReasoningContentOnAssistantMessages,
+    requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 
@@ -2942,6 +2974,111 @@ function resolveOpenAICompletionsMaxTokens(
     (model as { params?: Record<string, unknown> }).params,
   );
   return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
+}
+
+const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
+const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+
+// Used only to bound `max_completion_tokens` below the effective context cap
+// for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
+// helper avoids undercounting non-Latin prompts enough to trigger server-side
+// context rejections; wrong-high here just trims output a little. Estimate the
+// final shaped payload, not the raw context, so compat transforms and dropped
+// replay turns are reflected in the output cap.
+function estimateOpenAICompletionsInputTokens(payload: {
+  messages?: unknown;
+  tools?: unknown;
+  response_format?: unknown;
+}): number {
+  let adjustedChars = 0;
+  adjustedChars += estimateOpenAICompletionsMessagesChars(payload.messages);
+  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+    try {
+      adjustedChars += estimateStringChars(JSON.stringify(payload.tools));
+    } catch {
+      adjustedChars += 1024;
+    }
+  }
+  if (payload.response_format !== undefined) {
+    try {
+      adjustedChars += estimateStringChars(JSON.stringify(payload.response_format));
+    } catch {
+      adjustedChars += 256;
+    }
+  }
+  return Math.ceil(
+    (adjustedChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
+  );
+}
+
+function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
+  if (!Array.isArray(messages)) {
+    return 0;
+  }
+  let adjustedChars = 0;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    adjustedChars += estimateOpenAICompletionsContentChars(record.content);
+    for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
+      adjustedChars += estimateOpenAICompletionsContentChars(record[field]);
+    }
+    if (record.tool_calls !== undefined) {
+      try {
+        adjustedChars += estimateStringChars(JSON.stringify(record.tool_calls));
+      } catch {
+        adjustedChars += 256;
+      }
+    }
+  }
+  return adjustedChars;
+}
+
+function estimateOpenAICompletionsContentChars(value: unknown): number {
+  if (typeof value === "string") {
+    return estimateStringChars(value);
+  }
+  if (!Array.isArray(value)) {
+    return 0;
+  }
+  let adjustedChars = 0;
+  for (const block of value) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "image_url" || record.type === "input_image") {
+      adjustedChars += OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE;
+      continue;
+    }
+    const text = record.text;
+    if (typeof text === "string") {
+      adjustedChars += estimateStringChars(text);
+      continue;
+    }
+    try {
+      adjustedChars += estimateStringChars(JSON.stringify(block));
+    } catch {
+      adjustedChars += 256;
+    }
+  }
+  return adjustedChars;
+}
+
+function resolveOpenAICompletionsEffectiveContextTokens(
+  model: OpenAIModeModel,
+): number | undefined {
+  const contextTokens = (model as { contextTokens?: number }).contextTokens;
+  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
+    return contextTokens;
+  }
+  return typeof model.contextWindow === "number" &&
+    Number.isFinite(model.contextWindow) &&
+    model.contextWindow > 0
+    ? model.contextWindow
+    : undefined;
 }
 
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
@@ -3267,7 +3404,7 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
   }
-  return [...new Set(candidates.filter(Boolean))];
+  return uniqueStrings(candidates.filter(Boolean));
 }
 
 function shouldPreserveReasoningContentReplay(
@@ -3363,16 +3500,6 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
     params.prompt_cache_key = options.sessionId;
   }
-  {
-    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
-    if (effectiveMaxTokens) {
-      if (compat.maxTokensField === "max_tokens") {
-        params.max_tokens = effectiveMaxTokens;
-      } else {
-        params.max_completion_tokens = effectiveMaxTokens;
-      }
-    }
-  }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
@@ -3382,19 +3509,67 @@ export function buildOpenAICompletionsParams(
   if (options?.responseFormat !== undefined) {
     params.response_format = options.responseFormat;
   }
-  if (context.tools) {
-    params.tools = convertTools(context.tools, compat, model);
-    if (options?.toolChoice) {
-      params.tool_choice = options.toolChoice;
-    } else if (
+  if (options?.frequencyPenalty !== undefined) {
+    params.frequency_penalty = options.frequencyPenalty;
+  }
+  if (options?.presencePenalty !== undefined) {
+    params.presence_penalty = options.presencePenalty;
+  }
+  if (options?.seed !== undefined) {
+    params.seed = options.seed;
+  }
+  if (supportsModelTools(model)) {
+    if (context.tools) {
+      params.tools = convertTools(context.tools, compat, model);
+      if (options?.toolChoice) {
+        params.tool_choice = options.toolChoice;
+      } else if (
+        compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+        Array.isArray(params.tools) &&
+        params.tools.length > 0
+      ) {
+        params.tool_choice = "auto";
+      }
+    } else if (hasToolHistory(context.messages)) {
+      params.tools = [];
+    }
+    if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
       Array.isArray(params.tools) &&
-      params.tools.length > 0
+      params.tools.length === 0
     ) {
-      params.tool_choice = "auto";
+      delete params.tools;
+      delete params.tool_choice;
     }
-  } else if (hasToolHistory(context.messages)) {
-    params.tools = [];
+  }
+  {
+    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
+    let clampedMaxTokens = effectiveMaxTokens;
+    if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      effectiveMaxTokens !== undefined &&
+      effectiveContextTokens !== undefined
+    ) {
+      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
+      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
+      if (effectiveMaxTokens > remainingBudget) {
+        clampedMaxTokens = remainingBudget;
+        emitModelTransportDebug(
+          log,
+          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+            `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+        );
+      }
+    }
+    if (clampedMaxTokens) {
+      if (compat.maxTokensField === "max_tokens") {
+        params.max_tokens = clampedMaxTokens;
+      } else {
+        params.max_completion_tokens = clampedMaxTokens;
+      }
+    }
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort

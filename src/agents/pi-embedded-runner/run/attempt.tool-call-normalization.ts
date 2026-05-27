@@ -2,14 +2,15 @@ import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { streamSimple } from "@earendil-works/pi-ai";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
   extractToolCallsFromAssistant,
+  extractToolResultIds,
   sanitizeToolCallIdsForCloudCodeAssist,
   type ToolCallIdMode,
 } from "../../tool-call-id.js";
-import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
@@ -88,10 +89,7 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
   addCandidate(normalizedDelimiter);
   addCandidate(normalizeToolName(normalizedDelimiter));
 
-  const segments = normalizedDelimiter
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = normalizeStringEntries(normalizedDelimiter.split("."));
   if (segments.length > 1) {
     for (let index = 1; index < segments.length; index += 1) {
       const suffix = segments.slice(index).join(".");
@@ -265,12 +263,7 @@ function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<str
     }
     const replayBlock = block;
     const toolCallId = typeof replayBlock.id === "string" ? replayBlock.id.trim() : "";
-    if (
-      !replayToolCallHasInput(replayBlock) ||
-      !toolCallId ||
-      seenToolCallIds.has(toolCallId) ||
-      hasUnredactedSessionsSpawnAttachments(replayBlock)
-    ) {
+    if (!replayToolCallHasInput(replayBlock) || !toolCallId || seenToolCallIds.has(toolCallId)) {
       return false;
     }
     seenToolCallIds.add(toolCallId);
@@ -295,6 +288,35 @@ function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
   return hasInput || hasArguments;
+}
+
+function collectFollowingToolResults(
+  messages: AgentMessage[],
+  index: number,
+): { ids: Set<string>; displaced: boolean } {
+  const ids = new Set<string>();
+  let sawNonToolResult = false;
+  let displaced = false;
+  for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
+    const message = messages[nextIndex];
+    if (!message || typeof message !== "object") {
+      sawNonToolResult = true;
+      continue;
+    }
+    if (message.role === "assistant" && assistantTurnHasReplayToolCall(message)) {
+      break;
+    }
+    if (message.role === "toolResult") {
+      const resultIds = extractToolResultIds(message);
+      for (const id of resultIds) {
+        ids.add(id);
+      }
+      displaced ||= resultIds.length > 0 && sawNonToolResult;
+      continue;
+    }
+    sawNonToolResult = true;
+  }
+  return { ids, displaced };
 }
 
 function replayToolCallNonEmptyString(value: unknown): value is string {
@@ -328,9 +350,11 @@ function sanitizeReplayToolCallInputs(
   let changed = false;
   let droppedAssistantMessages = 0;
   const out: AgentMessage[] = [];
-  const claimedReplaySafeToolCallIds = new Set<string>();
+  const preservedThinkingToolCallIds = new Set<string>();
+  const priorToolCallIds = new Set<string>();
 
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
     if (!message || typeof message !== "object" || message.role !== "assistant") {
       out.push(message);
       continue;
@@ -345,13 +369,21 @@ function sanitizeReplayToolCallInputs(
       message.content.some((block) => isReplayToolCallBlock(block))
     ) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
+      const followingToolResults = collectFollowingToolResults(messages, index);
       if (
         isReplaySafeThinkingTurn(message.content, allowedToolNames) &&
-        replaySafeToolCalls.every((toolCall) => !claimedReplaySafeToolCallIds.has(toolCall.id))
+        replaySafeToolCalls.every(
+          (toolCall) =>
+            !preservedThinkingToolCallIds.has(toolCall.id) &&
+            (!followingToolResults.displaced || !priorToolCallIds.has(toolCall.id)) &&
+            followingToolResults.ids.has(toolCall.id),
+        )
       ) {
         for (const toolCall of replaySafeToolCalls) {
-          claimedReplaySafeToolCallIds.add(toolCall.id);
+          preservedThinkingToolCallIds.add(toolCall.id);
+          priorToolCallIds.add(toolCall.id);
         }
+        changed ||= followingToolResults.displaced;
         out.push(message);
       } else {
         changed = true;
@@ -396,13 +428,20 @@ function sanitizeReplayToolCallInputs(
     if (messageChanged) {
       changed = true;
       if (nextContent.length > 0) {
-        out.push({ ...message, content: nextContent });
+        const nextMessage = { ...message, content: nextContent };
+        for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
+          priorToolCallIds.add(toolCall.id);
+        }
+        out.push(nextMessage);
       } else {
         droppedAssistantMessages += 1;
       }
       continue;
     }
 
+    for (const toolCall of extractToolCallsFromAssistant(message)) {
+      priorToolCallIds.add(toolCall.id);
+    }
     out.push(message);
   }
 
@@ -919,6 +958,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     TranscriptPolicy,
     "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >,
+  provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
@@ -928,6 +968,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     }
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+      provider,
       policy: {
         validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
         preserveSignatures: transcriptPolicy?.preserveSignatures === true,

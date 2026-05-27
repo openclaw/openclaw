@@ -26,6 +26,7 @@ const modelProviderAuthMocks = vi.hoisted(() => {
   );
   return state;
 });
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
@@ -45,6 +46,11 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   getCurrentProviderAuthState: () => null,
   clearCurrentProviderAuthState: () => undefined,
   warmCurrentProviderAuthState: async () => undefined,
+}));
+
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: unknown) =>
+    normalizeProviderModelIdWithRuntimeMock(params),
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -121,6 +127,7 @@ beforeEach(() => {
   ]);
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
+  normalizeProviderModelIdWithRuntimeMock.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   setActivePluginRegistry(
@@ -206,6 +213,40 @@ describe("handleModelsCommand", () => {
     expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
 
+  it("uses read-only catalog loading and static auth checks for default browse", async () => {
+    await handleModelsCommand(buildParams("/models"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+    const authCheckerParams = firstAuthCheckerParams();
+    expect(authCheckerParams?.allowPluginSyntheticAuth).toBe(false);
+    expect(authCheckerParams?.discoverExternalCliAuth).toBe(false);
+  });
+
+  it("does not block default browse when read-only catalog loading is slow", async () => {
+    vi.useFakeTimers();
+    try {
+      modelCatalogMocks.loadModelCatalog.mockReturnValue(new Promise(() => undefined));
+
+      const resultPromise = handleModelsCommand(buildParams("/models"), true);
+      await vi.advanceTimersByTimeAsync(750);
+      const result = await resultPromise;
+
+      expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledTimes(1);
+      expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(true);
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Providers:");
+      expect(result?.reply?.text).toContain("- anthropic (1)");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps explicit all browse on the full catalog path", async () => {
+    await handleModelsCommand(buildParams("/models openai all"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
+  });
+
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
     modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
 
@@ -221,6 +262,37 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+  });
+
+  it("shows plugin-normalized allowlist models in browse data", async () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["custom-provider"]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "custom-provider/custom-modern-model" },
+          models: {
+            "custom-provider/custom-legacy-model": {},
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.byProvider.get("custom-provider")).toEqual(new Set(["custom-modern-model"]));
+    expect(data.modelNames.get("custom-provider/custom-modern-model")).toBe("Custom Modern");
+    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalled();
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {
@@ -248,6 +320,7 @@ describe("handleModelsCommand", () => {
       true,
     );
 
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]?.readOnly).toBe(false);
     expect(result?.reply?.text).toContain("- openai-codex (2)");
     expect(result?.reply?.text).toContain("- vllm (2)");
     expect(result?.reply?.text).not.toContain("- anthropic");

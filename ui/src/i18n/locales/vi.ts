@@ -362,6 +362,8 @@ export const vi: TranslationMap = {
     pending: "{count} đang chờ",
     allowOnce: "Cho phép một lần",
     alwaysAllow: "Luôn cho phép",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",
@@ -393,6 +395,7 @@ export const vi: TranslationMap = {
   },
   tabs: {
     agents: "Agent",
+    activity: "Activity",
     overview: "Tổng quan",
     channels: "Kênh",
     instances: "Phiên bản",
@@ -414,6 +417,7 @@ export const vi: TranslationMap = {
   },
   subtitles: {
     agents: "Không gian làm việc, công cụ, danh tính.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Trạng thái, điểm vào, tình trạng.",
     channels: "Kênh và cài đặt.",
     instances: "Máy khách và nút đã kết nối.",
@@ -432,6 +436,42 @@ export const vi: TranslationMap = {
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
     dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Tìm kiếm",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Công cụ",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Xóa",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Chạy",
+    session: "Phiên",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "Đang chạy",
+      done: "Hoàn tất",
+      error: "Lỗi",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

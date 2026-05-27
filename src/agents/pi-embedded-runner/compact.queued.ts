@@ -3,7 +3,7 @@ import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
@@ -26,6 +26,7 @@ import {
 } from "../harness/selection.js";
 import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
@@ -47,15 +48,108 @@ import { log } from "./logger.js";
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
+import { normalizeContextTokenBudget } from "./utils.js";
 
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedPiCompactResult | undefined,
+  harnessPolicyRuntime: string | undefined,
+  explicitHarnessId: string | undefined,
 ): boolean {
+  if (harnessPolicyRuntime === "codex" || explicitHarnessId === "codex") {
+    return false;
+  }
   return (
     result?.ok === false &&
     (result.failure?.reason === "missing_thread_binding" ||
       result.failure?.reason === "stale_thread_binding")
   );
+}
+
+const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =
+  "failed to schedule background context-engine maintenance";
+
+function shouldDeferOwningContextEngineBudgetCompaction(params: {
+  compactParams: CompactEmbeddedPiSessionParams;
+  contextEngine: ContextEngine;
+}): boolean {
+  // Request-time budget compaction for context-engine-owned transcripts can
+  // spend the whole reply preflight budget. Only defer engines that explicitly
+  // advertise background turn maintenance, leaving native/current-session
+  // harness compaction synchronous.
+  return (
+    params.compactParams.deferOwningContextEngineCompaction === true &&
+    params.compactParams.trigger === "budget" &&
+    params.contextEngine.info.ownsCompaction === true &&
+    params.contextEngine.info.turnMaintenanceMode === "background" &&
+    typeof params.contextEngine.maintain === "function"
+  );
+}
+
+async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
+  try {
+    await contextEngine.dispose?.();
+  } catch (err) {
+    log.warn("context engine dispose failed after deferred maintenance", {
+      errorMessage: formatErrorMessage(err),
+    });
+  }
+}
+
+async function deferOwningContextEngineBudgetCompaction(params: {
+  compactParams: CompactEmbeddedPiSessionParams;
+  contextEngine: ContextEngine;
+  contextEngineRuntimeContext: ContextEngineRuntimeContext;
+}): Promise<EmbeddedPiCompactResult> {
+  let deferredScheduled = false;
+  let deferredScheduleFailure: unknown;
+  try {
+    await runContextEngineMaintenance({
+      contextEngine: params.contextEngine,
+      sessionId: params.compactParams.sessionId,
+      sessionKey: params.compactParams.sessionKey,
+      sessionFile: params.compactParams.sessionFile,
+      reason: "turn",
+      runtimeContext: params.contextEngineRuntimeContext,
+      config: params.compactParams.config,
+      disposeDeferredContextEngineAfterMaintenance: true,
+      onDeferredMaintenance: () => {
+        deferredScheduled = true;
+      },
+      onDeferredMaintenanceFailure: (error) => {
+        deferredScheduleFailure = error;
+      },
+    });
+  } catch (err) {
+    log.warn("failed to defer context-engine budget compaction", {
+      errorMessage: formatErrorMessage(err),
+    });
+  }
+
+  if (!deferredScheduled || deferredScheduleFailure) {
+    await disposeContextEngine(params.contextEngine);
+    log.warn(
+      `[compaction] failed to schedule context-engine-owned budget compaction background maintenance ` +
+        `(sessionKey=${params.compactParams.sessionKey ?? params.compactParams.sessionId}` +
+        `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
+    );
+    return {
+      ok: false,
+      compacted: false,
+      reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON,
+      failure: { reason: "deferred_compaction_not_scheduled" },
+    };
+  }
+
+  log.info(
+    `[compaction] deferred context-engine-owned budget compaction to background maintenance ` +
+      `(sessionKey=${params.compactParams.sessionKey ?? params.compactParams.sessionId} ` +
+      `scheduled=${String(deferredScheduled)})`,
+  );
+  return {
+    ok: true,
+    compacted: false,
+    reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+  };
 }
 
 /**
@@ -82,49 +176,62 @@ export async function compactEmbeddedPiSession(
     agentDir,
     workspaceDir: resolvedWorkspaceDir,
   });
-  let contextTokenBudget = params.contextTokenBudget;
-  if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
-    const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
-      config: params.config,
-      provider: params.provider,
-      modelId: params.model,
-      authProfileId: params.authProfileId,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-    const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-    const { model: ceModel } = await resolveModelAsync(
-      ceProvider,
-      ceModelId,
-      agentDir,
-      params.config,
-    );
-    const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-    const ceHarnessPolicy = resolveAgentHarnessPolicy({
-      provider: ceProvider,
-      modelId: ceModelId,
-      config: params.config,
-      agentId: agentIds.sessionAgentId,
-      sessionKey: params.sessionKey,
-    });
-    contextTokenBudget = resolveContextWindowInfo({
-      cfg: params.config,
-      provider: resolveContextConfigProviderForRuntime({
-        provider: ceProvider,
-        runtimeId: ceHarnessPolicy.runtime,
-      }),
-      modelId: ceModelId,
-      modelContextTokens: readPiModelContextTokens(ceModel),
-      modelContextWindow: ceRuntimeModel?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    }).tokens;
-  }
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const ceRuntimeProvider = resolvedCompactionTarget.runtimeProvider ?? ceProvider;
+  const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const { model: ceModel } = await resolveModelAsync(
+    ceRuntimeProvider,
+    ceModelId,
+    agentDir,
+    params.config,
+  );
+  const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+  const ceHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: ceProvider,
+    modelId: ceModelId,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  const resolvedContextTokenBudget =
+    normalizeContextTokenBudget(
+      resolveContextWindowInfo({
+        cfg: params.config,
+        provider: resolveContextConfigProviderForRuntime({
+          provider: ceProvider,
+          runtimeId: ceHarnessPolicy.runtime,
+        }),
+        modelId: ceModelId,
+        modelContextTokens: readPiModelContextTokens(ceModel),
+        modelContextWindow: ceRuntimeModel?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens,
+    ) ?? DEFAULT_CONTEXT_TOKENS;
+  const requestedContextTokenBudget = normalizeContextTokenBudget(params.contextTokenBudget);
+  const contextTokenBudget = Math.min(
+    requestedContextTokenBudget ?? resolvedContextTokenBudget,
+    resolvedContextTokenBudget,
+  );
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params,
     agentDir,
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
+  });
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
   });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
@@ -133,13 +240,31 @@ export async function compactEmbeddedPiSession(
     contextEngineRuntimeContext,
   });
   if (harnessResult) {
-    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+    if (
+      !shouldFallbackAfterHarnessCompaction(
+        harnessResult,
+        harnessPolicy.runtime,
+        params.agentHarnessId,
+      )
+    ) {
       await contextEngine.dispose?.();
       return harnessResult;
     }
     log.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
     );
+  }
+  if (
+    shouldDeferOwningContextEngineBudgetCompaction({
+      compactParams: params,
+      contextEngine,
+    })
+  ) {
+    return await deferOwningContextEngineBudgetCompaction({
+      compactParams: params,
+      contextEngine,
+      contextEngineRuntimeContext,
+    });
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
@@ -402,6 +527,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       config: params.params.config,
       sessionKey: params.params.sessionKey,
       agentId: sessionAgentId,
+      authProfileId: params.params.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",
     }),

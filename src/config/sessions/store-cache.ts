@@ -28,9 +28,6 @@ type SessionStoreSnapshotCacheEntry = {
   snapshot: SessionStoreSnapshot;
   mtimeMs?: number;
   sizeBytes?: number;
-  generation: number;
-  createdAt: number;
-  entryCount: number;
 };
 
 type SerializedSessionStoreCacheEntry = {
@@ -60,7 +57,6 @@ const SESSION_STORE_STRING_INTERN_STATS = {
   skippedSmall: 0,
   skippedFull: 0,
 };
-let sessionStoreSnapshotGeneration = 0;
 let sessionStoreSerializedCacheBytes = 0;
 
 function parseNonNegativeInteger(value: string | undefined): number | null {
@@ -160,6 +156,14 @@ export function getSerializedSessionStoreCacheStatsForTest(): {
   };
 }
 
+export function getSessionStoreSnapshotCacheStatsForTest(): {
+  entries: number;
+} {
+  return {
+    entries: SESSION_STORE_SNAPSHOT_CACHE.size(),
+  };
+}
+
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): DeepReadonly<T> {
   if (!value || typeof value !== "object") {
     return value as DeepReadonly<T>;
@@ -179,7 +183,10 @@ export function cloneSessionStoreRecord(
   store: Record<string, SessionEntry>,
   serialized?: string,
 ): Record<string, SessionEntry> {
-  const cloned = JSON.parse(serialized ?? JSON.stringify(store)) as Record<string, SessionEntry>;
+  const cloned =
+    serialized === undefined
+      ? cloneJsonLikeValue(store)
+      : (JSON.parse(serialized) as Record<string, SessionEntry>);
   internSessionStoreLargeStrings(cloned);
   return cloned;
 }
@@ -193,7 +200,20 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    cloned[key] = cloneJsonLikeValue(child);
+    if (child === undefined) {
+      continue;
+    }
+    const clonedChild = cloneJsonLikeValue(child);
+    if (key === "__proto__") {
+      Object.defineProperty(cloned, key, {
+        value: clonedChild,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      cloned[key] = clonedChild;
+    }
   }
   return cloned as T;
 }
@@ -205,7 +225,7 @@ export function cloneSessionStoreSnapshot(
   const cloned =
     serialized === undefined
       ? cloneJsonLikeValue(store)
-      : cloneSessionStoreRecord(store, serialized);
+      : (JSON.parse(serialized) as Record<string, SessionEntry>);
   internSessionStoreLargeStrings(cloned);
   return deepFreeze(cloned);
 }
@@ -266,12 +286,19 @@ export function getSerializedSessionStore(storePath: string): string | undefined
   return SESSION_STORE_SERIALIZED_CACHE.get(storePath)?.serialized;
 }
 
-export function setSerializedSessionStore(storePath: string, serialized?: string): void {
+export function setSerializedSessionStore(
+  storePath: string,
+  serialized?: string,
+  sizeBytesHint?: number,
+): void {
   deleteSerializedSessionStore(storePath);
   if (serialized === undefined) {
     return;
   }
-  const sizeBytes = Buffer.byteLength(serialized, "utf8");
+  const sizeBytes =
+    typeof sizeBytesHint === "number" && Number.isFinite(sizeBytesHint) && sizeBytesHint >= 0
+      ? sizeBytesHint
+      : Buffer.byteLength(serialized, "utf8");
   const maxEntries = getSerializedSessionStoreCacheMaxEntries();
   const maxBytes = getSerializedSessionStoreCacheMaxBytes();
   if (maxEntries <= 0 || maxBytes <= 0 || sizeBytes > maxBytes) {
@@ -318,9 +345,6 @@ export function writeSessionStoreSnapshotCache(params: {
     snapshot,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
-    generation: (sessionStoreSnapshotGeneration += 1),
-    createdAt: Date.now(),
-    entryCount: Object.keys(snapshot).length,
   });
   return snapshot;
 }
@@ -368,10 +392,11 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  takeOwnership?: boolean;
 }): void {
   const store =
-    params.serialized === undefined ? cloneSessionStoreRecord(params.store) : params.store;
-  if (params.serialized !== undefined) {
+    params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
+  if (params.takeOwnership === true) {
     internSessionStoreLargeStrings(store);
   }
   SESSION_STORE_CACHE.set(params.storePath, {
@@ -380,5 +405,5 @@ export function writeSessionStoreCache(params: {
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,
   });
-  setSerializedSessionStore(params.storePath, params.serialized);
+  setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
 }

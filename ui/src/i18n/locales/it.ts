@@ -364,6 +364,8 @@ export const it: TranslationMap = {
     pending: "{count} in sospeso",
     allowOnce: "Consenti una volta",
     alwaysAllow: "Consenti sempre",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Nega",
     labels: {
       host: "Host",
@@ -395,6 +397,7 @@ export const it: TranslationMap = {
   },
   tabs: {
     agents: "Agenti",
+    activity: "Activity",
     overview: "Panoramica",
     channels: "Canali",
     instances: "Istanze",
@@ -416,6 +419,7 @@ export const it: TranslationMap = {
   },
   subtitles: {
     agents: "Spazi di lavoro, strumenti, identità.",
+    activity: "Browser-local tool activity summaries.",
     overview: "Stato, punti di ingresso, integrità.",
     channels: "Canali e impostazioni.",
     instances: "Client e nodi connessi.",
@@ -434,6 +438,42 @@ export const it: TranslationMap = {
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
     dreams: "Sogni della memoria, consolidamento e riflessione.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "Cerca",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "Strumento",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "Cancella",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "Esegui",
+    session: "Sessione",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "In esecuzione",
+      done: "Completato",
+      error: "Errore",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {

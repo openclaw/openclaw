@@ -4,8 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 const TOKEN = "bundled-plugin-runtime-smoke-token";
+const OUTPUT_CAPTURE_CHARS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS,
+  1024 * 1024,
+);
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
@@ -15,6 +20,14 @@ const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTI
 const RPC_READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
   210000,
+);
+const COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_COMMAND_MS,
+  120000,
+);
+const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
+  5000,
 );
 
 function readPositiveInt(raw, fallback) {
@@ -31,12 +44,17 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function manifestPath(pluginDir) {
-  return path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json");
+function manifestPath(pluginDir, pluginRoot) {
+  const candidates = [
+    ...(isNonEmptyString(pluginRoot) ? [path.join(pluginRoot, "openclaw.plugin.json")] : []),
+    path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json"),
+    path.join(process.cwd(), "dist-runtime", "extensions", pluginDir, "openclaw.plugin.json"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
-function loadManifest(pluginDir) {
-  const file = manifestPath(pluginDir);
+function loadManifest(pluginDir, pluginRoot) {
+  const file = manifestPath(pluginDir, pluginRoot);
   if (!fs.existsSync(file)) {
     throw new Error(`missing bundled plugin manifest: ${file}`);
   }
@@ -129,32 +147,87 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function runCommand(command, args, options = {}) {
+export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
+  const nextText = buffer.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: buffer.truncatedChars };
+  }
+  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedOutput(label, buffer) {
+  if (!buffer.text) {
+    return "";
+  }
+  const prefix =
+    buffer.truncatedChars > 0
+      ? `[${label} truncated ${buffer.truncatedChars} chars; showing tail]\n`
+      : "";
+  return `${prefix}${buffer.text}`;
+}
+
+export function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const { timeoutMs = COMMAND_TIMEOUT_MS, ...spawnOptions } = options;
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...options,
+      ...spawnOptions,
     });
-    let stdout = "";
-    let stderr = "";
+    let stdout = { text: "", truncatedChars: 0 };
+    let stderr = { text: "", truncatedChars: 0 };
+    let timedOut = false;
+    let settled = false;
     child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedOutput(stderr, chunk);
     });
-    child.on("error", reject);
-    child.on("close", (status, signal) => {
-      if (status === 0) {
-        resolve({ stdout, stderr });
+    const clearCommandTimer = timeoutMs
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGKILL");
+        }, timeoutMs)
+      : undefined;
+    child.on("error", (error) => {
+      if (settled) {
         return;
       }
-      const detail = [stdout, stderr].filter(Boolean).join("\n").trim();
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} failed with ${signal || status}${detail ? `\n${detail}` : ""}`,
-        ),
-      );
+      settled = true;
+      if (clearCommandTimer) {
+        clearTimeout(clearCommandTimer);
+      }
+      reject(error);
+    });
+    child.on("close", (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (clearCommandTimer) {
+        clearTimeout(clearCommandTimer);
+      }
+      if (status === 0) {
+        resolve({
+          stdout: stdout.text,
+          stderr: stderr.text,
+          stdoutTruncatedChars: stdout.truncatedChars,
+          stderrTruncatedChars: stderr.truncatedChars,
+        });
+        return;
+      }
+      const detail = [
+        formatCapturedOutput("stdout", stdout),
+        formatCapturedOutput("stderr", stderr),
+      ]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      const outcome = timedOut
+        ? `timed out after ${timeoutMs}ms`
+        : `failed with ${signal || status}`;
+      reject(new Error(`${command} ${args.join(" ")} ${outcome}${detail ? `\n${detail}` : ""}`));
     });
   });
 }
@@ -210,7 +283,7 @@ async function waitForReady(params) {
       throw new Error(`gateway exited before ready\n${tailFile(params.logPath)}`);
     }
     try {
-      const res = await fetch(`http://127.0.0.1:${params.port}/readyz`);
+      const res = await fetchHttpProbeStatus(params.port, "/readyz");
       if (res.ok) {
         return;
       }
@@ -231,9 +304,31 @@ function logShowsGatewayReady(logPath) {
   return log.includes("[gateway] ready");
 }
 
-async function httpOk(port, pathName) {
+async function fetchHttpProbeStatus(port, pathName, options = {}) {
+  const { timeoutMs = HTTP_PROBE_TIMEOUT_MS } = options;
+  const controller = new AbortController();
+  const clearProbeTimer = timeoutMs
+    ? setTimeout(() => {
+        controller.abort();
+      }, timeoutMs)
+    : undefined;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+    const res = await fetch(`http://127.0.0.1:${port}${pathName}`, {
+      signal: controller.signal,
+    });
+    const status = { ok: res.ok, status: res.status };
+    await res.body?.cancel().catch(() => {});
+    return status;
+  } finally {
+    if (clearProbeTimer) {
+      clearTimeout(clearProbeTimer);
+    }
+  }
+}
+
+export async function httpOk(port, pathName, options = {}) {
+  try {
+    const res = await fetchHttpProbeStatus(port, pathName, options);
     return res.ok;
   } catch {
     return false;
@@ -245,7 +340,7 @@ async function assertHttpOk(port, pathName) {
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+      const res = await fetchHttpProbeStatus(port, pathName);
       if (res.ok) {
         return;
       }
@@ -263,7 +358,7 @@ async function assertReadyzProbe(options) {
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
+      const res = await fetchHttpProbeStatus(options.port, "/readyz");
       if (res.ok) {
         return;
       }
@@ -373,7 +468,7 @@ function unwrapRpcPayload(raw) {
   return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
 }
 
-async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
+async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, pluginRoot) {
   if (requiresConfig) {
     console.log(`Runtime smoke skipped for ${pluginId}: plugin requires config`);
     return;
@@ -382,7 +477,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   if (!entrypoint) {
     throw new Error("missing OPENCLAW_ENTRY");
   }
-  const manifest = loadManifest(pluginDir);
+  const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port =
     readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
@@ -600,12 +695,12 @@ async function assertNoPackageManagerChildren(pid) {
   }
 }
 
-async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex) {
+async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex, pluginRoot) {
   const entrypoint = process.env.OPENCLAW_ENTRY;
   if (!entrypoint) {
     throw new Error("missing OPENCLAW_ENTRY");
   }
-  const manifest = loadManifest(pluginDir);
+  const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const selectedProvider = provider || plan.speechProviders[0];
   if (!selectedProvider) {
@@ -719,7 +814,7 @@ async function smokeOpenAiTts(pluginIndex) {
   }
 }
 
-function createIsolatedStateEnv(label) {
+export function createIsolatedStateEnv(label) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${label}-`));
   const home = path.join(root, "home");
   const stateDir = path.join(home, ".openclaw");
@@ -728,7 +823,8 @@ function createIsolatedStateEnv(label) {
   return {
     ...process.env,
     HOME: home,
-    OPENCLAW_HOME: stateDir,
+    USERPROFILE: home,
+    OPENCLAW_HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
   };
@@ -745,16 +841,22 @@ function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, provider] =
-  process.argv.slice(2);
-const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
+export async function main(argv = process.argv.slice(2)) {
+  const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
+    argv;
+  const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
 
-if (command === "plugin") {
-  await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex);
-} else if (command === "tts-global-disable") {
-  await smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex);
-} else if (command === "tts-openai-live") {
-  await smokeOpenAiTts(pluginIndex);
-} else {
-  throw new Error(`Unknown runtime smoke command: ${command || "(missing)"}`);
+  if (command === "plugin") {
+    await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex, pluginRoot);
+  } else if (command === "tts-global-disable") {
+    await smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex, pluginRoot);
+  } else if (command === "tts-openai-live") {
+    await smokeOpenAiTts(pluginIndex);
+  } else {
+    throw new Error(`Unknown runtime smoke command: ${command || "(missing)"}`);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }

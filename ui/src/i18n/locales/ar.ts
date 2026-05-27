@@ -361,6 +361,8 @@ export const ar: TranslationMap = {
     pending: "{count} قيد الانتظار",
     allowOnce: "السماح مرة واحدة",
     alwaysAllow: "السماح دائمًا",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "رفض",
     labels: {
       host: "المضيف",
@@ -392,6 +394,7 @@ export const ar: TranslationMap = {
   },
   tabs: {
     agents: "الوكلاء",
+    activity: "Activity",
     overview: "نظرة عامة",
     channels: "القنوات",
     instances: "المثيلات",
@@ -413,6 +416,7 @@ export const ar: TranslationMap = {
   },
   subtitles: {
     agents: "مساحات العمل، والأدوات، والهويات.",
+    activity: "Browser-local tool activity summaries.",
     overview: "الحالة، ونقاط الدخول، والصحة.",
     channels: "القنوات والإعدادات.",
     instances: "العملاء والعقد المتصلة.",
@@ -431,6 +435,42 @@ export const ar: TranslationMap = {
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
     dreams: "حلم الذاكرة، والدمج، والتأمل.",
+  },
+  activity: {
+    title: "Activity",
+    subtitle: "Ephemeral tool activity derived from live session events.",
+    visibleCount: "{visible} of {total}",
+    filtersLabel: "Activity filters",
+    search: "بحث",
+    searchPlaceholder: "Filter by tool, summary, run, session",
+    toolFilter: "الأداة",
+    allTools: "All tools",
+    statusFilters: "Status filters",
+    autoFollow: "Auto-follow",
+    expandAll: "Expand all",
+    collapseAll: "Collapse all",
+    clear: "مسح",
+    empty: "No tool activity yet.",
+    emptyFiltered: "No activity matches these filters.",
+    entrySummary: "{argumentSummary}",
+    argumentHiddenOne: "1 argument hidden",
+    argumentsHidden: "{count} arguments hidden",
+    streamLabel: "Tool activity entries",
+    toolCallId: "Tool call",
+    runId: "شغّل",
+    session: "الجلسة",
+    outputTruncated: "Preview redacted and truncated.",
+    noOutputPreview: "No output preview.",
+    status: {
+      running: "قيد التشغيل",
+      done: "مكتمل",
+      error: "خطأ",
+    },
+    duration: {
+      ms: "{count} ms",
+      seconds: "{count} s",
+      minutes: "{minutes}m {seconds}s",
+    },
   },
   overview: {
     access: {
