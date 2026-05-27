@@ -82,6 +82,7 @@ import {
   sanitizeToolsForGoogle,
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { createLlamaCppCacheKeyWrapper } from "../llamacpp-cache-key.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
 import {
@@ -646,6 +647,15 @@ export async function runEmbeddedAttempt(
         params.modelId,
         params.streamParams,
       );
+      const llamaCppCacheKeyStreamFn = createLlamaCppCacheKeyWrapper({
+        baseStreamFn: activeSession.agent.streamFn,
+        provider: params.provider,
+        sessionKey: params.sessionKey,
+        sessionId: activeSession.sessionId,
+      });
+      if (llamaCppCacheKeyStreamFn) {
+        activeSession.agent.streamFn = llamaCppCacheKeyStreamFn;
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
