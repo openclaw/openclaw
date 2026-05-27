@@ -670,7 +670,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(corePath, "export const core = true;\n", "utf-8");
     fs.writeFileSync(
       taskRuntimePath,
-      'import "./agent-harness-task-runtime-missing-chunk.js";\nexport const marker = true;\n',
+      "export const marker = true;\n",
       "utf-8",
     );
     const aliases = resolvePluginSdkScopedAliasMap({
@@ -682,6 +682,78 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(taskRuntimePath);
     expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(taskRuntimePath);
+    // The package-level fall-through that caused the original bug appended the
+    // subpath under the file-valued root alias target. Confirm no alias value
+    // ever points inside `root-alias.cjs/<subpath>`.
+    for (const aliasValue of Object.values(aliases)) {
+      expect(aliasValue).not.toMatch(/root-alias\.cjs[\\/]/);
+    }
+  });
+
+  it("does not backfill dist plugin-sdk artifacts whose transitive relative imports are missing", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "agent-harness-task-runtime.js"),
+      'import { x } from "./agent-harness-task-runtime-missing-chunk.js";\nexport const marker = x;\n',
+      "utf-8",
+    );
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBeUndefined();
+  });
+
+  it("does NOT backfill private dist plugin-sdk artifacts for untrusted callers", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "core.js"),
+      "export const core = true;\n",
+      "utf-8",
+    );
+    // Drop a private subpath artifact in dist. Its scoped alias must NOT be
+    // exposed to an untrusted loader path when private QA mode is disabled.
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "codex-native-task-runtime.js"),
+      "export const marker = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "ssrf-runtime-internal.js"),
+      "export const marker = true;\n",
+      "utf-8",
+    );
+
+    const aliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      resolvePluginSdkScopedAliasMap({
+        modulePath: path.join(
+          fixture.root,
+          "dist",
+          "extensions",
+          "demo",
+          "index.js",
+        ),
+      }),
+    );
+
+    expect(aliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(aliases["openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
+    expect(aliases["@openclaw/plugin-sdk/ssrf-runtime-internal"]).toBeUndefined();
   });
 
   it("adds non-QA private Codex helper subpaths only for trusted Codex plugins", () => {

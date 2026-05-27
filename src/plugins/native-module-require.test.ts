@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import Module from "node:module";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -203,6 +204,75 @@ describe("tryNativeRequireJavaScriptModule", () => {
         fallbackOnMissingDependency: true,
       }),
     ).toEqual({ ok: false });
+  });
+
+  it("resolves alias subpaths when the alias target is a directory whose name contains a dot", () => {
+    // Regression guard for the prior `path.extname(aliasTarget)` heuristic: a
+    // versioned directory like `plugin-sdk.v2` is a directory, not a file, and
+    // suffix resolution must happen INSIDE it, not under its parent.
+    const dir = makeTempDir();
+    const pluginSdkDir = path.join(dir, "plugin-sdk.v2");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "runtime.js"),
+      'module.exports = { marker: "versioned-dir" };\n',
+      "utf8",
+    );
+    const modulePath = path.join(dir, "plugin.cjs");
+    fs.writeFileSync(
+      modulePath,
+      'module.exports = require("openclaw/plugin-sdk/runtime");\n',
+      "utf8",
+    );
+
+    const result = tryNativeRequireJavaScriptModule(modulePath, {
+      allowWindows: true,
+      aliasMap: {
+        "openclaw/plugin-sdk": pluginSdkDir,
+      },
+    });
+
+    expect(result).toEqual({ ok: true, moduleExport: { marker: "versioned-dir" } });
+  });
+
+  it("re-throws non-MODULE_NOT_FOUND errors raised during subpath alias resolution", () => {
+    const dir = makeTempDir();
+    const pluginSdkDir = path.join(dir, "plugin-sdk");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    const rootAliasPath = path.join(pluginSdkDir, "root-alias.cjs");
+    fs.writeFileSync(rootAliasPath, "module.exports = {};\n", "utf8");
+
+    const moduleWithResolver = Module as typeof Module & {
+      _resolveFilename?: (
+        request: string,
+        parent: NodeJS.Module | undefined,
+        isMain: boolean,
+        options?: { paths?: string[] },
+      ) => string;
+    };
+    const originalResolveFilename = moduleWithResolver._resolveFilename;
+    if (!originalResolveFilename) {
+      throw new Error("Module._resolveFilename is not patchable in this environment");
+    }
+    moduleWithResolver._resolveFilename = ((request, parent, isMain, options) => {
+      if (typeof request === "string" && request.endsWith("throw-trigger")) {
+        const error = new Error("permission denied") as Error & { code?: string };
+        error.code = "EACCES";
+        throw error;
+      }
+      return originalResolveFilename(request, parent, isMain, options);
+    }) as typeof originalResolveFilename;
+
+    try {
+      expect(() =>
+        withNativeRequireAliases(
+          { "openclaw/plugin-sdk": rootAliasPath },
+          () => testRequire("openclaw/plugin-sdk/throw-trigger"),
+        ),
+      ).toThrow("permission denied");
+    } finally {
+      moduleWithResolver._resolveFilename = originalResolveFilename;
+    }
   });
 });
 

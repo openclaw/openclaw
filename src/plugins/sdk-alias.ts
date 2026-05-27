@@ -606,7 +606,12 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   );
 }
 
-function shouldBackfillDistPluginSdkArtifactSubpath(params: {
+// Backfill is default-allow for any non-private dist plugin-sdk subpath:
+// returns true when the subpath is not in the private list at all, or when
+// it IS private but the caller has trusted owner / private QA CLI access.
+// Callers MUST still gate on `isUsableDistPluginSdkArtifact` so we never
+// publish a scoped alias for a broken dist file.
+function isBackfillableDistPluginSdkArtifactSubpath(params: {
   packageRoot: string;
   modulePath: string;
   subpath: string;
@@ -758,10 +763,17 @@ export function resolvePluginSdkScopedAliasMap(
       if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         continue;
       }
-      if (!shouldBackfillDistPluginSdkArtifactSubpath({ packageRoot, modulePath, subpath })) {
+      if (!isBackfillableDistPluginSdkArtifactSubpath({ packageRoot, modulePath, subpath })) {
         continue;
       }
       const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+      // Mirror the health check used by the primary alias loop so we never
+      // publish a backfilled alias for an artifact whose transitive relative
+      // dependencies are missing on disk. Doing otherwise would just swap one
+      // runtime failure for another instead of failing fast in the loader.
+      if (!isUsableDistPluginSdkArtifact(candidate)) {
+        continue;
+      }
       for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
         aliasMap[`${packageName}/${subpath}`] = candidate;
       }
