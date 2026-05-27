@@ -473,13 +473,13 @@ Look for:
 
 Common signatures:
 
-- A stability bundle whose `error.code` is `ENETDOWN` (or sibling code) with the call stack pointing into Node's `net` `lookupAndConnect` / `Socket.connect` path. Recent OpenClaw releases classify these as benign transient network errors so they no longer propagate to the top-level uncaught handler; if you are on an older release, upgrade first.
+- A stability bundle whose `error.code` is `ENETDOWN` (or sibling code) with the call stack pointing into Node's `net` `lookupAndConnect` / `Socket.connect` path. Starting in `v2026.5.26` the gateway classifies these as benign transient network errors so they no longer propagate to the top-level uncaught handler; on `v2026.5.22` and earlier the same error terminates the process. Upgrade first if you are on an older release.
 - Long quiet periods that end the instant you connect to the Control UI or SSH into the host: the user-visible activity is what re-arms launchd's respawn gate, not anything the dashboard does to the gateway.
 - `runs` count incrementing across the day with no corresponding `received SIG*; shutting down` line in `~/Library/Logs/openclaw/gateway.log`: clean shutdowns log a signal; transient crashes do not.
 
 What to do:
 
-1. **Upgrade the gateway** if you are running a release before the transient network code classification landed for `ENETDOWN`. After upgrading, future `ENETDOWN` errors are logged as warnings instead of terminating the process.
+1. **Upgrade the gateway** to `v2026.5.26` or later. That release classifies `ENETDOWN` (and sibling transient codes such as `ENETUNREACH`, `EHOSTUNREACH`) as benign at the uncaught-exception handler, so future occurrences are logged and discarded instead of terminating the process. On `v2026.5.22` and earlier, the same errors are fatal.
 2. **Reduce maintenance sleep activity** on Mac mini / desktop hosts that are meant to run as always-on servers:
    ```bash
    sudo pmset -a sleep 0 disksleep 0 standby 0 powernap 0
