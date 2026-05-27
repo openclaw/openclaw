@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { syncSkillsToWorkspace } from "./skills/workspace.js";
+import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills/workspace.js";
 
 // Mock resolvePluginSkillDirs to return our test plugin skill directories
 const mockResolvePluginSkillDirs = vi.hoisted(() => vi.fn(() => [] as string[]));
@@ -41,11 +41,9 @@ afterAll(async () => {
 
 describe("syncSkillsToWorkspace for plugin skills", () => {
   it("syncs plugin skills from symlinked directories to sandbox workspace", async () => {
-    // Setup: create a real plugin skill directory and a symlink to it
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");
 
-    // Create the real plugin skill directory (outside the plugin-skills dir)
     const realPluginSkillDir = await createCaseDir("real-plugin-skill");
     await writeSkill({
       dir: realPluginSkillDir,
@@ -53,48 +51,17 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
       description: "Wiki maintenance skill for sandboxed agents",
     });
 
-    // Create the plugin-skills directory with a symlink
     const pluginSkillsDir = path.join(sourceWorkspace, ".openclaw", "plugin-skills");
     await fsPromises.mkdir(pluginSkillsDir, { recursive: true });
     const symlinkPath = path.join(pluginSkillsDir, "wiki-maintainer");
 
-    // Create symlink from plugin-skills to real skill directory
     fs.symlinkSync(
       realPluginSkillDir,
       symlinkPath,
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    // === Issue #86190 Verification Test ===
-    console.log("\n" + "=".repeat(70));
-    console.log("Issue #86190: Plugin skills unreadable in sandbox");
-    console.log("=".repeat(70));
-
-    // Step 1: Setup - create real plugin skill directory (simulates installed plugin)
-    console.log("\n[Step 1] Setup - Create real plugin skill directory");
-    console.log(`  Path: ${realPluginSkillDir}`);
-    console.log(`  Content: SKILL.md with name=wiki-maintainer`);
-
-    // Step 2: Create symlink under plugin-skills (simulates publishPluginSkills)
-    console.log("\n[Step 2] Create symlink under ~/.openclaw/plugin-skills/");
-    console.log(`  Symlink: ${symlinkPath}`);
-    console.log(`  Target:  ${fs.realpathSync(symlinkPath)}`);
-    console.log("  (This is how OpenClaw exposes plugin skills)");
-
-    // Step 3: Create target sandbox workspace
-    console.log("\n[Step 3] Create target sandbox workspace");
-    console.log(`  Path: ${targetWorkspace}`);
-    console.log("  (This becomes /workspace in the sandbox container)");
-
-    // Configure mock to return the real plugin skill directory
     mockResolvePluginSkillDirs.mockReturnValueOnce([realPluginSkillDir]);
-
-    // Step 4: Run syncSkillsToWorkspace (the fix we're testing)
-    console.log("\n[Step 4] Run syncSkillsToWorkspace");
-    console.log("  - Loads skill entries from source workspace");
-    console.log("  - Identifies plugin skills via resolvePluginSkillDirs");
-    console.log("  - Copies skill directories to target/skills/");
-    console.log("  - Key fix: canonicalSkillDir=skillDirRealPath enables sync");
 
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
@@ -103,37 +70,22 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
-    console.log("  Sync completed successfully");
 
-    // Step 5: Verify results
-    console.log("\n[Step 5] Verification");
     const syncedSkillDir = path.join(targetWorkspace, "skills", "wiki-maintainer");
     const syncedSkillMd = path.join(syncedSkillDir, "SKILL.md");
-
-    console.log(`  Target skills/: ${fs.readdirSync(path.join(targetWorkspace, "skills")).join(", ")}`);
-    console.log(`  wiki-maintainer/SKILL.md exists: ${fs.existsSync(syncedSkillMd)}`);
-
     const syncedStat = await fsPromises.lstat(syncedSkillDir);
-    console.log(`  Directory type: ${syncedStat.isSymbolicLink() ? "symlink (BUG!)" : "real directory (FIX WORKS!)"}`);
-
-    if (fs.existsSync(syncedSkillMd)) {
-      const content = fs.readFileSync(syncedSkillMd, "utf-8");
-      console.log(`  SKILL.md starts with: "${content.slice(0, 40).replace(/\n/g, "\\n")}..."`);
-    }
-
-    // Step 6: Explain why this matters
-    console.log("\n[Step 6] Why this matters");
-    console.log("  Before fix: Plugin skills NOT synced, sandbox read tool fails with");
-    console.log("    'Path escapes sandbox root: ~/.openclaw/plugin-skills/...'");
-    console.log("  After fix: Skills copied to /workspace/skills/, read tool works");
-    console.log("  Sandboxed agents can now load plugin-provided skills");
-
-    console.log("\n" + "=".repeat(70));
-    console.log("TEST PASSED - Fix verified");
-    console.log("=".repeat(70) + "\n");
+    const prompt = buildWorkspaceSkillsPrompt(targetWorkspace, {
+      bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+      managedSkillsDir: path.join(targetWorkspace, ".managed"),
+    }).replaceAll("\\", "/");
 
     expect(await pathExists(syncedSkillMd)).toBe(true);
     expect(syncedStat.isSymbolicLink()).toBe(false);
+    expect(prompt).toContain("Wiki maintenance skill for sandboxed agents");
+    expect(prompt).toContain("skills/wiki-maintainer/SKILL.md");
+    expect(prompt).not.toContain(realPluginSkillDir.replaceAll("\\", "/"));
+    expect(prompt).not.toContain(pluginSkillsDir.replaceAll("\\", "/"));
+    expect(prompt).not.toContain(symlinkPath.replaceAll("\\", "/"));
   });
 
   it("syncs multiple plugin skills directories to sandbox workspace", async () => {
@@ -181,8 +133,12 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     });
 
     // Both skills should be synced
-    expect(await pathExists(path.join(targetWorkspace, "skills", "browser-automation", "SKILL.md"))).toBe(true);
-    expect(await pathExists(path.join(targetWorkspace, "skills", "obsidian-vault", "SKILL.md"))).toBe(true);
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "browser-automation", "SKILL.md")),
+    ).toBe(true);
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "obsidian-vault", "SKILL.md")),
+    ).toBe(true);
   });
 
   it("does not sync plugin skills that escape allowed root", async () => {
@@ -220,6 +176,8 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     });
 
     // Escaped skill should NOT be synced
-    expect(await pathExists(path.join(targetWorkspace, "skills", "escaped-skill", "SKILL.md"))).toBe(false);
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "escaped-skill", "SKILL.md")),
+    ).toBe(false);
   });
 });

@@ -614,9 +614,7 @@ function loadGeneratedPluginSkillRecords(params: {
       maxSkillFileBytes: params.limits.maxSkillFileBytes,
     });
     loadedSkills.push(
-      ...loadedRecords.map((record) =>
-        setSyncSourceForPluginSkill(record, skillDirRealPath),
-      ),
+      ...loadedRecords.map((record) => setSyncSourceForPluginSkill(record, skillDirRealPath)),
     );
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;
