@@ -24,70 +24,6 @@ private final class StreamFailureBox: @unchecked Sendable {
     }
 }
 
-enum TalkGatewayPermissionState: Equatable {
-    case unknown
-    case ready
-    case missingScope(String)
-    case requestingUpgrade
-    case upgradeRequested(requestId: String?)
-    case requestFailed(String)
-    case apiKeyMissing
-    case loadFailed(String)
-
-    var statusLabel: String {
-        switch self {
-        case .unknown:
-            "Not checked"
-        case .ready:
-            "Ready"
-        case let .missingScope(scope):
-            "Missing \(scope)"
-        case .requestingUpgrade:
-            "Requesting approval"
-        case .upgradeRequested:
-            "Approval requested"
-        case .requestFailed:
-            "Request failed"
-        case .apiKeyMissing:
-            "API key missing"
-        case .loadFailed:
-            "Load failed"
-        }
-    }
-
-    var requiresTalkPermissionAction: Bool {
-        switch self {
-        case .missingScope, .requestingUpgrade, .upgradeRequested, .requestFailed:
-            true
-        default:
-            false
-        }
-    }
-
-    var isApprovalRequestInProgress: Bool {
-        switch self {
-        case .requestingUpgrade, .upgradeRequested:
-            true
-        default:
-            false
-        }
-    }
-
-    var failureMessage: String? {
-        if case let .requestFailed(message) = self {
-            return message
-        }
-        return nil
-    }
-
-    var requestId: String? {
-        if case let .upgradeRequested(requestId) = self {
-            return requestId
-        }
-        return nil
-    }
-}
-
 // This file intentionally centralizes talk mode state + behavior.
 // It's large, and splitting would force `private` -> `fileprivate` across many members.
 // We'll refactor into smaller files when the surface stabilizes.
@@ -2468,42 +2404,7 @@ extension TalkModeManager {
         self.pcmFormatUnavailable = false
         self.prefetchedRealtimeSession = nil
         do {
-<<<<<<< HEAD
-            func fetchConfig(includeSecrets: Bool) async throws -> [String: Any]? {
-                let paramsJSON = includeSecrets ? "{\"includeSecrets\":true}" : "{}"
-                let res = try await gateway.request(
-                    method: "talk.config",
-                    paramsJSON: paramsJSON,
-                    timeoutSeconds: 8)
-                guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else {
-                    return nil
-                }
-                return json["config"] as? [String: Any]
-            }
-
-            let config: [String: Any]
-            var redactedFallbackMissingScope: String?
-            do {
-                if let fetched = try await fetchConfig(includeSecrets: true) {
-                    config = fetched
-                } else if let fetched = try await fetchConfig(includeSecrets: false) {
-                    config = fetched
-                    GatewayDiagnostics.log("talk config secrets unavailable; loaded redacted config")
-                } else {
-                    return
-                }
-            } catch {
-                let missingScope = Self.missingTalkScope(from: error)
-                guard let fetched = try await fetchConfig(includeSecrets: false) else {
-                    throw error
-                }
-                config = fetched
-                redactedFallbackMissingScope = missingScope
-                GatewayDiagnostics.log("talk config secrets unavailable; loaded redacted config")
-            }
-=======
             guard let loaded = try await self.loadTalkConfig(from: gateway) else { return }
->>>>>>> 8821e81c55 (refactor: split ios pro app surfaces)
             let parsed = TalkModeGatewayConfigParser.parse(
                 config: loaded.config,
                 defaultProvider: Self.defaultTalkProvider,
@@ -2514,160 +2415,6 @@ extension TalkModeManager {
                 GatewayDiagnostics.log(
                     "talk config ignored: normalized payload missing talk.resolved")
             }
-<<<<<<< HEAD
-            let providerSelection = self.talkProviderSelection
-            var activeProvider = parsed.activeProvider
-            var executionMode = parsed.executionMode
-            var realtimeProvider = parsed.realtimeProvider
-            var realtimeModelId = parsed.realtimeModelId
-            let realtimeVoiceOverride = TalkModeRealtimeVoiceSelection.resolvedOverride(
-                UserDefaults.standard.string(forKey: TalkModeRealtimeVoiceSelection.storageKey))
-            let realtimeVoiceId = realtimeVoiceOverride ?? parsed.realtimeVoiceId
-            switch providerSelection {
-            case .gatewayDefault:
-                break
-            case .nativeElevenLabs:
-                activeProvider = Self.defaultTalkProvider
-                executionMode = .native
-            case .openAIRealtime:
-                activeProvider = "openai"
-                executionMode = .realtimeRelay
-                realtimeProvider = realtimeProvider ?? "openai"
-                realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
-            }
-            if activeProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "openai" {
-                executionMode = .realtimeRelay
-                realtimeProvider = realtimeProvider ?? "openai"
-                realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
-            }
-            let usesRealtimeConfig = activeProvider != Self.defaultTalkProvider || executionMode != .native
-            self.activeTalkProvider = activeProvider
-            self.executionMode = executionMode
-            self.realtimeWebRTCEnabled = usesRealtimeConfig
-            self.realtimeProvider = realtimeProvider
-            self.realtimeModelId = realtimeModelId
-            self.realtimeVoiceId = realtimeVoiceId
-            self.defaultVoiceId = parsed.defaultVoiceId
-            self.voiceAliases = parsed.voiceAliases
-            if !self.voiceOverrideActive {
-                self.currentVoiceId = self.defaultVoiceId
-            }
-            self.defaultModelId = parsed.defaultModelId
-            if !self.modelOverrideActive {
-                self.currentModelId = self.defaultModelId
-            }
-            self.defaultOutputFormat = parsed.defaultOutputFormat
-            let rawConfigApiKey = parsed.rawConfigApiKey
-            let configApiKey = Self.normalizedTalkApiKey(rawConfigApiKey)
-            let localApiKey = Self.normalizedTalkApiKey(
-                GatewaySettingsStore.loadTalkProviderApiKey(provider: activeProvider))
-            if rawConfigApiKey == Self.redactedConfigSentinel {
-                self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : nil
-                GatewayDiagnostics.log("talk config apiKey redacted; using local override if present")
-            } else {
-                self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : configApiKey
-            }
-            let gatewayOwnedVoiceProvider = usesRealtimeConfig
-            if gatewayOwnedVoiceProvider {
-                self.apiKey = nil
-                let credentialProvider = realtimeProvider ?? activeProvider
-                GatewayDiagnostics.log(
-                    "talk realtime provider '\(credentialProvider)' uses gateway-owned credentials")
-            }
-            self.gatewayTalkDefaultVoiceId = usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId
-            self.gatewayTalkDefaultModelId = usesRealtimeConfig ? realtimeModelId : self.defaultModelId
-            let providerLabel = providerSelection == .gatewayDefault
-                ? Self.displayName(forProvider: activeProvider)
-                : providerSelection.label
-            let usesRealtimeRelay = executionMode == .realtimeRelay
-            let transport = usesRealtimeConfig ? (usesRealtimeRelay ? "gateway-relay" : "webrtc") : "native"
-            let transportLabel = usesRealtimeRelay ? "Gateway Relay" : (usesRealtimeConfig ? "Native WebRTC" : "Native")
-            self.gatewayTalkProviderLabel = providerLabel
-            self.gatewayTalkUsesRealtime = usesRealtimeConfig
-            self.gatewayTalkUsesRealtimeRelay = usesRealtimeRelay
-            self.gatewayTalkTransportLabel = transportLabel
-            self.gatewayTalkRealtimeProviderLabel = realtimeProvider.map { Self.displayName(forProvider: $0) }
-            self.gatewayTalkRealtimeModelId = realtimeModelId
-            self.gatewayTalkRealtimeVoiceId = realtimeVoiceId
-            let voiceModeProvider = usesRealtimeConfig ? (realtimeProvider ?? "realtime") : activeProvider
-            let voiceModeLabel = usesRealtimeConfig
-                ? Self.displayName(forProvider: voiceModeProvider)
-                : Self.displayName(forProvider: activeProvider)
-            let voiceModeDescriptor = self.buildConfiguredVoiceModeDescriptor(
-                provider: voiceModeProvider,
-                providerLabel: voiceModeLabel,
-                modelId: usesRealtimeConfig ? realtimeModelId : self.defaultModelId,
-                voiceId: usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId,
-                transport: transport,
-                isRealtime: usesRealtimeConfig)
-            self.applyVoiceModeDescriptor(voiceModeDescriptor, persistAsConfigured: true)
-            self.gatewayTalkApiKeyConfigured = gatewayOwnedVoiceProvider || (self.apiKey?.isEmpty == false)
-            self.gatewayTalkConfigLoaded = true
-            self.talkConfigLoadedAt = Date()
-            if let missingScope = redactedFallbackMissingScope,
-               gatewayOwnedVoiceProvider || self.apiKey == nil
-            {
-                self.gatewayTalkPermissionState = .missingScope(missingScope)
-                GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
-            } else {
-                self.gatewayTalkPermissionState = (self.gatewayTalkApiKeyConfigured || gatewayOwnedVoiceProvider)
-                    ? .ready
-                    : .apiKeyMissing
-            }
-            if let interrupt = parsed.interruptOnSpeech {
-                self.interruptOnSpeech = interrupt
-            }
-            self.gatewaySpeechLocaleID = parsed.speechLocaleID
-            self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
-            if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
-                GatewayDiagnostics.log(
-                    "talk config provider=\(activeProvider) silenceTimeoutMs=\(parsed.silenceTimeoutMs)")
-            }
-        } catch {
-            if self.shouldForceRealtimeRelayFromSelection {
-                self.applyOpenAIRealtimeSelectionDefaults()
-                GatewayDiagnostics.log("talk config unavailable; keeping openai realtime selection")
-            } else {
-                self.activeTalkProvider = Self.defaultTalkProvider
-                self.executionMode = .native
-                self.realtimeWebRTCEnabled = false
-                self.realtimeProvider = nil
-                self.realtimeModelId = nil
-                self.realtimeVoiceId = nil
-                self.gatewayTalkProviderLabel = "Not loaded"
-                self.gatewayTalkTransportLabel = "Not loaded"
-                self.gatewayTalkUsesRealtime = false
-                self.gatewayTalkUsesRealtimeRelay = false
-                self.gatewayTalkRealtimeProviderLabel = nil
-                self.gatewayTalkRealtimeModelId = nil
-                self.gatewayTalkRealtimeVoiceId = nil
-                self.gatewayTalkDefaultVoiceId = nil
-                self.gatewayTalkDefaultModelId = nil
-                self.gatewayTalkApiKeyConfigured = false
-                self.applyVoiceModeDescriptor(TalkVoiceModeDescriptor(
-                    title: "Not loaded",
-                    subtitle: nil,
-                    providerId: nil,
-                    modelId: nil,
-                    voiceId: nil,
-                    transport: nil,
-                    isRealtime: false), persistAsConfigured: true)
-            }
-            self.defaultModelId = Self.defaultModelIdFallback
-            if !self.modelOverrideActive {
-                self.currentModelId = self.defaultModelId
-            }
-            self.gatewayTalkConfigLoaded = false
-            self.talkConfigLoadedAt = nil
-            self.gatewaySpeechLocaleID = nil
-            self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
-            if let missingScope = Self.missingTalkScope(from: error) {
-                self.gatewayTalkPermissionState = .missingScope(missingScope)
-                self.statusText = "Gateway permission required"
-                GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
-            } else {
-                self.gatewayTalkPermissionState = .loadFailed(error.localizedDescription)
-=======
             self.applyLoadedTalkConfig(parsed, redactedFallbackMissingScope: loaded.redactedFallbackMissingScope)
         } catch {
             self.applyTalkConfigLoadFailure(error)
@@ -2691,14 +2438,16 @@ extension TalkModeManager {
         }
 
         do {
-            guard let config = try await fetchConfig(includeSecrets: true) else { return nil }
+            if let config = try await fetchConfig(includeSecrets: true) {
+                return (config, nil)
+            }
+            guard let config = try await fetchConfig(includeSecrets: false) else { return nil }
+            GatewayDiagnostics.log("talk config secrets unavailable; loaded redacted config")
             return (config, nil)
         } catch {
-            guard let missingScope = Self.missingTalkScope(from: error),
-                  let config = try await fetchConfig(includeSecrets: false)
-            else {
+            let missingScope = Self.missingTalkScope(from: error)
+            guard let config = try await fetchConfig(includeSecrets: false) else {
                 throw error
->>>>>>> 8821e81c55 (refactor: split ios pro app surfaces)
             }
             GatewayDiagnostics.log("talk config secrets unavailable; loaded redacted config")
             return (config, missingScope)
@@ -2709,8 +2458,7 @@ extension TalkModeManager {
         _ parsed: TalkModeGatewayConfigState,
         redactedFallbackMissingScope: String?)
     {
-        let providerSelection = TalkModeProviderSelection.resolved(
-            UserDefaults.standard.string(forKey: TalkModeProviderSelection.storageKey))
+        let providerSelection = self.talkProviderSelection
         var activeProvider = parsed.activeProvider
         var executionMode = parsed.executionMode
         var realtimeProvider = parsed.realtimeProvider
@@ -2726,7 +2474,12 @@ extension TalkModeManager {
             executionMode = .native
         case .openAIRealtime:
             activeProvider = "openai"
-            executionMode = .native
+            executionMode = .realtimeRelay
+            realtimeProvider = realtimeProvider ?? "openai"
+            realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
+        }
+        if activeProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "openai" {
+            executionMode = .realtimeRelay
             realtimeProvider = realtimeProvider ?? "openai"
             realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
         }
@@ -2858,6 +2611,30 @@ extension TalkModeManager {
     }
 
     private func applyTalkConfigLoadFailure(_ error: Error) {
+        if self.shouldForceRealtimeRelayFromSelection {
+            self.applyOpenAIRealtimeSelectionDefaults()
+            GatewayDiagnostics.log("talk config unavailable; keeping openai realtime selection")
+        } else {
+            self.applyTalkConfigLoadFailureFallback()
+        }
+        self.defaultModelId = Self.defaultModelIdFallback
+        if !self.modelOverrideActive {
+            self.currentModelId = self.defaultModelId
+        }
+        self.gatewayTalkConfigLoaded = false
+        self.talkConfigLoadedAt = nil
+        self.gatewaySpeechLocaleID = nil
+        self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
+        if let missingScope = Self.missingTalkScope(from: error) {
+            self.gatewayTalkPermissionState = .missingScope(missingScope)
+            self.statusText = "Gateway permission required"
+            GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
+        } else {
+            self.gatewayTalkPermissionState = .loadFailed(error.localizedDescription)
+        }
+    }
+
+    private func applyTalkConfigLoadFailureFallback() {
         self.activeTalkProvider = Self.defaultTalkProvider
         self.executionMode = .native
         self.realtimeWebRTCEnabled = false
@@ -2886,17 +2663,6 @@ extension TalkModeManager {
         self.gatewayTalkDefaultVoiceId = nil
         self.gatewayTalkDefaultModelId = nil
         self.gatewayTalkApiKeyConfigured = false
-        self.gatewayTalkConfigLoaded = false
-        self.talkConfigLoadedAt = nil
-        self.gatewaySpeechLocaleID = nil
-        self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
-        if let missingScope = Self.missingTalkScope(from: error) {
-            self.gatewayTalkPermissionState = .missingScope(missingScope)
-            self.statusText = "Gateway permission required"
-            GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
-        } else {
-            self.gatewayTalkPermissionState = .loadFailed(error.localizedDescription)
-        }
     }
 
     func markTalkPermissionUpgradeRequested(requestId: String?) {
