@@ -7,6 +7,7 @@ import {
   buildGatewayProbeConnectionDetails,
   callGateway,
   isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
@@ -43,6 +44,12 @@ function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
   return isGatewayCredentialsRequiredError(error) || isGatewaySecretRefUnavailableError(error);
 }
 
+function isGatewayProtocolMismatchClose(err: unknown): boolean {
+  return (
+    isGatewayTransportError(err) && err.kind === "closed" && err.reason === "protocol mismatch"
+  );
+}
+
 function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   const gatewayVersion = status?.runtimeVersion?.trim();
   if (!gatewayVersion || gatewayVersion === VERSION) {
@@ -68,10 +75,16 @@ export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
   timeoutMs?: number;
-}): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
+}): Promise<{
+  healthOk: boolean;
+  authenticated: boolean;
+  protocolMismatch?: boolean;
+  status?: StatusSummary;
+}> {
   const timeoutMs =
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
+  let protocolMismatch = false;
   let status: StatusSummary | undefined;
   try {
     status = await callGateway<StatusSummary>({
@@ -127,7 +140,15 @@ export async function checkGatewayHealth(params: {
       }
     }
     const message = String(err);
-    if (message.includes("gateway closed")) {
+    if (isGatewayProtocolMismatchClose(err)) {
+      protocolMismatch = true;
+      const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
+      note(
+        "Gateway is running but speaks an incompatible protocol.\nStop the stale gateway and restart it with the current build.",
+        "Gateway protocol mismatch",
+      );
+      note(gatewayDetails.message, "Gateway connection");
+    } else if (message.includes("gateway closed")) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
       const closedDiagnostic = formatGatewayClosedDiagnostic(err);
       if (closedDiagnostic) {
@@ -141,7 +162,12 @@ export async function checkGatewayHealth(params: {
     }
   }
 
-  return { healthOk, authenticated: false, status };
+  return {
+    healthOk,
+    authenticated: false,
+    ...(protocolMismatch ? { protocolMismatch } : {}),
+    status,
+  };
 }
 
 /** Probes gateway memory readiness without forcing deep embedding checks. */

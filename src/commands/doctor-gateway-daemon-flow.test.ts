@@ -799,4 +799,27 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
     // The restart prompt was shown but user declined (createPrompter returned false for it).
   });
+
+  it("skips repair flow when protocolMismatch is true", async () => {
+    setPlatform("linux");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { repair: true, nonInteractive: true },
+      }),
+      options: { deep: false, repair: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      protocolMismatch: true,
+    });
+
+    // Service diagnostics still run (isLoaded is called), but the
+    // dead-gateway restart/install flow is skipped.
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(healthCommand).not.toHaveBeenCalled();
+  });
 });

@@ -192,6 +192,7 @@ export async function maybeRepairGatewayDaemon(params: {
   gatewayDetailsMessage: string;
   healthOk: boolean;
   healthSkipped?: boolean;
+  protocolMismatch?: boolean;
 }) {
   if (params.healthOk) {
     await maybeReportEstablishedGatewayClients({
@@ -235,6 +236,33 @@ export async function maybeRepairGatewayDaemon(params: {
     if (handoff) {
       note(formatGatewayRestartHandoffDiagnostic(handoff), "Gateway");
     }
+  }
+
+  // Protocol mismatch comes from a live Gateway transport close, not a dead daemon.
+  // Keep read-only diagnostics, but do not bootstrap, install, start, or restart service state.
+  if (params.protocolMismatch) {
+    noteGatewayRuntime(serviceRuntime, process.env);
+    if (params.cfg.gateway?.mode !== "remote") {
+      const port = resolveGatewayPort(params.cfg, process.env);
+      const diagnostics = await inspectPortUsage(port);
+      await maybeReportEstablishedGatewayClients({
+        cfg: params.cfg,
+        deep: params.options.deep ?? false,
+        port,
+      });
+      if (
+        diagnostics.status === "busy" &&
+        !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port)
+      ) {
+        note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
+      } else if (loaded && serviceRuntime?.status === "running") {
+        const lastError = await readLastGatewayErrorLine(process.env);
+        if (lastError) {
+          note(`Last gateway error: ${lastError}`, "Gateway");
+        }
+      }
+    }
+    return;
   }
 
   if (isLocalDarwinGateway) {

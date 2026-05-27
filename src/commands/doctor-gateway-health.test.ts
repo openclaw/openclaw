@@ -145,6 +145,31 @@ describe("checkGatewayHealth", () => {
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
   });
 
+  it("returns protocolMismatch only for typed protocol mismatch closes", async () => {
+    const error = Object.assign(new Error("gateway closed (1002): protocol mismatch"), {
+      kind: "closed",
+      reason: "protocol mismatch",
+    });
+    callGateway.mockRejectedValueOnce(error);
+    isGatewayTransportError.mockImplementation((value) => value === error);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const result = await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(result).toEqual({
+      authenticated: false,
+      healthOk: false,
+      protocolMismatch: true,
+      status: undefined,
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway is running but speaks an incompatible protocol"),
+      "Gateway protocol mismatch",
+    );
+    expect(note).not.toHaveBeenCalledWith("Gateway not running.", expect.anything());
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("reports credentials-required when status RPC auth blocks a reachable gateway", async () => {
     callGateway.mockRejectedValueOnce(new Error());
     isGatewayCredentialsRequiredError.mockReturnValueOnce(true);

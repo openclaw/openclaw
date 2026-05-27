@@ -45,6 +45,7 @@ export type DoctorHealthFlowContext = {
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
+  protocolMismatch?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
@@ -1128,7 +1129,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk, authenticated, status } = await checkGatewayHealth({
+  const { healthOk, authenticated, protocolMismatch, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
@@ -1136,6 +1137,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
   ctx.gatewayHealthAuthenticated = authenticated;
+  ctx.protocolMismatch = protocolMismatch;
   ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
@@ -1252,6 +1254,7 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
     // doctor --fix restart services only because probing would require exec.
     healthOk: ctx.healthOk ?? false,
     healthSkipped: ctx.gatewayHealthSkipped === true,
+    protocolMismatch: ctx.protocolMismatch ?? false,
   });
 }
 

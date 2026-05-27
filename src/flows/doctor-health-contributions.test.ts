@@ -1459,6 +1459,34 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("forwards Gateway protocol mismatch to daemon repair", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-daemon");
+    const ctx = {
+      cfg: {},
+      gatewayDetails: { message: "gateway details" },
+      healthOk: false,
+      protocolMismatch: true,
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.maybeRepairGatewayDaemon).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: ctx.cfg,
+        runtime: ctx.runtime,
+        prompter: ctx.prompter,
+        options: ctx.options,
+        gatewayDetailsMessage: "gateway details",
+        healthOk: false,
+        protocolMismatch: true,
+      }),
+    );
+  });
+
   it("keeps implemented core health checks owned by ordered doctor contributions", async () => {
     const coreIds = CORE_HEALTH_CHECKS.map((check) => check.id);
     const contributionIds = resolveDoctorHealthContributions().flatMap(
