@@ -97,6 +97,46 @@ describe("maybeRepairCanonicalApiKeyFieldAlias", () => {
     );
   });
 
+  it('rewrites non-canonical SecretRef "api_key" fields to canonical "key"', async () => {
+    const state = await makeTestState();
+    const canonical = {
+      version: 1,
+      profiles: {
+        "my-key": {
+          type: "api_key",
+          provider: "my-provider",
+          api_key: { source: "env", provider: "default", id: "MY_PROVIDER_API_KEY" },
+        },
+      },
+    };
+    const authPath = await state.writeAuthProfiles(canonical);
+
+    const result = await maybeRepairCanonicalApiKeyFieldAlias({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 123,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.changes).toStrictEqual([
+      `Rewrote 1 "api_key" field(s) to "key" in ${authPath} (backup: ${authPath}.api-key-alias.123.bak).`,
+    ]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        "my-key": {
+          type: "api_key",
+          provider: "my-provider",
+          key: { source: "env", provider: "default", id: "MY_PROVIDER_API_KEY" },
+        },
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(`${authPath}.api-key-alias.123.bak`, "utf8"))).toEqual(
+      canonical,
+    );
+  });
+
   it('does not touch profiles that already have the canonical "key" field', async () => {
     const state = await makeTestState();
     const canonical = {

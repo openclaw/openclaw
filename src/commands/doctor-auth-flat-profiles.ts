@@ -423,7 +423,9 @@ function resolveCanonicalApiKeyAliasRepair(
       continue;
     }
     const type = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
-    const hasApiKeyField = readNonEmptyString(value["api_key"]) !== undefined;
+    const hasApiKeyField =
+      readNonEmptyString(value["api_key"]) !== undefined ||
+      coerceSecretRef(value["api_key"]) !== null;
     const hasCanonicalKey =
       readNonEmptyString(value.key) !== undefined || coerceSecretRef(value.key) !== null;
     const hasCanonicalKeyRef = coerceSecretRef(value.keyRef) !== null;
