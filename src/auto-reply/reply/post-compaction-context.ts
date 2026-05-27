@@ -95,32 +95,33 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
+    // Extract configured sections from AGENTS.md.
     // An explicit empty array disables post-compaction context injection entirely.
     const configuredSections = (
       cfg && agentId
         ? (resolveAgentConfig(cfg, agentId)?.compaction ?? cfg.agents?.defaults?.compaction)
         : cfg?.agents?.defaults?.compaction
     )?.postCompactionSections;
-    const sectionNames = Array.isArray(configuredSections)
-      ? configuredSections
-      : DEFAULT_POST_COMPACTION_SECTIONS;
+    if (!Array.isArray(configuredSections)) {
+      return null;
+    }
 
-    if (sectionNames.length === 0) {
+    if (configuredSections.length === 0) {
       return null;
     }
 
     const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = extractSections(content, configuredSections, foundSectionNames);
 
     // Fall back to legacy section names ("Every Session" / "Safety") when using
     // defaults and the current headings aren't found — preserves compatibility
     // with older AGENTS.md templates. The fallback also applies when the user
     // explicitly configures the default pair, so that pinning the documented
     // defaults never silently changes behavior vs. leaving the field unset.
-    const isDefaultSections =
-      !Array.isArray(configuredSections) ||
-      matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
+    const isDefaultSections = matchesSectionSet(
+      configuredSections,
+      DEFAULT_POST_COMPACTION_SECTIONS,
+    );
     if (sections.length === 0 && isDefaultSections) {
       sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
     }
@@ -130,7 +131,7 @@ export async function readPostCompactionContext(
     }
 
     // Only reference section names that were actually found and injected.
-    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
+    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : configuredSections;
 
     const resolvedNowMs = effectiveNowMs ?? Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
