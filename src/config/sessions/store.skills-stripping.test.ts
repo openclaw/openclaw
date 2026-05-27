@@ -9,7 +9,7 @@ import {
   hydrateResolvedSkillsAsync,
 } from "../../agents/skills/snapshot-hydration.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import type { SessionEntry, SessionSkillSnapshot } from "./types.js";
+import type { SessionEntry, SessionSkillPromptRef, SessionSkillSnapshot } from "./types.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -45,6 +45,13 @@ function makeSnapshot(skillCount: number): SessionSkillSnapshot {
     skillFilter: undefined,
     resolvedSkills: resolved,
     version: 1,
+  };
+}
+
+function makeSnapshotWithPrompt(prompt: string): SessionSkillSnapshot {
+  return {
+    ...makeSnapshot(2),
+    prompt,
   };
 }
 
@@ -173,6 +180,124 @@ describe("session store strips resolvedSkills from persistence", () => {
     // Post-fix: only the lightweight `skills` array + prompt per entry.
     // Conservative budget that comfortably covers metadata growth.
     expect(stat.size).toBeLessThan(2 * 1024 * 1024);
+  });
+
+  it("stores duplicate large skills prompts as content-addressed blobs", async () => {
+    const prompt = `<available_skills>\n${"skill prompt body\n".repeat(200)}</available_skills>`;
+    const store = {
+      "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      "agent:main:test:2": makeEntry("session-2", makeSnapshotWithPrompt(prompt)),
+    };
+
+    await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    expect(raw).not.toContain("skill prompt body");
+    const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
+    const firstRef = parsed["agent:main:test:1"]?.skillsSnapshot
+      ?.promptRef as SessionSkillPromptRef;
+    const secondRef = parsed["agent:main:test:2"]?.skillsSnapshot
+      ?.promptRef as SessionSkillPromptRef;
+    expect(firstRef).toMatchObject({
+      version: 1,
+      algorithm: "sha256",
+      bytes: Buffer.byteLength(prompt, "utf8"),
+    });
+    expect(secondRef).toEqual(firstRef);
+    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.prompt).toBeUndefined();
+
+    const blobPath = path.join(
+      testDir,
+      "skills-prompts",
+      "sha256",
+      firstRef.hash.slice(0, 2),
+      `${firstRef.hash}.txt`,
+    );
+    expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
+  });
+
+  it("hydrates content-addressed skills prompt blobs on load", async () => {
+    const prompt = `<available_skills>\n${"persisted prompt\n".repeat(200)}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.promptRef).toBeUndefined();
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
+  });
+
+  it("keeps cache clones hydrated when disk JSON uses prompt refs", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "45000";
+    clearSessionStoreCacheForTest();
+    const prompt = `<available_skills>\n${"cached prompt\n".repeat(200)}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+
+    const loaded = loadSessionStore(storePath);
+
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.promptRef).toBeUndefined();
+  });
+
+  it("keeps small skills prompts inline", async () => {
+    const prompt = "short prompt";
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
+
+    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.promptRef).toBeUndefined();
+  });
+
+  it("drops stale prompt refs so missing blobs rebuild on the next turn", async () => {
+    await fs.mkdir(testDir, { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:test:1": {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            skillsSnapshot: {
+              promptRef: {
+                version: 1,
+                algorithm: "sha256",
+                hash: "a".repeat(64),
+                bytes: 123,
+              },
+              skills: [{ name: "demo" }],
+              version: 1,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot).toBeUndefined();
   });
 });
 

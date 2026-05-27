@@ -17,6 +17,7 @@ import { getRuntimeConfig } from "../io.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveStorePath } from "./paths.js";
+import { prepareSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
   dropSessionStoreObjectCache,
@@ -207,6 +208,7 @@ function updateSessionStoreWriteCaches(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
   const fileStat = getFileStatSnapshot(params.storePath);
@@ -221,7 +223,7 @@ function updateSessionStoreWriteCaches(params: {
     store: params.store,
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
-    serialized: params.serialized,
+    serialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
   dropSessionStoreSnapshotCache(params.storePath);
@@ -248,7 +250,6 @@ function restoreUnchangedSessionStoreCache(
     store,
     mtimeMs: loadedFileStat?.mtimeMs,
     sizeBytes: loadedFileStat?.sizeBytes,
-    serialized: getSerializedSessionStore(storePath),
     takeOwnership: true,
   });
 }
@@ -493,12 +494,15 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const persisted = await prepareSessionStoreForPersistence({ storePath, store });
+  const json = JSON.stringify(persisted.store, null, 2);
+  const cloneSerialized = persisted.changed ? undefined : json;
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({
       storePath,
       store,
       serialized: json,
+      cloneSerialized,
       takeOwnership: opts?.takeCacheOwnership,
     });
     return;
@@ -512,6 +516,7 @@ async function saveSessionStoreUnlocked(
           storePath,
           store,
           serialized: json,
+          cloneSerialized,
           takeOwnership: opts?.takeCacheOwnership,
         });
         return;
@@ -537,6 +542,7 @@ async function saveSessionStoreUnlocked(
       storePath,
       store,
       serialized: json,
+      cloneSerialized,
       takeOwnership: opts?.takeCacheOwnership,
     });
   } catch (err) {
@@ -550,6 +556,7 @@ async function saveSessionStoreUnlocked(
           storePath,
           store,
           serialized: json,
+          cloneSerialized,
           takeOwnership: opts?.takeCacheOwnership,
         });
       } catch (err2) {
@@ -664,6 +671,7 @@ async function writeSessionStoreAtomic(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  cloneSerialized?: string;
   takeOwnership?: boolean;
 }): Promise<void> {
   // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
@@ -678,6 +686,7 @@ async function writeSessionStoreAtomic(params: {
     storePath: params.storePath,
     store: params.store,
     serialized: params.serialized,
+    cloneSerialized: params.cloneSerialized,
     takeOwnership: params.takeOwnership,
   });
 }
