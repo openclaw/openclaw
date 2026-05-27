@@ -12,6 +12,7 @@
  */
 
 import * as fs from "node:fs";
+import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
   type ChatScope,
@@ -19,6 +20,7 @@ import {
   type MessageResponse,
   type EngineLogger,
 } from "../types.js";
+import { QQBOT_MEDIA_SSRF_POLICY } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, messagePath, getNextMsgSeq } from "./routes.js";
@@ -48,6 +50,24 @@ interface MediaApiConfig {
   uploadCache?: UploadCacheAdapter;
   /** File name sanitizer. */
   sanitizeFileName?: SanitizeFileNameFn;
+}
+
+async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Direct-upload media URL must be a valid URL");
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    policy: QQBOT_MEDIA_SSRF_POLICY,
+  });
+  return parsed.toString();
 }
 
 /**
@@ -144,9 +164,9 @@ export class MediaApi {
       file_type: fileType,
       srv_send_msg: opts.srvSendMsg ?? false,
     };
-    if (opts.url) {
-      body.url = opts.url;
-    } else if (fileData) {
+    if (opts.url !== undefined) {
+      body.url = await assertDirectUploadUrlAllowed(opts.url);
+    } else if (fileData !== undefined) {
       body.file_data = fileData;
     }
     if (fileType === MediaFileType.FILE && opts.fileName) {
