@@ -469,6 +469,7 @@ describe("write tool recovery hardening", () => {
         ({
           isError: false,
           content: [{ type: "text", text: "ok" }],
+          details: undefined,
         }) as AgentToolResult<unknown>,
     });
 
