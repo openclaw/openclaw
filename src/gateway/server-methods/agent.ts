@@ -1103,11 +1103,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
         const effectiveProvider = providerOverride || baseProvider;
         const effectiveModel = modelOverride || baseModel;
-        const supportsInlineImages = await resolveGatewayModelSupportsImages({
-          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-          provider: effectiveProvider,
-          model: effectiveModel,
-        });
+        const supportsInlineImages =
+          request.acpTurnSource === "manual_spawn"
+            ? true
+            : await resolveGatewayModelSupportsImages({
+                loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+                provider: effectiveProvider,
+                model: effectiveModel,
+              });
 
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
