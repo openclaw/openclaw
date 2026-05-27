@@ -330,6 +330,33 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("blocks outbound sends for disabled broker accounts", async () => {
+    const sendOutboundRequest = vi.fn();
+    setChannelBrokerRuntime({ sendOutboundRequest, createRequestId: () => "broker-send-1" });
+
+    await expect(
+      channelBrokerPlugin.message?.send?.text?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: false,
+                  baseUrl: "https://broker.example.test",
+                  platforms: ["telegram"],
+                },
+              },
+            },
+          },
+        },
+        to: "telegram:chat-1",
+        text: "hello",
+        accountId: "acme",
+      } as never),
+    ).rejects.toThrow("Channel broker provider acme is disabled.");
+    expect(sendOutboundRequest).not.toHaveBeenCalled();
+  });
+
   it("delivers media through the configured provider without dropping attachments", async () => {
     const sendOutboundRequest = vi.fn(async () =>
       createBrokerReceipt({

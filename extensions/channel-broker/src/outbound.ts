@@ -136,6 +136,12 @@ function assertProviderSupportsDeliveryRequirements(params: {
   );
 }
 
+function assertProviderEnabled(account: ResolvedChannelBrokerAccount): void {
+  if (!account.enabled) {
+    throw new Error(`Channel broker provider ${account.providerId} is disabled.`);
+  }
+}
+
 function validateBrokerReceiptForRequest(
   receipt: BrokerReceiptV1,
   request: BrokerOutboundRequestV1,
@@ -189,6 +195,7 @@ async function sendChannelBrokerFinal(params: {
   signal?: AbortSignal;
 }): Promise<ChannelMessageSendResult> {
   const account = resolveChannelBrokerAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertProviderEnabled(account);
   const target = parseChannelBrokerTarget({
     rawTarget: params.to,
     account,
