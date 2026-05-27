@@ -59,6 +59,7 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   heartbeatReferenceFiles?: EmbeddedContextFile[];
   memoryReferenceFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
+  memoryToolNames?: string[];
   memoryToolRouted?: boolean;
   promptContext?: string;
   developerInstructions?: string;
@@ -210,9 +211,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
-  memoryToolsAvailable: boolean;
+  memoryToolNames: readonly string[];
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
+    const memoryToolsAvailable = params.memoryToolNames.length > 0;
     const bootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
@@ -223,7 +225,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
     });
-    const memoryToolRoutedBootstrapFiles = params.memoryToolsAvailable
+    const memoryToolRoutedBootstrapFiles = memoryToolsAvailable
       ? selectCodexWorkspaceMemoryReferenceFiles({
           bootstrapFiles,
           workspaceDir: params.resolvedWorkspace,
@@ -237,7 +239,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       }),
     );
     const contextFiles = buildBootstrapContextForFiles(
-      params.memoryToolsAvailable
+      memoryToolsAvailable
         ? bootstrapFiles.filter(
             (file) =>
               !isCodexWorkspaceRootMemoryBootstrapFile({
@@ -259,7 +261,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       }),
     );
     const promptContextFiles = selectCodexWorkspacePromptContextFiles(contextFiles, {
-      excludeMemory: params.memoryToolsAvailable,
+      excludeMemory: memoryToolsAvailable,
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const developerInstructionFiles = shouldInjectCodexOpenClawPromptContext(params.params)
@@ -280,7 +282,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       heartbeatReferenceFiles,
       memoryReferenceFiles,
       memoryToolRoutedBootstrapFiles,
-      memoryToolRouted: params.memoryToolsAvailable,
+      memoryToolNames: [...params.memoryToolNames],
+      memoryToolRouted: memoryToolsAvailable,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
       developerInstructions:
         renderCodexWorkspaceThreadDeveloperInstructions(developerInstructionFiles),
@@ -785,14 +788,18 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
 
 export function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
+  toolNames?: readonly string[];
 }): string | undefined {
   if (params.files.length === 0) {
     return undefined;
   }
+  const toolNames = params.toolNames?.length
+    ? params.toolNames
+    : Array.from(CODEX_MEMORY_TOOL_NAMES);
   const lines = [
     "## OpenClaw Workspace Memory",
     "",
-    `MEMORY.md exists in the active agent workspace. OpenClaw does not paste its contents into native Codex turns; use ${Array.from(CODEX_MEMORY_TOOL_NAMES).join(" or ")} when durable memory is relevant and the tools are available.`,
+    `MEMORY.md exists in the active agent workspace. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
     "",
   ];
   for (const file of params.files) {
@@ -802,7 +809,12 @@ export function renderCodexWorkspaceMemoryReference(params: {
 }
 
 export function hasCodexWorkspaceMemoryTools(tools: readonly { name: string }[]): boolean {
-  return tools.some((tool) => normalizeCodexDynamicToolName(tool.name) === "memory_search");
+  return getCodexWorkspaceMemoryToolNames(tools).length > 0;
+}
+
+export function getCodexWorkspaceMemoryToolNames(tools: readonly { name: string }[]): string[] {
+  const availableToolNames = new Set(tools.map((tool) => normalizeCodexDynamicToolName(tool.name)));
+  return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
 }
 
 function isMissingCodexBootstrapContextFile(file: EmbeddedContextFile): boolean {

@@ -56,7 +56,7 @@ import {
   buildCodexOpenClawPromptContext,
   buildCodexSystemPromptReport,
   buildCodexWorkspaceBootstrapContext,
-  hasCodexWorkspaceMemoryTools,
+  getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
@@ -617,13 +617,14 @@ export async function runCodexAppServerAttempt(
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
   }
+  const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: contextSessionKey,
     sessionAgentId,
-    memoryToolsAvailable: hasCodexWorkspaceMemoryTools(toolBridge.availableSpecs),
+    memoryToolNames,
   });
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(params, {
@@ -637,6 +638,7 @@ export async function runCodexAppServerAttempt(
     workspacePromptContext: workspaceBootstrapContext.promptContext,
     workspaceMemoryReference: renderCodexWorkspaceMemoryReference({
       files: workspaceBootstrapContext.memoryReferenceFiles ?? [],
+      toolNames: workspaceBootstrapContext.memoryToolNames,
     }),
   });
   let promptText = params.prompt;
