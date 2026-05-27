@@ -19,49 +19,59 @@ struct ConnectOptions {
     var scopesAreExplicit: Bool = false
     var help: Bool = false
 
-    static func parse(_ args: [String]) -> ConnectOptions {
+    static func parse(_ args: [String]) throws -> ConnectOptions {
         var opts = ConnectOptions()
-        let flagHandlers: [String: (inout ConnectOptions) -> Void] = [
-            "-h": { $0.help = true },
-            "--help": { $0.help = true },
-            "--json": { $0.json = true },
-            "--probe": { $0.probe = true },
-        ]
-        let valueHandlers: [String: (inout ConnectOptions, String) -> Void] = [
-            "--url": { $0.url = $1 },
-            "--token": { $0.token = $1 },
-            "--password": { $0.password = $1 },
-            "--mode": { $0.mode = $1 },
-            "--timeout": { opts, raw in
-                if let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    opts.timeoutMs = max(250, parsed)
-                }
-            },
-            "--client-id": { $0.clientId = $1 },
-            "--client-mode": { $0.clientMode = $1 },
-            "--display-name": { $0.displayName = $1 },
-            "--role": { $0.role = $1 },
-            "--scopes": { opts, raw in
-                opts.scopes = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                opts.scopesAreExplicit = true
-            },
-        ]
+        var passwordInput = CLISecretInputParser(name: "password")
         var i = 0
         while i < args.count {
             let arg = args[i]
-            if let handler = flagHandlers[arg] {
-                handler(&opts)
-                i += 1
-                continue
-            }
-            if let handler = valueHandlers[arg], let value = CLIArgParsingSupport.nextValue(args, index: &i) {
-                handler(&opts, value)
-                i += 1
-                continue
+            switch arg {
+            case "-h", "--help":
+                opts.help = true
+            case "--json":
+                opts.json = true
+            case "--probe":
+                opts.probe = true
+            case "--url":
+                opts.url = CLIArgParsingSupport.nextValue(args, index: &i)
+            case "--token":
+                opts.token = CLIArgParsingSupport.nextValue(args, index: &i)
+            case "--password":
+                try passwordInput.parseInline(args, index: &i, flag: arg)
+            case "--password-stdin":
+                try passwordInput.parseStdin()
+            case "--password-file":
+                try passwordInput.parseFile(args, index: &i, flag: arg)
+            case "--password-env":
+                try passwordInput.parseEnvironment(args, index: &i, flag: arg)
+            case "--mode":
+                opts.mode = CLIArgParsingSupport.nextValue(args, index: &i)
+            case "--timeout":
+                if let raw = CLIArgParsingSupport.nextValue(args, index: &i),
+                   let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                {
+                    opts.timeoutMs = max(250, parsed)
+                }
+            case "--client-id":
+                opts.clientId = CLIArgParsingSupport.nextValue(args, index: &i) ?? opts.clientId
+            case "--client-mode":
+                opts.clientMode = CLIArgParsingSupport.nextValue(args, index: &i) ?? opts.clientMode
+            case "--display-name":
+                opts.displayName = CLIArgParsingSupport.nextValue(args, index: &i)
+            case "--role":
+                opts.role = CLIArgParsingSupport.nextValue(args, index: &i) ?? opts.role
+            case "--scopes":
+                if let raw = CLIArgParsingSupport.nextValue(args, index: &i) {
+                    opts.scopes = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                    opts.scopesAreExplicit = true
+                }
+            default:
+                break
             }
             i += 1
         }
+        opts.password = try passwordInput.resolve()
         return opts
     }
 }
@@ -92,31 +102,41 @@ actor SnapshotStore {
 }
 
 func runConnect(_ args: [String]) async {
-    let opts = ConnectOptions.parse(args)
+    let opts: ConnectOptions
+    do {
+        opts = try ConnectOptions.parse(args)
+    } catch {
+        fputs("connect: \(error)\n", stderr)
+        exit(1)
+    }
     if opts.help {
         print("""
         openclaw-mac connect
 
         Usage:
-          openclaw-mac connect [--url <ws://host:port>] [--token <token>] [--password <password>]
+          openclaw-mac connect [--url <ws://host:port>] [--token <token>] [--password-stdin]
+                               [--password-file <path>] [--password-env <name>] [--password <password>]
                                [--mode <local|remote>] [--timeout <ms>] [--probe] [--json]
                                [--client-id <id>] [--client-mode <mode>] [--display-name <name>]
                                [--role <role>] [--scopes <a,b,c>]
 
         Options:
-          --url <url>        Gateway WebSocket URL (overrides config)
-          --token <token>    Gateway token (if required)
-          --password <pw>    Gateway password (if required)
-          --mode <mode>      Resolve from config: local|remote (default: config or local)
-          --timeout <ms>     Request timeout (default: 15000)
-          --probe            Force a fresh health probe
-          --json             Emit JSON
-          --client-id <id>   Override client id (default: openclaw-macos)
-          --client-mode <m>  Override client mode (default: ui)
-          --display-name <n> Override display name
-          --role <role>      Override role (default: operator)
-          --scopes <a,b,c>   Override scopes list
-          -h, --help         Show help
+          --url <url>             Gateway WebSocket URL (overrides config)
+          --token <token>         Gateway token (if required)
+          --password-stdin        Read gateway password from stdin
+          --password-file <path>  Read gateway password from a file
+          --password-env <name>   Read gateway password from an environment variable
+          --password <pw>         Gateway password; warning: exposes the value in process listings and shell history
+          --mode <mode>           Resolve from config: local|remote (default: config or local)
+          --timeout <ms>          Request timeout (default: 15000)
+          --probe                 Force a fresh health probe
+          --json                  Emit JSON
+          --client-id <id>        Override client id (default: openclaw-macos)
+          --client-mode <m>       Override client mode (default: ui)
+          --display-name <n>      Override display name
+          --role <role>           Override role (default: operator)
+          --scopes <a,b,c>        Override scopes list
+          -h, --help              Show help
         """)
         return
     }
