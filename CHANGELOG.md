@@ -139,8 +139,6 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: mark memory-specific embedding provider registration as deprecated compatibility and surface non-bundled usage in plugin compatibility diagnostics. (#85072) Thanks @mbelinky.
 - Pixverse: add video generation provider support, API region selection, and external plugin publishing.
 - Plugins: expose approval action metadata for plugin-driven approval surfaces.
-- Agents/skills: cache hydrated `resolvedSkills` across warm gateway turns while keying reuse by the redacted effective config, reducing redundant skill snapshot rebuilds without crossing config-gated skill boundaries. (#81451) Thanks @solodmd.
-- Media: allow host-read local attachment sends for validated TXT, JSON, YAML, and YML documents while keeping full-buffer text validation and binary-disguise rejection.
 
 ### Fixes
 
