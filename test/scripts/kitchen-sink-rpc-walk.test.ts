@@ -1,5 +1,12 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,6 +19,7 @@ import {
   createGatewayReadyLogScanner,
   extractPluginCommandNames,
   fetchJson,
+  findErrorLogFindings,
   findDistCallGatewayModuleFiles,
   makeEnv,
   runCommand,
@@ -19,12 +27,14 @@ import {
   sampleWindowsProcessByPort,
   stopGateway,
   summarizeProcessSamples,
+  tailFile,
   usesBuiltOpenClawEntry,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -108,6 +118,74 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
 
       writeFileSync(logPath, "[gateway] ready\n");
       expect(scanner()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tails large gateway logs without returning older content", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-tail-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, `old fatal marker\n${"noise\n".repeat(2000)}recent ready\n`);
+
+      const tail = tailFile(logPath, 128);
+
+      expect(tail).toContain("recent ready");
+      expect(tail).not.toContain("old fatal marker");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("honors short reads when a gateway log shrinks during tailing", () => {
+    vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    vi.spyOn(fs, "statSync").mockReturnValue({
+      isFile: () => true,
+      size: 64,
+    } as fs.Stats);
+    vi.spyOn(fs, "openSync").mockReturnValue(123 as never);
+    vi.spyOn(fs, "closeSync").mockImplementation(() => undefined);
+    vi.spyOn(fs, "readSync").mockImplementation((_fd, buffer) => {
+      if (!Buffer.isBuffer(buffer)) {
+        throw new Error("expected buffer read");
+      }
+      buffer.write("recent ready");
+      return 12;
+    });
+
+    expect(tailFile("/tmp/truncated-kitchen-rpc.log", 64)).toBe("recent ready");
+  });
+
+  it("scans gateway error logs incrementally and keeps the latest findings", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-errors-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, `${"ordinary line\n".repeat(2000)}0 errors\n[ERROR] late failure\n`);
+
+      expect(findErrorLogFindings(logPath)).toEqual([
+        {
+          line: "[ERROR] late failure",
+          lineNumber: 2002,
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds scanner memory for very long log lines", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-long-line-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, `${"x".repeat(200_000)}[ERROR] giant line\n`);
+
+      const findings = findErrorLogFindings(logPath);
+
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.lineNumber).toBe(1);
+      expect(findings[0]?.line).toContain("[truncated]");
+      expect(findings[0]?.line.length).toBeLessThan(20_000);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
