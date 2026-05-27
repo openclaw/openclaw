@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Browser/snapshot: validate current tab URLs against the configured SSRF policy before ChromeMCP or direct CDP snapshot reads, closing the local-managed CDP bypass from GHSA-2x93-h3hg-2xfp while preserving existing-session coverage; the PR also rejects existing-session selectors before URL checks, adds focused route coverage, fetches full opengrep CI history, and stabilizes plugin activation normalization tests. Thanks @zsxsoft.
+- System events: sanitize queued system-event text at the queue boundary so untrusted plugin and channel labels cannot spoof nested `System:`, `[System]`, `[Assistant]`, or `[Internal]` prompt markers. (GHSA-j5p4-wxhw-4h4c) Thanks @ttzero25.
 
 - Crabbox: bootstrap raw AWS macOS JavaScript commands launched through `/usr/bin/env` so native mac runners without preinstalled Node, Corepack, or pnpm can still run wrapped Node and pnpm proof.
 - macOS: let app packaging fall back to `corepack pnpm` when a fresh native runner has Node/Corepack but no pnpm shim on `PATH`.
