@@ -57,6 +57,7 @@ Sources/Motion/MotionService.swift
 Sources/Onboarding/GatewayOnboardingReset.swift
 Sources/Onboarding/GatewayOnboardingView.swift
 Sources/Onboarding/OnboardingStateStore.swift
+Sources/Onboarding/OnboardingWizardSteps.swift
 Sources/Onboarding/OnboardingWizardView.swift
 Sources/Onboarding/QRScannerView.swift
 Sources/OpenClawApp.swift
